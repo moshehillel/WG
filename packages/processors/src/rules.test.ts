@@ -1,0 +1,51 @@
+import { describe, expect, it } from 'vitest';
+import { filterOpenedCases, triageVerifiedSession } from './rules.js';
+
+describe('filterOpenedCases', () => {
+  it('skips early intervention cases', () => {
+    const { kept, skippedEi } = filterOpenedCases([
+      {
+        caseId: '1',
+        firstName: 'A',
+        lastName: 'B',
+        programType: 'Early Intervention',
+      },
+      {
+        caseId: '2',
+        firstName: 'C',
+        lastName: 'D',
+        programType: 'Home Health',
+      },
+    ]);
+    expect(skippedEi).toHaveLength(1);
+    expect(kept.map((r) => r.caseId)).toEqual(['2']);
+  });
+});
+
+describe('triageVerifiedSession', () => {
+  it('auto-approves mapped PCA codes', () => {
+    const decision = triageVerifiedSession({
+      sessionId: 's1',
+      serviceCode: 'PCA001',
+    });
+    expect(decision.triage).toBe('auto_approve');
+  });
+
+  it('skips unknown codes', () => {
+    const decision = triageVerifiedSession({
+      sessionId: 's2',
+      serviceCode: 'ZZZ999',
+    });
+    expect(decision.triage).toBe('skip');
+    expect(decision.reason).toBe('unknown_service_code');
+  });
+
+  it('skips cancelled status', () => {
+    const decision = triageVerifiedSession({
+      sessionId: 's3',
+      serviceCode: 'PCA001',
+      status: 'Cancelled',
+    });
+    expect(decision.triage).toBe('skip');
+  });
+});

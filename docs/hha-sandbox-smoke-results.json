@@ -1,0 +1,72 @@
+{
+  "testedAt": "2026-07-15T00:05:20.656Z",
+  "endpoint": "https://sandbox1.hhaexchange.com/Integration/ENT/V1.8/ws.asmx",
+  "getOffices": {
+    "ok": false,
+    "errorId": "-5",
+    "errorMessage": "Invalid application key.",
+    "rawPreview": {
+      "Result": {
+        "ErrorInfo": {
+          "ErrorID": -5,
+          "ErrorMessage": "Invalid application key."
+        },
+        "Details": "",
+        "@_Status": "Failure"
+      }
+    }
+  },
+  "getContracts": {
+    "ok": false,
+    "errorId": "-5",
+    "errorMessage": "Invalid application key.",
+    "rawPreview": {
+      "Result": {
+        "ErrorInfo": {
+          "ErrorID": -5,
+          "ErrorMessage": "Invalid application key."
+        },
+        "Details": "",
+        "@_Status": "Failure"
+      }
+    }
+  },
+  "getDisciplines": {
+    "ok": false,
+    "errorId": "-5",
+    "errorMessage": "Invalid application key.",
+    "rawPreview": {
+      "Result": {
+        "ErrorInfo": {
+          "ErrorID": -5,
+          "ErrorMessage": "Invalid application key."
+        },
+        "Details": "",
+        "@_Status": "Failure"
+      }
+    }
+  },
+  "getContractServiceCode": {
+    "skipped": true,
+    "reason": "no contract id"
+  },
+  "searchPatients": {
+    "ok": false,
+    "errorId": "-5",
+    "errorMessage": "Invalid application key.",
+    "rawPreview": {
+      "Result": {
+        "ErrorInfo": {
+          "ErrorID": -5,
+          "ErrorMessage": "Invalid application key."
+        },
+        "Details": "",
+        "@_Status": "Failure"
+      }
+    }
+  },
+  "samplePatientIds": [],
+  "getPatientDemographics": {
+    "skipped": true
+  }
+}
