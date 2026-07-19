@@ -15,7 +15,9 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "local:download": "tsx src/local-cli.ts"
+    "local:download": "tsx src/local-cli.ts",
+    "login:probe": "tsx src/login-probe.ts",
+    "train:bot": "tsx src/train-bot.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.716.0",

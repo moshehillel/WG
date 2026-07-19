@@ -1,0 +1,50 @@
+{
+  "testedAt": "2026-07-16T19:22:56.576Z",
+  "results": [
+    {
+      "label": "GetContractServiceCode Non-Skilled",
+      "status": "Success",
+      "eid": "0",
+      "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><GetContractServiceCodeResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integration\"><GetContractServiceCodeResult><Result Status=\"Success\"><ErrorInfo><ErrorID>0</ErrorID><Erro"
+    },
+    {
+      "label": "GetContractServiceCode Skilled",
+      "status": "Success",
+      "eid": "0",
+      "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><GetContractServiceCodeResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integration\"><GetContractServiceCodeResult><Result Status=\"Success\"><ErrorInfo><ErrorID>0</ErrorID><Erro"
+    },
+    {
+      "label": "GetLinkedContractServiceCodes Non-Skilled",
+      "status": "Success",
+      "eid": "0",
+      "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><GetLinkedContractServiceCodesResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integration\"><GetLinkedContractServiceCodesResult><Result Status=\"Success\"><ErrorInfo><ErrorID>0<"
+    },
+    {
+      "label": "CreateSchedule Non-Skilled Daily Fixed HHMM",
+      "status": "Failure",
+      "eid": "-74",
+      "msg": "Invalid \"You can not enter ScheduleDuration Hours and Minutes in case of Visit Type Daily Fixed\"",
+      "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><CreateScheduleResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integration\"><CreateScheduleResult><Result Status=\"Failure\"><ErrorInfo><ErrorID>-74</ErrorID><ErrorMessage>Inval"
+    },
+    {
+      "label": "GetPatientContracts for visit patient",
+      "status": "Success",
+      "eid": "0",
+      "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><GetPatientContractsResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integration\"><GetPatientContractsResult><Result Status=\"Success\"><ErrorInfo><ErrorID>0</ErrorID><ErrorMessa"
+    },
+    {
+      "label": "CreateSchedule with patient placement codes",
+      "status": "Failure",
+      "eid": "-310",
+      "msg": "\"Requires PayCode ID or PayCode Name.\"",
+      "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><CreateScheduleResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integration\"><CreateScheduleResult><Result Status=\"Failure\"><ErrorInfo><ErrorID>-310</ErrorID><ErrorMessage>\"Req"
+    },
+    {
+      "label": "UpdateSchedule HHMM",
+      "status": "Failure",
+      "eid": "-315",
+      "msg": "Requires \"CaregiverID or CaregiverCode Or Caregiver Details\"",
+      "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><UpdateScheduleResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integration\"><UpdateScheduleResult><Result Status=\"Failure\"><ErrorInfo><ErrorID>-315</ErrorID><ErrorMessage>Requ"
+    }
+  ]
+}

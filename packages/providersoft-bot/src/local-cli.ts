@@ -4,7 +4,10 @@ import path from 'node:path';
 import { getEnv } from '@white-glove/shared';
 import { loadProviderSoftCredentials } from './credentials.js';
 import { downloadReports, writeStubReports } from './download-reports.js';
+import { loadRepoDotEnv } from './load-dotenv.js';
 import { uploadReportsToS3 } from './upload.js';
+
+loadRepoDotEnv();
 
 async function main() {
   const args = new Set(process.argv.slice(2));

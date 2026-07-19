@@ -50,7 +50,10 @@ export async function processVerifiedSessions(options: {
             : 'skipped_by_rule';
       exceptions.push({
         code,
-        message: `Session not sent to HHA (${decision.reason ?? 'skip'})`,
+        message:
+          decision.reason === 'early_intervention'
+            ? 'Early Intervention session ignored — not sent to HHA'
+            : `Session not sent to HHA (${decision.reason ?? 'skip'})`,
         reportKind: 'verified_sessions',
         rowId: row.sessionId,
       });

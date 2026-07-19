@@ -85,9 +85,12 @@ export class SoapHhaClientAdapter implements HhaClient {
   }
 
   async upsertContract(contract: HhaContract): Promise<UpsertResult> {
-    const existing = await this.soap.getPatientContracts(Number(contract.patientId));
+    const visitDate = contract.startDate ?? new Date().toISOString().slice(0, 10);
+    const existing = await this.soap.getPatientContracts(Number(contract.patientId), visitDate);
     assertOk(existing, 'GetPatientContracts');
-    const existingId = pickId(existing.raw, ['ID', 'ContractID']);
+    const existingId =
+      pickId(existing.raw, ['PlacementID', 'ID', 'ContractID']) ??
+      pickNestedContractId(existing.raw);
     if (existingId && !contract.contractExternalId) {
       return { id: existingId, created: false };
     }
@@ -98,11 +101,11 @@ export class SoapHhaClientAdapter implements HhaClient {
 
     const result = await this.soap.call(
       'AddPatientContract',
-      `<PatientContract>
+      `<PatientContractInfo>
   <PatientID>${escape(contract.patientId)}</PatientID>
   <ContractID>${escape(contract.contractExternalId)}</ContractID>
-  <ServiceStartDate>${escape(contract.startDate ?? '')}</ServiceStartDate>
-</PatientContract>`,
+  <StartDate>${escape(contract.startDate ?? '')}</StartDate>
+</PatientContractInfo>`,
     );
     assertOk(result, 'AddPatientContract');
     return {
@@ -117,13 +120,13 @@ export class SoapHhaClientAdapter implements HhaClient {
     }
     const result = await this.soap.call(
       'CreatePatientAuthorization',
-      `<Authorization>
+      `<CreateAuthorizationInfo>
   <PatientID>${escape(auth.patientId)}</PatientID>
   <ContractID>${escape(auth.serviceCode ?? '')}</ContractID>
   <AuthorizationNumber>${escape(auth.authorizationNumber)}</AuthorizationNumber>
-  <StartDate>${escape(auth.startDate ?? '')}</StartDate>
-  <EndDate>${escape(auth.endDate ?? '')}</EndDate>
-</Authorization>`,
+  <FromDate>${escape(auth.startDate ?? '')}</FromDate>
+  <ToDate>${escape(auth.endDate ?? '')}</ToDate>
+</CreateAuthorizationInfo>`,
     );
     // Note: ContractID / discipline / units shapes will be refined from sandbox CreatePatientAuthorization sample + report columns.
     if (!result.ok) {
@@ -207,20 +210,25 @@ export class SoapHhaClientAdapter implements HhaClient {
         'Closed-case updates need HHA PatientID mapping from ProviderSoft caseId before UpdatePatientContract discharge can run',
       );
     }
-    const contracts = await this.soap.getPatientContracts(Number(patientId));
+    const contracts = await this.soap.getPatientContracts(
+      Number(patientId),
+      update.closedDate ?? new Date().toISOString().slice(0, 10),
+    );
     assertOk(contracts, 'GetPatientContracts');
-    const contractId = pickId(contracts.raw, ['ID', 'ContractID']);
+    const contractId =
+      pickId(contracts.raw, ['PlacementID', 'ID', 'ContractID']) ??
+      pickNestedContractId(contracts.raw);
     if (!contractId) {
       throw new Error(`No patient contract found to discharge for patient ${patientId}`);
     }
     const result = await this.soap.call(
       'UpdatePatientContract',
-      `<PatientContract>
+      `<PatientContractInfo>
   <PatientID>${escape(patientId)}</PatientID>
-  <ContractID>${escape(contractId)}</ContractID>
+  <PlacementID>${escape(contractId)}</PlacementID>
   <UpdateDischargeDate>true</UpdateDischargeDate>
   <DischargeDate>${escape(update.closedDate ?? '')}</DischargeDate>
-</PatientContract>`,
+</PatientContractInfo>`,
     );
     assertOk(result, 'UpdatePatientContract');
   }
@@ -250,6 +258,21 @@ function collectPatientIds(raw: unknown): number[] {
   if (Array.isArray(ids)) return ids.map(Number).filter((n) => !Number.isNaN(n));
   if (ids !== undefined) return [Number(ids)].filter((n) => !Number.isNaN(n));
   return [];
+}
+
+function pickNestedContractId(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const root = raw as Record<string, unknown>;
+  const list =
+    (root.PatientContracts as { PatientContractInfo?: unknown } | undefined)?.PatientContractInfo ??
+    root.PatientContractInfo;
+  const first = Array.isArray(list) ? list[0] : list;
+  if (!first || typeof first !== 'object') return undefined;
+  const row = first as Record<string, unknown>;
+  if (row.PlacementID !== undefined) return String(row.PlacementID);
+  const contract = row.Contract as Record<string, unknown> | undefined;
+  if (contract?.ID !== undefined) return String(contract.ID);
+  return undefined;
 }
 
 function escape(value: string): string {

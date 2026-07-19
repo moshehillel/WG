@@ -8,53 +8,24 @@ API behavior reference: Enterprise Provider Guide v3.38 (docs the product; sandb
 
 ## Auth status
 
-**Blocked:** every `GetOffices` / `GetContracts` / `SearchPatients` call returns:
+### Sandbox — WORKING with PROD credentials (2026-07-16)
 
-- HTTP 400
-- `ErrorID = -5`
-- `ErrorMessage = Invalid application key.`
+White Glove confirmed the production App Name / Secret / Key may be used against the sandbox URL. Verified:
 
-Tried:
+- `GetOffices` → `ErrorID=0`, offices returned
+- Full pipeline endpoint probe: **0 auth failures** (`-5` / `-8`)
 
-- App Key as printed in the companion guide (Base64 UTF-16LE blob)
-- Decoded UTF-16LE plaintext form of that key
-- Key with embedded newline as in the PDF wrap
-- Wrong App Name / App Secret variants
+See [hha-endpoint-probe.md](hha-endpoint-probe.md) for per-method results.
 
-Whitespace check (per client request, 2026-07-14 evening):
+Keep `HHA_ALLOW_PRODUCTION=false` and the sandbox base URL until go-live is approved.
 
-- Re-extracted key characters directly from the PDF and stripped every whitespace character; Base64 length and padding decode cleanly — no spaces were hiding in the key.
-- Retested all-clean key plus more encodings (plaintext, lower-case, no dashes, UTF-8 re-Base64, no padding). Every variant returns `ErrorID -5, Invalid application key.`
-- Probe scripts (`packages/hha-client/scripts/*.mjs`) read credentials from env only.
+### Historical: sandbox-only companion App Key was invalid
 
-Conclusion: the key is whitespace-free and self-consistent, but sandbox still rejects it — **App Key is not active** (expired, rotated, or never provisioned on sandbox1). Need HHA / White Glove to re-issue a working sandbox App Key before write tests.
+Earlier sandbox-guide App Key returned `ErrorID=-5 Invalid application key` for every encoding. Superseded by using PROD credentials on the sandbox endpoint.
 
-### Proof that App Name + Secret are valid and only the App Key fails
+### Production — credentials work (2026-07-15)
 
-The API returns two distinct errors depending on which credential is wrong:
-
-| Sent | ErrorID | Message |
-|------|---------|---------|
-| Correct secret + guide App Key (any encoding/swap) | `-5` | Invalid application key. |
-| Corrupted App Secret (Base64-encoded, or App Key value pasted into the secret field) | `-8` | Invalid application name/secret key. |
-
-Since corrupting the secret changes the error from `-5` to `-8`, validation is two-stage: App Name + App Secret pass first (ours do), then the App Key check fails. Swapping secret and key in both directions was also tested — no combination authenticates. The App Key for Agency 613 must be re-issued/activated by HHAeXchange.
-
-### Alternate auth methods also tried
-
-Enterprise SOAP `AppParams` only has `AppName` / `AppSecret` / `AppKey` — there is no second SOAP credential scheme. Still tried every alternate transport:
-
-| Method | Result |
-|--------|--------|
-| SOAP 1.1 sandbox | `-5` Invalid application key |
-| SOAP 1.2 sandbox | `-5` Invalid application key |
-| Lowercase `/integration/...` sandbox URL | `-5` Invalid application key |
-| ASMX HTTP form POST (`/GetOffices`) | HTTP 500 (not a supported nested Authentication shape) |
-| OAuth2 on sandbox `/identity/connect/token` using AppName/Secret as client_id/secret | `invalid_client` (EVV Aggregator OAuth is a different product) |
-
-(An earlier exploratory hit on production also returned `-5`; **further work stays sandbox-only.**)
-
-Probe script: `packages/hha-client/scripts/alt-auth-probe.mjs`.
+The **PROD** companion guide credentials authenticate successfully against `https://app.hhaexchange.com/integration/ENT/V1.8/ws.asmx` when sent exactly as printed (`ErrorID = 0`). Do **not** write to production until explicit go-live.
 
 ## Pipeline → API mapping
 

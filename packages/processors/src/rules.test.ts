@@ -23,6 +23,16 @@ describe('filterOpenedCases', () => {
 });
 
 describe('triageVerifiedSession', () => {
+  it('skips Early Intervention sessions', () => {
+    const decision = triageVerifiedSession({
+      sessionId: 's-ei',
+      serviceCode: 'PCA001',
+      programType: 'Early Intervention',
+    });
+    expect(decision.triage).toBe('skip');
+    expect(decision.reason).toBe('early_intervention');
+  });
+
   it('auto-approves mapped PCA codes', () => {
     const decision = triageVerifiedSession({
       sessionId: 's1',

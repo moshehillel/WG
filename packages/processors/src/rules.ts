@@ -6,10 +6,31 @@ import type {
 } from '@white-glove/shared';
 import { lookupServiceCode } from '@white-glove/shared';
 
-export function isEarlyInterventionCase(row: OpenedCaseRow): boolean {
-  if (row.isEarlyIntervention === true) return true;
-  const program = row.programType?.toLowerCase() ?? '';
-  return program.includes('early intervention') || program === 'ei';
+/**
+ * Locked business rule: Early Intervention program types are never sent to HHA.
+ * Detected via program type text ("Early Intervention" / "EI") or an explicit EI flag.
+ */
+export function isEarlyInterventionProgram(
+  programType?: string,
+  explicitFlag?: boolean,
+): boolean {
+  if (explicitFlag === true) return true;
+  const program = programType?.trim().toLowerCase() ?? '';
+  if (!program) return false;
+  return (
+    program.includes('early intervention') ||
+    program === 'ei' ||
+    program.startsWith('ei ') ||
+    program.endsWith(' ei') ||
+    program.includes('(ei)')
+  );
+}
+
+export function isEarlyInterventionCase(row: {
+  programType?: string;
+  isEarlyIntervention?: boolean;
+}): boolean {
+  return isEarlyInterventionProgram(row.programType, row.isEarlyIntervention);
 }
 
 export function filterOpenedCases(rows: OpenedCaseRow[]): {
@@ -46,6 +67,14 @@ export function triageVerifiedSession(
   row: VerifiedSessionRow,
   config: SessionRulesConfig = {},
 ): SessionDecision {
+  if (isEarlyInterventionCase(row)) {
+    return {
+      sessionId: row.sessionId,
+      triage: 'skip',
+      reason: 'early_intervention',
+    };
+  }
+
   const status = row.status?.trim().toLowerCase() ?? '';
   const statusMap = { ...DEFAULT_STATUS_OVERRIDES, ...config.statusOverrides };
   if (status && statusMap[status]) {

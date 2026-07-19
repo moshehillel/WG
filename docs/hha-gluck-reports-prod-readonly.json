@@ -1,0 +1,1361 @@
+{
+  "testedAt": "2026-07-16T21:21:12.916Z",
+  "endpoint": "https://app.hhaexchange.com/Integration/ENT/V1.8/ws.asmx",
+  "mode": "read-only",
+  "reports": {
+    "open": {
+      "sampleCount": 4,
+      "samples": [
+        {
+          "programId": "166448",
+          "childName": "Abdulmateen Marwa",
+          "programType": "Americare Certified",
+          "serviceType": "OT CHHA",
+          "dateOfIntake": "",
+          "serviceBegin": "06/26/2026",
+          "serviceEnd": "07/18/2026",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968910
+              ]
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968910
+              ]
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968910
+              ]
+            }
+          ],
+          "patientIds": [
+            25968910
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "Marwa",
+              "lastName": "Abdulmateen",
+              "birthDate": "2020-05-14",
+              "admissionId": "924758",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": false,
+              "msg": "",
+              "placementIds": [],
+              "contractIds": [],
+              "serviceCodeIds": []
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 1,
+              "preview": [
+                {
+                  "id": "39704391",
+                  "number": "approved",
+                  "from": "2026-06-17"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "programId": "166448",
+          "childName": "Abdulmateen Marwa",
+          "programType": "Americare Certified",
+          "serviceType": "OT HC Eval",
+          "dateOfIntake": "",
+          "serviceBegin": "07/13/2026",
+          "serviceEnd": "07/18/2026",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968910
+              ]
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968910
+              ]
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968910
+              ]
+            }
+          ],
+          "patientIds": [
+            25968910
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "Marwa",
+              "lastName": "Abdulmateen",
+              "birthDate": "2020-05-14",
+              "admissionId": "924758",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": false,
+              "msg": "",
+              "placementIds": [],
+              "contractIds": [],
+              "serviceCodeIds": []
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 1,
+              "preview": [
+                {
+                  "id": "39704391",
+                  "number": "approved",
+                  "from": "2026-06-17"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "programId": "266963",
+          "childName": "Abdulmateen Rumaysah",
+          "programType": "Americare Certified",
+          "serviceType": "OT CHHA",
+          "dateOfIntake": "",
+          "serviceBegin": "06/26/2026",
+          "serviceEnd": "08/11/2026",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968908
+              ]
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968908
+              ]
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968908
+              ]
+            }
+          ],
+          "patientIds": [
+            25968908
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "Rumaysah",
+              "lastName": "Abdulmateen",
+              "birthDate": "2022-01-15",
+              "admissionId": "924757",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": false,
+              "msg": "",
+              "placementIds": [],
+              "contractIds": [],
+              "serviceCodeIds": []
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 1,
+              "preview": [
+                {
+                  "id": "39704389",
+                  "number": "approved",
+                  "from": "2026-06-16"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "programId": "266963",
+          "childName": "Abdulmateen Rumaysah",
+          "programType": "Americare Certified",
+          "serviceType": "OT HC Eval",
+          "dateOfIntake": "",
+          "serviceBegin": "07/16/2026",
+          "serviceEnd": "07/21/2026",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968908
+              ]
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968908
+              ]
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                25968908
+              ]
+            }
+          ],
+          "patientIds": [
+            25968908
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "Rumaysah",
+              "lastName": "Abdulmateen",
+              "birthDate": "2022-01-15",
+              "admissionId": "924757",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": false,
+              "msg": "",
+              "placementIds": [],
+              "contractIds": [],
+              "serviceCodeIds": []
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 1,
+              "preview": [
+                {
+                  "id": "39704389",
+                  "number": "approved",
+                  "from": "2026-06-16"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "closure": {
+      "sampleCount": 4,
+      "samples": [
+        {
+          "programId": "258270233",
+          "childName": "Slater Nechama",
+          "programType": "Americare Certified",
+          "closureDate": "12/31/2025",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            }
+          ],
+          "patientIds": []
+        },
+        {
+          "programId": "258266400",
+          "childName": "B R",
+          "programType": "MOESC",
+          "closureDate": "12/31/2024",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                1277206,
+                6001860,
+                6145625,
+                9519319,
+                14687160
+              ]
+            }
+          ],
+          "patientIds": [
+            1277206,
+            6001860,
+            6145625,
+            9519319,
+            14687160
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "REYNALDO",
+              "lastName": "BAEZ",
+              "birthDate": "1966-09-19",
+              "admissionId": "900881",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "placementIds": [
+                966900,
+                6006189
+              ],
+              "contractIds": [
+                10409,
+                45571
+              ],
+              "serviceCodeIds": [
+                55136
+              ]
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 66,
+              "preview": [
+                {
+                  "id": "34942370",
+                  "number": "01-091225-105-10",
+                  "from": "2025-09-13"
+                },
+                {
+                  "id": "34942385",
+                  "number": "01-091225-105-10",
+                  "from": "2025-09-13"
+                },
+                {
+                  "id": "29991370",
+                  "number": "01-013123-103-23",
+                  "from": "2025-01-19"
+                },
+                {
+                  "id": "29991396",
+                  "number": "01-013123-103-23",
+                  "from": "2025-01-19"
+                },
+                {
+                  "id": "33436325",
+                  "number": "01-013123-103-23",
+                  "from": "2025-06-08"
+                }
+              ]
+            }
+          },
+          "note": "Patient still has placements on/near closure date — discharge fields need visual check in XML if DischargeDate set"
+        },
+        {
+          "programId": "258266398",
+          "childName": "C R",
+          "programType": "MOESC",
+          "closureDate": "12/31/2024",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                1277507,
+                14408402,
+                15612942,
+                16443408,
+                20975817
+              ]
+            }
+          ],
+          "patientIds": [
+            1277507,
+            14408402,
+            15612942,
+            16443408,
+            20975817
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "REGINALD",
+              "lastName": "CORAM",
+              "birthDate": "1978-04-15",
+              "admissionId": "901182",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "placementIds": [
+                5947711,
+                5937879
+              ],
+              "contractIds": [
+                45571,
+                10393
+              ],
+              "serviceCodeIds": [
+                114190
+              ]
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 41,
+              "preview": [
+                {
+                  "id": "2107547",
+                  "number": "Temp",
+                  "from": "2016-01-01"
+                },
+                {
+                  "id": "35216118",
+                  "number": "UM85637482",
+                  "from": "2025-10-02"
+                },
+                {
+                  "id": "34402676",
+                  "number": "UM53900691",
+                  "from": "2025-08-08"
+                },
+                {
+                  "id": "32442958",
+                  "number": "UM53900691",
+                  "from": "2025-05-01"
+                },
+                {
+                  "id": "29432782",
+                  "number": "UM53900691",
+                  "from": "2024-11-14"
+                }
+              ]
+            }
+          },
+          "note": "Patient still has placements on/near closure date — discharge fields need visual check in XML if DischargeDate set"
+        },
+        {
+          "programId": "258266393",
+          "childName": "D M",
+          "programType": "MOESC",
+          "closureDate": "12/31/2024",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                6374987,
+                7253497,
+                12339226,
+                12676623,
+                15761136
+              ]
+            }
+          ],
+          "patientIds": [
+            6374987,
+            7253497,
+            12339226,
+            12676623,
+            15761136
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "MIGUELINA",
+              "lastName": "DE LOS SANTOS",
+              "birthDate": "1966-11-22",
+              "admissionId": "906109",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "placementIds": [
+                2561693,
+                4014847
+              ],
+              "contractIds": [
+                10410,
+                45571
+              ],
+              "serviceCodeIds": [
+                114535
+              ]
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 38,
+              "preview": [
+                {
+                  "id": "36532664",
+                  "number": "01-122325-101-44",
+                  "from": "2026-01-01"
+                },
+                {
+                  "id": "36532650",
+                  "number": "01-122325-101-44",
+                  "from": "2026-01-01"
+                },
+                {
+                  "id": "36073435",
+                  "number": "01-112425-102-05",
+                  "from": "2025-12-01"
+                },
+                {
+                  "id": "36073466",
+                  "number": "01-112425-102-05",
+                  "from": "2025-12-01"
+                },
+                {
+                  "id": "33334380",
+                  "number": "01-060325-102-67",
+                  "from": "2025-07-01"
+                }
+              ]
+            }
+          },
+          "note": "Patient still has placements on/near closure date — discharge fields need visual check in XML if DischargeDate set"
+        }
+      ]
+    },
+    "dischargeService": {
+      "sampleCount": 4,
+      "samples": [
+        {
+          "programId": "N6V342W09673",
+          "childName": "Aquino Lucas",
+          "programType": "Empire Bluecross Blueshield Therapy",
+          "serviceType": "OT BCBS",
+          "serviceBegin": "07/17/2025",
+          "serviceEnd": "12/31/2025",
+          "serviceDischargeDate": "12/31/2025",
+          "providerName": "NAVELGAS MARIA THERESA",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                22577239
+              ]
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                22577239
+              ]
+            }
+          ],
+          "patientIds": [
+            22577239
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "Lucas",
+              "lastName": "Aquino",
+              "birthDate": "2021-04-07",
+              "admissionId": "920731",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "placementIds": [
+                6674328
+              ],
+              "contractIds": [
+                14582
+              ],
+              "serviceCodeIds": [
+                1291400
+              ]
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 156,
+              "preview": [
+                {
+                  "id": "37518097",
+                  "number": "approved",
+                  "from": "2025-02-19"
+                },
+                {
+                  "id": "37518084",
+                  "number": "approved",
+                  "from": "2026-02-18"
+                },
+                {
+                  "id": "37518070",
+                  "number": "approved",
+                  "from": "2026-02-17"
+                },
+                {
+                  "id": "37373349",
+                  "number": "approved",
+                  "from": "2026-02-14"
+                },
+                {
+                  "id": "37373353",
+                  "number": "approved",
+                  "from": "2026-02-12"
+                }
+              ]
+            }
+          },
+          "authMatchHint": {
+            "authCount": 156,
+            "canListAuths": true,
+            "note": "Service Type name match to HHA ServiceCodeID still needs mapping table; AuthID list available for update targeting once mapped",
+            "authPreview": [
+              {
+                "id": "37518097",
+                "number": "approved",
+                "from": "2025-02-19"
+              },
+              {
+                "id": "37518084",
+                "number": "approved",
+                "from": "2026-02-18"
+              },
+              {
+                "id": "37518070",
+                "number": "approved",
+                "from": "2026-02-17"
+              },
+              {
+                "id": "37373349",
+                "number": "approved",
+                "from": "2026-02-14"
+              },
+              {
+                "id": "37373353",
+                "number": "approved",
+                "from": "2026-02-12"
+              }
+            ]
+          }
+        },
+        {
+          "programId": "N6V342W09673",
+          "childName": "Aquino Lucas",
+          "programType": "Empire Bluecross Blueshield Therapy",
+          "serviceType": "PT BCBS",
+          "serviceBegin": "07/17/2025",
+          "serviceEnd": "12/31/2025",
+          "serviceDischargeDate": "12/31/2025",
+          "providerName": "RUMBAOA SHERRY",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                22577239
+              ]
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                22577239
+              ]
+            }
+          ],
+          "patientIds": [
+            22577239
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "Lucas",
+              "lastName": "Aquino",
+              "birthDate": "2021-04-07",
+              "admissionId": "920731",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "placementIds": [
+                6674328
+              ],
+              "contractIds": [
+                14582
+              ],
+              "serviceCodeIds": [
+                1291400
+              ]
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 156,
+              "preview": [
+                {
+                  "id": "37518097",
+                  "number": "approved",
+                  "from": "2025-02-19"
+                },
+                {
+                  "id": "37518084",
+                  "number": "approved",
+                  "from": "2026-02-18"
+                },
+                {
+                  "id": "37518070",
+                  "number": "approved",
+                  "from": "2026-02-17"
+                },
+                {
+                  "id": "37373349",
+                  "number": "approved",
+                  "from": "2026-02-14"
+                },
+                {
+                  "id": "37373353",
+                  "number": "approved",
+                  "from": "2026-02-12"
+                }
+              ]
+            }
+          },
+          "authMatchHint": {
+            "authCount": 156,
+            "canListAuths": true,
+            "note": "Service Type name match to HHA ServiceCodeID still needs mapping table; AuthID list available for update targeting once mapped",
+            "authPreview": [
+              {
+                "id": "37518097",
+                "number": "approved",
+                "from": "2025-02-19"
+              },
+              {
+                "id": "37518084",
+                "number": "approved",
+                "from": "2026-02-18"
+              },
+              {
+                "id": "37518070",
+                "number": "approved",
+                "from": "2026-02-17"
+              },
+              {
+                "id": "37373349",
+                "number": "approved",
+                "from": "2026-02-14"
+              },
+              {
+                "id": "37373353",
+                "number": "approved",
+                "from": "2026-02-12"
+              }
+            ]
+          }
+        },
+        {
+          "programId": "P0100012106701",
+          "childName": "Hall  Justice",
+          "programType": "Americare Certified",
+          "serviceType": "SLP CHHA",
+          "serviceBegin": "11/02/2025",
+          "serviceEnd": "12/31/2025",
+          "serviceDischargeDate": "12/31/2025",
+          "providerName": "WRIGHT SHAKIRAH",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                20366962
+              ]
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                20366962
+              ]
+            }
+          ],
+          "patientIds": [
+            20366962
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "Justice",
+              "lastName": "Hall",
+              "birthDate": "2017-12-01",
+              "admissionId": "918010",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "placementIds": [
+                5989790
+              ],
+              "contractIds": [
+                37925
+              ],
+              "serviceCodeIds": []
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 137,
+              "preview": [
+                {
+                  "id": "39811263",
+                  "number": "approved",
+                  "from": "2026-06-30"
+                },
+                {
+                  "id": "39811257",
+                  "number": "approved",
+                  "from": "2026-06-23"
+                },
+                {
+                  "id": "39811252",
+                  "number": "approved",
+                  "from": "2026-06-22"
+                },
+                {
+                  "id": "39581696",
+                  "number": "approved",
+                  "from": "2026-06-09"
+                },
+                {
+                  "id": "39363692",
+                  "number": "approved",
+                  "from": "2026-05-26"
+                }
+              ]
+            }
+          },
+          "authMatchHint": {
+            "authCount": 137,
+            "canListAuths": true,
+            "note": "Service Type name match to HHA ServiceCodeID still needs mapping table; AuthID list available for update targeting once mapped",
+            "authPreview": [
+              {
+                "id": "39811263",
+                "number": "approved",
+                "from": "2026-06-30"
+              },
+              {
+                "id": "39811257",
+                "number": "approved",
+                "from": "2026-06-23"
+              },
+              {
+                "id": "39811252",
+                "number": "approved",
+                "from": "2026-06-22"
+              },
+              {
+                "id": "39581696",
+                "number": "approved",
+                "from": "2026-06-09"
+              },
+              {
+                "id": "39363692",
+                "number": "approved",
+                "from": "2026-05-26"
+              }
+            ]
+          }
+        },
+        {
+          "programId": "P0100012106701",
+          "childName": "Hall  Justice",
+          "programType": "Americare Certified",
+          "serviceType": "SLP HC EVAL",
+          "serviceBegin": "11/26/2025",
+          "serviceEnd": "12/02/2025",
+          "serviceDischargeDate": "12/31/2025",
+          "providerName": "WRIGHT SHAKIRAH",
+          "patientLookup": [
+            {
+              "label": "AdmissionID exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "AdmissionID no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber no leading 0",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": []
+            },
+            {
+              "label": "MRNumber exact",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                20366962
+              ]
+            },
+            {
+              "label": "Name",
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "patientIds": [
+                20366962
+              ]
+            }
+          ],
+          "patientIds": [
+            20366962
+          ],
+          "hha": {
+            "demographics": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "firstName": "Justice",
+              "lastName": "Hall",
+              "birthDate": "2017-12-01",
+              "admissionId": "918010",
+              "officeId": "1025"
+            },
+            "contracts": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "placementIds": [
+                5989790
+              ],
+              "contractIds": [
+                37925
+              ],
+              "serviceCodeIds": []
+            },
+            "authorizations": {
+              "ok": true,
+              "eid": "0",
+              "msg": "",
+              "count": 137,
+              "preview": [
+                {
+                  "id": "39811263",
+                  "number": "approved",
+                  "from": "2026-06-30"
+                },
+                {
+                  "id": "39811257",
+                  "number": "approved",
+                  "from": "2026-06-23"
+                },
+                {
+                  "id": "39811252",
+                  "number": "approved",
+                  "from": "2026-06-22"
+                },
+                {
+                  "id": "39581696",
+                  "number": "approved",
+                  "from": "2026-06-09"
+                },
+                {
+                  "id": "39363692",
+                  "number": "approved",
+                  "from": "2026-05-26"
+                }
+              ]
+            }
+          },
+          "authMatchHint": {
+            "authCount": 137,
+            "canListAuths": true,
+            "note": "Service Type name match to HHA ServiceCodeID still needs mapping table; AuthID list available for update targeting once mapped",
+            "authPreview": [
+              {
+                "id": "39811263",
+                "number": "approved",
+                "from": "2026-06-30"
+              },
+              {
+                "id": "39811257",
+                "number": "approved",
+                "from": "2026-06-23"
+              },
+              {
+                "id": "39811252",
+                "number": "approved",
+                "from": "2026-06-22"
+              },
+              {
+                "id": "39581696",
+                "number": "approved",
+                "from": "2026-06-09"
+              },
+              {
+                "id": "39363692",
+                "number": "approved",
+                "from": "2026-05-26"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "summary": {
+    "open": {
+      "samples": 4,
+      "patientsFound": 4,
+      "patientsMissing": 0
+    },
+    "closure": {
+      "samples": 4,
+      "patientsFound": 3,
+      "patientsMissing": 1
+    },
+    "dischargeService": {
+      "samples": 4,
+      "patientsFound": 4,
+      "patientsMissing": 0
+    }
+  }
+}

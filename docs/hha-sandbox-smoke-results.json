@@ -1,72 +1,318 @@
 {
-  "testedAt": "2026-07-15T00:05:20.656Z",
+  "testedAt": "2026-07-16T18:51:01.740Z",
   "endpoint": "https://sandbox1.hhaexchange.com/Integration/ENT/V1.8/ws.asmx",
   "getOffices": {
-    "ok": false,
-    "errorId": "-5",
-    "errorMessage": "Invalid application key.",
+    "ok": true,
+    "status": "Success",
+    "errorId": "0",
+    "errorMessage": "",
     "rawPreview": {
       "Result": {
         "ErrorInfo": {
-          "ErrorID": -5,
-          "ErrorMessage": "Invalid application key."
+          "ErrorID": 0,
+          "ErrorMessage": ""
         },
         "Details": "",
-        "@_Status": "Failure"
+        "@_Status": "Success"
+      },
+      "Offices": {
+        "Office": [
+          {
+            "OfficeID": 2259,
+            "OfficeName": "White Glove New Jersey",
+            "OfficeCode": "WGJ"
+          },
+          {
+            "OfficeID": 2933,
+            "OfficeName": "White Glove UJO",
+            "OfficeCode": "UJO"
+          },
+          {
+            "OfficeID": 7362,
+            "OfficeName": "WGCC Homecare",
+            "OfficeCode": "WGN"
+          },
+          {
+            "OfficeID": 13511,
+            "OfficeName": "WGCC Florida",
+            "OfficeCode": "WGF"
+          },
+          {
+            "OfficeID": 15453,
+            "OfficeName": "OGS WGP",
+            "OfficeCode": "OGS"
+          },
+          {
+            "OfficeID": 16039,
+            "OfficeName": "White Glove Community Care-Split",
+            "OfficeCode": "CCS"
+          },
+          {
+            "OfficeID": 1025,
+            "OfficeName": "White Glove Community",
+            "OfficeCode": "WGC"
+          }
+        ]
       }
     }
   },
   "getContracts": {
-    "ok": false,
-    "errorId": "-5",
-    "errorMessage": "Invalid application key.",
-    "rawPreview": {
-      "Result": {
-        "ErrorInfo": {
-          "ErrorID": -5,
-          "ErrorMessage": "Invalid application key."
-        },
-        "Details": "",
-        "@_Status": "Failure"
-      }
-    }
+    "ok": true,
+    "status": "Success",
+    "errorId": "0",
+    "errorMessage": "",
+    "rawPreview": "{\"Result\":{\"ErrorInfo\":{\"ErrorID\":0,\"ErrorMessage\":\"\"},\"Details\":\"\",\"@_Status\":\"Success\"},\"Contracts\":{\"Contract\":[{\"ContractID\":23194,\"ContractName\":\"1199 SEIU Funds\",\"Offices\":{\"Office\":[{\"ID\":13511,\"Name\":\"WGCC Florida\"},{\"ID\":1025,\"Name\":\"White Glove Community\"}]},\"Active\":\"Yes\"},{\"ContractID\":56540,\"ContractName\":\"ABBRUSCATO MARION\",\"Offices\":{\"Office\":[{\"ID\":1025,\"Name\":\"White Glove Community\"}]},\"Active\":\"Yes\"},{\"ContractID\":71791,\"ContractName\":\"Able Health Care Service\",\"Offices\":{\"Office\":[{\"ID\":1025,\"Name\":\"White Glove Community\"},{\"ID\":7362,\"Name\":\"WGCC Homecare\"}]},\"Active\":\"Yes\"},{\"ContractID\":13811,\"ContractName\":\"Abrams Danielle\",\"Offices\":{\"Office\":[{\"ID\":13511,\"Name\":\"WGCC Florida\"},{\"ID\":1025,\"Name\":\"White Glove Community\"}]},\"Active\":\"Yes\"},{\"ContractID\":71460,\"ContractName\":\"ADAPT\",\"Offices\":{\"Office\":[{\"ID\":1025,\"Name\":\"White Glove Community\"}]},\"Active\":\"Yes\"},{\"ContractID\":64721,\"ContractName\":\"Aetna Better Health of NJ (WGJ)\",\"Offices\":{\"Office\":[{\"ID\":2259,\"Name\":\"White Glove New Jersey\"}]},\"Active\":\"Yes\"},{\"ContractID\":69172,\"ContractName\":\"Aetna Better Health of NY (OGS)\",\"Offices\":{\"Office\":[{\"ID\":15453,\"Name\":\"OGS WGP\"}]},\"Active\":\"Yes\"},{\"ContractID\":69183,\"ContractName\":\"Aetna Better Health of NY (UJO)\",\"Offices\":{\"Office\":[{\"ID\":2933,\"Name\":\"White Glove UJO\"}]},\"Active\":\"Yes\"},{\"ContractID\":69168,\"ContractName\":\"Aetna Better Health of NY (WGC)\",\"Offices\":{\"Office\":[{\"ID\":1025,\"Name\":\"White Glove Community\"}]},\"Active\":\"Yes\"},{\"ContractID\":69170,\"ContractName\":\"Aetna Better Health of NY (WGF)\",\"Offices\":{\"Office\":[{\"ID\":13511,\"Name\":\"WGCC Florida\"}]},\"Active\":\"Yes\"},{\"ContractID\":69177,\"ContractName\":\"Aetna Better Health of NY (WGJ)\",\"Offices\":{\"Office\":[{\"ID\":2259,\"Name\":\"White Glove New Jersey\"}]},\"Active\":\"Yes\"},{\"ContractID\":69188,\"ContractName\":\"Aetna Better Health of NY (WGN)\",\"Offices\":{\"Office\":[{\"ID\":7362,\"Name\":\"WGCC Homecare\"}]},\"Active\":\"Yes\"},{\"ContractID\":10378,\"ContractName\":\"AETNA BETTER HEALTH SCA\",\"Offices\":{\"Office\":[{\"ID\":13511,\"Name\":\"WGCC Florida\"},{\"ID\":1025,\"Name\":\"White Glove Community\"}]},\"Active\":\"Yes\"},{\"ContractID\":24027,\"ContractName\":\"AETNA CDPAP\",\"Offices\":{\"Office\":[{\"ID\":1025,\"Name\":\"White Glove Community\"}]},\"Active\":\"Yes\"},{\"ContractID\":17246,\"ContractName\":\"Aetna Commercial Nursing - SCA\",\"Offices\":{\"Office\":[{\"ID\":1025,\"Name\":\"White Glove Community\"},{\"ID\":2259,\"Name\":\"White Glove New Jersey\"}]},\"Active\":\"Yes\"},{\"ContractID\":10386,\"ContractName\":\"Affinity Health Plan Inc\",\"Offices\":{\"Office\":[{\"ID\":13511,\"Name\":\"WGCC Florida\"},{\"ID\":1025,\"Name\":\"White Glove Community\"}]},\"Active\":\"Yes\"},{\"ContractID\":11473,\"ContractName\":\"Affinity Health Plan Nursing\",\"Offices\":{\"Office\":[{\"ID\":13511,\"Name\":\"WGCC Florida\"},{\"ID\":1025,\"Name\":\"White Glove Community\"}]},\"Active\":\"Yes\"},{\"ContractID\":26554,\"ContractName\":\"AGEWELL CDPAP SCA\",\"Offices\":{\"Office\":[{\"ID\":1025,\"Name\":\"White Glove Community\"}]},\"Active\":\"Yes\"},{\"ContractID\":10390,\"ContractName\":\"AGEWELL NEW YORK MLTC\",\"Offices\":{\"Office\"…"
   },
   "getDisciplines": {
-    "ok": false,
-    "errorId": "-5",
-    "errorMessage": "Invalid application key.",
-    "rawPreview": {
-      "Result": {
-        "ErrorInfo": {
-          "ErrorID": -5,
-          "ErrorMessage": "Invalid application key."
-        },
-        "Details": "",
-        "@_Status": "Failure"
-      }
-    }
+    "ok": true,
+    "status": "Success",
+    "errorId": "0",
+    "errorMessage": "",
+    "rawPreview": "{\"Result\":{\"ErrorInfo\":{\"ErrorID\":0,\"ErrorMessage\":\"\"},\"Details\":\"\",\"@_Status\":\"Success\"},\"Disciplines\":{\"DisciplineInfo\":[{\"DisciplineID\":1,\"DisciplineName\":\"PCA\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":2,\"DisciplineName\":\"HHA\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":3,\"DisciplineName\":\"RN\",\"DisciplineTypeID\":1,\"DisciplineType\":\"Skilled\"},{\"DisciplineID\":4,\"DisciplineName\":\"LPN\",\"DisciplineTypeID\":1,\"DisciplineType\":\"Skilled\"},{\"DisciplineID\":5,\"DisciplineName\":\"PT\",\"DisciplineTypeID\":1,\"DisciplineType\":\"Skilled\"},{\"DisciplineID\":6,\"DisciplineName\":\"OT\",\"DisciplineTypeID\":1,\"DisciplineType\":\"Skilled\"},{\"DisciplineID\":7,\"DisciplineName\":\"ST\",\"DisciplineTypeID\":1,\"DisciplineType\":\"Skilled\"},{\"DisciplineID\":8,\"DisciplineName\":\"MSW\",\"DisciplineTypeID\":1,\"DisciplineType\":\"Skilled\"},{\"DisciplineID\":9,\"DisciplineName\":\"HSK\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":20,\"DisciplineName\":\"HMK\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":10,\"DisciplineName\":\"NT\",\"DisciplineTypeID\":1,\"DisciplineType\":\"Skilled\"},{\"DisciplineID\":11,\"DisciplineName\":\"RT\",\"DisciplineTypeID\":1,\"DisciplineType\":\"Skilled\"},{\"DisciplineID\":12,\"DisciplineName\":\"PA\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":13,\"DisciplineName\":\"HCSS\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":14,\"DisciplineName\":\"CNA\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":29,\"DisciplineName\":\"COMP\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":17,\"DisciplineName\":\"APC\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":18,\"DisciplineName\":\"SCM\",\"DisciplineTypeID\":1,\"DisciplineType\":\"Skilled\"},{\"DisciplineID\":19,\"DisciplineName\":\"SCI\",\"DisciplineTypeID\":1,\"DisciplineType\":\"Skilled\"},{\"DisciplineID\":21,\"DisciplineName\":\"ILST\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":22,\"DisciplineName\":\"PBIS\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":25,\"DisciplineName\":\"RESP\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":26,\"DisciplineName\":\"ESC\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":27,\"DisciplineName\":\"SDP\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":28,\"DisciplineName\":\"CBSA\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":30,\"DisciplineName\":\"PC\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":31,\"DisciplineName\":\"CH\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":32,\"DisciplineName\":\"SPC\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":33,\"DisciplineName\":\"SHHA\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":34,\"DisciplineName\":\"SHC\",\"DisciplineTypeID\":2,\"DisciplineType\":\"Non Skilled\"},{\"DisciplineID\":35,\"DisciplineName\":\"NINS\",\"DisciplineTypeID\":1,\"DisciplineTyp…"
   },
   "getContractServiceCode": {
-    "skipped": true,
-    "reason": "no contract id"
-  },
-  "searchPatients": {
-    "ok": false,
-    "errorId": "-5",
-    "errorMessage": "Invalid application key.",
+    "ok": true,
+    "status": "Success",
+    "errorId": "-317",
+    "errorMessage": "Invalid Patient Contract",
     "rawPreview": {
       "Result": {
         "ErrorInfo": {
-          "ErrorID": -5,
-          "ErrorMessage": "Invalid application key."
+          "ErrorID": -317,
+          "ErrorMessage": "Invalid Patient Contract"
         },
         "Details": "",
-        "@_Status": "Failure"
+        "@_Status": "Success"
+      },
+      "ServiceCodes": ""
+    }
+  },
+  "searchPatients": {
+    "ok": true,
+    "status": "Success",
+    "errorId": "0",
+    "errorMessage": "",
+    "rawPreview": "{\"Result\":{\"ErrorInfo\":{\"ErrorID\":0,\"ErrorMessage\":\"\"},\"Details\":\"\",\"@_Status\":\"Success\"},\"Patients\":{\"PatientID\":[958000,1227276,1227396,1264058,1264093,1264116,1276941,1277149,1277155,1277194,1277206,1277274,1277331,1277340,1277348,1277355,1277391,1277400,1277418,1277429,1277430,1277446,1277475,1277486,1277507,1277509,1277513,1277523,1277531,1277554,1277572,1277618,1277625,1277634,1277663,1277737,1277818,1278526,1291946,1297230,1308247,1357193,1391228,1391242,1391254,1391266,1391286,1391288,1391300,1391307,1391308,1391309,1391310,1391319,1392300,1393030,1423215,1426787,1430387,1446868,1625400,1627627,1628102,2170832,2388236,2724993,2727396,2881704,2882833,2950845,2978011,3032173,3056201,3058863,3108131,3157099,3170674,3176181,3202830,3250137,3297891,3298869,3409739,3420757,3435703,3440030,3527898,3595593,3595706,3731226,3737039,3826357,3826661,4010503,4140848,4146050,4198911,4200351,4229743,4241557,4251013,4257460,4265888,4268942,4278944,4320396,4439571,4478978,4494252,4516856,4525844,4532188,4532379,4574833,4584775,4658441,4658613,4672322,4683762,5086686,6001860,6093772,6099759,6102667,6109245,6131554,6145625,6145634,6374987,6375261,6398550,6404782,6432360,6463602,6465778,6482717,6511370,6536203,6596455,6602847,6608393,6686734,6700478,6705978,6719819,6729009,6818918,6820298,6980317,7025185,7027143,7228605,7253497,7287753,7302630,7305053,7340933,7435930,7562586,8441960,8467640,8467658,8537769,9164148,9195782,9364552,9514702,9519319,9597493,9645044,9893934,9895401,10045810,10148704,10530964,10588144,10588225,10661073,10673891,10703595,10750615,10900344,10934736,10941813,11009785,11026163,11027389,11055108,11055286,11070197,11083051,11083172,11118919,11182758,11188639,11292257,11322414,11337722,11379683,11405622,11409181,11435791,11477150,11519180,11560299,11581632,11665061,11786079,11786087,11786227,11786450,11825433,11825492,11825501,11825569,11825613,11825622,11825733,11975763,12007047,12011916,12012597,12045849,12072660,12122927,12161414,12174718,12253989,12337109,12339226,12360716,12360874,12384999,12385289,12411065,12418257,12418542,12424691,12434949,12434986,12439230,12441988,12446475,12469361,12481136,12484138,12554301,12606503,12628183,12675318,12676623,12685880,12686627,12686771,12686778,12692625,12697614,12697681,12698356,12707982,12710553,12718426,12761342,12761859,12764171,12772718,12797478,12797969,12812561,12812628,12812705,12840121,12853453,12863586,12898252,12939855,12949687,13031162,13075383,13077814,13079079,13185154,13405977,13433881,13451940,13529414,13538186,13545320,13547466,13649761,13649926,13674288,13688149,13709322,13712976,13734295,13734861,13788811,13976032,14049838,14049869,14056944,14060887,14069387,14074133,14129518,14133302,14147880,14158371,14162135,14216556,14217290,14225440,14357260,14396318,14396607,14396651,14406749,14408267,14408272,14408283,14408290,14408294,14408311,14408325,14408341,14408344,14408375,14408402,14408422,14418612,14418636,14418639,14421439,14499048,14500215,14511455,14513299,14513347,1451362…"
+  },
+  "samplePatientIds": [
+    958000,
+    1227276,
+    1227396,
+    1264058,
+    1264093
+  ],
+  "getPatientDemographics": {
+    "ok": true,
+    "status": "Success",
+    "errorId": "0",
+    "errorMessage": "",
+    "rawPreview": {
+      "Result": {
+        "ErrorInfo": {
+          "ErrorID": 0,
+          "ErrorMessage": ""
+        },
+        "Details": "",
+        "@_Status": "Success"
+      },
+      "PatientInfo": {
+        "AgencyID": 613,
+        "OfficeID": 1025,
+        "PatientID": [
+          958000
+        ],
+        "FirstName": "ALFREDA",
+        "MiddleName": "",
+        "LastName": "JONES",
+        "BirthDate": "1960-03-25",
+        "Gender": "Female",
+        "Coordinators": {
+          "Coordinator": [
+            {
+              "ID": 25164,
+              "Name": "Ashley Ortiz Ext. 3272"
+            },
+            {
+              "ID": 78593,
+              "Name": "Francine Eisner Ext.4048"
+            },
+            {
+              "ID": 0,
+              "Name": ""
+            }
+          ]
+        },
+        "PriorityCode": 2,
+        "ServiceRequestStartDate": "2012-03-09",
+        "Nurse": {
+          "ID": 4652126,
+          "Name": "EISNER FRANCINE"
+        },
+        "AdmissionID": 900032,
+        "MedicaidNumber": "ZW20696J",
+        "MedicareNumber": "",
+        "AcceptedServices": {
+          "Discipline": [
+            "PCA",
+            "RN",
+            "PA"
+          ]
+        },
+        "SSN": "057-56-8535",
+        "Alerts": "QUALITY ALERT FOR PREVENTION OF HOSPITALIZATION AND EMERGENCY ROOM USE DUE TO DIABETES, ASTHMA, COPD, CHF, URINARY TRACT INFECTION (USE ONLY THE DIAGNOSES APPLICABLE FOR THE PATIENT) EPISODES’.   apartment 5A!!  9175694108  7188254749",
+        "SourceOfAdmission": {
+          "ID": 9300,
+          "Name": "MLTC"
+        },
+        "Team": {
+          "ID": 2036,
+          "Name": "Manager Wendy Ext. 3238"
+        },
+        "Location": {
+          "ID": 12284,
+          "Name": "Bronx"
+        },
+        "Branch": {
+          "ID": 10073742,
+          "Name": "CHHA Case"
+        },
+        "Addresses": {
+          "Address": {
+            "AddressID": 2966779,
+            "Address1": "1036 INTERVALE AVE 5A",
+            "Address2": "",
+            "CrossStreet": "",
+            "City": "BRONX",
+            "Zip5": 10459,
+            "Zip4": 0,
+            "State": "NY",
+            "County": "Bronx",
+            "IsPrimaryAddress": "Yes",
+            "AddressTypes": "GPS, Home"
+          }
+        },
+        "HomePhone": "917-569-4108",
+        "Phone2": "332-388-2704",
+        "Phone2Description": "",
+        "Phone3": "347-872-5011",
+        "Phone3Description": "",
+        "HomePhoneLocationAddressID": 2966779,
+        "HomePhoneLocationAddress": "1036 INTERVALE AVE 5A, BRONX, NY, Bronx, 10459",
+        "HomePhone2LocationAddressID": 2966779,
+        "HomePhone2LocationAddress": "1036 INTERVALE AVE 5A, BRONX, NY, Bronx, 10459",
+        "HomePhone3LocationAddressID": 2966779,
+        "HomePhone3LocationAddress": "1036 INTERVALE AVE 5A, BRONX, NY, Bronx, 10459",
+        "Direction": "",
+        "AlternateBilling": {
+          "FirstName": "",
+          "MiddleName": "",
+          "LastName": "",
+          "Street": "",
+          "City": "",
+          "State": "",
+          "Zip5": ""
+        },
+        "EmergencyContacts": {
+          "EmergencyContact": [
+            {
+              "Name": "KISMET",
+              "Relationship": {
+                "ID": -2,
+                "Name": "Other"
+              },
+              "LivesWithPatient": "False",
+              "HaveKeys": "False",
+              "Phone1": "917-214-4480",
+              "Phone2": "",
+              "Address": ""
+            },
+            {
+              "Name": "MARCIA JONES",
+              "Relationship": {
+                "ID": 229149,
+                "Name": "Sister"
+              },
+              "LivesWithPatient": "False",
+              "HaveKeys": "False",
+              "Phone1": "646-322-2343",
+              "Phone2": "",
+              "Address": ""
+            }
+          ]
+        },
+        "EmergencyPreparedness": {
+          "EvacuationZone": {
+            "ID": 10003239,
+            "Name": "None"
+          },
+          "EvacuationLocation": {
+            "ID": 0,
+            "Name": ""
+          },
+          "MobilityStatus": {
+            "ID": 2495,
+            "Name": "TAL 3: Ambulatory Independent"
+          },
+          "ElectricEquipmentDependency": ""
+        },
+        "PayerID": 0,
+        "PayerName": "",
+        "PayerCoordinatorID": 0,
+        "PayerCoordinatorName": "",
+        "PatientStatusID": 3,
+        "PatientStatusName": "Active",
+        "WageParity": "No",
+        "WageParityFromDate1": "",
+        "WageParityToDate1": "",
+        "WageParityFromDate2": "",
+        "WageParityToDate2": "",
+        "PrimaryLanguageID": 2,
+        "PrimaryLanguage": "English",
+        "SecondaryLanguageID": 0,
+        "SecondaryLanguage": "",
+        "AllowedCaregiverAccessPatientInfoToMobileApp": "",
+        "LastModifiedDate": "2026-03-04 13:32:11",
+        "DischargeDate": "",
+        "Race": "",
+        "Ethnicity": ""
       }
     }
   },
-  "samplePatientIds": [],
-  "getPatientDemographics": {
-    "skipped": true
+  "getPatientContracts": {
+    "ok": false,
+    "status": "Failure",
+    "errorId": "-56",
+    "errorMessage": "Patient ID is an invalid for current Agency.",
+    "rawPreview": {
+      "Result": {
+        "ErrorInfo": {
+          "ErrorID": -56,
+          "ErrorMessage": "Patient ID is an invalid for current Agency."
+        },
+        "Details": "",
+        "@_Status": "Failure"
+      },
+      "PatientContracts": ""
+    }
+  },
+  "searchVisits": {
+    "ok": true,
+    "status": "Success",
+    "errorId": "-499",
+    "errorMessage": "Invalid caregiver ID; please resend transaction with correct data.",
+    "rawPreview": {
+      "Result": {
+        "ErrorInfo": {
+          "ErrorID": -499,
+          "ErrorMessage": "Invalid caregiver ID; please resend transaction with correct data."
+        },
+        "Details": "",
+        "@_Status": "Success"
+      }
+    }
+  },
+  "getVisitInfoV2": {
+    "skipped": true,
+    "reason": "no visit id in range"
   }
 }

@@ -1,141 +1,412 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { chromium, type Browser, type Page } from 'playwright';
-import type { ReportKind } from '@white-glove/shared';
-import { REPORT_FILENAMES } from '@white-glove/shared';
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from 'playwright';
 import type { ProviderSoftCredentials } from './credentials.js';
+import { downloadOneReportHttp, downloadReportsViaHttp } from './http-download.js';
+import { PsHttpClient } from './ps-http-client.js';
+import {
+  ALL_BOT_KINDS,
+  BOT_REPORT_FILENAMES,
+  defaultDateRange,
+  isDailyReport,
+  loadReportUserIds,
+  loginUrl,
+  REPORT_DATE_INPUTS,
+  REPORT_LINK_NAMES,
+  reportViewUrl,
+  type BotReportKind,
+  type ReportUserIds,
+} from './report-config.js';
+import type { LocalDownloadResult } from './stub-reports.js';
+export type { LocalDownloadResult } from './stub-reports.js';
+export { writeStubReports } from './stub-reports.js';
+
+/** 1 initial attempt + 2 retries, then HTTP backend fallback. */
+const PLAYWRIGHT_ATTEMPTS = 3;
+
+/** ProviderSoft ASP.NET postbacks are slow — generous defaults. */
+const TIMEOUT = {
+  action: 60_000,
+  navigation: 120_000,
+  download: 180_000,
+  settle: 45_000,
+} as const;
+
+export type TrainStep =
+  | 'launch'
+  | 'login'
+  | 'navigate_report'
+  | 'modify'
+  | 'dates'
+  | 'export'
+  | 'retry'
+  | 'http'
+  | 'done'
+  | 'skip';
+
+export interface DateRange {
+  from: string;
+  to: string;
+}
 
 export interface DownloadReportsOptions {
   credentials: ProviderSoftCredentials;
   downloadDir: string;
   headless?: boolean;
+  /** Which reports to download. Default: all four bot kinds. */
+  kinds?: BotReportKind[];
+  reportIds?: ReportUserIds;
   /**
-   * Selector / navigation hooks — filled once we have access to the live UI.
-   * Defaults intentionally target common login form patterns.
+   * Optional override for **daily** reports only.
+   * API Report always uses past-week → today unless `dateRanges.verified_sessions` is set.
    */
-  selectors?: Partial<ProviderSoftSelectors>;
+  dateRange?: DateRange;
+  /** Per-kind date overrides (escape hatch). */
+  dateRanges?: Partial<Record<BotReportKind, DateRange>>;
+  onStep?: (step: TrainStep, detail: string) => void;
+  keepOpen?: boolean;
+  /** Disable HTTP fallback after Playwright retries (default: false = allow fallback). */
+  disableHttpFallback?: boolean;
 }
 
-export interface ProviderSoftSelectors {
-  username: string;
-  password: string;
-  submit: string;
-  reportsMenu: string;
-  reportLinks: Record<ReportKind, string>;
-  exportButton: string;
+function log(
+  onStep: DownloadReportsOptions['onStep'],
+  step: TrainStep,
+  detail: string,
+): void {
+  onStep?.(step, detail);
 }
 
-const DEFAULT_SELECTORS: ProviderSoftSelectors = {
-  username: 'input[name="username"], input[name="UserName"], #username, input[type="email"]',
-  password: 'input[name="password"], input[name="Password"], #password, input[type="password"]',
-  submit: 'button[type="submit"], input[type="submit"], button:has-text("Login"), button:has-text("Sign in")',
-  reportsMenu: 'a:has-text("Reports"), text=Reports',
-  reportLinks: {
-    opened_cases: 'text=New Opened Cases',
-    closed_cases: 'text=Closed Cases',
-    verified_sessions: 'text=Verified Sessions',
-  },
-  exportButton: 'button:has-text("Export"), a:has-text("Export"), button:has-text("Download"), a:has-text("CSV")',
-};
-
-export interface LocalDownloadResult {
-  files: Record<ReportKind, string>;
+/** Wait for ASP.NET page to finish loading after a postback. */
+async function settle(page: Page): Promise<void> {
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForLoadState('networkidle', { timeout: TIMEOUT.settle }).catch(() => undefined);
+  await page.waitForTimeout(750);
 }
 
-async function login(page: Page, creds: ProviderSoftCredentials, selectors: ProviderSoftSelectors) {
-  await page.goto(creds.baseUrl, { waitUntil: 'domcontentloaded' });
-  await page.locator(selectors.username).first().fill(creds.username);
-  await page.locator(selectors.password).first().fill(creds.password);
-  await Promise.all([
-    page.waitForLoadState('networkidle').catch(() => undefined),
-    page.locator(selectors.submit).first().click(),
-  ]);
+async function clickReady(locator: Locator): Promise<void> {
+  await locator.waitFor({ state: 'visible', timeout: TIMEOUT.action });
+  await locator.click({ timeout: TIMEOUT.action });
 }
 
-async function downloadOneReport(
+async function fillReady(locator: Locator, value: string): Promise<void> {
+  await locator.waitFor({ state: 'visible', timeout: TIMEOUT.action });
+  await locator.click({ timeout: TIMEOUT.action });
+  await locator.fill(value, { timeout: TIMEOUT.action });
+}
+
+async function login(
   page: Page,
-  kind: ReportKind,
-  downloadDir: string,
-  selectors: ProviderSoftSelectors,
-): Promise<string> {
-  await page.locator(selectors.reportsMenu).first().click({ timeout: 30_000 });
-  await page.locator(selectors.reportLinks[kind]).first().click({ timeout: 30_000 });
+  creds: ProviderSoftCredentials,
+  onStep?: DownloadReportsOptions['onStep'],
+): Promise<void> {
+  const url = loginUrl(creds.baseUrl);
+  log(onStep, 'login', `goto ${url}`);
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: TIMEOUT.navigation });
+  await settle(page);
 
+  await fillReady(page.locator('#unametxt'), creds.username);
+  await fillReady(page.locator('#passtxt'), creds.password);
+
+  log(onStep, 'login', 'submit credentials');
+  await clickReady(page.getByRole('button', { name: 'Login' }));
+  await settle(page);
+
+  if (/login\.aspx/i.test(page.url())) {
+    throw new Error(`Login appears to have failed; still on ${page.url()}`);
+  }
+  log(onStep, 'login', `ok → ${page.url()}`);
+}
+
+async function openReportsMenu(page: Page): Promise<void> {
+  const reports = page.getByRole('link', { name: 'ReportsReports' });
+  if (await reports.count()) {
+    await clickReady(reports.first());
+    await settle(page);
+    return;
+  }
+  await clickReady(page.getByRole('link', { name: /Reports/i }).first());
+  await settle(page);
+}
+
+async function openReportPage(
+  page: Page,
+  kind: BotReportKind,
+  baseUrl: string,
+  reportIds: ReportUserIds,
+  onStep?: DownloadReportsOptions['onStep'],
+): Promise<void> {
+  const id = reportIds[kind];
+  if (id) {
+    const url = reportViewUrl(baseUrl, id);
+    log(onStep, 'navigate_report', `${kind} via UserReportId=${id}`);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: TIMEOUT.navigation });
+    await settle(page);
+    return;
+  }
+
+  log(onStep, 'navigate_report', `${kind} via Reports → ${REPORT_LINK_NAMES[kind]}`);
+  await openReportsMenu(page);
+  await clickReady(
+    page.getByRole('link', { name: REPORT_LINK_NAMES[kind], exact: false }).first(),
+  );
+  await settle(page);
+}
+
+/**
+ * Wizard path from codegen:
+ * Modify Report → Next → set dates → Next → Next → Export to Excel
+ */
+async function modifyDatesAndExport(
+  page: Page,
+  kind: BotReportKind,
+  downloadDir: string,
+  range: DateRange,
+  onStep?: DownloadReportsOptions['onStep'],
+): Promise<string> {
+  log(onStep, 'modify', `${kind}: Modify Report`);
+  await clickReady(page.getByRole('button', { name: 'Modify Report' }));
+  await settle(page);
+
+  await clickReady(page.getByRole('button', { name: 'Next >>' }));
+  await settle(page);
+
+  const inputs = REPORT_DATE_INPUTS[kind];
+  log(onStep, 'dates', `${kind}: ${range.from} → ${range.to}`);
+  await fillReady(page.locator(inputs.from), range.from);
+  await fillReady(page.locator(inputs.to), range.to);
+
+  await clickReady(page.getByRole('button', { name: 'Next >>' }));
+  await settle(page);
+  await clickReady(page.getByRole('button', { name: 'Next >>' }));
+  await settle(page);
+
+  const exportBtn = page.getByRole('button', { name: 'Export to Excel' });
+  await exportBtn.waitFor({ state: 'visible', timeout: TIMEOUT.action });
+
+  log(onStep, 'export', `Export to Excel (${kind})`);
   const [download] = await Promise.all([
-    page.waitForEvent('download', { timeout: 60_000 }),
-    page.locator(selectors.exportButton).first().click(),
+    page.waitForEvent('download', { timeout: TIMEOUT.download }),
+    exportBtn.click({ timeout: TIMEOUT.action }),
   ]);
 
   const suggested = download.suggestedFilename();
   const ext = path.extname(suggested) || '.csv';
-  const target = path.join(downloadDir, `${REPORT_FILENAMES[kind]}${ext}`);
+  const target = path.join(downloadDir, `${BOT_REPORT_FILENAMES[kind]}${ext}`);
   await download.saveAs(target);
+  log(onStep, 'export', `saved ${target} (suggested: ${suggested})`);
   return target;
 }
 
+export interface InteractiveSession {
+  browser: Browser;
+  context: BrowserContext;
+  page: Page;
+  close: () => Promise<void>;
+}
+
+async function launchSession(
+  options: DownloadReportsOptions,
+): Promise<InteractiveSession> {
+  log(options.onStep, 'launch', `headless=${options.headless ?? true}`);
+  const browser = await chromium.launch({ headless: options.headless ?? true });
+  const context = await browser.newContext({ acceptDownloads: true });
+  context.setDefaultTimeout(TIMEOUT.action);
+  context.setDefaultNavigationTimeout(TIMEOUT.navigation);
+  const page = await context.newPage();
+  return {
+    browser,
+    context,
+    page,
+    close: async () => {
+      await context.close().catch(() => undefined);
+      await browser.close().catch(() => undefined);
+    },
+  };
+}
+
+function resolveKinds(options: DownloadReportsOptions): BotReportKind[] {
+  if (options.kinds?.length) return options.kinds;
+  return [...ALL_BOT_KINDS];
+}
+
+function resolveRange(
+  kind: BotReportKind,
+  options: DownloadReportsOptions,
+): DateRange {
+  if (options.dateRanges?.[kind]) return options.dateRanges[kind]!;
+  if (options.dateRange && isDailyReport(kind)) return options.dateRange;
+  return defaultDateRange(kind);
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+async function downloadOneWithRetries(
+  page: Page,
+  kind: BotReportKind,
+  options: DownloadReportsOptions,
+  reportIds: ReportUserIds,
+  range: DateRange,
+): Promise<string> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= PLAYWRIGHT_ATTEMPTS; attempt++) {
+    try {
+      if (attempt > 1) {
+        log(
+          options.onStep,
+          'retry',
+          `${kind}: Playwright attempt ${attempt}/${PLAYWRIGHT_ATTEMPTS}`,
+        );
+        await sleep(1500 * (attempt - 1));
+      }
+      await openReportPage(
+        page,
+        kind,
+        options.credentials.baseUrl,
+        reportIds,
+        options.onStep,
+      );
+      return await modifyDatesAndExport(
+        page,
+        kind,
+        options.downloadDir,
+        range,
+        options.onStep,
+      );
+    } catch (err) {
+      lastError = err;
+      log(
+        options.onStep,
+        'retry',
+        `${kind}: attempt ${attempt} failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  if (options.disableHttpFallback) {
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  const id = reportIds[kind];
+  if (!id) {
+    throw new Error(
+      `${kind}: Playwright failed ${PLAYWRIGHT_ATTEMPTS}x and no UserReportId for HTTP fallback. ` +
+        `Last error: ${lastError instanceof Error ? lastError.message : lastError}`,
+    );
+  }
+
+  log(
+    options.onStep,
+    'http',
+    `${kind}: falling back to ProviderSoft HTTP backend (UserReportId=${id})`,
+  );
+  const client = new PsHttpClient(options.credentials);
+  await client.login();
+  return downloadOneReportHttp(
+    client,
+    kind,
+    id,
+    options.downloadDir,
+    range,
+    (_step, detail) => log(options.onStep, 'http', detail),
+  );
+}
+
 /**
- * Logs into ProviderSoft and downloads the three required reports.
- * Selectors are best-effort until live UI access is available; local dry-runs
- * can use `writeStubReports` instead.
+ * Login + download reports via Playwright (up to 3 attempts each),
+ * then HTTP backend fallback when a UserReportId is configured.
  */
 export async function downloadReports(
   options: DownloadReportsOptions,
 ): Promise<LocalDownloadResult> {
-  const selectors: ProviderSoftSelectors = {
-    ...DEFAULT_SELECTORS,
-    ...options.selectors,
-    reportLinks: {
-      ...DEFAULT_SELECTORS.reportLinks,
-      ...options.selectors?.reportLinks,
-    },
-  };
+  const reportIds = options.reportIds ?? loadReportUserIds();
+  const kinds = resolveKinds(options);
 
   await mkdir(options.downloadDir, { recursive: true });
+  const session = await launchSession(options);
 
-  let browser: Browser | undefined;
   try {
-    browser = await chromium.launch({ headless: options.headless ?? true });
-    const context = await browser.newContext({ acceptDownloads: true });
-    const page = await context.newPage();
-    await login(page, options.credentials, selectors);
-
-    const files = {} as Record<ReportKind, string>;
-    for (const kind of ['opened_cases', 'closed_cases', 'verified_sessions'] as ReportKind[]) {
-      files[kind] = await downloadOneReport(page, kind, options.downloadDir, selectors);
+    let loginOk = false;
+    let loginErr: unknown;
+    for (let attempt = 1; attempt <= PLAYWRIGHT_ATTEMPTS; attempt++) {
+      try {
+        if (attempt > 1) {
+          log(options.onStep, 'retry', `login attempt ${attempt}/${PLAYWRIGHT_ATTEMPTS}`);
+          await sleep(1500 * (attempt - 1));
+        }
+        await login(session.page, options.credentials, options.onStep);
+        loginOk = true;
+        break;
+      } catch (err) {
+        loginErr = err;
+        log(
+          options.onStep,
+          'retry',
+          `login failed: ${err instanceof Error ? err.message : err}`,
+        );
+      }
     }
+
+    if (!loginOk) {
+      if (options.disableHttpFallback) {
+        throw loginErr instanceof Error ? loginErr : new Error(String(loginErr));
+      }
+      log(options.onStep, 'http', 'Playwright login failed; downloading all via HTTP backend');
+      return downloadReportsViaHttp({
+        credentials: options.credentials,
+        downloadDir: options.downloadDir,
+        kinds,
+        reportIds,
+        dateRange: options.dateRange,
+        dateRanges: options.dateRanges,
+        onStep: (_step, detail) => log(options.onStep, 'http', detail),
+      });
+    }
+
+    const files: LocalDownloadResult['files'] = {};
+    for (const kind of kinds) {
+      const range = resolveRange(kind, options);
+      log(
+        options.onStep,
+        'dates',
+        `plan ${kind}: ${range.from} → ${range.to}` +
+          (kind === 'verified_sessions' ? ' (weekly)' : ' (daily)'),
+      );
+      files[kind] = await downloadOneWithRetries(
+        session.page,
+        kind,
+        options,
+        reportIds,
+        range,
+      );
+    }
+
+    if (!Object.keys(files).length) {
+      throw new Error('No reports downloaded.');
+    }
+
+    log(options.onStep, 'done', JSON.stringify(files));
     return { files };
   } finally {
-    await browser?.close();
+    if (!options.keepOpen) await session.close().catch(() => undefined);
   }
 }
 
-/** Local / CI stub when ProviderSoft credentials or UI are unavailable. */
-export async function writeStubReports(downloadDir: string): Promise<LocalDownloadResult> {
-  await mkdir(downloadDir, { recursive: true });
-  const opened = [
-    'Case ID,First Name,Last Name,Program Type,Service Code,Authorization Number,Contract ID',
-    'HH-1,Home,Health,Home Health,PCA001,AUTH-1,CT-1',
-    'EI-1,Early,Case,Early Intervention,HHA001,AUTH-E,CT-E',
-  ].join('\n');
-  const closed = ['case_id,status,closed_date,closed_reason', 'HH-0,Closed,2026-07-01,Discharged'].join(
-    '\n',
-  );
-  const sessions = [
-    'session_id,patient_id,case_id,service_code,visit_date,start_time,end_time,status',
-    'S-1,p1,HH-1,PCA001,2026-07-14,09:00,10:00,Verified',
-    'S-2,p1,HH-1,HHA001,2026-07-14,11:00,12:00,Verified',
-    'S-3,p2,HH-2,ZZZ999,2026-07-14,13:00,14:00,Verified',
-  ].join('\n');
-
-  const files = {
-    opened_cases: path.join(downloadDir, `${REPORT_FILENAMES.opened_cases}.csv`),
-    closed_cases: path.join(downloadDir, `${REPORT_FILENAMES.closed_cases}.csv`),
-    verified_sessions: path.join(downloadDir, `${REPORT_FILENAMES.verified_sessions}.csv`),
-  };
-  await writeFile(files.opened_cases, opened, 'utf8');
-  await writeFile(files.closed_cases, closed, 'utf8');
-  await writeFile(files.verified_sessions, sessions, 'utf8');
-  return { files };
+/** Login-only helper for headed training. */
+export async function loginOnly(
+  options: Omit<DownloadReportsOptions, 'kinds'>,
+): Promise<InteractiveSession> {
+  const session = await launchSession(options);
+  try {
+    await login(session.page, options.credentials, options.onStep);
+    log(options.onStep, 'done', `logged in at ${session.page.url()}`);
+    return session;
+  } catch (err) {
+    if (!options.keepOpen) await session.close();
+    throw err;
+  }
 }
 
 export async function readReportFile(filePath: string): Promise<Buffer> {

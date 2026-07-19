@@ -77,7 +77,8 @@ async function main() {
     printSummary('GetPatientDemographics', demo);
 
     console.log(`7) GetPatientContracts(${pid})…`);
-    const pc = await client.getPatientContracts(pid);
+    const visitDate = new Date().toISOString().slice(0, 10);
+    const pc = await client.getPatientContracts(pid, visitDate);
     results.getPatientContracts = summarize(pc);
     printSummary('GetPatientContracts', pc);
 

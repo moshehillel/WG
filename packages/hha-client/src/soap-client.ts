@@ -60,7 +60,7 @@ function interpretStatus(result: Record<string, unknown>): Pick<
   SoapCallResult,
   'ok' | 'status' | 'errorId' | 'errorMessage'
 > {
-  const status = String(result.Status ?? result.status ?? '');
+  const status = String(result.Status ?? result['@_Status'] ?? result.status ?? '');
   const errorId = result.ErrorID !== undefined ? String(result.ErrorID) : undefined;
   const errorMessage =
     result.ErrorMessage !== undefined
@@ -121,7 +121,8 @@ export class HhaSoapClient {
       const nestedResult = (result as { Result?: Record<string, unknown> }).Result;
       if (nestedResult) {
         const errorInfo = nestedResult.ErrorInfo as Record<string, unknown> | undefined;
-        const status = String(nestedResult.Status ?? '');
+        // fast-xml-parser puts attributes as @_Status
+        const status = String(nestedResult.Status ?? nestedResult['@_Status'] ?? '');
         return {
           ok: status.toLowerCase() === 'success',
           status: status || undefined,
@@ -196,35 +197,36 @@ export class HhaSoapClient {
     );
   }
 
-  getPatientContracts(patientId: number, visitDate?: string): Promise<SoapCallResult> {
+  getPatientContracts(patientId: number, visitDate: string): Promise<SoapCallResult> {
+    // ASMX requires a real VisitDate (empty string → SOAP fault). Flat params, not wrapped.
     return this.call(
       'GetPatientContracts',
-      `<PatientContracts>
-  <PatientID>${patientId}</PatientID>
-  <VisitDate>${escapeXml(visitDate ?? '')}</VisitDate>
-</PatientContracts>`,
+      `<PatientID>${patientId}</PatientID>
+  <VisitDate>${escapeXml(visitDate)}</VisitDate>`,
     );
   }
 
   searchVisits(filters: {
     patientId?: number;
     caregiverId?: number;
+    officeId?: number;
     startDate: string;
     endDate: string;
   }): Promise<SoapCallResult> {
-    return this.call(
-      'SearchVisits',
-      `<SearchFilters>
-  <CaregiverID>${filters.caregiverId ?? 0}</CaregiverID>
-  <PatientID>${filters.patientId ?? 0}</PatientID>
-  <StartDate>${escapeXml(filters.startDate)}</StartDate>
-  <EndDate>${escapeXml(filters.endDate)}</EndDate>
-</SearchFilters>`,
-    );
+    // Do not send CaregiverID=0 (Invalid caregiver ID). Office searches max 1-day range.
+    const parts = [
+      `<StartDate>${escapeXml(filters.startDate)}</StartDate>`,
+      `<EndDate>${escapeXml(filters.endDate)}</EndDate>`,
+    ];
+    if (filters.patientId) parts.push(`<PatientID>${filters.patientId}</PatientID>`);
+    if (filters.caregiverId) parts.push(`<CaregiverID>${filters.caregiverId}</CaregiverID>`);
+    if (filters.officeId) parts.push(`<OfficeID>${filters.officeId}</OfficeID>`);
+    return this.call('SearchVisits', `<SearchFilters>\n  ${parts.join('\n  ')}\n</SearchFilters>`);
   }
 
   getVisitInfoV2(visitId: number): Promise<SoapCallResult> {
-    return this.call('GetVisitInfoV2', `<VisitInfo><VisitID>${visitId}</VisitID></VisitInfo>`);
+    // ASMX docs show VisitID, but sandbox accepts ID (VisitID returns -415).
+    return this.call('GetVisitInfoV2', `<VisitInfo><ID>${visitId}</ID></VisitInfo>`);
   }
 
   getPatientAuthorizationInfo(patientId: number, authorizationId: number): Promise<SoapCallResult> {

@@ -4,23 +4,31 @@ import type {
   VerifiedSessionRow,
 } from '@white-glove/shared';
 import { firstField, normalizeHeaders, parseCsv, truthyFlag } from './csv.js';
+import { isEarlyInterventionProgram } from './rules.js';
+
+function detectEarlyIntervention(row: Record<string, string>): {
+  programType?: string;
+  isEarlyIntervention: boolean;
+} {
+  const programType = firstField(row, 'program_type', 'program', 'programtype');
+  const eiField = firstField(
+    row,
+    'is_early_intervention',
+    'early_intervention',
+    'ei',
+    'program_type',
+    'program',
+  );
+  return {
+    programType,
+    isEarlyIntervention: truthyFlag(eiField) || isEarlyInterventionProgram(programType),
+  };
+}
 
 export function parseOpenedCases(content: string): OpenedCaseRow[] {
   return parseCsv(content).map((raw) => {
     const row = normalizeHeaders(raw);
-    const programType = firstField(row, 'program_type', 'program', 'programtype');
-    const eiField = firstField(
-      row,
-      'is_early_intervention',
-      'early_intervention',
-      'ei',
-      'program_type',
-      'program',
-    );
-    const isEarlyIntervention =
-      truthyFlag(eiField) ||
-      (programType?.toLowerCase().includes('early intervention') ?? false) ||
-      programType?.toUpperCase() === 'EI';
+    const { programType, isEarlyIntervention } = detectEarlyIntervention(row);
 
     return {
       caseId: firstField(row, 'case_id', 'caseid', 'case_number', 'id') ?? '',
@@ -43,11 +51,14 @@ export function parseOpenedCases(content: string): OpenedCaseRow[] {
 export function parseClosedCases(content: string): ClosedCaseRow[] {
   return parseCsv(content).map((raw) => {
     const row = normalizeHeaders(raw);
+    const { programType, isEarlyIntervention } = detectEarlyIntervention(row);
     return {
       caseId: firstField(row, 'case_id', 'caseid', 'case_number', 'id') ?? '',
       patientExternalId: firstField(row, 'patient_external_id', 'patient_id', 'client_id'),
       firstName: firstField(row, 'first_name', 'firstname'),
       lastName: firstField(row, 'last_name', 'lastname'),
+      programType,
+      isEarlyIntervention,
       closedDate: firstField(row, 'closed_date', 'close_date', 'end_date'),
       closedReason: firstField(row, 'closed_reason', 'reason', 'close_reason'),
       status: firstField(row, 'status', 'case_status') ?? 'Closed',
@@ -59,10 +70,13 @@ export function parseClosedCases(content: string): ClosedCaseRow[] {
 export function parseVerifiedSessions(content: string): VerifiedSessionRow[] {
   return parseCsv(content).map((raw) => {
     const row = normalizeHeaders(raw);
+    const { programType, isEarlyIntervention } = detectEarlyIntervention(row);
     return {
       sessionId: firstField(row, 'session_id', 'sessionid', 'visit_id', 'id') ?? '',
       caseId: firstField(row, 'case_id', 'caseid'),
       patientExternalId: firstField(row, 'patient_external_id', 'patient_id', 'client_id'),
+      programType,
+      isEarlyIntervention,
       serviceCode: firstField(row, 'service_code', 'servicecode', 'code'),
       visitDate: firstField(row, 'visit_date', 'session_date', 'date'),
       startTime: firstField(row, 'start_time', 'start', 'clock_in'),

@@ -2,6 +2,7 @@ import type { HhaClient } from '@white-glove/hha-client';
 import type { ClosedCaseRow, PipelineException, ProcessorResult } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
+import { isEarlyInterventionCase } from './rules.js';
 
 export async function processClosedCases(options: {
   runId: string;
@@ -23,6 +24,17 @@ export async function processClosedCases(options: {
         code: 'parse_error',
         message: 'Closed case missing caseId',
         reportKind: 'closed_cases',
+      });
+      continue;
+    }
+
+    if (isEarlyInterventionCase(row)) {
+      skipped += 1;
+      exceptions.push({
+        code: 'skipped_by_rule',
+        message: 'Early Intervention case ignored — not sent to HHA',
+        reportKind: 'closed_cases',
+        rowId: row.caseId,
       });
       continue;
     }

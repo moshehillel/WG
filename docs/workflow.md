@@ -6,10 +6,23 @@ Automation syncs ProviderSoft reports into HHA. The bot’s only ProviderSoft in
 
 | Report | HHA action |
 |--------|------------|
-| New Opened Cases | Skip Early Intervention; create/update patient, contract, authorization |
-| Closed Cases | Update case status |
+| New Opened Cases | Create/update patient, contract, authorization |
+| Closed Cases | Update case status / discharge |
 | Verified Sessions | Triage: `auto_approve` / `verify_clocking` / `skip`; apply business rules for missing codes |
 
+## Locked business rules
+
+### Early Intervention — ignore (do not send to HHA)
+
+If **program type** is Early Intervention (including values like `Early Intervention`, `EI`), **do not transfer any data to HHA** for that row.
+
+Applies to all three reports when the field is present:
+
+- Opened cases → skip patient/contract/authorization create
+- Closed cases → skip status/discharge update
+- Verified sessions → skip clocking verify / approve
+
+Detection: `program_type` / `program` contains “early intervention” or equals `EI` (case-insensitive), or an explicit EI flag column.
 ## Pipeline (AWS)
 
 1. EventBridge (daily 06:00 UTC) starts Step Functions.
@@ -28,7 +41,6 @@ Runs in the client AWS account (Lambda + Step Functions). You create the account
 - Sample exports of the three ProviderSoft reports (final column mapping)
 - Service code catalog: meaning, existing in HHA?, create-if-missing?, relation to contracts/auths/visits/billing
 - Exact session triage rules (auto-approve vs clocking verify vs never send)
-- How Early Intervention is identified on Opened Cases
 - Preferred schedule timezone (currently 06:00 UTC)
 - SNS alert email for exceptions
 

@@ -2,7 +2,6 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
-import * as ecr_assets from 'aws-cdk-lib/aws-ecr-assets';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
@@ -80,24 +79,8 @@ export class WhiteGloveStack extends cdk.Stack {
       NODE_OPTIONS: '--enable-source-maps',
     };
 
-    const downloadFn = new lambda.DockerImageFunction(this, 'ProviderSoftDownloadFn', {
-      code: lambda.DockerImageCode.fromImageAsset(repoRoot, {
-        file: 'packages/providersoft-bot/Dockerfile',
-        platform: ecr_assets.Platform.LINUX_AMD64,
-      }),
-      timeout: cdk.Duration.minutes(10),
-      memorySize: 2048,
-      environment: {
-        ...sharedEnv,
-        PROVIDERSOFT_SECRET_ARN: providerSoftSecret.secretArn,
-        PROVIDERSOFT_USE_STUBS: 'false',
-        HEADLESS: 'true',
-      },
-      logRetention: logs.RetentionDays.ONE_MONTH,
-    });
-    reportsBucket.grantReadWrite(downloadFn);
-    providerSoftSecret.grantRead(downloadFn);
-
+    // Zip Lambda (stub reports) — no Docker required for bootstrap/deploy.
+    // Switch back to DockerImageFunction + Playwright when ProviderSoft live login is ready.
     const bundling = {
       minify: true,
       sourceMap: true,
@@ -106,13 +89,32 @@ export class WhiteGloveStack extends cdk.Stack {
       banner:
         "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
       mainFields: ['module', 'main'] as string[],
+      externalModules: ['playwright', 'playwright-core', '@playwright/test'],
     };
+
+    const downloadFn = new NodejsFunction(this, 'ProviderSoftDownloadFn', {
+      entry: path.join(repoRoot, 'packages/providersoft-bot/src/stub-handler.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      timeout: cdk.Duration.minutes(5),
+      memorySize: 512,
+      environment: {
+        ...sharedEnv,
+        PROVIDERSOFT_SECRET_ARN: providerSoftSecret.secretArn,
+        PROVIDERSOFT_USE_STUBS: 'true',
+      },
+      bundling,
+      depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
+      projectRoot: repoRoot,
+    });
+    reportsBucket.grantReadWrite(downloadFn);
+    providerSoftSecret.grantRead(downloadFn);
 
     const makeProcessor = (functionId: string, entry: string) => {
       const fn = new NodejsFunction(this, functionId, {
         entry: path.join(repoRoot, entry),
         handler: 'handler',
-        runtime: lambda.Runtime.NODEJS_20_X,
+        runtime: lambda.Runtime.NODEJS_22_X,
         timeout: cdk.Duration.minutes(5),
         memorySize: 1024,
         environment: {
@@ -120,7 +122,6 @@ export class WhiteGloveStack extends cdk.Stack {
           HHA_SECRET_ARN: hhaSecret.secretArn,
         },
         bundling,
-        logRetention: logs.RetentionDays.ONE_MONTH,
         depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
         projectRoot: repoRoot,
       });
