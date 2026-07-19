@@ -84,7 +84,7 @@ export class WhiteGloveStack extends cdk.Stack {
     const bundling = {
       minify: true,
       sourceMap: true,
-      target: 'node20',
+      target: 'node22',
       format: OutputFormat.ESM,
       banner:
         "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
