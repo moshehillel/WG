@@ -94,6 +94,8 @@ export class WhiteGloveStack extends cdk.Stack {
       String(this.node.tryGetContext('providerSoftLiveBot') ?? 'false') === 'true';
     const providerSoftUseStubs =
       String(this.node.tryGetContext('providerSoftUseStubs') ?? 'true') === 'true';
+    const enableDailySchedule =
+      String(this.node.tryGetContext('enableDailySchedule') ?? 'false') === 'true';
 
     const bundling = {
       minify: true,
@@ -321,21 +323,29 @@ export class WhiteGloveStack extends cdk.Stack {
       },
     });
 
-    new events.Rule(this, 'DailyPipelineSchedule', {
-      schedule: events.Schedule.cron({ minute: '0', hour: '6' }),
-      description: 'Daily White-glove ProviderSoft → HHA sync (06:00 UTC)',
-      targets: [
-        new targets.SfnStateMachine(stateMachine, {
-          input: events.RuleTargetInput.fromObject({
-            runId: events.EventField.fromPath('$.id'),
-            dryRun: false,
+    if (enableDailySchedule) {
+      new events.Rule(this, 'DailyPipelineSchedule', {
+        schedule: events.Schedule.cron({ minute: '0', hour: '6' }),
+        description: 'Daily White-glove ProviderSoft → HHA sync (06:00 UTC)',
+        targets: [
+          new targets.SfnStateMachine(stateMachine, {
+            input: events.RuleTargetInput.fromObject({
+              runId: events.EventField.fromPath('$.id'),
+              dryRun: false,
+            }),
           }),
-        }),
-      ],
-    });
+        ],
+      });
+    }
+
+    const pipelineConsoleUrl = `https://${this.region}.console.aws.amazon.com/states/home?region=${this.region}#/statemachines/view/${stateMachine.stateMachineArn}`;
 
     new cdk.CfnOutput(this, 'ReportsBucketName', { value: reportsBucket.bucketName });
     new cdk.CfnOutput(this, 'StateMachineArn', { value: stateMachine.stateMachineArn });
+    new cdk.CfnOutput(this, 'PipelineConsoleUrl', {
+      value: pipelineConsoleUrl,
+      description: 'Manual run: open link → Start execution → use {"runId":"manual-YYYY-MM-DD"}',
+    });
     new cdk.CfnOutput(this, 'ExceptionTopicArn', { value: exceptionTopic.topicArn });
     new cdk.CfnOutput(this, 'ProviderSoftSecretArn', { value: providerSoftSecret.secretArn });
     new cdk.CfnOutput(this, 'HhaSecretArn', { value: hhaSecret.secretArn });

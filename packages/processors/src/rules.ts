@@ -4,7 +4,7 @@ import type {
   SessionTriage,
   VerifiedSessionRow,
 } from '@white-glove/shared';
-import { lookupServiceCode } from '@white-glove/shared';
+import { lookupServiceCode, programSessionMode } from '@white-glove/shared';
 
 /**
  * Locked business rule: Early Intervention program types are never sent to HHA.
@@ -72,6 +72,22 @@ export function triageVerifiedSession(
       sessionId: row.sessionId,
       triage: 'skip',
       reason: 'early_intervention',
+    };
+  }
+
+  const programMode = programSessionMode(row.programType);
+  if (programMode === 'evv') {
+    return {
+      sessionId: row.sessionId,
+      triage: 'verify_clocking',
+      reason: `program_evv:${row.programType}`,
+    };
+  }
+  if (programMode === 'no_evv') {
+    return {
+      sessionId: row.sessionId,
+      triage: 'auto_approve',
+      reason: `program_no_evv:${row.programType}`,
     };
   }
 

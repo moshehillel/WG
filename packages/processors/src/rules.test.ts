@@ -58,4 +58,24 @@ describe('triageVerifiedSession', () => {
     });
     expect(decision.triage).toBe('skip');
   });
+
+  it('verify_clocking for EVV program types', () => {
+    const decision = triageVerifiedSession({
+      sessionId: 's-evv',
+      programType: 'Extended Home Care Therapy',
+      serviceCode: 'OT CHHA EXTENDED',
+    });
+    expect(decision.triage).toBe('verify_clocking');
+    expect(decision.reason).toContain('program_evv');
+  });
+
+  it('auto_approve for no-EVV program types', () => {
+    const decision = triageVerifiedSession({
+      sessionId: 's-no-evv',
+      programType: 'Garden City UFSD Therapy',
+      serviceCode: 'OT CHHA EXTENDED',
+    });
+    expect(decision.triage).toBe('auto_approve');
+    expect(decision.reason).toContain('program_no_evv');
+  });
 });

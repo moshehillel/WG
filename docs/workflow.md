@@ -25,15 +25,22 @@ Applies to all three reports when the field is present:
 Detection: `program_type` / `program` contains “early intervention” or equals `EI` (case-insensitive), or an explicit EI flag column.
 ## Pipeline (AWS)
 
-1. EventBridge (daily 06:00 UTC) starts Step Functions.
-2. **Download** Lambda — default **stub zip**; production path is **Playwright container** (`-c providerSoftLiveBot=true`). See [providersoft-bot-aws.md](./providersoft-bot-aws.md).
-3. **Parse** Lambda normalizes CSV → JSON artifacts under `runs/{runId}/normalized/`.
-4. Parallel HHA sync: opened / closed / sessions processors (mock client until sandbox is wired).
-5. **Validate** writes summary + exceptions to S3 and publishes to SNS when needed.
+**Manual only by default** — no automatic daily run. Open [PipelineConsoleUrl from stack outputs](https://console.aws.amazon.com/cloudformation) (or run `aws cloudformation describe-stacks --stack-name WhiteGloveStack --query "Stacks[0].Outputs[?OutputKey=='PipelineConsoleUrl'].OutputValue" --output text`), click **Start execution**, input:
+
+```json
+{ "runId": "manual-2026-07-22" }
+```
+
+To enable daily 06:00 UTC schedule: `npm run deploy -w @white-glove/infra -- -c enableDailySchedule=true`
+
+1. **Download** Lambda — default **stub zip**; production path is **Playwright container** (`-c providerSoftLiveBot=true`). See [providersoft-bot-aws.md](./providersoft-bot-aws.md).
+2. **Parse** Lambda normalizes CSV → JSON artifacts under `runs/{runId}/normalized/`.
+3. Parallel HHA sync: opened / closed / sessions processors.
+4. **Validate** writes summary + exceptions to S3 and publishes to SNS when needed.
 
 ## Hosting
 
-Runs in the client AWS account (Lambda + Step Functions). You create the account; CDK deploys the stack.
+**Serverless (Lambda)** — no always-on server. Each pipeline step runs as an AWS Lambda function invoked by Step Functions; you pay only when a run executes.
 
 ## Open questions (client)
 
