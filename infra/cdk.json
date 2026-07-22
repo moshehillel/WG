@@ -15,6 +15,9 @@
   },
   "context": {
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
-    "@aws-cdk/core:checkSecretUsage": true
+    "@aws-cdk/core:checkSecretUsage": true,
+    "providerSoftLiveBot": false,
+    "providerSoftUseStubs": true,
+    "alertEmails": "elefkowitz@whiteglovecare.net,moshe@advancedautomations.net"
   }
 }

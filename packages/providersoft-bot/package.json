@@ -17,7 +17,8 @@
     "test": "vitest run",
     "local:download": "tsx src/local-cli.ts",
     "login:probe": "tsx src/login-probe.ts",
-    "train:bot": "tsx src/train-bot.ts"
+    "train:bot": "tsx src/train-bot.ts",
+    "capture:reports": "tsx src/capture-report-network.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.716.0",

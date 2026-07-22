@@ -4,7 +4,12 @@ import type {
   ProcessorResult,
   ValidateResult,
 } from '@white-glove/shared';
-import { exceptionsKey, getEnv, validateSummaryKey } from '@white-glove/shared';
+import {
+  exceptionsKey,
+  formatPipelineAlertBody,
+  getEnv,
+  validateSummaryKey,
+} from '@white-glove/shared';
 import { putJson } from './s3.js';
 
 const sns = new SNSClient({});
@@ -45,21 +50,21 @@ export async function validateAndNotify(options: {
 
   const topicArn = options.topicArn ?? getEnv().EXCEPTION_TOPIC_ARN;
   if (topicArn && (!result.ok || exceptions.length > 0)) {
+    const alertBody = formatPipelineAlertBody({
+      runId: options.runId,
+      ok: result.ok,
+      hardFailures,
+      exceptions,
+      opened: options.opened,
+      closed: options.closed,
+      sessions: options.sessions,
+    });
+
     await sns.send(
       new PublishCommand({
         TopicArn: topicArn,
-        Subject: `White-glove run ${options.runId}: ${result.ok ? 'exceptions' : 'FAILED'}`,
-        Message: JSON.stringify(
-          {
-            runId: options.runId,
-            ok: result.ok,
-            exceptionCount: exceptions.length,
-            hardFailures,
-            sample: exceptions.slice(0, 20),
-          },
-          null,
-          2,
-        ),
+        Subject: `White-glove run ${options.runId}: ${result.ok ? 'exceptions' : 'FAILED'} (${exceptions.length} item(s))`,
+        Message: alertBody,
       }),
     );
   }

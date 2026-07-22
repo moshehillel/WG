@@ -18,6 +18,8 @@ export interface HhaSoapClientOptions {
   baseUrl: string;
   auth: HhaSoapAuth;
   fetchImpl?: typeof fetch;
+  /** Allow app.hhaexchange.com (read-only reason lookup against prod). */
+  allowProductionEndpoint?: boolean;
 }
 
 export interface SoapCallResult {
@@ -82,7 +84,8 @@ export class HhaSoapClient {
     // Sandbox-first: block production unless explicitly opted in.
     if (
       /app\.hhaexchange\.com/i.test(this.endpoint) &&
-      process.env.HHA_ALLOW_PRODUCTION !== 'true'
+      process.env.HHA_ALLOW_PRODUCTION !== 'true' &&
+      !options.allowProductionEndpoint
     ) {
       throw new Error(
         'Production HHA URL blocked. Use sandbox1.hhaexchange.com, or set HHA_ALLOW_PRODUCTION=true when go-live is approved.',
@@ -227,6 +230,18 @@ export class HhaSoapClient {
   getVisitInfoV2(visitId: number): Promise<SoapCallResult> {
     // ASMX docs show VisitID, but sandbox accepts ID (VisitID returns -415).
     return this.call('GetVisitInfoV2', `<VisitInfo><ID>${visitId}</ID></VisitInfo>`);
+  }
+
+  /** Reason/action pairs for ConfirmVisits (may be unauthorized on sandbox → use prod read fallback). */
+  getVisitEditReasonActionTaken(visitId: number): Promise<SoapCallResult> {
+    return this.call(
+      'GetVisitEditReasonActionTaken',
+      `<VisitInfo><VisitId>${visitId}</VisitId></VisitInfo>`,
+    );
+  }
+
+  confirmVisit(innerBody: string): Promise<SoapCallResult> {
+    return this.call('ConfirmVisits', innerBody);
   }
 
   getPatientAuthorizationInfo(patientId: number, authorizationId: number): Promise<SoapCallResult> {

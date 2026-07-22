@@ -15,7 +15,9 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "sandbox:smoke": "tsx src/sandbox-smoke.ts"
+    "sandbox:smoke": "tsx src/sandbox-smoke.ts",
+    "sandbox:create-patient": "node scripts/create-patient-sandbox.mjs",
+    "sandbox:session-flow": "tsx src/sandbox-session-flow.ts"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.716.0",

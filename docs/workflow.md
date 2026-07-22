@@ -26,7 +26,7 @@ Detection: `program_type` / `program` contains “early intervention” or equal
 ## Pipeline (AWS)
 
 1. EventBridge (daily 06:00 UTC) starts Step Functions.
-2. **Download** Lambda (Playwright container) logs into ProviderSoft, downloads reports, writes to S3 `runs/{runId}/raw/`.
+2. **Download** Lambda — default **stub zip**; production path is **Playwright container** (`-c providerSoftLiveBot=true`). See [providersoft-bot-aws.md](./providersoft-bot-aws.md).
 3. **Parse** Lambda normalizes CSV → JSON artifacts under `runs/{runId}/normalized/`.
 4. Parallel HHA sync: opened / closed / sessions processors (mock client until sandbox is wired).
 5. **Validate** writes summary + exceptions to S3 and publishes to SNS when needed.
@@ -42,7 +42,7 @@ Runs in the client AWS account (Lambda + Step Functions). You create the account
 - Service code catalog: meaning, existing in HHA?, create-if-missing?, relation to contracts/auths/visits/billing
 - Exact session triage rules (auto-approve vs clocking verify vs never send)
 - Preferred schedule timezone (currently 06:00 UTC)
-- SNS alert email for exceptions
+- SNS alert emails (configured: elefkowitz@whiteglovecare.net, moshe@advancedautomations.net)
 
 ## Service codes
 

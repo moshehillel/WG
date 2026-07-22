@@ -20,6 +20,7 @@ import {
 import type { LocalDownloadResult } from './stub-reports.js';
 export type { LocalDownloadResult } from './stub-reports.js';
 export { writeStubReports } from './stub-reports.js';
+import { DownloadFailureError } from './errors.js';
 
 /** 1 initial attempt + 2 retries, then HTTP backend fallback. */
 const PLAYWRIGHT_ATTEMPTS = 3;
@@ -113,7 +114,10 @@ async function login(
   await settle(page);
 
   if (/login\.aspx/i.test(page.url())) {
-    throw new Error(`Login appears to have failed; still on ${page.url()}`);
+    throw new DownloadFailureError({
+      stage: 'login',
+      cause: `Playwright login rejected credentials — still on login page ${page.url()}`,
+    });
   }
   log(onStep, 'login', `ok → ${page.url()}`);
 }
@@ -209,7 +213,20 @@ async function launchSession(
   options: DownloadReportsOptions,
 ): Promise<InteractiveSession> {
   log(options.onStep, 'launch', `headless=${options.headless ?? true}`);
-  const browser = await chromium.launch({ headless: options.headless ?? true });
+  const inLambda = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+  const browser = await chromium.launch({
+    headless: options.headless ?? true,
+    args: inLambda
+      ? [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--single-process',
+          '--no-zygote',
+        ]
+      : undefined,
+  });
   const context = await browser.newContext({ acceptDownloads: true });
   context.setDefaultTimeout(TIMEOUT.action);
   context.setDefaultNavigationTimeout(TIMEOUT.navigation);
@@ -286,32 +303,60 @@ async function downloadOneWithRetries(
   }
 
   if (options.disableHttpFallback) {
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    throw new DownloadFailureError({
+      stage: 'playwright_report',
+      reportKind: kind,
+      attempts: PLAYWRIGHT_ATTEMPTS,
+      cause: lastError,
+    });
   }
 
   const id = reportIds[kind];
   if (!id) {
-    throw new Error(
-      `${kind}: Playwright failed ${PLAYWRIGHT_ATTEMPTS}x and no UserReportId for HTTP fallback. ` +
-        `Last error: ${lastError instanceof Error ? lastError.message : lastError}`,
-    );
+    throw new DownloadFailureError({
+      stage: 'http_fallback',
+      reportKind: kind,
+      attempts: PLAYWRIGHT_ATTEMPTS,
+      cause:
+        `${kind}: Playwright failed ${PLAYWRIGHT_ATTEMPTS} time(s) and no UserReportId configured for HTTP fallback. ` +
+        `Set PROVIDERSOFT_REPORT_*_ID. Last Playwright error: ${lastError instanceof Error ? lastError.message : lastError}`,
+    });
   }
 
   log(
     options.onStep,
     'http',
-    `${kind}: falling back to ProviderSoft HTTP backend (UserReportId=${id})`,
+    `${kind}: falling back to ProviderSoft HTTP backend (UserReportId=${id}) after ${PLAYWRIGHT_ATTEMPTS} Playwright failure(s)`,
   );
   const client = new PsHttpClient(options.credentials);
-  await client.login();
-  return downloadOneReportHttp(
-    client,
-    kind,
-    id,
-    options.downloadDir,
-    range,
-    (_step, detail) => log(options.onStep, 'http', detail),
-  );
+  try {
+    await client.login();
+  } catch (err) {
+    throw new DownloadFailureError({
+      stage: 'http_login',
+      reportKind: kind,
+      userReportId: id,
+      cause: err,
+    });
+  }
+  try {
+    return await downloadOneReportHttp(
+      client,
+      kind,
+      id,
+      options.downloadDir,
+      range,
+      (_step, detail) => log(options.onStep, 'http', detail),
+    );
+  } catch (err) {
+    throw new DownloadFailureError({
+      stage: 'http_fallback',
+      reportKind: kind,
+      userReportId: id,
+      attempts: PLAYWRIGHT_ATTEMPTS,
+      cause: err,
+    });
+  }
 }
 
 /**
@@ -351,18 +396,30 @@ export async function downloadReports(
 
     if (!loginOk) {
       if (options.disableHttpFallback) {
-        throw loginErr instanceof Error ? loginErr : new Error(String(loginErr));
+        throw new DownloadFailureError({
+          stage: 'login',
+          attempts: PLAYWRIGHT_ATTEMPTS,
+          cause: loginErr,
+        });
       }
       log(options.onStep, 'http', 'Playwright login failed; downloading all via HTTP backend');
-      return downloadReportsViaHttp({
-        credentials: options.credentials,
-        downloadDir: options.downloadDir,
-        kinds,
-        reportIds,
-        dateRange: options.dateRange,
-        dateRanges: options.dateRanges,
-        onStep: (_step, detail) => log(options.onStep, 'http', detail),
-      });
+      try {
+        return await downloadReportsViaHttp({
+          credentials: options.credentials,
+          downloadDir: options.downloadDir,
+          kinds,
+          reportIds,
+          dateRange: options.dateRange,
+          dateRanges: options.dateRanges,
+          onStep: (_step, detail) => log(options.onStep, 'http', detail),
+        });
+      } catch (err) {
+        throw new DownloadFailureError({
+          stage: 'http_login',
+          attempts: PLAYWRIGHT_ATTEMPTS,
+          cause: err,
+        });
+      }
     }
 
     const files: LocalDownloadResult['files'] = {};
@@ -384,7 +441,10 @@ export async function downloadReports(
     }
 
     if (!Object.keys(files).length) {
-      throw new Error('No reports downloaded.');
+      throw new DownloadFailureError({
+        stage: 'no_reports',
+        cause: `No report files downloaded for kinds: ${kinds.join(', ')}`,
+      });
     }
 
     log(options.onStep, 'done', JSON.stringify(files));

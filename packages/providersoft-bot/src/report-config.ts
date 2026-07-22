@@ -18,9 +18,9 @@ export type ReportUserIds = Partial<Record<BotReportKind, string>>;
 export function loadReportUserIds(env: NodeJS.ProcessEnv = process.env): ReportUserIds {
   return {
     opened_cases: env.PROVIDERSOFT_REPORT_OPENED_ID ?? '4526',
-    closed_cases: env.PROVIDERSOFT_REPORT_CLOSED_ID || undefined,
+    closed_cases: env.PROVIDERSOFT_REPORT_CLOSED_ID ?? '4527',
     verified_sessions: env.PROVIDERSOFT_REPORT_SESSIONS_ID ?? '4026',
-    discharge_service: env.PROVIDERSOFT_REPORT_DISCHARGE_ID || undefined,
+    discharge_service: env.PROVIDERSOFT_REPORT_DISCHARGE_ID ?? '4528',
   };
 }
 

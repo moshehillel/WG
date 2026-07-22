@@ -1,9 +1,14 @@
 import type { HhaClient } from '@white-glove/hha-client';
 import type { OpenedCaseRow, PipelineException, ProcessorResult } from '@white-glove/shared';
-import { lookupServiceCode } from '@white-glove/shared';
+import { buildHhaRowException, buildRowException, lookupServiceCode } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
 import { filterOpenedCases } from './rules.js';
+
+function missingFieldMessage(reportKind: string, rowId: string | undefined, fields: string[]): string {
+  const id = rowId ? `row=${rowId}` : 'row=(unknown)';
+  return `[${reportKind}] ${id} missing required field(s): ${fields.join(', ')}`;
+}
 
 export async function processOpenedCases(options: {
   runId: string;
@@ -16,7 +21,7 @@ export async function processOpenedCases(options: {
   const { kept, skippedEi } = filterOpenedCases(options.rows);
   const exceptions: PipelineException[] = skippedEi.map((row) => ({
     code: 'skipped_by_rule',
-    message: 'Early Intervention case ignored',
+    message: `[opened_cases] row=${row.caseId ?? '(unknown)'} skipped: Early Intervention case not sent to HHA`,
     reportKind: 'opened_cases',
     rowId: row.caseId,
   }));
@@ -26,15 +31,21 @@ export async function processOpenedCases(options: {
   let failed = 0;
 
   for (const row of kept) {
-    if (!row.caseId || !row.firstName || !row.lastName) {
+    const missing: string[] = [];
+    if (!row.caseId) missing.push('caseId');
+    if (!row.firstName) missing.push('firstName');
+    if (!row.lastName) missing.push('lastName');
+    if (missing.length) {
       failed += 1;
-      exceptions.push({
-        code: 'parse_error',
-        message: 'Opened case missing required identity fields',
-        reportKind: 'opened_cases',
-        rowId: row.caseId || undefined,
-        details: { firstName: row.firstName, lastName: row.lastName },
-      });
+      exceptions.push(
+        buildRowException({
+          code: 'parse_error',
+          message: missingFieldMessage('opened_cases', row.caseId, missing),
+          reportKind: 'opened_cases',
+          rowId: row.caseId || undefined,
+          details: { missing, firstName: row.firstName, lastName: row.lastName },
+        }),
+      );
       continue;
     }
 
@@ -45,23 +56,29 @@ export async function processOpenedCases(options: {
     }
 
     if (row.serviceCode && !lookupServiceCode(row.serviceCode)) {
-      exceptions.push({
-        code: 'unknown_service_code',
-        message: `Unknown service code ${row.serviceCode}`,
-        reportKind: 'opened_cases',
-        rowId: row.caseId,
-      });
+      exceptions.push(
+        buildRowException({
+          code: 'unknown_service_code',
+          message: `[opened_cases] row=${row.caseId} unknown service code "${row.serviceCode}" — add mapping in service-codes config`,
+          reportKind: 'opened_cases',
+          rowId: row.caseId,
+          details: { serviceCode: row.serviceCode },
+        }),
+      );
     }
 
     if (!row.serviceCode) {
-      exceptions.push({
-        code: 'missing_service_code',
-        message: 'Opened case has no service code',
-        reportKind: 'opened_cases',
-        rowId: row.caseId,
-      });
+      exceptions.push(
+        buildRowException({
+          code: 'missing_service_code',
+          message: `[opened_cases] row=${row.caseId} has no service code in Gluck open report`,
+          reportKind: 'opened_cases',
+          rowId: row.caseId,
+        }),
+      );
     }
 
+    let step = 'upsertPatient';
     try {
       if (!dryRun) {
         const patient = await hha.upsertPatient({
@@ -71,6 +88,7 @@ export async function processOpenedCases(options: {
           lastName: row.lastName,
           dateOfBirth: row.dateOfBirth,
         });
+        step = 'upsertContract';
         await hha.upsertContract({
           patientId: patient.id,
           contractExternalId: row.contractId,
@@ -78,6 +96,7 @@ export async function processOpenedCases(options: {
           startDate: row.startDate,
           endDate: row.endDate,
         });
+        step = 'upsertAuthorization';
         await hha.upsertAuthorization({
           patientId: patient.id,
           authorizationNumber: row.authorizationNumber,
@@ -90,12 +109,18 @@ export async function processOpenedCases(options: {
       succeeded += 1;
     } catch (err) {
       failed += 1;
-      exceptions.push({
-        code: 'hha_api_error',
-        message: err instanceof Error ? err.message : String(err),
-        reportKind: 'opened_cases',
-        rowId: row.caseId,
-      });
+      exceptions.push(
+        buildHhaRowException({
+          reportKind: 'opened_cases',
+          rowId: row.caseId,
+          step,
+          err,
+          extraDetails: {
+            patientExternalId: row.patientExternalId,
+            serviceCode: row.serviceCode,
+          },
+        }),
+      );
     }
   }
 

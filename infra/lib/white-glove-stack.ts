@@ -22,7 +22,12 @@ export class WhiteGloveStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    const alertEmail = this.node.tryGetContext('alertEmail') as string | undefined;
+    const alertEmailRaw =
+      (this.node.tryGetContext('alertEmails') as string | undefined) ??
+      (this.node.tryGetContext('alertEmail') as string | undefined);
+    const alertEmails = alertEmailRaw
+      ? alertEmailRaw.split(',').map((e) => e.trim()).filter(Boolean)
+      : [];
 
     const reportsBucket = new s3.Bucket(this, 'ReportsBucket', {
       encryption: s3.BucketEncryption.S3_MANAGED,
@@ -67,20 +72,29 @@ export class WhiteGloveStack extends cdk.Stack {
     const exceptionTopic = new sns.Topic(this, 'ExceptionTopic', {
       displayName: 'White-glove pipeline exceptions',
     });
-    if (alertEmail) {
-      exceptionTopic.addSubscription(new subscriptions.EmailSubscription(alertEmail));
+    for (const email of alertEmails) {
+      exceptionTopic.addSubscription(new subscriptions.EmailSubscription(email));
     }
+
+    const hhaUseMock = String(this.node.tryGetContext('hhaUseMock') ?? 'false') === 'true';
 
     const sharedEnv: Record<string, string> = {
       REPORTS_BUCKET: reportsBucket.bucketName,
       IDEMPOTENCY_TABLE: idempotencyTable.tableName,
       EXCEPTION_TOPIC_ARN: exceptionTopic.topicArn,
-      HHA_USE_MOCK: 'true',
+      HHA_USE_MOCK: hhaUseMock ? 'true' : 'false',
       NODE_OPTIONS: '--enable-source-maps',
     };
 
-    // Zip Lambda (stub reports) — no Docker required for bootstrap/deploy.
-    // Switch back to DockerImageFunction + Playwright when ProviderSoft live login is ready.
+    // Download Lambda:
+    // - Default: zip stub (no Docker) — safe until PS secrets + reports are ready
+    // - Production bot: cdk deploy -c providerSoftLiveBot=true  (Playwright Chromium image)
+    // - Keep stubs inside the image until ready: -c providerSoftUseStubs=true (default true)
+    const providerSoftLiveBot =
+      String(this.node.tryGetContext('providerSoftLiveBot') ?? 'false') === 'true';
+    const providerSoftUseStubs =
+      String(this.node.tryGetContext('providerSoftUseStubs') ?? 'true') === 'true';
+
     const bundling = {
       minify: true,
       sourceMap: true,
@@ -92,21 +106,40 @@ export class WhiteGloveStack extends cdk.Stack {
       externalModules: ['playwright', 'playwright-core', '@playwright/test'],
     };
 
-    const downloadFn = new NodejsFunction(this, 'ProviderSoftDownloadFn', {
-      entry: path.join(repoRoot, 'packages/providersoft-bot/src/stub-handler.ts'),
-      handler: 'handler',
-      runtime: lambda.Runtime.NODEJS_22_X,
-      timeout: cdk.Duration.minutes(5),
-      memorySize: 512,
-      environment: {
-        ...sharedEnv,
-        PROVIDERSOFT_SECRET_ARN: providerSoftSecret.secretArn,
-        PROVIDERSOFT_USE_STUBS: 'true',
-      },
-      bundling,
-      depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
-      projectRoot: repoRoot,
-    });
+    const downloadEnv = {
+      ...sharedEnv,
+      PROVIDERSOFT_SECRET_ARN: providerSoftSecret.secretArn,
+      PROVIDERSOFT_USE_STUBS: providerSoftUseStubs ? 'true' : 'false',
+      HEADLESS: 'true',
+      PROVIDERSOFT_REPORT_OPENED_ID: '4526',
+      PROVIDERSOFT_REPORT_CLOSED_ID: '4527',
+      PROVIDERSOFT_REPORT_DISCHARGE_ID: '4528',
+      PROVIDERSOFT_REPORT_SESSIONS_ID: '4026',
+      PROVIDERSOFT_REPORT_KINDS: 'opened_cases,closed_cases,verified_sessions',
+    };
+
+    const downloadFn: lambda.IFunction = providerSoftLiveBot
+      ? new lambda.DockerImageFunction(this, 'ProviderSoftDownloadFn', {
+          code: lambda.DockerImageCode.fromImageAsset(repoRoot, {
+            file: 'packages/providersoft-bot/Dockerfile',
+          }),
+          timeout: cdk.Duration.minutes(15),
+          memorySize: 3008,
+          ephemeralStorageSize: cdk.Size.mebibytes(2048),
+          environment: downloadEnv,
+          architecture: lambda.Architecture.X86_64,
+        })
+      : new NodejsFunction(this, 'ProviderSoftDownloadFn', {
+          entry: path.join(repoRoot, 'packages/providersoft-bot/src/stub-handler.ts'),
+          handler: 'handler',
+          runtime: lambda.Runtime.NODEJS_22_X,
+          timeout: cdk.Duration.minutes(5),
+          memorySize: 512,
+          environment: downloadEnv,
+          bundling,
+          depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
+          projectRoot: repoRoot,
+        });
     reportsBucket.grantReadWrite(downloadFn);
     providerSoftSecret.grantRead(downloadFn);
 
@@ -138,6 +171,40 @@ export class WhiteGloveStack extends cdk.Stack {
     const sessionsFn = makeProcessor('SessionsFn', 'packages/processors/src/handlers/sessions.ts');
     const validateFn = makeProcessor('ValidateFn', 'packages/processors/src/handlers/validate.ts');
 
+    const notifyFailureFn = new NodejsFunction(this, 'NotifyFailureFn', {
+      entry: path.join(repoRoot, 'packages/processors/src/handlers/notify-failure.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_22_X,
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256,
+      environment: sharedEnv,
+      bundling,
+      depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
+      projectRoot: repoRoot,
+    });
+    exceptionTopic.grantPublish(notifyFailureFn);
+
+    const pipelineFailed = new sfn.Fail(this, 'PipelineFailed', {
+      error: 'PipelineStepFailed',
+      cause: 'See SNS alert email for step name and error details.',
+    });
+
+    const makeFailureNotifier = (stepName: string, id: string) =>
+      new tasks.LambdaInvoke(this, id, {
+        lambdaFunction: notifyFailureFn,
+        payload: sfn.TaskInput.fromObject({
+          'runId.$': '$.runId',
+          'error.$': '$.error',
+          step: stepName,
+        }),
+        resultPath: sfn.JsonPath.DISCARD,
+      }).next(pipelineFailed);
+
+    const notifyDownloadFailure = makeFailureNotifier('DownloadReports', 'NotifyDownloadFailure');
+    const notifyParseFailure = makeFailureNotifier('ParseNormalize', 'NotifyParseFailure');
+    const notifySyncFailure = makeFailureNotifier('SyncToHha', 'NotifySyncFailure');
+    const notifyValidateFailure = makeFailureNotifier('ValidateAndNotify', 'NotifyValidateFailure');
+
     // Normalize input to { runId, dryRun }. Stubs are controlled via Lambda env PROVIDERSOFT_USE_STUBS.
     const mergeDefaults = new sfn.Pass(this, 'MergeDefaults', {
       parameters: {
@@ -161,6 +228,10 @@ export class WhiteGloveStack extends cdk.Stack {
       maxAttempts: 2,
       backoffRate: 2,
     });
+    downloadTask.addCatch(notifyDownloadFailure, {
+      errors: ['States.ALL'],
+      resultPath: '$.error',
+    });
 
     const parseTask = new tasks.LambdaInvoke(this, 'ParseNormalize', {
       lambdaFunction: parseFn,
@@ -171,6 +242,7 @@ export class WhiteGloveStack extends cdk.Stack {
       payloadResponseOnly: true,
       resultPath: '$.parse',
     });
+    parseTask.addCatch(notifyParseFailure, { errors: ['States.ALL'], resultPath: '$.error' });
 
     const openedBranch = new tasks.LambdaInvoke(this, 'OpenedBranch', {
       lambdaFunction: openedFn,
@@ -213,6 +285,7 @@ export class WhiteGloveStack extends cdk.Stack {
       .branch(openedBranch)
       .branch(closedBranch)
       .branch(sessionsBranch);
+    parallelProcessors.addCatch(notifySyncFailure, { errors: ['States.ALL'], resultPath: '$.error' });
 
     const validateTask = new tasks.LambdaInvoke(this, 'ValidateAndNotify', {
       lambdaFunction: validateFn,
@@ -226,6 +299,7 @@ export class WhiteGloveStack extends cdk.Stack {
       payloadResponseOnly: true,
       resultPath: '$.validation',
     });
+    validateTask.addCatch(notifyValidateFailure, { errors: ['States.ALL'], resultPath: '$.error' });
 
     // Input contract: { runId } (dryRun forced false for scheduled runs; override via console as needed)
     const definition = mergeDefaults
@@ -266,5 +340,13 @@ export class WhiteGloveStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ProviderSoftSecretArn', { value: providerSoftSecret.secretArn });
     new cdk.CfnOutput(this, 'HhaSecretArn', { value: hhaSecret.secretArn });
     new cdk.CfnOutput(this, 'IdempotencyTableName', { value: idempotencyTable.tableName });
+    new cdk.CfnOutput(this, 'ProviderSoftLiveBot', {
+      value: providerSoftLiveBot ? 'true' : 'false',
+      description:
+        'When false, download Lambda is stub zip. Deploy with -c providerSoftLiveBot=true for Playwright.',
+    });
+    new cdk.CfnOutput(this, 'ProviderSoftUseStubs', {
+      value: providerSoftUseStubs ? 'true' : 'false',
+    });
   }
 }

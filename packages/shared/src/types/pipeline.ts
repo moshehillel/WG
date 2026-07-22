@@ -49,6 +49,8 @@ export const ExceptionCodeSchema = z.enum([
   'hha_api_error',
   'parse_error',
   'skipped_by_rule',
+  'download_error',
+  'pipeline_step_error',
   'other',
 ]);
 

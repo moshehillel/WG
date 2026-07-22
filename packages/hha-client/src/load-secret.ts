@@ -16,9 +16,18 @@ export async function applyHhaSecretFromArn(env: Env = getEnv()): Promise<Env> {
   const res = await secrets.send(new GetSecretValueCommand({ SecretId: arn }));
   if (!res.SecretString) return env;
 
-  const parsed = JSON.parse(res.SecretString) as { baseUrl?: string; apiKey?: string };
+  const parsed = JSON.parse(res.SecretString) as {
+    baseUrl?: string;
+    apiKey?: string;
+    appName?: string;
+    appSecret?: string;
+    appKey?: string;
+  };
   if (parsed.baseUrl) process.env.HHA_BASE_URL = parsed.baseUrl;
   if (parsed.apiKey) process.env.HHA_API_KEY = parsed.apiKey;
+  if (parsed.appName) process.env.HHA_APP_NAME = parsed.appName;
+  if (parsed.appSecret) process.env.HHA_APP_SECRET = parsed.appSecret;
+  if (parsed.appKey) process.env.HHA_APP_KEY = parsed.appKey;
   resetEnvCache();
   return getEnv();
 }

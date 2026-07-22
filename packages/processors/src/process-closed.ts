@@ -1,5 +1,6 @@
 import type { HhaClient } from '@white-glove/hha-client';
 import type { ClosedCaseRow, PipelineException, ProcessorResult } from '@white-glove/shared';
+import { buildHhaRowException, buildRowException } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
 import { isEarlyInterventionCase } from './rules.js';
@@ -20,22 +21,27 @@ export async function processClosedCases(options: {
   for (const row of options.rows) {
     if (!row.caseId) {
       failed += 1;
-      exceptions.push({
-        code: 'parse_error',
-        message: 'Closed case missing caseId',
-        reportKind: 'closed_cases',
-      });
+      exceptions.push(
+        buildRowException({
+          code: 'parse_error',
+          message:
+            '[closed_cases] row=(unknown) missing caseId — cannot match ProviderSoft case to HHA patient',
+          reportKind: 'closed_cases',
+        }),
+      );
       continue;
     }
 
     if (isEarlyInterventionCase(row)) {
       skipped += 1;
-      exceptions.push({
-        code: 'skipped_by_rule',
-        message: 'Early Intervention case ignored — not sent to HHA',
-        reportKind: 'closed_cases',
-        rowId: row.caseId,
-      });
+      exceptions.push(
+        buildRowException({
+          code: 'skipped_by_rule',
+          message: `[closed_cases] row=${row.caseId} skipped: Early Intervention case not sent to HHA`,
+          reportKind: 'closed_cases',
+          rowId: row.caseId,
+        }),
+      );
       continue;
     }
 
@@ -45,6 +51,7 @@ export async function processClosedCases(options: {
       continue;
     }
 
+    const step = 'updateClosedCase';
     try {
       if (!dryRun) {
         await hha.updateClosedCase({
@@ -59,12 +66,19 @@ export async function processClosedCases(options: {
       succeeded += 1;
     } catch (err) {
       failed += 1;
-      exceptions.push({
-        code: 'hha_api_error',
-        message: err instanceof Error ? err.message : String(err),
-        reportKind: 'closed_cases',
-        rowId: row.caseId,
-      });
+      exceptions.push(
+        buildHhaRowException({
+          reportKind: 'closed_cases',
+          rowId: row.caseId,
+          step,
+          err,
+          extraDetails: {
+            patientExternalId: row.patientExternalId,
+            closedDate: row.closedDate,
+            closedReason: row.closedReason,
+          },
+        }),
+      );
     }
   }
 

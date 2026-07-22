@@ -1,5 +1,6 @@
 export * from './types/reports.js';
 export * from './types/pipeline.js';
+export * from './errors.js';
 export * from './types/hha.js';
 export * from './config/service-codes.js';
 export * from './env.js';

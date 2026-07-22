@@ -7,6 +7,14 @@ import type {
 } from '@white-glove/shared';
 import type { ClosedCaseUpdate, HhaClient, UpsertResult } from './types.js';
 import { HhaSoapClient, type HhaSoapAuth, type SoapCallResult } from './soap-client.js';
+import {
+  buildConfirmVisitsBody,
+  parseTimesheetFlags,
+  parseVisitConfirmTimes,
+  parseVisitEditReasonPairs,
+  timesheetConfirmAttempts,
+  type VisitConfirmReasonPair,
+} from './visit-confirm.js';
 
 export interface SoapHhaClientAdapterOptions {
   baseUrl: string;
@@ -14,6 +22,13 @@ export interface SoapHhaClientAdapterOptions {
   /** Required for CreatePatient / CreateSchedule (office-scoped). */
   defaultOfficeId?: number;
   fetchImpl?: typeof fetch;
+  /**
+   * When sandbox returns -9 on GetVisitEditReasonActionTaken, read pairs from prod (read-only).
+   * Defaults to HHA_REASON_LOOKUP_URL or app.hhaexchange.com when HHA_ALLOW_REASON_LOOKUP=true.
+   */
+  reasonLookupBaseUrl?: string;
+  /** Prod visit used only for reason lookup (not the visit being confirmed). */
+  reasonLookupVisitId?: number;
 }
 
 function assertOk(result: SoapCallResult, context: string): void {
@@ -48,11 +63,28 @@ function pickId(raw: unknown, keys: string[]): string | undefined {
  */
 export class SoapHhaClientAdapter implements HhaClient {
   private readonly soap: HhaSoapClient;
+  private readonly reasonLookup?: HhaSoapClient;
+  private readonly reasonLookupVisitId?: number;
   readonly defaultOfficeId?: number;
 
   constructor(options: SoapHhaClientAdapterOptions) {
-    this.soap = new HhaSoapClient(options);
+    this.soap = new HhaSoapClient({
+      baseUrl: options.baseUrl,
+      auth: options.auth,
+      fetchImpl: options.fetchImpl,
+    });
     this.defaultOfficeId = options.defaultOfficeId;
+    this.reasonLookupVisitId = options.reasonLookupVisitId;
+
+    const lookupUrl = options.reasonLookupBaseUrl?.trim();
+    if (lookupUrl) {
+      this.reasonLookup = new HhaSoapClient({
+        baseUrl: lookupUrl,
+        auth: options.auth,
+        fetchImpl: options.fetchImpl,
+        allowProductionEndpoint: true,
+      });
+    }
   }
 
   getSoap(): HhaSoapClient {
@@ -188,15 +220,79 @@ export class SoapHhaClientAdapter implements HhaClient {
   }
 
   async approveVisit(visitId: string): Promise<void> {
-    const result = await this.soap.call(
-      'ConfirmVisits',
-      `<VisitInfo>
-  <VisitID>${escape(visitId)}</VisitID>
-  <TimesheetRequired>No</TimesheetRequired>
-  <TimesheetApproved>Yes</TimesheetApproved>
-</VisitInfo>`,
+    const numericId = Number(visitId);
+    if (!Number.isFinite(numericId) || numericId <= 0) {
+      throw new Error(`approveVisit requires numeric VisitID, got ${visitId}`);
+    }
+
+    const info = await this.soap.getVisitInfoV2(numericId);
+    assertOk(info, 'GetVisitInfoV2');
+
+    const times =
+      parseVisitConfirmTimes(info.bodyXml) ??
+      (() => {
+        throw new Error(
+          `Cannot confirm visit ${visitId}: missing VisitDate/Schedule times in GetVisitInfoV2`,
+        );
+      })();
+
+    const visitFlags = parseTimesheetFlags(info.bodyXml);
+    const reasonPairs = await this.resolveConfirmReasonPairs(numericId);
+    if (!reasonPairs.length) {
+      throw new Error(
+        'ConfirmVisits requires ReasonCode/ActionCode; enable GetVisitEditReasonActionTaken on sandbox or configure HHA_REASON_LOOKUP_URL + HHA_REASON_LOOKUP_VISIT_ID',
+      );
+    }
+
+    const errors: string[] = [];
+    for (const pair of reasonPairs) {
+      for (const flags of timesheetConfirmAttempts(visitFlags)) {
+        const body = buildConfirmVisitsBody({
+          visitId,
+          times,
+          reasonCode: pair.reasonCode,
+          actionCode: pair.actionCode,
+          timesheetRequired: flags.timesheetRequired,
+          timesheetApproved: flags.timesheetApproved,
+        });
+        const result = await this.soap.confirmVisit(body);
+        if (result.ok) return;
+        errors.push(
+          `reason=${pair.reasonCode} action=${pair.actionCode} ts=${flags.timesheetRequired}/${flags.timesheetApproved}: ${result.errorMessage ?? result.status} (${result.errorId ?? '-'})`,
+        );
+        // Future visit — other pairs won't help
+        if (result.errorId === '-310') break;
+      }
+    }
+
+    throw new Error(
+      `ConfirmVisits failed for visit ${visitId} after ${reasonPairs.length} reason pair(s): ${errors.slice(0, 3).join('; ')}`,
     );
-    assertOk(result, 'ConfirmVisits');
+  }
+
+  /** Load reason/action codes: sandbox visit first, then optional prod read-only fallback. */
+  private async resolveConfirmReasonPairs(visitId: number): Promise<VisitConfirmReasonPair[]> {
+    const fromVisit = await this.fetchReasonPairs(this.soap, visitId);
+    if (fromVisit.length) return fromVisit;
+
+    if (this.reasonLookup && this.reasonLookupVisitId) {
+      const fromProd = await this.fetchReasonPairs(
+        this.reasonLookup,
+        this.reasonLookupVisitId,
+      );
+      if (fromProd.length) return fromProd;
+    }
+
+    return [];
+  }
+
+  private async fetchReasonPairs(
+    client: HhaSoapClient,
+    visitId: number,
+  ): Promise<VisitConfirmReasonPair[]> {
+    const res = await client.getVisitEditReasonActionTaken(visitId);
+    if (!res.ok) return [];
+    return parseVisitEditReasonPairs(res.bodyXml);
   }
 
   async updateClosedCase(update: ClosedCaseUpdate): Promise<void> {

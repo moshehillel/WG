@@ -14,6 +14,11 @@ coverage/
 
 downloads/
 .tmp/
+tmp/
+
+# CDK synth output (all variants)
+infra/cdk.out*/
+
 *.tsbuildinfo
 .playwright/
 playwright-report/
@@ -24,3 +29,9 @@ infra/cdk.context.json
 !fixtures/**/*.csv
 *.log
 .DS_Store
+
+# docs/: keep markdown + CSV test samples; ignore probe/sandbox JSON and scratch files
+docs/*
+!docs/*.md
+!docs/samples/
+!docs/samples/**

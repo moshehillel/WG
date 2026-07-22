@@ -1,0 +1,22 @@
+# Keep image builds small (context = repo root)
+.git
+.tmp
+tmp
+**/downloads
+**/cdk.out*
+**/cdk.out-bootstrap
+**/node_modules
+**/dist
+**/.env
+**/.env.*
+!**/.env.example
+**/coverage
+**/*.log
+**/playwright-report
+**/test-results
+docs
+infra
+packages/hha-client
+packages/processors
+*.md
+!packages/providersoft-bot/README.md

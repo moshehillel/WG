@@ -4,9 +4,23 @@ import type {
   ProcessorResult,
   VerifiedSessionRow,
 } from '@white-glove/shared';
+import { buildHhaRowException, buildRowException } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
 import { triageVerifiedSession, type SessionRulesConfig } from './rules.js';
+
+function sessionSkipMessage(sessionId: string, reason: string | undefined): string {
+  switch (reason) {
+    case 'early_intervention':
+      return `[verified_sessions] session=${sessionId} skipped: Early Intervention session not sent to HHA`;
+    case 'missing_service_code':
+      return `[verified_sessions] session=${sessionId} skipped: no service code on API report row`;
+    case 'unknown_service_code':
+      return `[verified_sessions] session=${sessionId} skipped: service code not in mapping table`;
+    default:
+      return `[verified_sessions] session=${sessionId} skipped: ${reason ?? 'triage rule'}`;
+  }
+}
 
 export async function processVerifiedSessions(options: {
   runId: string;
@@ -25,11 +39,14 @@ export async function processVerifiedSessions(options: {
   for (const row of options.rows) {
     if (!row.sessionId) {
       failed += 1;
-      exceptions.push({
-        code: 'parse_error',
-        message: 'Session missing sessionId',
-        reportKind: 'verified_sessions',
-      });
+      exceptions.push(
+        buildRowException({
+          code: 'parse_error',
+          message:
+            '[verified_sessions] row missing sessionId — cannot match API report row to HHA visit',
+          reportKind: 'verified_sessions',
+        }),
+      );
       continue;
     }
 
@@ -48,15 +65,15 @@ export async function processVerifiedSessions(options: {
           : decision.reason === 'unknown_service_code'
             ? 'unknown_service_code'
             : 'skipped_by_rule';
-      exceptions.push({
-        code,
-        message:
-          decision.reason === 'early_intervention'
-            ? 'Early Intervention session ignored — not sent to HHA'
-            : `Session not sent to HHA (${decision.reason ?? 'skip'})`,
-        reportKind: 'verified_sessions',
-        rowId: row.sessionId,
-      });
+      exceptions.push(
+        buildRowException({
+          code,
+          message: sessionSkipMessage(row.sessionId, decision.reason),
+          reportKind: 'verified_sessions',
+          rowId: row.sessionId,
+          details: { triageReason: decision.reason },
+        }),
+      );
       await store.markProcessed(pk, `${runId}#${sk}`, { triage: 'skip' });
       continue;
     }
@@ -64,15 +81,19 @@ export async function processVerifiedSessions(options: {
     const patientKey = row.patientExternalId ?? row.caseId;
     if (!patientKey) {
       failed += 1;
-      exceptions.push({
-        code: 'unmatched_patient',
-        message: 'Session has no patient or case reference',
-        reportKind: 'verified_sessions',
-        rowId: row.sessionId,
-      });
+      exceptions.push(
+        buildRowException({
+          code: 'unmatched_patient',
+          message: `[verified_sessions] session=${row.sessionId} has no patientExternalId or caseId — cannot locate HHA patient`,
+          reportKind: 'verified_sessions',
+          rowId: row.sessionId,
+          details: { visitDate: row.visitDate, serviceCode: row.serviceCode },
+        }),
+      );
       continue;
     }
 
+    let step = 'upsertPatient';
     try {
       if (!dryRun) {
         const patient = await hha.upsertPatient({
@@ -81,6 +102,7 @@ export async function processVerifiedSessions(options: {
           firstName: 'Unknown',
           lastName: patientKey,
         });
+        step = 'locateOrScheduleVisit';
         const visit = await hha.locateOrScheduleVisit({
           patientId: patient.id,
           visitExternalId: row.sessionId,
@@ -92,6 +114,7 @@ export async function processVerifiedSessions(options: {
         });
 
         if (decision.triage === 'verify_clocking') {
+          step = 'getClockingDetails';
           const clocking = await hha.getClockingDetails(visit.id, {
             patientId: patient.id,
             visitDate: row.visitDate,
@@ -100,17 +123,27 @@ export async function processVerifiedSessions(options: {
           });
           if (!clocking.matchesExpected) {
             failed += 1;
-            exceptions.push({
-              code: 'clocking_mismatch',
-              message: clocking.notes ?? 'Clocking details did not match',
-              reportKind: 'verified_sessions',
-              rowId: row.sessionId,
-              details: { visitId: visit.id },
-            });
+            exceptions.push(
+              buildRowException({
+                code: 'clocking_mismatch',
+                message: `[verified_sessions] session=${row.sessionId} visit=${visit.id} EVV mismatch: expected ${row.startTime ?? '?'}–${row.endTime ?? '?'}, got ${clocking.clockIn ?? '?'}–${clocking.clockOut ?? '?'}`,
+                reportKind: 'verified_sessions',
+                rowId: row.sessionId,
+                details: {
+                  visitId: visit.id,
+                  expectedStart: row.startTime,
+                  expectedEnd: row.endTime,
+                  clockIn: clocking.clockIn,
+                  clockOut: clocking.clockOut,
+                  notes: clocking.notes,
+                },
+              }),
+            );
             continue;
           }
         }
 
+        step = 'approveVisit';
         await hha.approveVisit(visit.id);
       }
 
@@ -118,12 +151,20 @@ export async function processVerifiedSessions(options: {
       succeeded += 1;
     } catch (err) {
       failed += 1;
-      exceptions.push({
-        code: 'hha_api_error',
-        message: err instanceof Error ? err.message : String(err),
-        reportKind: 'verified_sessions',
-        rowId: row.sessionId,
-      });
+      exceptions.push(
+        buildHhaRowException({
+          reportKind: 'verified_sessions',
+          rowId: row.sessionId,
+          step,
+          err,
+          extraDetails: {
+            patientKey,
+            visitDate: row.visitDate,
+            serviceCode: row.serviceCode,
+            triage: decision.triage,
+          },
+        }),
+      );
     }
   }
 
