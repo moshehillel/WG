@@ -28,7 +28,9 @@ FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-jammy
 
 WORKDIR /var/task
 
-RUN npm install -g aws-lambda-ric@3.1.1
+RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make python3 xz-utils \
+  && npm install -g aws-lambda-ric@4.0.2 \
+  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages/shared/package.json ./node_modules/@white-glove/shared/package.json

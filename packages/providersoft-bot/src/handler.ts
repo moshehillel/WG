@@ -14,8 +14,16 @@ export interface DownloadEvent {
   runId?: string;
   dryRun?: boolean;
   reportDate?: string;
+  reportKinds?: Array<ReportKind | 'caregiver_codes' | 'discharge_service'>;
   /** When true, write stub CSVs instead of hitting ProviderSoft (useful for pipeline tests). */
   useStubs?: boolean;
+}
+
+function resolveDownloadKinds(event: DownloadEvent): BotReportKind[] {
+  if (event.reportKinds?.length) {
+    return event.reportKinds.filter((k) => ALL_BOT_KINDS.includes(k as BotReportKind)) as BotReportKind[];
+  }
+  return pipelineKindsFromEnv();
 }
 
 function defaultRunId(reportDate?: string): string {
@@ -49,6 +57,7 @@ export const handler: Handler<DownloadEvent, DownloadResult> = async (event) => 
     runId: event.runId ?? defaultRunId(event.reportDate),
     dryRun: event.dryRun ?? false,
     reportDate: event.reportDate,
+    reportKinds: event.reportKinds,
   });
 
   const env = getEnv();
@@ -68,11 +77,11 @@ export const handler: Handler<DownloadEvent, DownloadResult> = async (event) => 
           credentials: await loadProviderSoftCredentials(process.env.PROVIDERSOFT_SECRET_ARN),
           downloadDir,
           headless: env.HEADLESS ?? true,
-          kinds: pipelineKindsFromEnv(),
+          kinds: resolveDownloadKinds(event),
         });
 
-    const pipelineFiles: Partial<Record<ReportKind, string>> = {};
-    for (const kind of ['opened_cases', 'closed_cases', 'verified_sessions'] as ReportKind[]) {
+    const pipelineFiles: Partial<Record<BotReportKind, string>> = {};
+    for (const kind of resolveDownloadKinds(event)) {
       if (local.files[kind]) pipelineFiles[kind] = local.files[kind];
     }
 

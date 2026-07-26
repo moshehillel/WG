@@ -94,6 +94,27 @@ export function buildConfirmVisitsBody(options: {
 </VisitInfo>`;
 }
 
+export function buildConfirmVisitsEvvBody(options: {
+  visitId: string;
+  callerId: string;
+  times: VisitConfirmTimes;
+  reasonCode: string;
+  actionCode: string;
+  timesheetRequired: 'Yes' | 'No';
+  timesheetApproved: 'Yes' | 'No';
+}): string {
+  return `<VisitInfo>
+  <VisitID>${escapeXml(options.visitId)}</VisitID>
+  <CallerID>${escapeXml(options.callerId)}</CallerID>
+  <VisitStartTime>${escapeXml(options.times.startIso)}</VisitStartTime>
+  <VisitEndTime>${escapeXml(options.times.endIso)}</VisitEndTime>
+  <ReasonCode>${escapeXml(options.reasonCode)}</ReasonCode>
+  <ActionCode>${escapeXml(options.actionCode)}</ActionCode>
+  <TimesheetRequired>${options.timesheetRequired}</TimesheetRequired>
+  <TimesheetApproved>${options.timesheetApproved}</TimesheetApproved>
+</VisitInfo>`;
+}
+
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, '&amp;')

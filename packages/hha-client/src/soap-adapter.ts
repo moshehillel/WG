@@ -5,10 +5,36 @@ import type {
   HhaPatient,
   HhaVisit,
 } from '@white-glove/shared';
-import type { ClosedCaseUpdate, HhaClient, UpsertResult } from './types.js';
+import { resolveDischargeToId } from '@white-glove/shared';
+import { lookupContractId, lookupServiceCode } from '@white-glove/shared';
+import type { ClosedCaseUpdate, HhaClient, PendingCall, UpsertResult } from './types.js';
+import { compareSessionClock, psDateToIso, splitProviderName } from './hha-time.js';
+import {
+  matchByName,
+  normalizeRefName,
+  parseContractsFromXml,
+  parseServiceCodesFromXml,
+} from './reference-resolve.js';
+import {
+  parseCallDashboardEntries,
+  parsePayCodesFromXml,
+  xmlFirstTag,
+  xmlIds,
+} from './hha-xml-parse.js';
+import { buildCreateScheduleBody } from './schedule-builder.js';
+import {
+  buildCreatePatientBody,
+  canCreatePatient,
+  createPatientDefaultsFromEnv,
+  defaultReferenceIds,
+  formatAdmissionId,
+  type CreatePatientDefaults,
+  type CreatePatientReferenceIds,
+} from './create-patient-builder.js';
 import { HhaSoapClient, type HhaSoapAuth, type SoapCallResult } from './soap-client.js';
 import {
   buildConfirmVisitsBody,
+  buildConfirmVisitsEvvBody,
   parseTimesheetFlags,
   parseVisitConfirmTimes,
   parseVisitEditReasonPairs,
@@ -29,6 +55,8 @@ export interface SoapHhaClientAdapterOptions {
   reasonLookupBaseUrl?: string;
   /** Prod visit used only for reason lookup (not the visit being confirmed). */
   reasonLookupVisitId?: number;
+  /** Office/coordinator/reference IDs for CreatePatient (defaults from env). */
+  createPatientDefaults?: CreatePatientDefaults;
 }
 
 function assertOk(result: SoapCallResult, context: string): void {
@@ -65,6 +93,12 @@ export class SoapHhaClientAdapter implements HhaClient {
   private readonly soap: HhaSoapClient;
   private readonly reasonLookup?: HhaSoapClient;
   private readonly reasonLookupVisitId?: number;
+  private payCodeCache?: Map<string, string>;
+  private createPatientRefs?: CreatePatientReferenceIds;
+  private contractCache?: Array<{ id: string; name: string }>;
+  private serviceCodeByName = new Map<string, string>();
+  private loadedContractServiceCodes = new Set<number>();
+  private readonly createPatientDefaults: CreatePatientDefaults;
   readonly defaultOfficeId?: number;
 
   constructor(options: SoapHhaClientAdapterOptions) {
@@ -75,6 +109,11 @@ export class SoapHhaClientAdapter implements HhaClient {
     });
     this.defaultOfficeId = options.defaultOfficeId;
     this.reasonLookupVisitId = options.reasonLookupVisitId;
+    this.createPatientDefaults =
+      options.createPatientDefaults ?? createPatientDefaultsFromEnv();
+    if (options.defaultOfficeId) {
+      this.createPatientDefaults.officeId = options.defaultOfficeId;
+    }
 
     const lookupUrl = options.reasonLookupBaseUrl?.trim();
     if (lookupUrl) {
@@ -91,14 +130,35 @@ export class SoapHhaClientAdapter implements HhaClient {
     return this.soap;
   }
 
-  async upsertPatient(patient: HhaPatient): Promise<UpsertResult> {
-    if (patient.externalId) {
-      const search = await this.soap.searchPatients({ mrNumber: patient.externalId });
-      if (search.ok) {
-        const ids = collectPatientIds(search.raw);
-        if (ids[0]) return { id: String(ids[0]), created: false };
-      }
+  async findPatient(options: {
+    externalId?: string;
+    caseId?: string;
+  }): Promise<string | undefined> {
+    if (options.externalId) {
+      const byMr = await this.soap.searchPatients({ mrNumber: options.externalId });
+      const mrIds = byMr.ok ? collectPatientIds(byMr.raw) : [];
+      if (mrIds[0]) return String(mrIds[0]);
     }
+
+    const admissionId = formatAdmissionId(
+      options.caseId ?? options.externalId,
+      this.createPatientDefaults.admissionIdPrefix,
+    );
+    if (admissionId) {
+      const byAdmission = await this.soap.searchPatients({ admissionId });
+      const admIds = byAdmission.ok ? collectPatientIds(byAdmission.raw) : [];
+      if (admIds[0]) return String(admIds[0]);
+    }
+
+    return undefined;
+  }
+
+  async upsertPatient(patient: HhaPatient): Promise<UpsertResult> {
+    const existingId = await this.findPatient({
+      externalId: patient.externalId,
+      caseId: patient.caseId,
+    });
+    if (existingId) return { id: existingId, created: false };
 
     const searchByName = await this.soap.searchPatients({
       firstName: patient.firstName,
@@ -110,10 +170,56 @@ export class SoapHhaClientAdapter implements HhaClient {
       if (ids[0]) return { id: String(ids[0]), created: false };
     }
 
-    // CreatePatient requires many office-specific fields; surface clearly until report mapping is complete.
-    throw new Error(
-      'CreatePatient not auto-invoked yet: map OfficeID, Address, Coordinator, and required demographics from ProviderSoft reports / HHA office setup first. Existing patient search found no match.',
-    );
+    const readiness = canCreatePatient(patient, this.createPatientDefaults);
+    if (!readiness.ok) {
+      throw new Error(
+        `CreatePatient missing Gluck open report field(s): ${readiness.missing.join(', ')}. Existing patient search found no match.`,
+      );
+    }
+
+    const refs = await this.resolveCreatePatientRefs();
+    const body = buildCreatePatientBody(patient, this.createPatientDefaults, refs);
+    const result = await this.soap.createPatient(body);
+    assertOk(result, 'CreatePatient');
+    const newId =
+      xmlIds(result.bodyXml, 'PatientID')[0]?.toString() ??
+      pickId(result.raw, ['PatientID', 'ID']);
+    if (!newId) {
+      throw new Error('CreatePatient succeeded but no PatientID returned');
+    }
+    return { id: newId, created: true };
+  }
+
+  private async resolveCreatePatientRefs(): Promise<CreatePatientReferenceIds> {
+    if (this.createPatientRefs) return this.createPatientRefs;
+
+    const envRefs = defaultReferenceIds();
+    let mobilityStatusId = envRefs.mobilityStatusId;
+    let evacuationZoneId = envRefs.evacuationZoneId;
+
+    try {
+      const mobility = await this.soap.getMobilityStatuses();
+      if (mobility.ok) {
+        const picked = pickMobilityStatusId(mobility.bodyXml);
+        if (picked) mobilityStatusId = picked;
+      }
+      const evacuation = await this.soap.getEvacuationZones();
+      if (evacuation.ok) {
+        const picked = pickEvacuationZoneId(evacuation.bodyXml);
+        if (picked) evacuationZoneId = picked;
+      }
+    } catch {
+      /* use env defaults */
+    }
+
+    this.createPatientRefs = {
+      branchId: envRefs.branchId,
+      teamId: envRefs.teamId,
+      locationId: envRefs.locationId,
+      mobilityStatusId,
+      evacuationZoneId,
+    };
+    return this.createPatientRefs;
   }
 
   async upsertContract(contract: HhaContract): Promise<UpsertResult> {
@@ -150,17 +256,20 @@ export class SoapHhaClientAdapter implements HhaClient {
     if (!auth.authorizationNumber) {
       throw new Error('CreatePatientAuthorization requires authorizationNumber');
     }
+    const contractId = auth.contractId ?? auth.serviceCode;
+    if (!contractId) {
+      throw new Error('CreatePatientAuthorization requires contractId from program type mapping');
+    }
     const result = await this.soap.call(
       'CreatePatientAuthorization',
       `<CreateAuthorizationInfo>
   <PatientID>${escape(auth.patientId)}</PatientID>
-  <ContractID>${escape(auth.serviceCode ?? '')}</ContractID>
+  <ContractID>${escape(contractId)}</ContractID>
   <AuthorizationNumber>${escape(auth.authorizationNumber)}</AuthorizationNumber>
   <FromDate>${escape(auth.startDate ?? '')}</FromDate>
   <ToDate>${escape(auth.endDate ?? '')}</ToDate>
 </CreateAuthorizationInfo>`,
     );
-    // Note: ContractID / discipline / units shapes will be refined from sandbox CreatePatientAuthorization sample + report columns.
     if (!result.ok) {
       throw new Error(
         `CreatePatientAuthorization failed: ${result.errorMessage ?? result.status} (ErrorID=${result.errorId}). Payload may need ContractID/discipline from GetContractServiceCode.`,
@@ -187,35 +296,244 @@ export class SoapHhaClientAdapter implements HhaClient {
         endDate: visit.visitDate,
       });
       if (found.ok) {
-        const id = pickId(found.raw, ['VisitID', 'ID']);
+        const visitIds = xmlIds(found.bodyXml, 'VisitID');
+        for (const vid of visitIds) {
+          const info = await this.soap.getVisitInfoV2(vid);
+          if (!info.ok) continue;
+          const cmp = compareSessionClock(
+            visit.startTime,
+            visit.endTime,
+            xmlFirstTag(info.bodyXml, 'EVVStartTime') ?? xmlFirstTag(info.bodyXml, 'VisitStartTime'),
+            xmlFirstTag(info.bodyXml, 'EVVEndTime') ?? xmlFirstTag(info.bodyXml, 'VisitEndTime'),
+          );
+          if (cmp.matches) return { id: String(vid), created: false };
+        }
+        const id = visitIds[0] ? String(visitIds[0]) : pickId(found.raw, ['VisitID', 'ID']);
         if (id) return { id, created: false };
       }
     }
 
+    if (visit.contractId && visit.serviceCodeId && visit.caregiverId && visit.visitDate) {
+      const body = buildCreateScheduleBody(visit);
+      const result = await this.soap.createSchedule(body);
+      assertOk(result, 'CreateSchedule');
+      const newId =
+        xmlIds(result.bodyXml, 'VisitID')[0]?.toString() ??
+        pickId(result.raw, ['VisitID', 'ID']);
+      if (!newId) {
+        throw new Error('CreateSchedule succeeded but no VisitID returned');
+      }
+      return { id: newId, created: true };
+    }
+
     throw new Error(
-      'CreateSchedule not auto-invoked yet: need caregiver, discipline, contract, and schedule times from Verified Sessions + HHA reference data.',
+      'Cannot locate or create visit: missing contractId, serviceCodeId, caregiverId, or visitDate for CreateSchedule',
     );
+  }
+
+  async findPendingCall(options: {
+    patientId: string;
+    caregiverId?: string;
+    visitDate: string;
+    officeId?: number;
+  }): Promise<PendingCall | undefined> {
+    const visitDate = psDateToIso(options.visitDate) ?? options.visitDate;
+    const result = await this.soap.getCallDashboardData({
+      officeId: options.officeId ?? this.defaultOfficeId,
+      patientId: Number(options.patientId),
+      caregiverId: options.caregiverId ? Number(options.caregiverId) : undefined,
+      startDate: visitDate,
+      endDate: visitDate,
+    });
+    if (!result.ok) return undefined;
+
+    const entries = parseCallDashboardEntries(result.bodyXml);
+    const match = entries.find(
+      (e) =>
+        (!options.caregiverId || e.caregiverId === options.caregiverId) &&
+        (!e.patientId || e.patientId === options.patientId),
+    );
+    if (!match?.callDashboardId) return undefined;
+    return { callDashboardId: match.callDashboardId, callTime: match.callTime };
+  }
+
+  async linkClockToVisit(
+    visitId: string,
+    options: { callerId: string; startTime?: string; endTime?: string },
+  ): Promise<void> {
+    const numericId = Number(visitId);
+    if (!Number.isFinite(numericId) || numericId <= 0) {
+      throw new Error(`linkClockToVisit requires numeric VisitID, got ${visitId}`);
+    }
+
+    const info = await this.soap.getVisitInfoV2(numericId);
+    assertOk(info, 'GetVisitInfoV2');
+
+    const times =
+      parseVisitConfirmTimes(info.bodyXml) ??
+      (() => {
+        throw new Error(
+          `Cannot link clock to visit ${visitId}: missing VisitDate/Schedule times in GetVisitInfoV2`,
+        );
+      })();
+
+    const visitFlags = parseTimesheetFlags(info.bodyXml);
+    const reasonPairs = await this.resolveConfirmReasonPairs(numericId);
+    if (!reasonPairs.length) {
+      throw new Error(
+        'ConfirmVisitsEVV requires ReasonCode/ActionCode; enable GetVisitEditReasonActionTaken on sandbox or configure HHA_REASON_LOOKUP_URL',
+      );
+    }
+
+    const errors: string[] = [];
+    for (const pair of reasonPairs) {
+      for (const flags of timesheetConfirmAttempts(visitFlags)) {
+        const body = buildConfirmVisitsEvvBody({
+          visitId,
+          callerId: options.callerId,
+          times,
+          reasonCode: pair.reasonCode,
+          actionCode: pair.actionCode,
+          timesheetRequired: flags.timesheetRequired,
+          timesheetApproved: flags.timesheetApproved,
+        });
+        const result = await this.soap.confirmVisitEvv(body);
+        if (result.ok) return;
+        errors.push(
+          `reason=${pair.reasonCode} action=${pair.actionCode}: ${result.errorMessage ?? result.status} (${result.errorId ?? '-'})`,
+        );
+        if (result.errorId === '-310') break;
+      }
+    }
+
+    throw new Error(
+      `ConfirmVisitsEVV failed for visit ${visitId}: ${errors.slice(0, 3).join('; ')}`,
+    );
+  }
+
+  async resolveCaregiverId(providerName: string | undefined): Promise<string | undefined> {
+    const { firstName, lastName } = splitProviderName(providerName);
+    if (!firstName && !lastName) return undefined;
+
+    const result = await this.soap.searchCaregivers({
+      firstName,
+      lastName,
+      status: 'Active',
+    });
+    if (!result.ok) return undefined;
+
+    const ids = xmlIds(result.bodyXml, 'CaregiverID');
+    if (ids.length === 1) return String(ids[0]);
+
+    if (ids.length > 1 && providerName) {
+      const normalized = providerName.trim().toUpperCase();
+      for (const block of result.bodyXml.match(/<CaregiverInfo>[\s\S]*?<\/CaregiverInfo>/gi) ?? []) {
+        const id = xmlFirstTag(block, 'CaregiverID');
+        const first = xmlFirstTag(block, 'FirstName') ?? '';
+        const last = xmlFirstTag(block, 'LastName') ?? '';
+        const full = `${last} ${first}`.trim().toUpperCase();
+        if (id && full === normalized) return id;
+      }
+    }
+
+    return ids[0] ? String(ids[0]) : undefined;
+  }
+
+  async resolvePayCodeId(payCodeName: string): Promise<string | undefined> {
+    if (!payCodeName.trim()) return undefined;
+    const cache = await this.loadPayCodeCache();
+    const key = payCodeName.trim().toUpperCase();
+    return cache.get(key);
+  }
+
+  async resolveContractId(programType: string | undefined): Promise<number | undefined> {
+    const staticId = lookupContractId(programType);
+    if (staticId) return staticId;
+    if (!programType?.trim()) return undefined;
+    await this.loadContractCache();
+    const match = matchByName(programType, this.contractCache ?? []);
+    return match ? Number(match.id) : undefined;
+  }
+
+  async resolveServiceCodeId(
+    serviceType: string | undefined,
+    contractId?: number,
+  ): Promise<string | undefined> {
+    if (!serviceType?.trim()) return undefined;
+    const staticMapping = lookupServiceCode(serviceType);
+    if (staticMapping) return staticMapping.hhaCode;
+
+    const key = normalizeRefName(serviceType);
+    if (this.serviceCodeByName.has(key)) return this.serviceCodeByName.get(key);
+
+    if (contractId) {
+      await this.loadServiceCodesForContract(contractId);
+      if (this.serviceCodeByName.has(key)) return this.serviceCodeByName.get(key);
+    }
+
+    await this.loadContractCache();
+    for (const contract of this.contractCache ?? []) {
+      const cid = Number(contract.id);
+      if (contractId && cid === contractId) continue;
+      await this.loadServiceCodesForContract(cid);
+      if (this.serviceCodeByName.has(key)) return this.serviceCodeByName.get(key);
+    }
+
+    return undefined;
+  }
+
+  private async loadContractCache(): Promise<void> {
+    if (this.contractCache) return;
+    const result = await this.soap.getContracts();
+    this.contractCache = result.ok ? parseContractsFromXml(result.bodyXml) : [];
+  }
+
+  private async loadServiceCodesForContract(contractId: number): Promise<void> {
+    if (!Number.isFinite(contractId) || contractId <= 0) return;
+    if (this.loadedContractServiceCodes.has(contractId)) return;
+    for (const scheduleType of ['Non-Skilled', 'Skilled'] as const) {
+      const result = await this.soap.getBillingServiceCodes(contractId, scheduleType);
+      if (!result.ok) continue;
+      for (const row of parseServiceCodesFromXml(result.bodyXml)) {
+        this.serviceCodeByName.set(normalizeRefName(row.name), row.id);
+      }
+    }
+    this.loadedContractServiceCodes.add(contractId);
+  }
+
+  private async loadPayCodeCache(): Promise<Map<string, string>> {
+    if (this.payCodeCache) return this.payCodeCache;
+    const result = await this.soap.getCaregiverPayCodes();
+    const map = new Map<string, string>();
+    if (result.ok) {
+      for (const row of parsePayCodesFromXml(result.bodyXml)) {
+        map.set(row.name.trim().toUpperCase(), row.id);
+      }
+    }
+    this.payCodeCache = map;
+    return map;
   }
 
   async getClockingDetails(visitId: string, expected: HhaVisit): Promise<HhaClockingDetails> {
     const info = await this.soap.getVisitInfoV2(Number(visitId));
     assertOk(info, 'GetVisitInfoV2');
-    const visitInfo =
-      (info.raw as { VisitInfo?: Record<string, unknown> }).VisitInfo ??
-      (info.raw as Record<string, unknown>);
-    const clockIn = String(visitInfo.VisitStartTime ?? visitInfo.EVVStartTime ?? '');
-    const clockOut = String(visitInfo.VisitEndTime ?? visitInfo.EVVEndTime ?? '');
-    const expectedStart = expected.startTime ?? '';
-    const expectedEnd = expected.endTime ?? '';
-    const matchesExpected =
-      (!expectedStart || clockIn.includes(expectedStart)) &&
-      (!expectedEnd || clockOut.includes(expectedEnd));
+    const clockIn =
+      xmlFirstTag(info.bodyXml, 'EVVStartTime') ??
+      xmlFirstTag(info.bodyXml, 'VisitStartTime') ??
+      '';
+    const clockOut =
+      xmlFirstTag(info.bodyXml, 'EVVEndTime') ??
+      xmlFirstTag(info.bodyXml, 'VisitEndTime') ??
+      '';
+    const cmp = compareSessionClock(expected.startTime, expected.endTime, clockIn, clockOut);
     return {
       visitId,
       clockIn: clockIn || undefined,
       clockOut: clockOut || undefined,
-      matchesExpected,
-      notes: matchesExpected ? undefined : 'Visit EVV/clock times do not match expected session window',
+      matchesExpected: cmp.matches,
+      notes: cmp.matches
+        ? undefined
+        : `EVV mismatch: start Δ${cmp.startDiffMin ?? '?'}min end Δ${cmp.endDiffMin ?? '?'}min`,
     };
   }
 
@@ -317,13 +635,17 @@ export class SoapHhaClientAdapter implements HhaClient {
     if (!contractId) {
       throw new Error(`No patient contract found to discharge for patient ${patientId}`);
     }
+    const dischargeToId = resolveDischargeToId();
+    const dischargeToXml = dischargeToId
+      ? `\n  <DischargeToID>${escape(dischargeToId)}</DischargeToID>`
+      : '';
     const result = await this.soap.call(
       'UpdatePatientContract',
       `<PatientContractInfo>
   <PatientID>${escape(patientId)}</PatientID>
   <PlacementID>${escape(contractId)}</PlacementID>
   <UpdateDischargeDate>true</UpdateDischargeDate>
-  <DischargeDate>${escape(update.closedDate ?? '')}</DischargeDate>
+  <DischargeDate>${escape(update.closedDate ?? '')}</DischargeDate>${dischargeToXml}
 </PatientContractInfo>`,
     );
     assertOk(result, 'UpdatePatientContract');
@@ -377,4 +699,28 @@ function escape(value: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function pickMobilityStatusId(xml: string): number | undefined {
+  for (const block of xml.match(/<MobilityStatus[^>]*>[\s\S]*?<\/MobilityStatus>/gi) ?? []) {
+    const id = Number(
+      block.match(/<MobilityStatusID>(\d+)<\/MobilityStatusID>/i)?.[1] ??
+        block.match(/<ID>(\d+)<\/ID>/i)?.[1],
+    );
+    if (id) return id;
+  }
+  return undefined;
+}
+
+function pickEvacuationZoneId(xml: string): number | undefined {
+  for (const block of xml.match(/<EvacuationZone[^>]*>[\s\S]*?<\/EvacuationZone>/gi) ?? []) {
+    const name = block.match(/<Name>([^<]*)<\/Name>/i)?.[1]?.trim().toLowerCase();
+    const id = Number(block.match(/<ID>(\d+)<\/ID>/i)?.[1]);
+    if (id && name === 'none') return id;
+  }
+  for (const block of xml.match(/<EvacuationZone[^>]*>[\s\S]*?<\/EvacuationZone>/gi) ?? []) {
+    const id = Number(block.match(/<ID>(\d+)<\/ID>/i)?.[1]);
+    if (id > 10000) return id;
+  }
+  return undefined;
 }

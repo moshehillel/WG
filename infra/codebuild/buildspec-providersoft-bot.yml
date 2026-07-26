@@ -1,0 +1,45 @@
+version: 0.2
+
+# Builds ProviderSoft Playwright Lambda image in AWS (no local Docker).
+# Source: s3://<BotSourceBucket>/source.zip (repo root zip uploaded by scripts/build-bot-image-aws.mjs)
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to Amazon ECR..."
+      - REGISTRY="${ECR_REPO_URI%%/*}"
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $REGISTRY
+      - echo "Source layout (GitHub archive extracts to one top-level folder)..."
+      - ls -la $CODEBUILD_SRC_DIR
+      - cd $CODEBUILD_SRC_DIR/*/
+      - pwd && ls -la
+  build:
+    commands:
+      - echo "Patching Dockerfile for aws-lambda-ric (GitHub may lag behind)..."
+      - |
+        DF=packages/providersoft-bot/Dockerfile
+        sed -i 's/aws-lambda-ric@3.1.1/aws-lambda-ric@4.0.2/' "$DF"
+        if ! grep -q xz-utils "$DF"; then
+          if grep -q '^RUN npm install -g aws-lambda-ric' "$DF"; then
+            sed -i '/^RUN npm install -g aws-lambda-ric/d' "$DF"
+          fi
+          if grep -q cmake "$DF"; then
+            sed -i 's/python3 \\$/python3 xz-utils \\/' "$DF"
+            sed -i 's/python3 \&\& rm/python3 xz-utils \&\& npm install -g aws-lambda-ric@4.0.2 \&\& rm/' "$DF"
+          else
+            sed -i '/^WORKDIR \/var\/task$/a\
+        RUN apt-get update \&\& apt-get install -y --no-install-recommends cmake g++ make python3 xz-utils \\\
+          \&\& npm install -g aws-lambda-ric@4.0.2 \\\
+          \&\& rm -rf /var/lib/apt/lists/*' "$DF"
+          fi
+        fi
+      - echo "Building Docker image..."
+      - docker build -f packages/providersoft-bot/Dockerfile -t $ECR_REPO_URI:latest .
+  post_build:
+    commands:
+      - echo "Pushing image..."
+      - docker push $ECR_REPO_URI:latest
+      - echo "Done — image $ECR_REPO_URI:latest"
+
+artifacts:
+  files: []

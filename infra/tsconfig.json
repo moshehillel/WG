@@ -8,5 +8,6 @@
     "types": ["node"],
     "noUnusedLocals": false
   },
-  "include": ["bin/**/*", "lib/**/*"]
+  "include": ["bin/**/*", "lib/**/*"],
+  "exclude": ["lib/bootstrap-bot-build-handler.ts"]
 }

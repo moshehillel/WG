@@ -11,6 +11,7 @@ import {
   isDailyReport,
   loadReportUserIds,
   loginUrl,
+  REFERENCE_REPORT_KINDS,
   REPORT_DATE_INPUTS,
   REPORT_LINK_NAMES,
   reportViewUrl,
@@ -157,6 +158,29 @@ async function openReportPage(
   await settle(page);
 }
 
+async function exportToExcel(
+  page: Page,
+  kind: BotReportKind,
+  downloadDir: string,
+  onStep?: DownloadReportsOptions['onStep'],
+): Promise<string> {
+  const exportBtn = page.getByRole('button', { name: 'Export to Excel' });
+  await exportBtn.waitFor({ state: 'visible', timeout: TIMEOUT.action });
+
+  log(onStep, 'export', `Export to Excel (${kind})`);
+  const [download] = await Promise.all([
+    page.waitForEvent('download', { timeout: TIMEOUT.download }),
+    exportBtn.click({ timeout: TIMEOUT.action }),
+  ]);
+
+  const suggested = download.suggestedFilename();
+  const ext = path.extname(suggested) || '.csv';
+  const target = path.join(downloadDir, `${BOT_REPORT_FILENAMES[kind]}${ext}`);
+  await download.saveAs(target);
+  log(onStep, 'export', `saved ${target} (suggested: ${suggested})`);
+  return target;
+}
+
 /**
  * Wizard path from codegen:
  * Modify Report → Next → set dates → Next → Next → Export to Excel
@@ -168,6 +192,11 @@ async function modifyDatesAndExport(
   range: DateRange,
   onStep?: DownloadReportsOptions['onStep'],
 ): Promise<string> {
+  if (REFERENCE_REPORT_KINDS.includes(kind)) {
+    log(onStep, 'export', `${kind}: reference report (no date filter)`);
+    return exportToExcel(page, kind, downloadDir, onStep);
+  }
+
   log(onStep, 'modify', `${kind}: Modify Report`);
   await clickReady(page.getByRole('button', { name: 'Modify Report' }));
   await settle(page);
@@ -185,21 +214,7 @@ async function modifyDatesAndExport(
   await clickReady(page.getByRole('button', { name: 'Next >>' }));
   await settle(page);
 
-  const exportBtn = page.getByRole('button', { name: 'Export to Excel' });
-  await exportBtn.waitFor({ state: 'visible', timeout: TIMEOUT.action });
-
-  log(onStep, 'export', `Export to Excel (${kind})`);
-  const [download] = await Promise.all([
-    page.waitForEvent('download', { timeout: TIMEOUT.download }),
-    exportBtn.click({ timeout: TIMEOUT.action }),
-  ]);
-
-  const suggested = download.suggestedFilename();
-  const ext = path.extname(suggested) || '.csv';
-  const target = path.join(downloadDir, `${BOT_REPORT_FILENAMES[kind]}${ext}`);
-  await download.saveAs(target);
-  log(onStep, 'export', `saved ${target} (suggested: ${suggested})`);
-  return target;
+  return exportToExcel(page, kind, downloadDir, onStep);
 }
 
 export interface InteractiveSession {
@@ -244,7 +259,8 @@ async function launchSession(
 
 function resolveKinds(options: DownloadReportsOptions): BotReportKind[] {
   if (options.kinds?.length) return options.kinds;
-  return [...ALL_BOT_KINDS];
+  const ids = options.reportIds ?? loadReportUserIds();
+  return ALL_BOT_KINDS.filter((k) => !REFERENCE_REPORT_KINDS.includes(k) || ids[k]);
 }
 
 function resolveRange(

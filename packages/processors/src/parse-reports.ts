@@ -55,13 +55,9 @@ export function parseOpenedCases(content: string): OpenedCaseRow[] {
         parsedName.firstName,
       lastName:
         firstField(row, 'last_name', 'lastname', 'patient_last_name') ?? parsedName.lastName,
-      dateOfBirth: firstField(
-        row,
-        'date_of_birth',
-        'dob',
-        'birth_date',
-        'date_of_birth',
-      ),
+      dateOfBirth:
+        firstField(row, 'date_of_birth', 'dob', 'birth_date') ??
+        firstField(row, 'real_dob_for_school_cases', 'real_dob', 'real_date_of_birth'),
       programType,
       serviceCode: firstField(
         row,
@@ -77,13 +73,42 @@ export function parseOpenedCases(content: string): OpenedCaseRow[] {
         'authorization',
       ),
       contractId: firstField(row, 'contract_id', 'contract'),
+      intakeDate: firstField(row, 'date_of_intake', 'intake_date'),
+      address1: firstField(row, 'childs_address', "child's_address", 'child_address', 'address'),
+      city: firstField(row, 'childs_city', "child's_city", 'child_city', 'city'),
+      state: firstField(row, 'childs_state', "child's_state", 'child_state', 'state'),
+      zipCode: firstField(row, 'childs_zip_code', "child's_zip_code", 'child_zip_code', 'zip_code', 'zip'),
+      homePhone:
+        firstField(row, 'primary_contact_phone', 'home_phone', 'phone', 'contact_phone') ??
+        firstField(row, 'childs_phone', "child's_phone", 'child_phone'),
+      emergencyContactName: firstField(
+        row,
+        'primary_contact_name',
+        'emergency_contact_name',
+        'contact_name',
+      ),
+      primaryContactEmail: firstField(
+        row,
+        'primary_contact_email',
+        'contact_email',
+        'emergency_contact_email',
+      ),
+      childPhone: firstField(row, 'childs_phone', "child's_phone", 'child_phone'),
+      realDateOfBirth: firstField(
+        row,
+        'real_dob_for_school_cases',
+        'real_dob',
+        'real_date_of_birth',
+      ),
+      wgCaseCoordinator: firstField(row, 'wg_case_coordinator', 'case_coordinator'),
+      schoolDistrict: firstField(row, 'school_district'),
+      countyOfService: firstField(row, 'county_of_service', 'region'),
       startDate: firstField(
         row,
         'start_date',
         'opened_date',
         'open_date',
         'service_begin_date',
-        'date_of_intake',
       ),
       endDate: firstField(row, 'end_date', 'auth_end_date', 'service_end_date'),
       isEarlyIntervention,
@@ -117,7 +142,13 @@ export function parseClosedCases(content: string): ClosedCaseRow[] {
         'end_date',
         'closure_date',
       ),
-      closedReason: firstField(row, 'closed_reason', 'reason', 'close_reason'),
+      closedReason: firstField(
+        row,
+        'closed_reason',
+        'reason',
+        'close_reason',
+        'closure_reason',
+      ),
       status: firstField(row, 'status', 'case_status') ?? 'Closed',
       raw: row,
     };
@@ -131,10 +162,11 @@ export function parseVerifiedSessions(content: string): VerifiedSessionRow[] {
     const programId = firstField(row, 'program_id', 'programid', 'patient_id') ?? '';
     const visitDate = firstField(row, 'visit_date', 'session_date', 'date') ?? '';
     const startTime = firstField(row, 'start_time', 'start', 'clock_in', 'begin_time') ?? '';
-    const provider = firstField(row, 'provider_name', 'caregiver_id', 'provider_id') ?? '';
+    const providerName = firstField(row, 'provider_name', 'provider') ?? '';
+    const supplierNumber = firstField(row, 'supplier_number', 'supplier #') ?? '';
     const sessionId =
       firstField(row, 'session_id', 'sessionid', 'visit_id', 'id') ??
-      [programId, visitDate, startTime, provider, String(index)].filter(Boolean).join('|');
+      [programId, visitDate, startTime, providerName, String(index)].filter(Boolean).join('|');
 
     return {
       sessionId,
@@ -154,14 +186,12 @@ export function parseVerifiedSessions(content: string): VerifiedSessionRow[] {
       visitDate,
       startTime,
       endTime: firstField(row, 'end_time', 'end', 'clock_out', 'end_time'),
-      caregiverId: firstField(
-        row,
-        'caregiver_id',
-        'provider_id',
-        'aide_id',
-        'provider_name',
-        'supplier_number',
-      ),
+      providerName: providerName || undefined,
+      payRate: firstField(row, 'pay_rate', 'payrate') || undefined,
+      caregiverId:
+        firstField(row, 'caregiver_id', 'provider_id', 'aide_id') ||
+        supplierNumber ||
+        undefined,
       verifiedAt: firstField(row, 'verified_at', 'verified_date'),
       status: firstField(row, 'status', 'authorization_number'),
       raw: row,

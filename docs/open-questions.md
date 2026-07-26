@@ -1,34 +1,54 @@
 # Open questions for the client
 
-See **[client-decisions.md](./client-decisions.md)** for answered rules (EVV programs, schedule, alerts).
+See **[client-decisions.md](./client-decisions.md)** for answered rules (EVV programs, schedule, alerts, pay codes, caregiver codes).
 
 ## Still need from client
 
-1. **Service Type → HHA exchange code** — Full catalog (ProviderSoft `Service Type` / CPT → HHA code). Alerts fire on unknown codes; mapping must be maintained in `service-codes.ts`.
-2. **Program Type → HHA ContractID** — e.g. Extended Home Care Therapy → ContractID from `GetContracts`.
-3. **Discharged To (default)** — `UpdatePatientContract` needs `DischargeToID`. Confirm agency default (e.g. “Home”) or add column to closure report.
-4. **Schedule — confirm times** — Open/close: **once or twice daily**? Which clock times + **timezone**? Sessions: **Tuesday 12:00** — confirm noon **Eastern**?
-5. **Additional alert emails** — Send comma-separated list for SNS (each person confirms AWS subscription once).
-6. **Weekly code preview** — Confirm **Tuesday 11:00 dry-run + Tuesday 12:00 live** for API Report (preview lists new unknown codes only).
+1. **Additional alert emails** — Send comma-separated list for SNS (each person confirms AWS subscription once).
+
+2. **Discharge “Home” vs HHA label** — API has no literal “Home”; we mapped client **Home** → HHA **self/family/friend** (`HHA_DISCHARGE_TO_ID=198`). Confirm this is correct.
+
+3. **Unmatched Service Types (13 SI/ABA variants)** — Not found in HHA billing codes; rows using these **error** until mapped. See `UNMATCHED_SERVICE_TYPES` in `service-codes.ts`.
+
+4. **HHA clock → visit linking** — Pending HHA response on `ConfirmVisitsEVV` / REST API path.
+
+## Schedule (confirmed for implementation)
+
+| When | What | Mode |
+|------|------|------|
+| **Every night 2:00 AM Eastern** | Gluck open + closure | Live |
+| **Monday night 2:00 AM Eastern** | All reports (incl. API Report) | **Dry-run** — email alerts only, no HHA writes |
+| **Tuesday night 2:00 AM Eastern** | Verified sessions (API Report) | Live |
+
+Enable in AWS: `npm run deploy -w @white-glove/infra -- -c enableNightSchedule=true`
+
+Bot **never runs daytime** — night batch only.
+
+## Resolved via prod API lookup (Jul 2026)
+
+| Item | Result |
+|------|--------|
+| **Program Type → ContractID** | **63/63** → `contract-map.ts` |
+| **Service Type → ServiceCodeID** | **47/60** sample types → `service-codes.ts` |
+| **DischargeToID for Home** | **198** (`self/family/friend`) |
 
 ## Confirmed (no longer open)
 
 | Item | Decision |
 |------|----------|
 | **Early Intervention** | Skip all rows — never send to HHA. |
-| **Session triage by program** | EVV programs → verify clocking; no-EVV programs → direct entry; list in `program-types.ts`. |
-| **Unknown service code on open** | Alert (SNS) — do not silently proceed. |
-| **HHA credentials** | Prod App Name/Secret/Key against sandbox URL. |
-| **ProviderSoft bot user** | `MGLUCK2`. |
-| **Alert emails (current)** | `elefkowitz@whiteglovecare.net`, `moshe@advancedautomations.net`. |
-| **Report UserReportIds** | Open **4526**, closure **4527**, discharge **4528**, API **4026**. |
-| **Sample CSV exports** | In `docs/samples/`; parsers in `parse-reports.ts`. |
-| **AWS run mode** | Manual trigger only (no auto schedule until times confirmed). |
+| **Session triage by program** | EVV → verify clocking; no-EVV → direct entry; `program-types.ts`. |
+| **Unknown / unmatched service type** | **Error + SNS alert** — do not proceed to HHA. |
+| **Discharged To** | Default **Home**; closure reason **case termination**. |
+| **Pay codes** | Discipline + pay rate (e.g. OT72). Monday preview flags missing pay codes. |
+| **Caregiver codes** | Separate PS report; lookup by Provider Name; alert if missing. |
+| **Weekly review** | Monday night dry-run; Tuesday night live sessions; other reports nightly. |
+| **Report UserReportIds** | Open **4526**, closure **4527**, discharge **4528**, API **4026**, caregiver codes **4541**. |
 
-Deploy / update alerts:
+Deploy:
 
 ```powershell
-npm run deploy -w @white-glove/infra -- -c "alertEmails=elefkowitz@whiteglovecare.net,moshe@advancedautomations.net"
+npm run deploy -w @white-glove/infra -- -c "alertEmails=elefkowitz@whiteglovecare.net,moshe@advancedautomations.net" -c enableNightSchedule=true
 ```
 
-Manual pipeline run: see **PipelineConsoleUrl** in CloudFormation stack outputs.
+Manual run: **PipelineConsoleUrl** in CloudFormation outputs. Optional input: `{ "runId": "manual-…", "dryRun": true, "reportKinds": ["opened_cases","closed_cases","verified_sessions"] }`.

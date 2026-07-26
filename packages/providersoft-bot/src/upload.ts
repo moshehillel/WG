@@ -2,7 +2,7 @@ import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DownloadResult, ReportKind } from '@white-glove/shared';
-import { rawReportKey } from '@white-glove/shared';
+import { rawReferenceKey, rawReportKey } from '@white-glove/shared';
 import type { BotReportKind } from './report-config.js';
 
 const s3 = new S3Client({});
@@ -12,6 +12,8 @@ const PIPELINE_KINDS = new Set<ReportKind>([
   'closed_cases',
   'verified_sessions',
 ]);
+
+const REFERENCE_KINDS = new Set<BotReportKind>(['caregiver_codes', 'discharge_service']);
 
 export async function uploadReportsToS3(options: {
   runId: string;
@@ -25,13 +27,17 @@ export async function uploadReportsToS3(options: {
     string | undefined,
   ][]) {
     if (!filePath) continue;
-    if (!PIPELINE_KINDS.has(kind as ReportKind)) {
-      // discharge_service not in pipeline ReportKind yet — skip S3 key mapping
+    const ext = path.extname(filePath).replace('.', '') || 'csv';
+    let key: string;
+    if (PIPELINE_KINDS.has(kind as ReportKind)) {
+      key = rawReportKey(options.runId, kind as ReportKind, ext);
+      keys[kind as ReportKind] = key;
+    } else if (REFERENCE_KINDS.has(kind)) {
+      key = rawReferenceKey(options.runId, kind as 'caregiver_codes' | 'discharge_service', ext);
+      keys[kind as 'caregiver_codes' | 'discharge_service'] = key;
+    } else {
       continue;
     }
-    const reportKind = kind as ReportKind;
-    const ext = path.extname(filePath).replace('.', '') || 'csv';
-    const key = rawReportKey(options.runId, reportKind, ext);
     const body = await readFile(filePath);
     await s3.send(
       new PutObjectCommand({
@@ -41,7 +47,6 @@ export async function uploadReportsToS3(options: {
         ContentType: ext === 'csv' ? 'text/csv' : 'application/octet-stream',
       }),
     );
-    keys[reportKind] = key;
   }
 
   return {

@@ -33,27 +33,37 @@ describe('triageVerifiedSession', () => {
     expect(decision.reason).toBe('early_intervention');
   });
 
-  it('auto-approves mapped PCA codes', () => {
-    const decision = triageVerifiedSession({
-      sessionId: 's1',
-      serviceCode: 'PCA001',
-    });
-    expect(decision.triage).toBe('auto_approve');
-  });
-
-  it('skips unknown codes', () => {
+  it('blocks explicit unmapped service types at triage', () => {
     const decision = triageVerifiedSession({
       sessionId: 's2',
-      serviceCode: 'ZZZ999',
+      serviceCode: 'SI- ABA 1 NYC',
     });
     expect(decision.triage).toBe('skip');
     expect(decision.reason).toBe('unknown_service_code');
   });
 
+  it('allows new service types through to live HHA resolve', () => {
+    const decision = triageVerifiedSession({
+      sessionId: 's-new',
+      serviceCode: 'ZZZ999',
+    });
+    expect(decision.triage).toBe('verify_clocking');
+    expect(decision.reason).toBe('service_resolve_live');
+  });
+
+  it('auto-approves mapped service types for no-EVV programs', () => {
+    const decision = triageVerifiedSession({
+      sessionId: 's1',
+      serviceCode: 'OT CHHA EXTENDED',
+      programType: 'Garden City UFSD Therapy',
+    });
+    expect(decision.triage).toBe('auto_approve');
+  });
+
   it('skips cancelled status', () => {
     const decision = triageVerifiedSession({
       sessionId: 's3',
-      serviceCode: 'PCA001',
+      serviceCode: 'OT CHHA EXTENDED',
       status: 'Cancelled',
     });
     expect(decision.triage).toBe('skip');

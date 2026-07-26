@@ -45,6 +45,13 @@ export class HttpHhaClient implements HhaClient {
     return (await res.json()) as T;
   }
 
+  findPatient(options: {
+    externalId?: string;
+    caseId?: string;
+  }): Promise<string | undefined> {
+    return this.request('POST', '/patients/find', options);
+  }
+
   upsertPatient(patient: HhaPatient): Promise<UpsertResult> {
     return this.request('POST', '/patients/upsert', patient);
   }
@@ -59,6 +66,41 @@ export class HttpHhaClient implements HhaClient {
 
   locateOrScheduleVisit(visit: HhaVisit): Promise<UpsertResult> {
     return this.request('POST', '/visits/locate-or-schedule', visit);
+  }
+
+  findPendingCall(options: {
+    patientId: string;
+    caregiverId?: string;
+    visitDate: string;
+    officeId?: number;
+  }): Promise<import('./types.js').PendingCall | undefined> {
+    return this.request('POST', '/calls/pending', options);
+  }
+
+  linkClockToVisit(
+    visitId: string,
+    options: { callerId: string; startTime?: string; endTime?: string },
+  ): Promise<void> {
+    return this.request('POST', `/visits/${encodeURIComponent(visitId)}/link-clock`, options);
+  }
+
+  resolveCaregiverId(providerName: string | undefined): Promise<string | undefined> {
+    return this.request('POST', '/caregivers/resolve', { providerName });
+  }
+
+  resolvePayCodeId(payCodeName: string): Promise<string | undefined> {
+    return this.request('POST', '/pay-codes/resolve', { payCodeName });
+  }
+
+  resolveContractId(programType: string | undefined): Promise<number | undefined> {
+    return this.request('POST', '/contracts/resolve', { programType });
+  }
+
+  resolveServiceCodeId(
+    serviceType: string | undefined,
+    contractId?: number,
+  ): Promise<string | undefined> {
+    return this.request('POST', '/service-codes/resolve', { serviceType, contractId });
   }
 
   getClockingDetails(visitId: string, expected: HhaVisit): Promise<HhaClockingDetails> {

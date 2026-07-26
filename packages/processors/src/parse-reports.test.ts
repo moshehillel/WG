@@ -47,6 +47,11 @@ describe('parseOpenedCases', () => {
       lastName: 'Aboagye',
       serviceCode: 'SI',
       isEarlyIntervention: true,
+      address1: expect.stringContaining('COOPER'),
+      city: 'New Rochelle',
+      state: 'NY',
+      zipCode: '10801-4721',
+      homePhone: expect.stringContaining('347'),
     });
   });
 });
@@ -66,6 +71,7 @@ describe('parseClosedCases', () => {
       lastName: 'Landolfi',
       firstName: 'Gianna',
       closedDate: '07/15/2026',
+      closedReason: 'case termination',
     });
   });
 });

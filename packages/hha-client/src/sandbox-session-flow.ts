@@ -102,13 +102,6 @@ function extractHhaMinutes(s: string): number | null {
   return Number(m[1]) * 60 + Number(m[2]);
 }
 
-function psDateToIso(d: string): string {
-  const m = d.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!m) return d;
-  const [, mm, dd, yyyy] = m;
-  return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
-}
-
 function psTimeToHhmm(t: string): string {
   const mins = toMinutes12h(t);
   if (mins == null) return t.replace(/:/g, '').slice(0, 4);

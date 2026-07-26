@@ -31,7 +31,11 @@ Detection: `program_type` / `program` contains “early intervention” or equal
 { "runId": "manual-2026-07-22" }
 ```
 
-To enable daily 06:00 UTC schedule: `npm run deploy -w @white-glove/infra -- -c enableDailySchedule=true`
+To enable nightly schedules (2:00 AM Eastern):
+
+`npm run deploy -w @white-glove/infra -- -c enableNightSchedule=true`
+
+Legacy 06:00 UTC daily: `-c enableDailySchedule=true`
 
 1. **Download** Lambda — default **stub zip**; production path is **Playwright container** (`-c providerSoftLiveBot=true`). See [providersoft-bot-aws.md](./providersoft-bot-aws.md).
 2. **Parse** Lambda normalizes CSV → JSON artifacts under `runs/{runId}/normalized/`.

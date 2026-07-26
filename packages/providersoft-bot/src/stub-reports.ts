@@ -26,15 +26,27 @@ export async function writeStubReports(downloadDir: string): Promise<LocalDownlo
     'S-2,p1,HH-1,HHA001,2026-07-14,11:00,12:00,Verified',
     'S-3,p2,HH-2,ZZZ999,2026-07-14,13:00,14:00,Verified',
   ].join('\n');
+  const discharge = [
+    'Program Id,Program Type,Service Type,Child\'s Name',
+    'HH-1,Home Health,PCA001,Home Health',
+  ].join('\n');
+  const caregiverCodes = [
+    'Provider Name,Caregiver Code',
+    'FORTUNE JOHANA,WGC-35595',
+  ].join('\n');
 
   const files = {
     opened_cases: path.join(downloadDir, `${REPORT_FILENAMES.opened_cases}.csv`),
     closed_cases: path.join(downloadDir, `${REPORT_FILENAMES.closed_cases}.csv`),
     verified_sessions: path.join(downloadDir, `${REPORT_FILENAMES.verified_sessions}.csv`),
+    discharge_service: path.join(downloadDir, `${BOT_REPORT_FILENAMES.discharge_service}.csv`),
+    caregiver_codes: path.join(downloadDir, `${BOT_REPORT_FILENAMES.caregiver_codes}.csv`),
   };
   await writeFile(files.opened_cases, opened, 'utf8');
   await writeFile(files.closed_cases, closed, 'utf8');
   await writeFile(files.verified_sessions, sessions, 'utf8');
+  await writeFile(files.discharge_service, discharge, 'utf8');
+  await writeFile(files.caregiver_codes, caregiverCodes, 'utf8');
   return { files };
 }
 

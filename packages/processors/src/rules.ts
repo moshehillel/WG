@@ -4,7 +4,7 @@ import type {
   SessionTriage,
   VerifiedSessionRow,
 } from '@white-glove/shared';
-import { lookupServiceCode, programSessionMode } from '@white-glove/shared';
+import { isUnmatchedServiceType, lookupServiceCode, programSessionMode } from '@white-glove/shared';
 
 /**
  * Locked business rule: Early Intervention program types are never sent to HHA.
@@ -122,7 +122,7 @@ export function triageVerifiedSession(
   }
 
   const mapping = lookupServiceCode(code);
-  if (!mapping) {
+  if (isUnmatchedServiceType(row.serviceCode)) {
     return {
       sessionId: row.sessionId,
       triage: 'skip',
@@ -130,9 +130,17 @@ export function triageVerifiedSession(
     };
   }
 
+  if (mapping) {
+    return {
+      sessionId: row.sessionId,
+      triage: mapping.defaultSessionTriage,
+      reason: `service_map:${mapping.hhaCode}`,
+    };
+  }
+
   return {
     sessionId: row.sessionId,
-    triage: mapping.defaultSessionTriage,
-    reason: `service_map:${mapping.hhaCode}`,
+    triage: 'verify_clocking',
+    reason: 'service_resolve_live',
   };
 }

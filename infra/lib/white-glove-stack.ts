@@ -14,6 +14,7 @@ import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import { Construct } from 'constructs';
+import { ProviderSoftBotImage } from './providersoft-bot-image.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '../..');
@@ -87,13 +88,17 @@ export class WhiteGloveStack extends cdk.Stack {
     };
 
     // Download Lambda:
-    // - Default: zip stub (no Docker) — safe until PS secrets + reports are ready
-    // - Production bot: cdk deploy -c providerSoftLiveBot=true  (Playwright Chromium image)
-    // - Keep stubs inside the image until ready: -c providerSoftUseStubs=true (default true)
+    // - Default: zip stub (no Docker on laptop)
+    // - Production bot: ECR image built by AWS CodeBuild (scripts/build-bot-image-aws.mjs)
+    // - Deploy live: cdk deploy -c providerSoftLiveBot=true -c providerSoftUseStubs=false
     const providerSoftLiveBot =
       String(this.node.tryGetContext('providerSoftLiveBot') ?? 'false') === 'true';
     const providerSoftUseStubs =
       String(this.node.tryGetContext('providerSoftUseStubs') ?? 'true') === 'true';
+
+    const botImage = new ProviderSoftBotImage(this, 'ProviderSoftBotImage', { repoRoot });
+    const enableNightSchedule =
+      String(this.node.tryGetContext('enableNightSchedule') ?? 'false') === 'true';
     const enableDailySchedule =
       String(this.node.tryGetContext('enableDailySchedule') ?? 'false') === 'true';
 
@@ -117,13 +122,14 @@ export class WhiteGloveStack extends cdk.Stack {
       PROVIDERSOFT_REPORT_CLOSED_ID: '4527',
       PROVIDERSOFT_REPORT_DISCHARGE_ID: '4528',
       PROVIDERSOFT_REPORT_SESSIONS_ID: '4026',
+      PROVIDERSOFT_REPORT_CAREGIVER_CODES_ID: '4541',
       PROVIDERSOFT_REPORT_KINDS: 'opened_cases,closed_cases,verified_sessions',
     };
 
     const downloadFn: lambda.IFunction = providerSoftLiveBot
       ? new lambda.DockerImageFunction(this, 'ProviderSoftDownloadFn', {
-          code: lambda.DockerImageCode.fromImageAsset(repoRoot, {
-            file: 'packages/providersoft-bot/Dockerfile',
+          code: lambda.DockerImageCode.fromEcr(botImage.repository, {
+            tagOrDigest: 'latest',
           }),
           timeout: cdk.Duration.minutes(15),
           memorySize: 3008,
@@ -211,7 +217,8 @@ export class WhiteGloveStack extends cdk.Stack {
     const mergeDefaults = new sfn.Pass(this, 'MergeDefaults', {
       parameters: {
         'runId.$': '$.runId',
-        dryRun: false,
+        'dryRun.$': '$.dryRun',
+        'reportKinds.$': '$.reportKinds',
       },
     });
 
@@ -220,6 +227,7 @@ export class WhiteGloveStack extends cdk.Stack {
       payload: sfn.TaskInput.fromObject({
         'runId.$': '$.runId',
         'dryRun.$': '$.dryRun',
+        'reportKinds.$': '$.reportKinds',
       }),
       payloadResponseOnly: true,
       resultPath: '$.download',
@@ -293,6 +301,7 @@ export class WhiteGloveStack extends cdk.Stack {
       lambdaFunction: validateFn,
       payload: sfn.TaskInput.fromObject({
         'runId.$': '$.runId',
+        'dryRun.$': '$.dryRun',
         'bucket.$': '$.download.bucket',
         'opened.$': '$.results.opened',
         'closed.$': '$.results.closed',
@@ -326,7 +335,7 @@ export class WhiteGloveStack extends cdk.Stack {
     if (enableDailySchedule) {
       new events.Rule(this, 'DailyPipelineSchedule', {
         schedule: events.Schedule.cron({ minute: '0', hour: '6' }),
-        description: 'Daily White-glove ProviderSoft → HHA sync (06:00 UTC)',
+        description: 'Legacy daily sync (06:00 UTC) — prefer enableNightSchedule',
         targets: [
           new targets.SfnStateMachine(stateMachine, {
             input: events.RuleTargetInput.fromObject({
@@ -335,6 +344,41 @@ export class WhiteGloveStack extends cdk.Stack {
             }),
           }),
         ],
+      });
+    }
+
+    if (enableNightSchedule) {
+      this.addEasternNightSchedule(this, 'NightlyCaseReportsSchedule', {
+        weekDay: 'MON-SUN',
+        description: 'Nightly Gluck open + closure (2:00 AM Eastern)',
+        stateMachine,
+        input: {
+          runId: events.EventField.fromPath('$.id'),
+          dryRun: false,
+          reportKinds: ['opened_cases', 'closed_cases', 'discharge_service'],
+        },
+      });
+
+      this.addEasternNightSchedule(this, 'MondayPreviewSchedule', {
+        weekDay: 'MON',
+        description: 'Monday night dry-run — flag missing mappings (2:00 AM Eastern)',
+        stateMachine,
+        input: {
+          runId: events.EventField.fromPath('$.id'),
+          dryRun: true,
+          reportKinds: ['opened_cases', 'closed_cases', 'verified_sessions', 'caregiver_codes'],
+        },
+      });
+
+      this.addEasternNightSchedule(this, 'TuesdaySessionsSchedule', {
+        weekDay: 'TUE',
+        description: 'Tuesday night live verified sessions (2:00 AM Eastern)',
+        stateMachine,
+        input: {
+          runId: events.EventField.fromPath('$.id'),
+          dryRun: false,
+          reportKinds: ['verified_sessions', 'caregiver_codes'],
+        },
       });
     }
 
@@ -353,10 +397,50 @@ export class WhiteGloveStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ProviderSoftLiveBot', {
       value: providerSoftLiveBot ? 'true' : 'false',
       description:
-        'When false, download Lambda is stub zip. Deploy with -c providerSoftLiveBot=true for Playwright.',
+        'When false, download Lambda uses stub zip. Set true after: node scripts/build-bot-image-aws.mjs --deploy-live',
     });
     new cdk.CfnOutput(this, 'ProviderSoftUseStubs', {
       value: providerSoftUseStubs ? 'true' : 'false',
+    });
+    new cdk.CfnOutput(this, 'BotEcrRepositoryUri', {
+      value: botImage.repository.repositoryUri,
+      description: 'ECR repo for Playwright bot — image built by CodeBuild in AWS',
+    });
+    new cdk.CfnOutput(this, 'BotSourceBucketName', {
+      value: botImage.sourceBucket.bucketName,
+      description: 'Upload source.zip here before CodeBuild (or use scripts/build-bot-image-aws.mjs)',
+    });
+    new cdk.CfnOutput(this, 'BotCodeBuildProjectName', {
+      value: botImage.project.projectName,
+      description: 'CodeBuild project that builds the bot Docker image (no local Docker)',
+    });
+    new cdk.CfnOutput(this, 'BotBootstrapFunctionName', {
+      value: botImage.bootstrapFn.functionName,
+      description: 'Invoke to download GitHub source + start CodeBuild: npm run bot:deploy:aws',
+    });
+  }
+
+  /**
+   * ~2:00 AM Eastern via 06:00 UTC (EDT). EventBridge Rules in this account reject ScheduleExpressionTimezone.
+   */
+  private addEasternNightSchedule(
+    scope: Construct,
+    id: string,
+    props: {
+      weekDay: string;
+      description: string;
+      stateMachine: sfn.IStateMachine;
+      input: Record<string, unknown>;
+    },
+  ): events.Rule {
+    return new events.Rule(scope, id, {
+      schedule: events.Schedule.cron({ minute: '0', hour: '6', weekDay: props.weekDay }),
+      description: `${props.description} (06:00 UTC ≈ 2:00 AM EDT)`,
+      targets: [
+        new targets.SfnStateMachine(props.stateMachine, {
+          input: events.RuleTargetInput.fromObject(props.input),
+        }),
+      ],
     });
   }
 }

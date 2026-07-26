@@ -46,7 +46,7 @@ export async function processClosedCases(options: {
     }
 
     const { pk, sk } = rowKey('closed_cases', row.caseId);
-    if (await store.alreadyProcessed(pk, `${runId}#${sk}`)) {
+    if (!dryRun && (await store.alreadyProcessed(pk, `${runId}#${sk}`))) {
       skipped += 1;
       continue;
     }
@@ -62,7 +62,9 @@ export async function processClosedCases(options: {
           closedReason: row.closedReason,
         });
       }
-      await store.markProcessed(pk, `${runId}#${sk}`, { caseId: row.caseId });
+      if (!dryRun) {
+        await store.markProcessed(pk, `${runId}#${sk}`, { caseId: row.caseId });
+      }
       succeeded += 1;
     } catch (err) {
       failed += 1;

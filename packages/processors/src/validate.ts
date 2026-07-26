@@ -6,6 +6,7 @@ import type {
 } from '@white-glove/shared';
 import {
   exceptionsKey,
+  buildAlertSubject,
   formatPipelineAlertBody,
   getEnv,
   validateSummaryKey,
@@ -21,6 +22,7 @@ export async function validateAndNotify(options: {
   closed?: ProcessorResult;
   sessions?: ProcessorResult;
   topicArn?: string;
+  dryRun?: boolean;
 }): Promise<ValidateResult> {
   const exceptions: PipelineException[] = [
     ...(options.opened?.exceptions ?? []),
@@ -58,12 +60,19 @@ export async function validateAndNotify(options: {
       opened: options.opened,
       closed: options.closed,
       sessions: options.sessions,
+      dryRun: options.dryRun,
     });
 
     await sns.send(
       new PublishCommand({
         TopicArn: topicArn,
-        Subject: `White-glove run ${options.runId}: ${result.ok ? 'exceptions' : 'FAILED'} (${exceptions.length} item(s))`,
+        Subject: buildAlertSubject({
+          runId: options.runId,
+          ok: result.ok,
+          hardFailures,
+          exceptions,
+          dryRun: options.dryRun,
+        }),
         Message: alertBody,
       }),
     );

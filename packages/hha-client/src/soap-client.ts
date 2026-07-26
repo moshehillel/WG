@@ -164,6 +164,13 @@ export class HhaSoapClient {
     return this.call('GetContracts', '');
   }
 
+  getBillingServiceCodes(contractId: number, scheduleType: 'Skilled' | 'Non-Skilled'): Promise<SoapCallResult> {
+    return this.call(
+      'GetBillingServiceCodes',
+      `<ContractID>${contractId}</ContractID><ScheduleType>${scheduleType}</ScheduleType>`,
+    );
+  }
+
   getDisciplines(): Promise<SoapCallResult> {
     return this.call('GetDisciplines', '');
   }
@@ -242,6 +249,62 @@ export class HhaSoapClient {
 
   confirmVisit(innerBody: string): Promise<SoapCallResult> {
     return this.call('ConfirmVisits', innerBody);
+  }
+
+  confirmVisitEvv(innerBody: string): Promise<SoapCallResult> {
+    return this.call('ConfirmVisitsEVV', innerBody);
+  }
+
+  searchCaregivers(filters: {
+    firstName?: string;
+    lastName?: string;
+    status?: string;
+  }): Promise<SoapCallResult> {
+    return this.call(
+      'SearchCaregivers',
+      `<SearchFilters>
+  <FirstName>${escapeXml(filters.firstName ?? '')}</FirstName>
+  <LastName>${escapeXml(filters.lastName ?? '')}</LastName>
+  <Status>${escapeXml(filters.status ?? 'Active')}</Status>
+</SearchFilters>`,
+    );
+  }
+
+  getCallDashboardData(filters: {
+    officeId?: number;
+    patientId?: number;
+    caregiverId?: number;
+    startDate: string;
+    endDate: string;
+  }): Promise<SoapCallResult> {
+    const parts = [
+      `<StartDate>${escapeXml(filters.startDate)}</StartDate>`,
+      `<EndDate>${escapeXml(filters.endDate)}</EndDate>`,
+    ];
+    if (filters.officeId) parts.push(`<OfficeID>${filters.officeId}</OfficeID>`);
+    if (filters.patientId) parts.push(`<PatientID>${filters.patientId}</PatientID>`);
+    if (filters.caregiverId) parts.push(`<CaregiverID>${filters.caregiverId}</CaregiverID>`);
+    return this.call('GetCallDashBoardData', `<SearchFilters>\n  ${parts.join('\n  ')}\n</SearchFilters>`);
+  }
+
+  getCaregiverPayCodes(): Promise<SoapCallResult> {
+    return this.call('GetCaregiverPayCodes', '');
+  }
+
+  createSchedule(innerBody: string): Promise<SoapCallResult> {
+    return this.call('CreateSchedule', innerBody);
+  }
+
+  createPatient(innerBody: string): Promise<SoapCallResult> {
+    return this.call('CreatePatient', innerBody);
+  }
+
+  getMobilityStatuses(): Promise<SoapCallResult> {
+    return this.call('GetMobilityStatuses', '');
+  }
+
+  getEvacuationZones(): Promise<SoapCallResult> {
+    return this.call('GetEvacuationZones', '');
   }
 
   getPatientAuthorizationInfo(patientId: number, authorizationId: number): Promise<SoapCallResult> {

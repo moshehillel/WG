@@ -1,7 +1,9 @@
 import { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
 import type { Handler } from 'aws-lambda';
 import {
+  buildAlertSubject,
   errorMessage,
+  explainPipelineError,
   formatPipelineAlertBody,
   getEnv,
   parseStepFunctionsCause,
@@ -34,6 +36,7 @@ export const handler: Handler<NotifyFailureEvent, { notified: boolean }> = async
   const pipelineError =
     parsed.errorMessage ??
     (event.error?.Cause ? errorMessage(event.error.Cause) : 'Pipeline step failed with no cause');
+  const explained = explainPipelineError(pipelineError);
 
   const body = formatPipelineAlertBody({
     runId,
@@ -47,8 +50,14 @@ export const handler: Handler<NotifyFailureEvent, { notified: boolean }> = async
   await sns.send(
     new PublishCommand({
       TopicArn: topicArn,
-      Subject: `White-glove run ${runId}: pipeline step FAILED (${step})`,
-      Message: body,
+      Subject: buildAlertSubject({
+        runId,
+        ok: false,
+        hardFailures: 0,
+        exceptions: [],
+        pipelineStep: step,
+      }),
+      Message: `${body}\n\nTechnical detail: ${explained.summary}`,
     }),
   );
 

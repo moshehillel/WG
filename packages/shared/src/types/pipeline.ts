@@ -1,11 +1,18 @@
 import { z } from 'zod';
 import { ReportKindSchema, SessionTriageSchema } from './reports.js';
 
+export const PipelineReportKindSchema = z.union([
+  ReportKindSchema,
+  z.enum(['caregiver_codes', 'discharge_service']),
+]);
+
 export const PipelineRunInputSchema = z.object({
   runId: z.string().min(1),
   dryRun: z.boolean().default(false),
   /** ISO date (YYYY-MM-DD) for which reports are pulled. Defaults to today UTC. */
   reportDate: z.string().optional(),
+  /** Subset of reports for this run; defaults to all pipeline kinds in download Lambda. */
+  reportKinds: z.array(PipelineReportKindSchema).optional(),
 });
 
 export type PipelineRunInput = z.infer<typeof PipelineRunInputSchema>;
@@ -14,9 +21,11 @@ export const DownloadResultSchema = z.object({
   runId: z.string(),
   bucket: z.string(),
   keys: z.object({
-    opened_cases: z.string(),
-    closed_cases: z.string(),
-    verified_sessions: z.string(),
+    opened_cases: z.string().optional(),
+    closed_cases: z.string().optional(),
+    verified_sessions: z.string().optional(),
+    caregiver_codes: z.string().optional(),
+    discharge_service: z.string().optional(),
   }),
   downloadedAt: z.string(),
 });
@@ -30,11 +39,15 @@ export const ParseResultSchema = z.object({
     closed_cases: z.number(),
     verified_sessions: z.number(),
     opened_cases_after_ei_filter: z.number(),
+    discharge_service: z.number().optional(),
+    caregiver_codes: z.number().optional(),
   }),
   artifactKeys: z.object({
     opened_cases: z.string(),
     closed_cases: z.string(),
     verified_sessions: z.string(),
+    caregiver_codes: z.string().optional(),
+    discharge_service: z.string().optional(),
   }),
 });
 

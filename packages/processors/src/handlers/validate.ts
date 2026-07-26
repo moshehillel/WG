@@ -6,6 +6,7 @@ import { validateAndNotify } from '../validate.js';
 export interface ValidateEvent {
   runId: string;
   bucket?: string;
+  dryRun?: boolean;
   opened?: ProcessorResult;
   closed?: ProcessorResult;
   sessions?: ProcessorResult;
@@ -19,6 +20,7 @@ export const handler: Handler<ValidateEvent, ValidateResult> = async (event) => 
   return validateAndNotify({
     runId: event.runId,
     bucket,
+    dryRun: event.dryRun,
     opened: event.opened,
     closed: event.closed,
     sessions: event.sessions,

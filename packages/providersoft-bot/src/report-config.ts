@@ -1,12 +1,13 @@
 import type { ReportKind } from '@white-glove/shared';
 import { REPORT_FILENAMES } from '@white-glove/shared';
 
-/** Pipeline report kinds plus discharge-service (4th ProviderSoft report). */
-export type BotReportKind = ReportKind | 'discharge_service';
+/** Pipeline report kinds plus PS reference reports not yet in every pipeline branch. */
+export type BotReportKind = ReportKind | 'discharge_service' | 'caregiver_codes';
 
 export const BOT_REPORT_FILENAMES: Record<BotReportKind, string> = {
   ...REPORT_FILENAMES,
   discharge_service: 'discharge-service',
+  caregiver_codes: 'caregiver-codes',
 };
 
 /**
@@ -21,6 +22,7 @@ export function loadReportUserIds(env: NodeJS.ProcessEnv = process.env): ReportU
     closed_cases: env.PROVIDERSOFT_REPORT_CLOSED_ID ?? '4527',
     verified_sessions: env.PROVIDERSOFT_REPORT_SESSIONS_ID ?? '4026',
     discharge_service: env.PROVIDERSOFT_REPORT_DISCHARGE_ID ?? '4528',
+    caregiver_codes: env.PROVIDERSOFT_REPORT_CAREGIVER_CODES_ID ?? '4541',
   };
 }
 
@@ -30,6 +32,7 @@ export const REPORT_LINK_NAMES: Record<BotReportKind, string> = {
   closed_cases: 'gluck closure',
   discharge_service: 'discharge service',
   verified_sessions: 'API Report',
+  caregiver_codes: 'caregiver codes',
 };
 
 /**
@@ -56,6 +59,10 @@ export const REPORT_DATE_INPUTS: Record<
     from: '#ctl00_Content_dlREportColumns_ctl07_DLColumControl_6_1_datePicker_dateInput',
     to: '#ctl00_Content_dlREportColumns_ctl07_DLColumControl_6_2_datePicker_dateInput',
   },
+  caregiver_codes: {
+    from: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_1_datePicker_dateInput',
+    to: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_2_datePicker_dateInput',
+  },
 };
 
 export const ALL_BOT_KINDS: BotReportKind[] = [
@@ -63,7 +70,11 @@ export const ALL_BOT_KINDS: BotReportKind[] = [
   'closed_cases',
   'discharge_service',
   'verified_sessions',
+  'caregiver_codes',
 ];
+
+/** Reference exports — no date filter; re-download when lookup misses. */
+export const REFERENCE_REPORT_KINDS: BotReportKind[] = ['caregiver_codes'];
 
 export function reportViewUrl(baseUrl: string, userReportId: string): string {
   const base = baseUrl.replace(/\/$/, '');

@@ -8,4 +8,19 @@ export { SoapHhaClientAdapter } from './soap-adapter.js';
 export type { SoapHhaClientAdapterOptions } from './soap-adapter.js';
 export { createHhaClient } from './factory.js';
 export { applyHhaSecretFromArn } from './load-secret.js';
+export {
+  compareSessionClock,
+  psDateToIso,
+  psTimeToHhmm,
+  sessionDurationMinutes,
+  splitProviderName,
+} from './hha-time.js';
+export {
+  buildCreatePatientBody,
+  canCreatePatient,
+  createPatientDefaultsFromEnv,
+  formatAdmissionId,
+  mapServiceToDiscipline,
+} from './create-patient-builder.js';
+export type { CreatePatientDefaults, CreatePatientReferenceIds } from './create-patient-builder.js';
 

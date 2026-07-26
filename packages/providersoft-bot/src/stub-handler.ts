@@ -36,7 +36,7 @@ export const handler: Handler<DownloadEvent, DownloadResult> = async (event) => 
   const downloadDir = await mkdtemp(path.join(tmpdir(), 'wg-ps-'));
   try {
     const local = await writeStubReports(downloadDir);
-    return uploadReportsToS3({
+    return await uploadReportsToS3({
       runId: input.runId,
       bucket,
       files: local.files,

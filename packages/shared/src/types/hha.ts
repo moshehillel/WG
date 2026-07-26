@@ -6,6 +6,16 @@ export const HhaPatientSchema = z.object({
   lastName: z.string(),
   dateOfBirth: z.string().optional(),
   caseId: z.string().optional(),
+  gender: z.string().optional(),
+  /** Date of Intake from Gluck open report (M/D/YYYY). */
+  intakeDate: z.string().optional(),
+  serviceCode: z.string().optional(),
+  address1: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zipCode: z.string().optional(),
+  homePhone: z.string().optional(),
+  emergencyContactName: z.string().optional(),
 });
 
 export type HhaPatient = z.infer<typeof HhaPatientSchema>;
@@ -24,6 +34,7 @@ export const HhaAuthorizationSchema = z.object({
   patientId: z.string(),
   authorizationNumber: z.string().optional(),
   serviceCode: z.string().optional(),
+  contractId: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   units: z.number().optional(),
@@ -39,6 +50,19 @@ export const HhaVisitSchema = z.object({
   startTime: z.string().optional(),
   endTime: z.string().optional(),
   caregiverId: z.string().optional(),
+  /** HHA ContractID (numeric string). */
+  contractId: z.string().optional(),
+  /** HHA ServiceCodeID. */
+  serviceCodeId: z.string().optional(),
+  /** HHA PayCodeID. */
+  payCodeId: z.string().optional(),
+  programType: z.string().optional(),
+  providerName: z.string().optional(),
+  payRate: z.string().optional(),
+  /** Pending mobile clock from GetCallDashBoardData. */
+  callDashboardId: z.string().optional(),
+  scheduleType: z.string().optional(),
+  durationMinutes: z.number().optional(),
 });
 
 export type HhaVisit = z.infer<typeof HhaVisitSchema>;

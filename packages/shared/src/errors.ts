@@ -1,4 +1,23 @@
 import type { ExceptionCode, PipelineException, ProcessorResult } from './types/pipeline.js';
+import {
+  explainPipelineError,
+  formatAlertSubject,
+  formatExplainedException,
+  isPreviewException,
+  looksLikeStubFixtureData,
+  summarizeProcessorResult,
+} from './exception-guidance.js';
+
+export {
+  explainException,
+  explainPipelineError,
+  formatAlertSubject,
+  formatExplainedException,
+  isPreviewException,
+  looksLikeStubFixtureData,
+  codeLabel,
+  reportLabel,
+} from './exception-guidance.js';
 
 /** Extract a readable message from any thrown value. */
 export function errorMessage(err: unknown): string {
@@ -31,12 +50,8 @@ export function parseStepFunctionsCause(cause: string | undefined): {
 }
 
 export function formatExceptionLine(ex: PipelineException): string {
-  const tags: string[] = [`[${ex.code}]`];
-  if (ex.reportKind) tags.push(`report=${ex.reportKind}`);
-  if (ex.rowId) tags.push(`row=${ex.rowId}`);
-  const step = ex.details?.step;
-  if (typeof step === 'string') tags.push(`step=${step}`);
-  return `${tags.join(' ')}: ${ex.message}`;
+  const explained = formatExplainedException(ex, 0).split('\n').slice(1).join('\n');
+  return explained.trim() || ex.message;
 }
 
 export function groupExceptionsByCode(
@@ -51,17 +66,6 @@ export function groupExceptionsByCode(
   return groups;
 }
 
-function formatProcessorSummary(name: string, result?: ProcessorResult): string {
-  if (!result) return `${name}: (not run)`;
-  const status =
-    result.failed > 0
-      ? `${result.failed} failed`
-      : result.exceptions.length > 0
-        ? `${result.exceptions.length} exception(s)`
-        : 'OK';
-  return `${name}: ${status} (${result.succeeded} ok, ${result.skipped} skipped, ${result.processed} total)`;
-}
-
 /** Human-readable SNS / email body for validate + pipeline failure alerts. */
 export function formatPipelineAlertBody(options: {
   runId: string;
@@ -73,50 +77,126 @@ export function formatPipelineAlertBody(options: {
   sessions?: ProcessorResult;
   pipelineStep?: string;
   pipelineError?: string;
+  dryRun?: boolean;
 }): string {
   const lines: string[] = [];
-  const headline = options.ok
-    ? `White-glove run ${options.runId}: completed with exceptions`
-    : `White-glove run ${options.runId}: FAILED (${options.hardFailures} hard failure(s))`;
+  const previewExceptions = options.exceptions.filter(isPreviewException);
+  const allPreview =
+    options.exceptions.length > 0 && previewExceptions.length === options.exceptions.length;
+  const stubFixtures = looksLikeStubFixtureData(options.exceptions);
+  const dryRun = options.dryRun ?? allPreview;
 
-  lines.push(headline);
+  lines.push(`Run ID: ${options.runId}`);
   lines.push('');
 
   if (options.pipelineStep || options.pipelineError) {
-    lines.push('Pipeline step failure');
-    if (options.pipelineStep) lines.push(`  Step: ${options.pipelineStep}`);
-    if (options.pipelineError) lines.push(`  Error: ${options.pipelineError}`);
+    lines.push('=== PIPELINE STOPPED (infrastructure / download error) ===');
+    lines.push('');
+    if (options.pipelineStep) lines.push(`Failed step: ${options.pipelineStep}`);
+    if (options.pipelineError) {
+      const explained = explainPipelineError(options.pipelineError);
+      lines.push(`What happened: ${explained.summary}`);
+      lines.push(`Likely cause: ${explained.likelyCause}`);
+      lines.push(`What to do: ${explained.action}`);
+    }
+    lines.push('');
+    lines.push('No ProviderSoft row processing ran after this point.');
+    return lines.join('\n').trimEnd();
+  }
+
+  if (dryRun) {
+    lines.push('=== DRY-RUN MODE ===');
+    lines.push('No changes were made to HHA. This email lists rows that WOULD fail on a live run.');
+    lines.push('');
+  } else {
+    lines.push('=== LIVE RUN ===');
+    lines.push('This run attempted real HHA sync (sandbox or production per Secrets Manager URL).');
     lines.push('');
   }
 
-  lines.push('Processor summary');
-  lines.push(`  ${formatProcessorSummary('Opened cases', options.opened)}`);
-  lines.push(`  ${formatProcessorSummary('Closed cases', options.closed)}`);
-  lines.push(`  ${formatProcessorSummary('Verified sessions', options.sessions)}`);
-  lines.push('');
-
-  if (options.exceptions.length === 0 && !options.pipelineError) {
-    lines.push('No row-level exceptions recorded.');
-    return lines.join('\n');
-  }
-
-  const groups = groupExceptionsByCode(options.exceptions);
-  lines.push(`Exceptions (${options.exceptions.length} total, ${groups.size} type(s))`);
-  lines.push('');
-
-  for (const [code, items] of groups) {
-    lines.push(`${code} (${items.length})`);
-    const shown = items.slice(0, 15);
-    for (const ex of shown) {
-      lines.push(`  - ${formatExceptionLine(ex)}`);
-    }
-    if (items.length > shown.length) {
-      lines.push(`  - … and ${items.length - shown.length} more ${code} item(s)`);
-    }
+  if (stubFixtures) {
+    lines.push('*** TEST DATA WARNING ***');
+    lines.push(
+      'Rows like HH-1, S-1, S-2, PCA001 are AWS stub fixtures — not real ProviderSoft exports.',
+    );
+    lines.push(
+      'These alerts are expected until the live Playwright bot is deployed (Docker + providerSoftLiveBot=true).',
+    );
+    lines.push('Real Gluck/API Report data will produce meaningful mapping results.');
     lines.push('');
   }
+
+  if (options.ok && options.exceptions.length === 0) {
+    lines.push('Result: SUCCESS — all rows passed checks.');
+    return lines.join('\n').trimEnd();
+  }
+
+  if (dryRun && allPreview) {
+    lines.push(
+      `Result: ${options.exceptions.length} mapping issue(s) found during preview (${options.hardFailures} row(s) would be blocked on live run).`,
+    );
+  } else if (!options.ok) {
+    lines.push(`Result: FAILED — ${options.hardFailures} row(s) blocked from HHA sync.`);
+  } else {
+    lines.push(`Result: Completed with ${options.exceptions.length} note(s).`);
+  }
+  lines.push('');
+
+  lines.push('--- Summary by report ---');
+  lines.push(summarizeProcessorResult('Gluck open (new cases)', options.opened));
+  lines.push(summarizeProcessorResult('Gluck closure', options.closed));
+  lines.push(summarizeProcessorResult('API Report (sessions)', options.sessions));
+  lines.push('');
+
+  if (options.exceptions.length === 0) {
+    lines.push('No row-level issues recorded.');
+    return lines.join('\n').trimEnd();
+  }
+
+  lines.push(`--- Issues (${options.exceptions.length}) — read each block below ---`);
+  lines.push('');
+
+  options.exceptions.slice(0, 25).forEach((ex, i) => {
+    lines.push(formatExplainedException(ex, i + 1));
+    lines.push('');
+  });
+
+  if (options.exceptions.length > 25) {
+    lines.push(`… and ${options.exceptions.length - 25} more issue(s). See S3 exceptions.json for full list.`);
+    lines.push('');
+  }
+
+  lines.push('--- Quick reference ---');
+  lines.push('• Program Type → HHA ContractID: must match GetContracts name exactly');
+  lines.push('• Service Type → HHA billing code: must exist in GetBillingServiceCodes');
+  lines.push('• Gluck open: needs DOB, address, city, state, zip, auth number for new patients');
+  lines.push('• API Report: needs Provider Name + Pay Rate for caregiver/pay code lookup');
+  lines.push('• Early Intervention rows are always skipped (by design)');
 
   return lines.join('\n').trimEnd();
+}
+
+export function buildAlertSubject(options: {
+  runId: string;
+  ok: boolean;
+  hardFailures: number;
+  exceptions: PipelineException[];
+  pipelineStep?: string;
+  dryRun?: boolean;
+}): string {
+  const allPreview =
+    options.exceptions.length > 0 &&
+    options.exceptions.every(isPreviewException);
+  return formatAlertSubject({
+    runId: options.runId,
+    ok: options.ok,
+    dryRun: options.dryRun ?? allPreview,
+    hardFailures: options.hardFailures,
+    exceptionCount: options.exceptions.length,
+    pipelineStep: options.pipelineStep,
+    allPreview,
+    stubFixtures: looksLikeStubFixtureData(options.exceptions),
+  });
 }
 
 export function buildRowException(options: {

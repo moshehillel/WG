@@ -1,6 +1,7 @@
 import { getEnv, type Env } from '@white-glove/shared';
 import { HttpHhaClient } from './http-client.js';
 import { MockHhaClient } from './mock-client.js';
+import { createPatientDefaultsFromEnv } from './create-patient-builder.js';
 import { SoapHhaClientAdapter } from './soap-adapter.js';
 import type { HhaClient } from './types.js';
 
@@ -32,6 +33,7 @@ export function createHhaClient(env: Env = getEnv()): HhaClient {
       baseUrl,
       auth: { appName, appSecret, appKey },
       defaultOfficeId: process.env.HHA_OFFICE_ID ? Number(process.env.HHA_OFFICE_ID) : undefined,
+      createPatientDefaults: createPatientDefaultsFromEnv(),
       reasonLookupBaseUrl,
       reasonLookupVisitId,
     });

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { HhaClockingDetails, HhaPatient, HhaVisit } from '@white-glove/shared';
-import type { ClosedCaseUpdate, HhaClient, UpsertResult } from './types.js';
+import { lookupContractId, lookupServiceCode } from '@white-glove/shared';
+import type { ClosedCaseUpdate, HhaClient, PendingCall, UpsertResult } from './types.js';
 
 /**
  * In-memory mock used until HHA sandbox + API docs are available.
@@ -11,7 +12,30 @@ export class MockHhaClient implements HhaClient {
   readonly authorizations = new Map<string, UpsertResult>();
   readonly visits = new Map<string, HhaVisit & { id: string; approved: boolean }>();
   readonly closedCases = new Map<string, ClosedCaseUpdate>();
+  readonly pendingCalls = new Map<string, PendingCall>();
+  readonly payCodes = new Map<string, string>([
+    ['OT72', 'pay-ot72'],
+    ['OT70', 'pay-ot70'],
+  ]);
+  readonly caregiverByName = new Map<string, string>();
   readonly calls: string[] = [];
+
+  async findPatient(options: {
+    externalId?: string;
+    caseId?: string;
+  }): Promise<string | undefined> {
+    this.calls.push('findPatient');
+    for (const [, patient] of this.patients) {
+      if (options.externalId && patient.externalId === options.externalId) return patient.id;
+      if (options.caseId && patient.caseId === options.caseId) return patient.id;
+    }
+    const key = options.externalId ?? options.caseId;
+    if (key) {
+      const existing = this.patients.get(key);
+      if (existing) return existing.id;
+    }
+    return undefined;
+  }
 
   async upsertPatient(patient: HhaPatient): Promise<UpsertResult> {
     this.calls.push('upsertPatient');
@@ -61,6 +85,54 @@ export class MockHhaClient implements HhaClient {
     const id = randomUUID();
     this.visits.set(key, { ...visit, id, approved: false });
     return { id, created: true };
+  }
+
+  async findPendingCall(options: {
+    patientId: string;
+    caregiverId?: string;
+    visitDate: string;
+  }): Promise<PendingCall | undefined> {
+    this.calls.push('findPendingCall');
+    const key = `${options.patientId}:${options.visitDate}:${options.caregiverId ?? ''}`;
+    return this.pendingCalls.get(key);
+  }
+
+  async linkClockToVisit(
+    visitId: string,
+    _options: { callerId: string; startTime?: string; endTime?: string },
+  ): Promise<void> {
+    this.calls.push('linkClockToVisit');
+    for (const [key, visit] of this.visits) {
+      if (visit.id === visitId) {
+        this.visits.set(key, { ...visit, approved: false });
+        return;
+      }
+    }
+  }
+
+  async resolveCaregiverId(providerName: string | undefined): Promise<string | undefined> {
+    this.calls.push('resolveCaregiverId');
+    if (!providerName?.trim()) return 'mock-caregiver-1';
+    const key = providerName.trim().toUpperCase();
+    return this.caregiverByName.get(key) ?? 'mock-caregiver-1';
+  }
+
+  async resolvePayCodeId(payCodeName: string): Promise<string | undefined> {
+    this.calls.push('resolvePayCodeId');
+    return this.payCodes.get(payCodeName.trim().toUpperCase());
+  }
+
+  async resolveContractId(programType: string | undefined): Promise<number | undefined> {
+    this.calls.push('resolveContractId');
+    return lookupContractId(programType);
+  }
+
+  async resolveServiceCodeId(
+    serviceType: string | undefined,
+    _contractId?: number,
+  ): Promise<string | undefined> {
+    this.calls.push('resolveServiceCodeId');
+    return lookupServiceCode(serviceType)?.hhaCode;
   }
 
   async getClockingDetails(visitId: string, expected: HhaVisit): Promise<HhaClockingDetails> {

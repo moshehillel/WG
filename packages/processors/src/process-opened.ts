@@ -1,8 +1,14 @@
 import type { HhaClient } from '@white-glove/hha-client';
 import type { OpenedCaseRow, PipelineException, ProcessorResult } from '@white-glove/shared';
-import { buildHhaRowException, buildRowException, lookupServiceCode } from '@white-glove/shared';
+import {
+  buildHhaRowException,
+  buildRowException,
+  isUnmatchedServiceType,
+} from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
+import { previewOpenedCase } from './preview-scan.js';
+import { openedCaseToHhaPatient } from './opened-to-hha-patient.js';
 import { filterOpenedCases } from './rules.js';
 
 function missingFieldMessage(reportKind: string, rowId: string | undefined, fields: string[]): string {
@@ -50,61 +56,76 @@ export async function processOpenedCases(options: {
     }
 
     const { pk, sk } = rowKey('opened_cases', row.caseId);
-    if (await store.alreadyProcessed(pk, `${runId}#${sk}`)) {
+    if (!dryRun && (await store.alreadyProcessed(pk, `${runId}#${sk}`))) {
       skipped += 1;
       continue;
     }
 
-    if (row.serviceCode && !lookupServiceCode(row.serviceCode)) {
+    if (dryRun) {
+      const previewIssues = previewOpenedCase(row);
+      if (previewIssues.length) {
+        failed += 1;
+        exceptions.push(...previewIssues);
+      } else {
+        succeeded += 1;
+      }
+      continue;
+    }
+
+    if (isUnmatchedServiceType(row.serviceCode) || !row.serviceCode) {
+      failed += 1;
       exceptions.push(
         buildRowException({
-          code: 'unknown_service_code',
-          message: `[opened_cases] row=${row.caseId} unknown service code "${row.serviceCode}" — add mapping in service-codes config`,
+          code: row.serviceCode ? 'unknown_service_code' : 'missing_service_code',
+          message: row.serviceCode
+            ? `[opened_cases] row=${row.caseId} unknown service type "${row.serviceCode}" — no HHA billing code`
+            : `[opened_cases] row=${row.caseId} has no service code in Gluck open report`,
           reportKind: 'opened_cases',
           rowId: row.caseId,
           details: { serviceCode: row.serviceCode },
         }),
       );
-    }
-
-    if (!row.serviceCode) {
-      exceptions.push(
-        buildRowException({
-          code: 'missing_service_code',
-          message: `[opened_cases] row=${row.caseId} has no service code in Gluck open report`,
-          reportKind: 'opened_cases',
-          rowId: row.caseId,
-        }),
-      );
+      continue;
     }
 
     let step = 'upsertPatient';
     try {
-      if (!dryRun) {
-        const patient = await hha.upsertPatient({
-          externalId: row.patientExternalId,
-          caseId: row.caseId,
-          firstName: row.firstName,
-          lastName: row.lastName,
-          dateOfBirth: row.dateOfBirth,
-        });
-        step = 'upsertContract';
-        await hha.upsertContract({
-          patientId: patient.id,
-          contractExternalId: row.contractId,
-          serviceCode: row.serviceCode,
-          startDate: row.startDate,
-          endDate: row.endDate,
-        });
-        step = 'upsertAuthorization';
-        await hha.upsertAuthorization({
-          patientId: patient.id,
-          authorizationNumber: row.authorizationNumber,
-          serviceCode: row.serviceCode,
-          startDate: row.startDate,
-          endDate: row.endDate,
-        });
+      const contractNum =
+        (row.contractId ? Number(row.contractId) : undefined) ??
+        (await hha.resolveContractId(row.programType));
+      const contractId = contractNum ? String(contractNum) : undefined;
+      if (!contractId) {
+        failed += 1;
+        exceptions.push(
+          buildRowException({
+            code: 'other',
+            message: `[opened_cases] row=${row.caseId} no HHA ContractID for program type "${row.programType ?? '(missing)'}"`,
+            reportKind: 'opened_cases',
+            rowId: row.caseId,
+            details: { programType: row.programType },
+          }),
+        );
+        continue;
       }
+
+      const patient = await hha.upsertPatient(openedCaseToHhaPatient(row));
+      step = 'upsertContract';
+      await hha.upsertContract({
+        patientId: patient.id,
+        contractExternalId: contractId,
+        serviceCode: row.serviceCode,
+        startDate: row.startDate,
+        endDate: row.endDate,
+      });
+      step = 'upsertAuthorization';
+      await hha.upsertAuthorization({
+        patientId: patient.id,
+        authorizationNumber: row.authorizationNumber,
+        serviceCode: row.serviceCode,
+        contractId,
+        startDate: row.startDate,
+        endDate: row.endDate,
+      });
       await store.markProcessed(pk, `${runId}#${sk}`, { caseId: row.caseId });
       succeeded += 1;
     } catch (err) {

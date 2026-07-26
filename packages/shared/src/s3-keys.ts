@@ -13,6 +13,21 @@ export function normalizedArtifactKey(runId: string, kind: ReportKind): string {
   return `${runPrefix(runId)}/normalized/${REPORT_FILENAMES[kind]}.json`;
 }
 
+export type ReferenceReportKind = 'caregiver_codes' | 'discharge_service';
+
+const REFERENCE_FILENAMES: Record<ReferenceReportKind, string> = {
+  caregiver_codes: 'caregiver-codes',
+  discharge_service: 'discharge-service',
+};
+
+export function rawReferenceKey(runId: string, kind: ReferenceReportKind, ext = 'csv'): string {
+  return `${runPrefix(runId)}/raw/${REFERENCE_FILENAMES[kind]}.${ext}`;
+}
+
+export function normalizedReferenceKey(runId: string, kind: ReferenceReportKind): string {
+  return `${runPrefix(runId)}/normalized/${REFERENCE_FILENAMES[kind]}.json`;
+}
+
 export function exceptionsKey(runId: string): string {
   return `${runPrefix(runId)}/exceptions.json`;
 }
