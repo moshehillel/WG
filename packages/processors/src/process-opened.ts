@@ -1,4 +1,5 @@
 import type { HhaClient } from '@white-glove/hha-client';
+import { AmbiguousPatientNameError } from '@white-glove/hha-client';
 import type { OpenedCaseRow, PipelineException, ProcessorResult } from '@white-glove/shared';
 import {
   buildHhaRowException,
@@ -150,6 +151,23 @@ export async function processOpenedCases(options: {
       succeeded += 1;
     } catch (err) {
       failed += 1;
+      if (err instanceof AmbiguousPatientNameError) {
+        exceptions.push(
+          buildRowException({
+            code: 'unmatched_patient',
+            message: `[opened_cases] row=${row.caseId}: ${err.message}`,
+            reportKind: 'opened_cases',
+            rowId: row.caseId,
+            details: {
+              step,
+              firstName: err.firstName,
+              lastName: err.lastName,
+              hhaNameMatches: err.matchCount,
+            },
+          }),
+        );
+        continue;
+      }
       exceptions.push(
         buildHhaRowException({
           reportKind: 'opened_cases',

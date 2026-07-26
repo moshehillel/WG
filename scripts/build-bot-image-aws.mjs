@@ -103,7 +103,9 @@ async function main() {
         '-c',
         'providerSoftUseStubs=false',
         '-c',
-        'enableNightSchedule=true',
+        'enableNightSchedule=false',
+        '-c',
+        'enableSessionsSchedule=false',
         '-c',
         'hhaUseMock=false',
         '-c',
@@ -114,7 +116,7 @@ async function main() {
     if (code.status !== 0) throw new Error('CDK deploy failed');
   }
 
-  console.log('\nDone. ProviderSoft downloads will run in AWS Lambda on the night schedule.');
+  console.log('\nDone. Live bot deployed. Nightly schedules stay off unless you pass enableNightSchedule / enableSessionsSchedule.');
   console.log('Verify stack outputs: ProviderSoftLiveBot=true, ProviderSoftUseStubs=false');
 }
 

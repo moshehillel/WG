@@ -15,7 +15,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "cdk": "npm run cdk -w @white-glove/infra --",
     "bot:build:aws": "node scripts/build-bot-image-aws.mjs",
-    "bot:deploy:aws": "node scripts/build-bot-image-aws.mjs --deploy-live"
+    "bot:deploy:aws": "node scripts/build-bot-image-aws.mjs --deploy-live",
+    "docs:client-guide": "python scripts/generate-client-guide-pdf.py"
   },
 
   "devDependencies": {

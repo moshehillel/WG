@@ -25,7 +25,7 @@ const REPORT_LABELS: Record<string, string> = {
 const CODE_LABELS: Record<ExceptionCode, string> = {
   missing_service_code: 'Missing service type',
   unknown_service_code: 'Unknown service type (no HHA billing code)',
-  unmatched_patient: 'Patient not found in HHA',
+  unmatched_patient: 'Patient not found or ambiguous in HHA',
   missing_authorization: 'Missing authorization number',
   clocking_mismatch: 'EVV clock times do not match',
   hha_api_error: 'HHA API error',
@@ -107,6 +107,22 @@ export function explainException(ex: PipelineException): ExplainedException {
       };
 
     case 'parse_error':
+      if (ex.reportKind === 'closed_cases' && ex.message.includes('discharge_service')) {
+        return {
+          title: 'Discharge row missing required fields',
+          problem:
+            ex.message.includes('Service Type') || ex.message.includes('Service Begin Date')
+              ? 'The discharge service export row is missing Service Type and/or Service Begin Date.'
+              : ex.message.replace(/^\[discharge_service\]\s*/i, ''),
+          impact:
+            'HHA will not discharge any service for this row — avoids closing the wrong placement when a child has multiple active services.',
+          action:
+            'Coordinator: open the case in ProviderSoft, confirm which service ended, and ensure the discharge service report row includes both Service Type (e.g. SI, OT HC Eval) and Service Begin Date exactly as shown on the active service line. Re-run the nightly sync.',
+          rowRef,
+          reportLabel: 'Discharge service',
+          isPreview,
+        };
+      }
       if (missing) {
         const fieldLabels: Record<string, string> = {
           dateOfBirth: 'Date of Birth',
@@ -149,6 +165,20 @@ export function explainException(ex: PipelineException): ExplainedException {
       };
 
     case 'hha_api_error':
+      if (ex.message.includes('Ambiguous HHA discharge')) {
+        return {
+          title: 'Cannot identify which service to discharge',
+          problem:
+            'The child has multiple active services in HHA, and the discharge report Service Type / Service Begin Date did not match exactly one placement.',
+          impact:
+            'No placement was discharged — the wrong service was not closed by accident.',
+          action:
+            'Coordinator: verify Service Type and Service Begin Date on the discharge row match the ending service in HHA. If the child has two lines with the same type and start date, resolve manually in HHA and note for automation mapping.',
+          rowRef,
+          reportLabel: 'Discharge service',
+          isPreview,
+        };
+      }
       return {
         title: codeLabel(ex.code),
         problem: ex.message,
@@ -232,6 +262,19 @@ export function explainException(ex: PipelineException): ExplainedException {
         problem: ex.message.replace(/^\[preview\/[^\]]+\]\s*/i, ''),
         impact: 'Row needs manual review before HHA sync.',
         action: 'See message above and fix ProviderSoft export or HHA mapping.',
+        rowRef,
+        reportLabel: report,
+        isPreview,
+      };
+
+    case 'pipeline_step_error':
+      return {
+        title: codeLabel(ex.code),
+        problem: ex.message,
+        impact:
+          'One HHA sync branch crashed. Other branches may still have processed rows — check the validate summary counts.',
+        action:
+          'Review CloudWatch logs for the Opened, Closed, or Sessions Lambda for this runId. Fix the root cause (S3 artifact, JSON parse, credentials) and re-run. Row-level failures from other branches are still listed separately in this email.',
         rowRef,
         reportLabel: report,
         isPreview,

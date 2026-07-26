@@ -10,6 +10,7 @@ export type {
 export { activePlacements, parsePatientPlacements } from './placements.js';
 export type { PatientPlacement } from './placements.js';
 export { resolvePlacementForService } from './resolve-placement.js';
+export { AmbiguousPatientNameError } from './patient-errors.js';
 export { MockHhaClient } from './mock-client.js';
 export { HttpHhaClient } from './http-client.js';
 export type { HttpHhaClientOptions } from './http-client.js';

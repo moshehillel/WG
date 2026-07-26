@@ -23,12 +23,14 @@ export interface ClosedCaseUpdate {
 export interface DischargeServiceUpdate {
   caseId: string;
   patientId?: string;
+  /** ProviderSoft Service Type — matched to HHA service code on active placements. */
   serviceCode?: string;
+  /** ProviderSoft Service Begin Date — matched to placement start date. */
   startDate?: string;
+  /** ProviderSoft Program Type — resolved to HHA contract id for disambiguation. */
+  programType?: string;
   dischargeDate?: string;
   closedReason?: string;
-  /** From Dynamo mapping when automation opened this service. */
-  placementId?: string;
 }
 
 export interface DischargePlacementOptions {

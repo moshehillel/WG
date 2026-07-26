@@ -59,8 +59,9 @@ export const REPORT_DATE_INPUTS: Record<
     to: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_2_datePicker_dateInput',
   },
   new_services: {
-    from: '#ctl00_Content_dlREportColumns_ctl33_DLColumControl_32_1_datePicker_dateInput',
-    to: '#ctl00_Content_dlREportColumns_ctl33_DLColumControl_32_2_datePicker_dateInput',
+    /** Date of Intake — sync services entered today even when Service Begin Date is in the future. */
+    from: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_1_datePicker_dateInput',
+    to: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_2_datePicker_dateInput',
   },
   verified_sessions: {
     from: '#ctl00_Content_dlREportColumns_ctl07_DLColumControl_6_1_datePicker_dateInput',

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { HhaClockingDetails, HhaPatient, HhaVisit } from '@white-glove/shared';
 import { lookupContractId, lookupServiceCode } from '@white-glove/shared';
+import { resolvePlacementForService } from './resolve-placement.js';
 import type {
   ClosedCaseUpdate,
   DischargeAllPlacementsOptions,
@@ -76,9 +77,11 @@ export class MockHhaClient implements HhaClient {
     );
     if (existing) return { id: existing.placementId, created: false };
     const placementId = randomUUID();
+    const serviceCodeId = lookupServiceCode(contract.serviceCode)?.hhaCode;
     list.push({
       placementId,
       contractId: contract.contractExternalId,
+      serviceCodeId,
       startDate: contract.startDate,
     });
     this.placementsByPatient.set(patientKey, list);
@@ -235,14 +238,13 @@ export class MockHhaClient implements HhaClient {
         : (await this.findPatient({ caseId: update.caseId, externalId: update.caseId })) ??
           update.caseId;
     const active = (this.placementsByPatient.get(patientId) ?? []).filter((p) => !p.dischargeDate);
-    const placementId =
-      update.placementId ??
-      (active.length === 1 ? active[0]!.placementId : undefined);
-    if (!placementId) {
-      throw new Error(
-        `Mock dischargeService: ambiguous placements for ${update.caseId} / ${update.serviceCode ?? 'unknown'}`,
-      );
-    }
+    const contractId = await this.resolveContractId(update.programType);
+    const placementId = resolvePlacementForService({
+      serviceCode: update.serviceCode,
+      startDate: update.startDate,
+      contractId,
+      active,
+    });
     await this.dischargePlacement({
       patientId,
       placementId,

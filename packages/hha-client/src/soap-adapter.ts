@@ -41,6 +41,7 @@ import {
   type CreatePatientReferenceIds,
 } from './create-patient-builder.js';
 import { HhaSoapClient, type HhaSoapAuth, type SoapCallResult } from './soap-client.js';
+import { AmbiguousPatientNameError } from './patient-errors.js';
 import { activePlacements, parsePatientPlacements } from './placements.js';
 import { resolvePlacementForService } from './resolve-placement.js';
 import {
@@ -178,6 +179,13 @@ export class SoapHhaClientAdapter implements HhaClient {
     });
     if (searchByName.ok) {
       const ids = collectPatientIds(searchByName.raw);
+      if (ids.length >= 2) {
+        throw new AmbiguousPatientNameError(
+          patient.firstName ?? '',
+          patient.lastName ?? '',
+          ids.length,
+        );
+      }
       if (ids[0]) return { id: String(ids[0]), created: false };
     }
 
@@ -677,10 +685,11 @@ export class SoapHhaClientAdapter implements HhaClient {
     const active = activePlacements(
       await this.listPatientPlacements(patientId, update.dischargeDate),
     );
+    const contractId = await this.resolveContractId(update.programType);
     const placementId = resolvePlacementForService({
-      placementId: update.placementId,
       serviceCode: update.serviceCode,
       startDate: update.startDate,
+      contractId,
       active,
     });
     await this.dischargePlacement({

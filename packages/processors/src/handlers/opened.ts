@@ -5,6 +5,7 @@ import { getEnv } from '@white-glove/shared';
 import { createIdempotencyStore } from '../idempotency.js';
 import { createServiceMappingStore } from '../service-mapping.js';
 import { processOpenedCases } from '../process-opened.js';
+import { runProcessorBranchSafely } from '../safe-handler.js';
 import { getObjectText } from '../s3.js';
 
 export interface OpenedEvent {
@@ -18,16 +19,18 @@ export const handler: Handler<OpenedEvent, ProcessorResult> = async (event) => {
   const bucket = event.bucket || env.REPORTS_BUCKET;
   if (!bucket) throw new Error('REPORTS_BUCKET required');
 
-  const text = await getObjectText(bucket, event.parse.artifactKeys.opened_cases);
-  const rows = JSON.parse(text) as OpenedCaseRow[];
+  return runProcessorBranchSafely('opened', event.parse.runId, async () => {
+    const text = await getObjectText(bucket, event.parse.artifactKeys.opened_cases);
+    const rows = JSON.parse(text) as OpenedCaseRow[];
 
-  return processOpenedCases({
-    runId: event.parse.runId,
-    rows,
-    hha: createHhaClient(env),
-    store: createIdempotencyStore(env.IDEMPOTENCY_TABLE),
-    mappingStore: createServiceMappingStore(env.IDEMPOTENCY_TABLE),
-    dryRun: event.dryRun ?? env.DRY_RUN,
+    return processOpenedCases({
+      runId: event.parse.runId,
+      rows,
+      hha: createHhaClient(env),
+      store: createIdempotencyStore(env.IDEMPOTENCY_TABLE),
+      mappingStore: createServiceMappingStore(env.IDEMPOTENCY_TABLE),
+      dryRun: event.dryRun ?? env.DRY_RUN,
+    });
   });
 };
 

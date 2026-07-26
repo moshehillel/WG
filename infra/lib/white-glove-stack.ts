@@ -38,8 +38,10 @@ export class WhiteGloveStack extends cdk.Stack {
       lifecycleRules: [
         {
           id: 'expire-old-runs',
-          expiration: cdk.Duration.days(90),
-          noncurrentVersionExpiration: cdk.Duration.days(30),
+          expiration: cdk.Duration.days(
+            Number(this.node.tryGetContext('reportsRetentionDays') ?? 7),
+          ),
+          noncurrentVersionExpiration: cdk.Duration.days(3),
         },
       ],
       removalPolicy: cdk.RemovalPolicy.RETAIN,
@@ -99,6 +101,8 @@ export class WhiteGloveStack extends cdk.Stack {
     const botImage = new ProviderSoftBotImage(this, 'ProviderSoftBotImage', { repoRoot });
     const enableNightSchedule =
       String(this.node.tryGetContext('enableNightSchedule') ?? 'false') === 'true';
+    const enableSessionsSchedule =
+      String(this.node.tryGetContext('enableSessionsSchedule') ?? 'false') === 'true';
     const enableDailySchedule =
       String(this.node.tryGetContext('enableDailySchedule') ?? 'false') === 'true';
 
@@ -367,20 +371,24 @@ export class WhiteGloveStack extends cdk.Stack {
         input: {
           runId: events.EventField.fromPath('$.id'),
           dryRun: true,
-          reportKinds: ['opened_cases', 'closed_cases', 'new_services', 'verified_sessions', 'caregiver_codes'],
+          reportKinds: enableSessionsSchedule
+            ? ['opened_cases', 'closed_cases', 'new_services', 'verified_sessions', 'caregiver_codes']
+            : ['opened_cases', 'closed_cases', 'new_services', 'caregiver_codes'],
         },
       });
 
-      this.addEasternNightSchedule(this, 'TuesdaySessionsSchedule', {
-        weekDay: 'TUE',
-        description: 'Tuesday night live verified sessions (2:00 AM Eastern)',
-        stateMachine,
-        input: {
-          runId: events.EventField.fromPath('$.id'),
-          dryRun: false,
-          reportKinds: ['verified_sessions', 'caregiver_codes'],
-        },
-      });
+      if (enableSessionsSchedule) {
+        this.addEasternNightSchedule(this, 'TuesdaySessionsSchedule', {
+          weekDay: 'TUE',
+          description: 'Tuesday night live verified sessions / API Report (2:00 AM Eastern)',
+          stateMachine,
+          input: {
+            runId: events.EventField.fromPath('$.id'),
+            dryRun: false,
+            reportKinds: ['verified_sessions', 'caregiver_codes'],
+          },
+        });
+      }
     }
 
     const pipelineConsoleUrl = `https://${this.region}.console.aws.amazon.com/states/home?region=${this.region}#/statemachines/view/${stateMachine.stateMachineArn}`;
