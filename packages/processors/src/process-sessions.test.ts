@@ -12,6 +12,9 @@ describe('processVerifiedSessions', () => {
       firstName: 'Test',
       lastName: 'Patient',
     });
+    hha.pendingCalls.set('patient-p1:2026-07-14:mock-caregiver-1', {
+      callDashboardId: 'clock-1',
+    });
     const result = await processVerifiedSessions({
       runId: 'run-s',
       hha,
@@ -42,7 +45,9 @@ describe('processVerifiedSessions', () => {
         {
           sessionId: 'S-fail',
           patientExternalId: 'p1',
-          serviceCode: 'UNKNOWN',
+          serviceCode: 'OT CHHA EXTENDED',
+          programType: 'Unknown Payer XYZ',
+          visitDate: '2026-07-14',
         },
       ],
     });

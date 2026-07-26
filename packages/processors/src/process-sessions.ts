@@ -4,10 +4,10 @@ import type {
   ProcessorResult,
   VerifiedSessionRow,
 } from '@white-glove/shared';
-import { buildHhaRowException, buildRowException, lookupCaregiverCode } from '@white-glove/shared';
+import { buildHhaRowException, buildRowException } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
-import { previewVerifiedSession } from './preview-scan.js';
+import { previewVerifiedSessionWithHha } from './preview-scan.js';
 import { triageVerifiedSession, type SessionRulesConfig } from './rules.js';
 import { resolveSessionVisit } from './session-resolve.js';
 
@@ -19,6 +19,10 @@ function sessionSkipMessage(sessionId: string, reason: string | undefined): stri
       return `[verified_sessions] session=${sessionId} error: no service type on API report row`;
     case 'unknown_service_code':
       return `[verified_sessions] session=${sessionId} error: service type not in HHA mapping table`;
+    case 'missing_program_type':
+      return `[verified_sessions] session=${sessionId} error: Program Type required on API report row — no billable approve without it`;
+    case 'unknown_program_type':
+      return `[verified_sessions] session=${sessionId} error: Program Type not in approved billing list — fix in ProviderSoft or add mapping before any HHA approve`;
     default:
       return `[verified_sessions] session=${sessionId} skipped: ${reason ?? 'triage rule'}`;
   }
@@ -61,13 +65,21 @@ export async function processVerifiedSessions(options: {
 
     const decision = triageVerifiedSession(row, rules);
     if (decision.triage === 'skip') {
-      const isServiceCodeError =
-        decision.reason === 'missing_service_code' || decision.reason === 'unknown_service_code';
-      if (isServiceCodeError) {
+      const isBillingBlock =
+        decision.reason === 'missing_service_code' ||
+        decision.reason === 'unknown_service_code' ||
+        decision.reason === 'missing_program_type' ||
+        decision.reason === 'unknown_program_type';
+      if (isBillingBlock) {
         failed += 1;
         exceptions.push(
           buildRowException({
-            code: decision.reason === 'missing_service_code' ? 'missing_service_code' : 'unknown_service_code',
+            code:
+              decision.reason === 'missing_service_code'
+                ? 'missing_service_code'
+                : decision.reason === 'unknown_service_code'
+                  ? 'unknown_service_code'
+                  : 'parse_error',
             message: sessionSkipMessage(row.sessionId, decision.reason),
             reportKind: 'verified_sessions',
             rowId: row.sessionId,
@@ -110,18 +122,7 @@ export async function processVerifiedSessions(options: {
 
     if (dryRun) {
       const previewIssues = [
-        ...previewVerifiedSession(row),
-        ...(caregiverMap && row.providerName && !lookupCaregiverCode(caregiverMap, row.providerName)
-          ? [
-              buildRowException({
-                code: 'other',
-                message: `[preview/verified_sessions] session=${row.sessionId} provider "${row.providerName}" not in caregiver codes report`,
-                reportKind: 'verified_sessions',
-                rowId: row.sessionId,
-                details: { providerName: row.providerName, preview: true },
-              }),
-            ]
-          : []),
+        ...(await previewVerifiedSessionWithHha(row, hha, caregiverMap)),
       ];
       if (previewIssues.length) {
         failed += 1;
@@ -175,6 +176,24 @@ export async function processVerifiedSessions(options: {
             visitDate: visitInput.visitDate!,
           })
         : undefined;
+
+      if (needsEvv && !pendingCall?.callDashboardId) {
+        failed += 1;
+        exceptions.push(
+          buildRowException({
+            code: 'missing_evv_clock',
+            message: `[verified_sessions] session=${row.sessionId} EVV program requires a pending mobile clock in HHA — no billable approve without linked clock`,
+            reportKind: 'verified_sessions',
+            rowId: row.sessionId,
+            details: {
+              patientId,
+              visitDate: visitInput.visitDate,
+              caregiverId: visitInput.caregiverId,
+            },
+          }),
+        );
+        continue;
+      }
 
       step = 'locateOrScheduleVisit';
       const visit = await hha.locateOrScheduleVisit({

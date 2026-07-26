@@ -19,6 +19,8 @@ export type { HhaSoapAuth, HhaSoapClientOptions, SoapCallResult } from './soap-c
 export { SoapHhaClientAdapter } from './soap-adapter.js';
 export type { SoapHhaClientAdapterOptions } from './soap-adapter.js';
 export { createHhaClient } from './factory.js';
+export type { HhaReferenceCache } from './reference-cache.js';
+export { InMemoryHhaReferenceCache } from './reference-cache.js';
 export { applyHhaSecretFromArn } from './load-secret.js';
 export {
   compareSessionClock,

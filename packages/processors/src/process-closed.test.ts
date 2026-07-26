@@ -26,7 +26,7 @@ describe('processClosedCases', () => {
       runId: 'run-c',
       hha,
       store: new InMemoryIdempotencyStore(),
-      rows: [{ caseId: 'C-9', status: 'Closed', closedDate: '2026-07-01' }],
+      rows: [{ caseId: 'C-9', status: 'Closed', closedDate: '2026-07-01', programType: 'Garden City UFSD Therapy' }],
     });
     expect(result.succeeded).toBe(1);
     expect(hha.closedCases.get('C-9')?.status).toBe('Closed');

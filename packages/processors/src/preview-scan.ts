@@ -1,10 +1,10 @@
+import type { HhaClient } from '@white-glove/hha-client';
 import type { OpenedCaseRow, PipelineException, VerifiedSessionRow } from '@white-glove/shared';
-import {
-  buildPayCodeName,
-  isUnknownServiceType,
-  lookupContractId,
-  lookupServiceCode,
-} from '@white-glove/shared';
+import { buildPayCodeName, lookupCaregiverCode } from '@white-glove/shared';
+
+/** Shown when HHA live lookup misses — client owns exact name parity in ProviderSoft vs HHA admin. */
+export const HHA_NAME_MATCH_HINT =
+  'ProviderSoft names must match HHA exactly (Program Type → contract name, Service Type → billing code name).';
 
 function previewMessage(parts: {
   report: string;
@@ -14,41 +14,10 @@ function previewMessage(parts: {
   return `[preview/${parts.report}] case/session ${parts.rowId}: ${parts.summary}`;
 }
 
-/** Dry-run mapping checks for Monday preview (no HHA writes). */
-export function previewOpenedCase(row: OpenedCaseRow): PipelineException[] {
+function openedFieldChecks(row: OpenedCaseRow): PipelineException[] {
   const issues: PipelineException[] = [];
   const rowId = row.caseId;
   const name = [row.firstName, row.lastName].filter(Boolean).join(' ') || rowId;
-
-  if (!row.programType || !lookupContractId(row.programType)) {
-    issues.push({
-      code: 'other',
-      message: previewMessage({
-        report: 'opened_cases',
-        rowId,
-        summary: `Program Type "${row.programType ?? '(blank)'}" (${name}) is not mapped to an HHA contract ID`,
-      }),
-      reportKind: 'opened_cases',
-      rowId,
-      details: { programType: row.programType, preview: true, patientName: name },
-    });
-  }
-
-  if (!row.serviceCode || isUnknownServiceType(row.serviceCode)) {
-    issues.push({
-      code: row.serviceCode ? 'unknown_service_code' : 'missing_service_code',
-      message: previewMessage({
-        report: 'opened_cases',
-        rowId,
-        summary: row.serviceCode
-          ? `Service Type "${row.serviceCode}" has no matching HHA billing code`
-          : 'Service Type column is blank in the Gluck open export',
-      }),
-      reportKind: 'opened_cases',
-      rowId,
-      details: { serviceCode: row.serviceCode, preview: true, patientName: name },
-    });
-  }
 
   const fieldLabels: Record<string, string> = {
     dateOfBirth: 'Date of Birth',
@@ -91,17 +60,81 @@ export function previewOpenedCase(row: OpenedCaseRow): PipelineException[] {
   return issues;
 }
 
-export function previewVerifiedSession(row: VerifiedSessionRow): PipelineException[] {
+/** Dry-run checks with live HHA read-only lookup (Monday preview). */
+export async function previewOpenedCaseWithHha(
+  row: OpenedCaseRow,
+  hha: HhaClient,
+): Promise<PipelineException[]> {
+  const issues = openedFieldChecks(row);
+  const rowId = row.caseId;
+  const name = [row.firstName, row.lastName].filter(Boolean).join(' ') || rowId;
+
+  const contractNum = await hha.resolveContractId(row.programType);
+  if (!row.programType?.trim() || !contractNum) {
+    issues.push({
+      code: 'other',
+      message: previewMessage({
+        report: 'opened_cases',
+        rowId,
+        summary: `Program Type "${row.programType ?? '(blank)'}" (${name}) not found in HHA contracts — ${HHA_NAME_MATCH_HINT}`,
+      }),
+      reportKind: 'opened_cases',
+      rowId,
+      details: { programType: row.programType, preview: true, patientName: name },
+    });
+  }
+
+  if (!row.serviceCode?.trim()) {
+    issues.push({
+      code: 'missing_service_code',
+      message: previewMessage({
+        report: 'opened_cases',
+        rowId,
+        summary: 'Service Type column is blank in the Gluck open export',
+      }),
+      reportKind: 'opened_cases',
+      rowId,
+      details: { serviceCode: row.serviceCode, preview: true, patientName: name },
+    });
+  } else {
+    const serviceCodeId = await hha.resolveServiceCodeId(
+      row.serviceCode,
+      contractNum ?? undefined,
+    );
+    if (!serviceCodeId) {
+      issues.push({
+        code: 'unknown_service_code',
+        message: previewMessage({
+          report: 'opened_cases',
+          rowId,
+          summary: `Service Type "${row.serviceCode}" not found in HHA billing codes — ${HHA_NAME_MATCH_HINT}`,
+        }),
+        reportKind: 'opened_cases',
+        rowId,
+        details: { serviceCode: row.serviceCode, preview: true, patientName: name },
+      });
+    }
+  }
+
+  return issues;
+}
+
+export async function previewVerifiedSessionWithHha(
+  row: VerifiedSessionRow,
+  hha: HhaClient,
+  caregiverMap?: Map<string, string>,
+): Promise<PipelineException[]> {
   const issues: PipelineException[] = [];
   const rowId = row.sessionId;
 
-  if (!row.programType || !lookupContractId(row.programType)) {
+  const contractNum = await hha.resolveContractId(row.programType);
+  if (!row.programType?.trim() || !contractNum) {
     issues.push({
       code: 'other',
       message: previewMessage({
         report: 'verified_sessions',
         rowId,
-        summary: `Program Type "${row.programType ?? '(blank)'}" is not mapped to an HHA contract ID`,
+        summary: `Program Type "${row.programType ?? '(blank)'}" not found in HHA contracts — ${HHA_NAME_MATCH_HINT}`,
       }),
       reportKind: 'verified_sessions',
       rowId,
@@ -109,20 +142,36 @@ export function previewVerifiedSession(row: VerifiedSessionRow): PipelineExcepti
     });
   }
 
-  if (!row.serviceCode || !lookupServiceCode(row.serviceCode)) {
+  if (!row.serviceCode?.trim()) {
     issues.push({
-      code: row.serviceCode ? 'unknown_service_code' : 'missing_service_code',
+      code: 'missing_service_code',
       message: previewMessage({
         report: 'verified_sessions',
         rowId,
-        summary: row.serviceCode
-          ? `Service Type "${row.serviceCode}" has no matching HHA billing code`
-          : 'Service Type is blank on the API Report row',
+        summary: 'Service Type is blank on the API Report row',
       }),
       reportKind: 'verified_sessions',
       rowId,
       details: { serviceCode: row.serviceCode, preview: true },
     });
+  } else {
+    const serviceCodeId = await hha.resolveServiceCodeId(
+      row.serviceCode,
+      contractNum ?? undefined,
+    );
+    if (!serviceCodeId) {
+      issues.push({
+        code: 'unknown_service_code',
+        message: previewMessage({
+          report: 'verified_sessions',
+          rowId,
+          summary: `Service Type "${row.serviceCode}" not found in HHA billing codes — ${HHA_NAME_MATCH_HINT}`,
+        }),
+        reportKind: 'verified_sessions',
+        rowId,
+        details: { serviceCode: row.serviceCode, preview: true },
+      });
+    }
   }
 
   const payCode = buildPayCodeName(row.serviceCode, row.payRate);
@@ -138,6 +187,21 @@ export function previewVerifiedSession(row: VerifiedSessionRow): PipelineExcepti
       rowId,
       details: { serviceCode: row.serviceCode, payRate: row.payRate, preview: true },
     });
+  } else if (payCode) {
+    const payCodeId = await hha.resolvePayCodeId(payCode.payCodeName);
+    if (!payCodeId) {
+      issues.push({
+        code: 'other',
+        message: previewMessage({
+          report: 'verified_sessions',
+          rowId,
+          summary: `Pay code "${payCode.payCodeName}" not found in HHA — confirm Pay Rate + Service Type match HHA admin`,
+        }),
+        reportKind: 'verified_sessions',
+        rowId,
+        details: { payCodeName: payCode.payCodeName, preview: true },
+      });
+    }
   }
 
   if (!row.providerName?.trim()) {
@@ -152,7 +216,47 @@ export function previewVerifiedSession(row: VerifiedSessionRow): PipelineExcepti
       rowId,
       details: { preview: true },
     });
+  } else if (
+    caregiverMap &&
+    !lookupCaregiverCode(caregiverMap, row.providerName) &&
+    !(await hha.resolveCaregiverId(row.providerName))
+  ) {
+    issues.push({
+      code: 'other',
+      message: previewMessage({
+        report: 'verified_sessions',
+        rowId,
+        summary: `Provider "${row.providerName}" not found in HHA — name must match caregiver codes / HHA exactly`,
+      }),
+      reportKind: 'verified_sessions',
+      rowId,
+      details: { providerName: row.providerName, preview: true },
+    });
   }
 
+  return issues;
+}
+
+/** @deprecated Use previewOpenedCaseWithHha — kept for field-only unit tests. */
+export function previewOpenedCase(row: OpenedCaseRow): PipelineException[] {
+  return openedFieldChecks(row);
+}
+
+/** @deprecated Use previewVerifiedSessionWithHha. */
+export function previewVerifiedSession(row: VerifiedSessionRow): PipelineException[] {
+  const issues: PipelineException[] = [];
+  if (!row.providerName?.trim()) {
+    issues.push({
+      code: 'other',
+      message: previewMessage({
+        report: 'verified_sessions',
+        rowId: row.sessionId,
+        summary: 'Provider Name is blank — needed to look up caregiver in HHA',
+      }),
+      reportKind: 'verified_sessions',
+      rowId: row.sessionId,
+      details: { preview: true },
+    });
+  }
   return issues;
 }

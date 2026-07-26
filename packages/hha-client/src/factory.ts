@@ -4,8 +4,12 @@ import { MockHhaClient } from './mock-client.js';
 import { createPatientDefaultsFromEnv } from './create-patient-builder.js';
 import { SoapHhaClientAdapter } from './soap-adapter.js';
 import type { HhaClient } from './types.js';
+import type { HhaReferenceCache } from './reference-cache.js';
 
-export function createHhaClient(env: Env = getEnv()): HhaClient {
+export function createHhaClient(
+  env: Env = getEnv(),
+  options?: { referenceCache?: HhaReferenceCache },
+): HhaClient {
   const useMock = env.HHA_USE_MOCK !== false;
   if (useMock) {
     return new MockHhaClient();
@@ -36,6 +40,7 @@ export function createHhaClient(env: Env = getEnv()): HhaClient {
       createPatientDefaults: createPatientDefaultsFromEnv(),
       reasonLookupBaseUrl,
       reasonLookupVisitId,
+      referenceCache: options?.referenceCache,
     });
   }
 

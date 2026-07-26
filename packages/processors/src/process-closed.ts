@@ -3,6 +3,7 @@ import type { ClosedCaseRow, PipelineException, ProcessorResult } from '@white-g
 import { buildHhaRowException, buildRowException } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
+import { billingGuardMessage, validateClosedCaseBilling } from './billing-guards.js';
 import { isEarlyInterventionCase } from './rules.js';
 
 export async function processClosedCases(options: {
@@ -40,6 +41,21 @@ export async function processClosedCases(options: {
           message: `[closed_cases] row=${row.caseId} skipped: Early Intervention case not sent to HHA`,
           reportKind: 'closed_cases',
           rowId: row.caseId,
+        }),
+      );
+      continue;
+    }
+
+    const billingMissing = validateClosedCaseBilling(row);
+    if (billingMissing.length) {
+      failed += 1;
+      exceptions.push(
+        buildRowException({
+          code: 'parse_error',
+          message: billingGuardMessage('closed_cases', row.caseId, billingMissing),
+          reportKind: 'closed_cases',
+          rowId: row.caseId,
+          details: { missing: billingMissing },
         }),
       );
       continue;

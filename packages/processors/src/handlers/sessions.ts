@@ -3,6 +3,7 @@ import { applyHhaSecretFromArn, createHhaClient } from '@white-glove/hha-client'
 import type { ParseResult, ProcessorResult, VerifiedSessionRow } from '@white-glove/shared';
 import { buildCaregiverCodeMap, getEnv } from '@white-glove/shared';
 import { createIdempotencyStore } from '../idempotency.js';
+import { createReferenceMappingStore } from '../reference-mapping.js';
 import { processVerifiedSessions } from '../process-sessions.js';
 import { runProcessorBranchSafely } from '../safe-handler.js';
 import { getObjectText } from '../s3.js';
@@ -41,7 +42,9 @@ export const handler: Handler<SessionsEvent, ProcessorResult> = async (event) =>
     return processVerifiedSessions({
       runId: event.parse.runId,
       rows,
-      hha: createHhaClient(env),
+      hha: createHhaClient(env, {
+        referenceCache: createReferenceMappingStore(env.IDEMPOTENCY_TABLE),
+      }),
       store: createIdempotencyStore(env.IDEMPOTENCY_TABLE),
       dryRun: event.dryRun ?? env.DRY_RUN,
       caregiverMap,

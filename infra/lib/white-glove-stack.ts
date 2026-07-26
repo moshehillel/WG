@@ -129,6 +129,9 @@ export class WhiteGloveStack extends cdk.Stack {
       PROVIDERSOFT_REPORT_CAREGIVER_CODES_ID: '4541',
       PROVIDERSOFT_REPORT_NEW_SERVICES_ID: '4544',
       PROVIDERSOFT_REPORT_KINDS: 'opened_cases,closed_cases,verified_sessions',
+      /** Nightly ~11 PM Eastern: filter today's Date of Intake / closure / discharge dates. */
+      PROVIDERSOFT_DAILY_LOOKBACK_DAYS: '0',
+      PROVIDERSOFT_TIMEZONE: 'America/New_York',
     };
 
     const downloadFn: lambda.IFunction = providerSoftLiveBot
@@ -355,7 +358,7 @@ export class WhiteGloveStack extends cdk.Stack {
     if (enableNightSchedule) {
       this.addEasternNightSchedule(this, 'NightlyCaseReportsSchedule', {
         weekDay: 'MON-SUN',
-        description: 'Nightly Gluck open + closure (2:00 AM Eastern)',
+        description: 'Nightly Gluck open + closure (11:00 PM Eastern)',
         stateMachine,
         input: {
           runId: events.EventField.fromPath('$.id'),
@@ -366,7 +369,7 @@ export class WhiteGloveStack extends cdk.Stack {
 
       this.addEasternNightSchedule(this, 'MondayPreviewSchedule', {
         weekDay: 'MON',
-        description: 'Monday night dry-run — flag missing mappings (2:00 AM Eastern)',
+        description: 'Monday night dry-run — flag missing mappings (11:00 PM Eastern)',
         stateMachine,
         input: {
           runId: events.EventField.fromPath('$.id'),
@@ -380,7 +383,7 @@ export class WhiteGloveStack extends cdk.Stack {
       if (enableSessionsSchedule) {
         this.addEasternNightSchedule(this, 'TuesdaySessionsSchedule', {
           weekDay: 'TUE',
-          description: 'Tuesday night live verified sessions / API Report (2:00 AM Eastern)',
+          description: 'Tuesday night live verified sessions / API Report (11:00 PM Eastern)',
           stateMachine,
           input: {
             runId: events.EventField.fromPath('$.id'),
@@ -430,7 +433,8 @@ export class WhiteGloveStack extends cdk.Stack {
   }
 
   /**
-   * ~2:00 AM Eastern via 06:00 UTC (EDT). EventBridge Rules in this account reject ScheduleExpressionTimezone.
+   * ~11:00 PM Eastern via 03:00 UTC (EDT). During EST (winter) this fires ~10:00 PM Eastern.
+   * EventBridge Rules in this account reject ScheduleExpressionTimezone.
    */
   private addEasternNightSchedule(
     scope: Construct,
@@ -443,8 +447,8 @@ export class WhiteGloveStack extends cdk.Stack {
     },
   ): events.Rule {
     return new events.Rule(scope, id, {
-      schedule: events.Schedule.cron({ minute: '0', hour: '6', weekDay: props.weekDay }),
-      description: `${props.description} (06:00 UTC ≈ 2:00 AM EDT)`,
+      schedule: events.Schedule.cron({ minute: '0', hour: '3', weekDay: props.weekDay }),
+      description: `${props.description} (03:00 UTC ≈ 11:00 PM EDT)`,
       targets: [
         new targets.SfnStateMachine(props.stateMachine, {
           input: events.RuleTargetInput.fromObject(props.input),

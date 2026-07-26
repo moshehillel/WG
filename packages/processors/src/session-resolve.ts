@@ -3,9 +3,9 @@ import { psDateToIso, sessionDurationMinutes } from '@white-glove/hha-client';
 import type { ExceptionCode, HhaVisit, VerifiedSessionRow } from '@white-glove/shared';
 import {
   buildPayCodeName,
-  isUnmatchedServiceType,
   lookupCaregiverCode,
 } from '@white-glove/shared';
+import { HHA_NAME_MATCH_HINT } from './preview-scan.js';
 
 export interface SessionResolveError {
   code: ExceptionCode;
@@ -47,24 +47,13 @@ export async function resolveSessionVisit(options: {
     };
   }
 
-  if (isUnmatchedServiceType(row.serviceCode)) {
-    return {
-      ok: false,
-      error: resolveError(
-        'unknown_service_code',
-        `[verified_sessions] session=${sessionId} error: service type "${row.serviceCode}" has no HHA billing code`,
-        { serviceCode: row.serviceCode },
-      ),
-    };
-  }
-
   const contractNum = await hha.resolveContractId(row.programType);
   if (!contractNum) {
     return {
       ok: false,
       error: resolveError(
         'other',
-        `[verified_sessions] session=${sessionId} error: no HHA ContractID for program type "${row.programType ?? '(missing)'}"`,
+        `[verified_sessions] session=${sessionId} error: no HHA ContractID for program type "${row.programType ?? '(missing)'}" — ${HHA_NAME_MATCH_HINT}`,
         { programType: row.programType },
       ),
     };
@@ -76,7 +65,7 @@ export async function resolveSessionVisit(options: {
       ok: false,
       error: resolveError(
         'unknown_service_code',
-        `[verified_sessions] session=${sessionId} error: service type "${row.serviceCode}" not found in HHA billing codes`,
+        `[verified_sessions] session=${sessionId} error: service type "${row.serviceCode}" not found in HHA billing codes — ${HHA_NAME_MATCH_HINT}`,
         { serviceCode: row.serviceCode, contractId: contractNum },
       ),
     };

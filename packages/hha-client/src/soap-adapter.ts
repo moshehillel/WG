@@ -42,6 +42,7 @@ import {
 } from './create-patient-builder.js';
 import { HhaSoapClient, type HhaSoapAuth, type SoapCallResult } from './soap-client.js';
 import { AmbiguousPatientNameError } from './patient-errors.js';
+import type { HhaReferenceCache } from './reference-cache.js';
 import { activePlacements, parsePatientPlacements } from './placements.js';
 import { resolvePlacementForService } from './resolve-placement.js';
 import {
@@ -69,6 +70,8 @@ export interface SoapHhaClientAdapterOptions {
   reasonLookupVisitId?: number;
   /** Office/coordinator/reference IDs for CreatePatient (defaults from env). */
   createPatientDefaults?: CreatePatientDefaults;
+  /** DynamoDB-backed cache for codes discovered via live HHA lookup. */
+  referenceCache?: HhaReferenceCache;
 }
 
 function assertOk(result: SoapCallResult, context: string): void {
@@ -111,6 +114,7 @@ export class SoapHhaClientAdapter implements HhaClient {
   private serviceCodeByName = new Map<string, string>();
   private loadedContractServiceCodes = new Set<number>();
   private readonly createPatientDefaults: CreatePatientDefaults;
+  private readonly referenceCache?: HhaReferenceCache;
   readonly defaultOfficeId?: number;
 
   constructor(options: SoapHhaClientAdapterOptions) {
@@ -123,6 +127,7 @@ export class SoapHhaClientAdapter implements HhaClient {
     this.reasonLookupVisitId = options.reasonLookupVisitId;
     this.createPatientDefaults =
       options.createPatientDefaults ?? createPatientDefaultsFromEnv();
+    this.referenceCache = options.referenceCache;
     if (options.defaultOfficeId) {
       this.createPatientDefaults.officeId = options.defaultOfficeId;
     }
@@ -254,6 +259,20 @@ export class SoapHhaClientAdapter implements HhaClient {
 
     if (!contract.contractExternalId) {
       throw new Error('AddPatientContract requires ContractID from GetContracts / report mapping');
+    }
+
+    if (existing.bodyXml) {
+      const targetContract = contract.contractExternalId;
+      const targetStart = (psDateToIso(contract.startDate) ?? contract.startDate ?? '').slice(0, 10);
+      const duplicate = activePlacements(parsePatientPlacements(existing.bodyXml)).find((p) => {
+        if (p.contractId !== targetContract) return false;
+        if (!targetStart || !p.startDate?.trim()) return true;
+        const placementStart = (psDateToIso(p.startDate) ?? p.startDate).slice(0, 10);
+        return placementStart === targetStart;
+      });
+      if (duplicate) {
+        return { id: duplicate.placementId, created: false };
+      }
     }
 
     const result = await this.soap.call(
@@ -470,12 +489,23 @@ export class SoapHhaClientAdapter implements HhaClient {
   }
 
   async resolveContractId(programType: string | undefined): Promise<number | undefined> {
+    if (!programType?.trim()) return undefined;
+
     const staticId = lookupContractId(programType);
     if (staticId) return staticId;
-    if (!programType?.trim()) return undefined;
+
+    const cached = await this.referenceCache?.getContractId(programType);
+    if (cached) return cached;
+
     await this.loadContractCache();
     const match = matchByName(programType, this.contractCache ?? []);
-    return match ? Number(match.id) : undefined;
+    if (match) {
+      const id = Number(match.id);
+      await this.referenceCache?.putContractId(programType, id);
+      return id;
+    }
+
+    return undefined;
   }
 
   async resolveServiceCodeId(
@@ -483,15 +513,22 @@ export class SoapHhaClientAdapter implements HhaClient {
     contractId?: number,
   ): Promise<string | undefined> {
     if (!serviceType?.trim()) return undefined;
+
     const staticMapping = lookupServiceCode(serviceType);
-    if (staticMapping) return staticMapping.hhaCode;
+    if (staticMapping?.hhaCode) return staticMapping.hhaCode;
+
+    const cached = await this.referenceCache?.getServiceCodeId(serviceType);
+    if (cached) return cached;
 
     const key = normalizeRefName(serviceType);
-    if (this.serviceCodeByName.has(key)) return this.serviceCodeByName.get(key);
 
     if (contractId) {
       await this.loadServiceCodesForContract(contractId);
-      if (this.serviceCodeByName.has(key)) return this.serviceCodeByName.get(key);
+      const fromContract = this.serviceCodeByName.get(key);
+      if (fromContract) {
+        await this.referenceCache?.putServiceCodeId(serviceType, fromContract);
+        return fromContract;
+      }
     }
 
     await this.loadContractCache();
@@ -499,7 +536,11 @@ export class SoapHhaClientAdapter implements HhaClient {
       const cid = Number(contract.id);
       if (contractId && cid === contractId) continue;
       await this.loadServiceCodesForContract(cid);
-      if (this.serviceCodeByName.has(key)) return this.serviceCodeByName.get(key);
+      const fromHha = this.serviceCodeByName.get(key);
+      if (fromHha) {
+        await this.referenceCache?.putServiceCodeId(serviceType, fromHha);
+        return fromHha;
+      }
     }
 
     return undefined;

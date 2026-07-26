@@ -89,7 +89,7 @@ export function explainException(ex: PipelineException): ExplainedException {
           ? 'If this were a live run, the case/session would be blocked and you would receive this alert.'
           : 'The row was not sent to HHA.',
         action:
-          'Confirm the Service Type spelling in ProviderSoft matches HHA GetBillingServiceCodes. If HHA added a new code, update the mapping or ask HHA to create the billing code.',
+          'Confirm Service Type in ProviderSoft matches the HHA billing code name exactly (same spelling and spacing). If you added a new code in HHA admin, Monday preview will detect it on the next dry-run — no need to wait for a config update.',
         rowRef,
         reportLabel: report,
         isPreview,

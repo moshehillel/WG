@@ -4,7 +4,7 @@ import type {
   SessionTriage,
   VerifiedSessionRow,
 } from '@white-glove/shared';
-import { isUnmatchedServiceType, lookupServiceCode, programSessionMode } from '@white-glove/shared';
+import { programSessionMode } from '@white-glove/shared';
 
 /**
  * Locked business rule: Early Intervention program types are never sent to HHA.
@@ -49,12 +49,6 @@ export function filterOpenedCases(rows: OpenedCaseRow[]): {
 export interface SessionRulesConfig {
   /** Force triage by session status string (lowercased). */
   statusOverrides?: Record<string, SessionTriage>;
-  /** Codes that must never be sent to HHA. */
-  skipServiceCodes?: string[];
-  /** Codes that always require clocking verification. */
-  verifyClockingCodes?: string[];
-  /** Codes that always auto-approve. */
-  autoApproveCodes?: string[];
 }
 
 const DEFAULT_STATUS_OVERRIDES: Record<string, SessionTriage> = {
@@ -75,22 +69,6 @@ export function triageVerifiedSession(
     };
   }
 
-  const programMode = programSessionMode(row.programType);
-  if (programMode === 'evv') {
-    return {
-      sessionId: row.sessionId,
-      triage: 'verify_clocking',
-      reason: `program_evv:${row.programType}`,
-    };
-  }
-  if (programMode === 'no_evv') {
-    return {
-      sessionId: row.sessionId,
-      triage: 'auto_approve',
-      reason: `program_no_evv:${row.programType}`,
-    };
-  }
-
   const status = row.status?.trim().toLowerCase() ?? '';
   const statusMap = { ...DEFAULT_STATUS_OVERRIDES, ...config.statusOverrides };
   if (status && statusMap[status]) {
@@ -106,41 +84,33 @@ export function triageVerifiedSession(
     };
   }
 
-  const skipSet = new Set((config.skipServiceCodes ?? []).map((c) => c.toUpperCase()));
-  if (skipSet.has(code)) {
-    return { sessionId: row.sessionId, triage: 'skip', reason: 'skip_service_code' };
-  }
-
-  const verifySet = new Set((config.verifyClockingCodes ?? []).map((c) => c.toUpperCase()));
-  if (verifySet.has(code)) {
-    return { sessionId: row.sessionId, triage: 'verify_clocking', reason: 'verify_list' };
-  }
-
-  const autoSet = new Set((config.autoApproveCodes ?? []).map((c) => c.toUpperCase()));
-  if (autoSet.has(code)) {
-    return { sessionId: row.sessionId, triage: 'auto_approve', reason: 'auto_list' };
-  }
-
-  const mapping = lookupServiceCode(code);
-  if (isUnmatchedServiceType(row.serviceCode)) {
+  const program = row.programType?.trim();
+  if (!program) {
     return {
       sessionId: row.sessionId,
       triage: 'skip',
-      reason: 'unknown_service_code',
+      reason: 'missing_program_type',
     };
   }
 
-  if (mapping) {
+  const programMode = programSessionMode(program);
+  if (programMode === 'evv') {
     return {
       sessionId: row.sessionId,
-      triage: mapping.defaultSessionTriage,
-      reason: `service_map:${mapping.hhaCode}`,
+      triage: 'verify_clocking',
+      reason: `program_evv:${program}`,
     };
   }
-
+  if (programMode === 'no_evv') {
+    return {
+      sessionId: row.sessionId,
+      triage: 'auto_approve',
+      reason: `program_no_evv:${program}`,
+    };
+  }
   return {
     sessionId: row.sessionId,
-    triage: 'verify_clocking',
-    reason: 'service_resolve_live',
+    triage: 'skip',
+    reason: 'unknown_program_type',
   };
 }

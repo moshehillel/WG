@@ -33,22 +33,33 @@ describe('triageVerifiedSession', () => {
     expect(decision.reason).toBe('early_intervention');
   });
 
-  it('blocks explicit unmapped service types at triage', () => {
+  it('requires EVV verify when program type is EVV', () => {
     const decision = triageVerifiedSession({
       sessionId: 's2',
       serviceCode: 'SI- ABA 1 NYC',
+      programType: 'Extended Home Care Therapy',
     });
-    expect(decision.triage).toBe('skip');
-    expect(decision.reason).toBe('unknown_service_code');
+    expect(decision.triage).toBe('verify_clocking');
+    expect(decision.reason).toContain('program_evv');
   });
 
-  it('allows new service types through to live HHA resolve', () => {
+  it('blocks sessions with unknown program type', () => {
     const decision = triageVerifiedSession({
       sessionId: 's-new',
       serviceCode: 'ZZZ999',
+      programType: 'Unknown Payer XYZ',
     });
-    expect(decision.triage).toBe('verify_clocking');
-    expect(decision.reason).toBe('service_resolve_live');
+    expect(decision.triage).toBe('skip');
+    expect(decision.reason).toBe('unknown_program_type');
+  });
+
+  it('blocks sessions missing program type', () => {
+    const decision = triageVerifiedSession({
+      sessionId: 's-noprogram',
+      serviceCode: 'OT CHHA EXTENDED',
+    });
+    expect(decision.triage).toBe('skip');
+    expect(decision.reason).toBe('missing_program_type');
   });
 
   it('auto-approves mapped service types for no-EVV programs', () => {

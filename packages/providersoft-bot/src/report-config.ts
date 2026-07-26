@@ -95,7 +95,7 @@ export function loginUrl(baseUrl: string): string {
   return `${base}/security/login.aspx`;
 }
 
-/** Daily Gluck / discharge reports — always “today → today”. */
+/** Daily Gluck / discharge reports — Eastern calendar day (default same day for ~11 PM run). */
 export const DAILY_REPORT_KINDS: BotReportKind[] = [
   'opened_cases',
   'closed_cases',
@@ -108,22 +108,65 @@ export function formatPsDate(d: Date): string {
   return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
 }
 
+export const DEFAULT_PROVIDERSOFT_TIMEZONE = 'America/New_York';
+
+/** Calendar Y/M/D in a timezone (e.g. Eastern — coordinators work in local dates). */
+export function datePartsInTimeZone(
+  date: Date,
+  timeZone: string = DEFAULT_PROVIDERSOFT_TIMEZONE,
+): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return { year: get('year'), month: get('month'), day: get('day') };
+}
+
+export function calendarDate(year: number, month: number, day: number): Date {
+  return new Date(year, month - 1, day);
+}
+
+export function addCalendarDays(base: Date, delta: number): Date {
+  const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
+  d.setDate(d.getDate() + delta);
+  return d;
+}
+
+/**
+ * How many Eastern calendar days to look back for daily report filters.
+ * Default 0 = same Eastern calendar day (nightly run at ~11 PM Eastern, before midnight).
+ * Set to 1 only if the pipeline runs after midnight Eastern.
+ */
+export function dailyLookbackDays(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.PROVIDERSOFT_DAILY_LOOKBACK_DAYS ?? '0';
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
 /**
  * Computed date windows (never hardcode calendar days):
- * - Daily reports: today → today
- * - API Report (verified_sessions): past 7 days → today
+ * - Daily reports: Eastern calendar day minus lookback (default same day for ~11 PM run)
+ * - API Report (verified_sessions): 7 days ending on that same business day
  */
 export function defaultDateRange(
   kind: BotReportKind,
   now: Date = new Date(),
+  env: NodeJS.ProcessEnv = process.env,
 ): { from: string; to: string } {
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const timeZone = env.PROVIDERSOFT_TIMEZONE ?? DEFAULT_PROVIDERSOFT_TIMEZONE;
+  const { year, month, day } = datePartsInTimeZone(now, timeZone);
+  const lookback = dailyLookbackDays(env);
+  const businessDay = addCalendarDays(calendarDate(year, month, day), -lookback);
+
   if (kind === 'verified_sessions') {
-    const from = new Date(today);
-    from.setDate(from.getDate() - 7);
-    return { from: formatPsDate(from), to: formatPsDate(today) };
+    const from = addCalendarDays(businessDay, -7);
+    return { from: formatPsDate(from), to: formatPsDate(businessDay) };
   }
-  const s = formatPsDate(today);
+
+  const s = formatPsDate(businessDay);
   return { from: s, to: s };
 }
 

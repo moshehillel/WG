@@ -3,6 +3,7 @@ import { applyHhaSecretFromArn, createHhaClient } from '@white-glove/hha-client'
 import type { OpenedCaseRow, ParseResult, ProcessorResult } from '@white-glove/shared';
 import { getEnv } from '@white-glove/shared';
 import { createIdempotencyStore } from '../idempotency.js';
+import { createReferenceMappingStore } from '../reference-mapping.js';
 import { createServiceMappingStore } from '../service-mapping.js';
 import { processOpenedCases } from '../process-opened.js';
 import { runProcessorBranchSafely } from '../safe-handler.js';
@@ -26,7 +27,9 @@ export const handler: Handler<OpenedEvent, ProcessorResult> = async (event) => {
     return processOpenedCases({
       runId: event.parse.runId,
       rows,
-      hha: createHhaClient(env),
+      hha: createHhaClient(env, {
+        referenceCache: createReferenceMappingStore(env.IDEMPOTENCY_TABLE),
+      }),
       store: createIdempotencyStore(env.IDEMPOTENCY_TABLE),
       mappingStore: createServiceMappingStore(env.IDEMPOTENCY_TABLE),
       dryRun: event.dryRun ?? env.DRY_RUN,

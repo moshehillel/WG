@@ -4,12 +4,12 @@ import type { OpenedCaseRow, PipelineException, ProcessorResult } from '@white-g
 import {
   buildHhaRowException,
   buildRowException,
-  isUnmatchedServiceType,
 } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
+import { billingGuardMessage, validateOpenCaseBilling } from './billing-guards.js';
 import type { ServiceMappingStore } from './service-mapping.js';
-import { previewOpenedCase } from './preview-scan.js';
+import { HHA_NAME_MATCH_HINT, previewOpenedCaseWithHha } from './preview-scan.js';
 import { openedCaseToHhaPatient } from './opened-to-hha-patient.js';
 import { filterOpenedCases } from './rules.js';
 
@@ -64,6 +64,21 @@ export async function processOpenedCases(options: {
       continue;
     }
 
+    const billingMissing = validateOpenCaseBilling(row);
+    if (billingMissing.length) {
+      failed += 1;
+      exceptions.push(
+        buildRowException({
+          code: 'parse_error',
+          message: billingGuardMessage('opened_cases', row.caseId, billingMissing),
+          reportKind: 'opened_cases',
+          rowId: row.caseId,
+          details: { missing: billingMissing },
+        }),
+      );
+      continue;
+    }
+
     const { pk, sk } = rowKey('opened_cases', openedRowId(row));
     if (!dryRun && (await store.alreadyProcessed(pk, `${runId}#${sk}`))) {
       skipped += 1;
@@ -71,29 +86,13 @@ export async function processOpenedCases(options: {
     }
 
     if (dryRun) {
-      const previewIssues = previewOpenedCase(row);
+      const previewIssues = await previewOpenedCaseWithHha(row, hha);
       if (previewIssues.length) {
         failed += 1;
         exceptions.push(...previewIssues);
       } else {
         succeeded += 1;
       }
-      continue;
-    }
-
-    if (isUnmatchedServiceType(row.serviceCode) || !row.serviceCode) {
-      failed += 1;
-      exceptions.push(
-        buildRowException({
-          code: row.serviceCode ? 'unknown_service_code' : 'missing_service_code',
-          message: row.serviceCode
-            ? `[opened_cases] row=${row.caseId} unknown service type "${row.serviceCode}" — no HHA billing code`
-            : `[opened_cases] row=${row.caseId} has no service code in Gluck open report`,
-          reportKind: 'opened_cases',
-          rowId: row.caseId,
-          details: { serviceCode: row.serviceCode },
-        }),
-      );
       continue;
     }
 
@@ -108,7 +107,7 @@ export async function processOpenedCases(options: {
         exceptions.push(
           buildRowException({
             code: 'other',
-            message: `[opened_cases] row=${row.caseId} no HHA ContractID for program type "${row.programType ?? '(missing)'}"`,
+            message: `[opened_cases] row=${row.caseId} no HHA ContractID for program type "${row.programType ?? '(missing)'}" — ${HHA_NAME_MATCH_HINT}`,
             reportKind: 'opened_cases',
             rowId: row.caseId,
             details: { programType: row.programType },
@@ -117,6 +116,23 @@ export async function processOpenedCases(options: {
         continue;
       }
 
+      step = 'resolveServiceCodeId';
+      const serviceCodeId = await hha.resolveServiceCodeId(row.serviceCode, contractNum);
+      if (!serviceCodeId) {
+        failed += 1;
+        exceptions.push(
+          buildRowException({
+            code: 'unknown_service_code',
+            message: `[opened_cases] row=${row.caseId} service type "${row.serviceCode}" not found in HHA billing codes — ${HHA_NAME_MATCH_HINT}`,
+            reportKind: 'opened_cases',
+            rowId: row.caseId,
+            details: { serviceCode: row.serviceCode, contractId },
+          }),
+        );
+        continue;
+      }
+
+      step = 'upsertPatient';
       const patient = await hha.upsertPatient(openedCaseToHhaPatient(row));
       step = 'upsertContract';
       const contract = await hha.upsertContract({

@@ -3,6 +3,7 @@ import type { PipelineException, ProcessorResult } from '@white-glove/shared';
 import { buildHhaRowException, buildRowException } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
+import { billingGuardMessage, validateDischargeServiceBilling } from './billing-guards.js';
 import { isEarlyInterventionCase } from './rules.js';
 
 export interface DischargeServiceRow {
@@ -70,27 +71,34 @@ export async function processDischargeService(options: {
     }
 
     if (dryRun) {
+      const billingMissing = validateDischargeServiceBilling(row);
+      if (billingMissing.length) {
+        failed += 1;
+        exceptions.push(
+          buildRowException({
+            code: 'parse_error',
+            message: billingGuardMessage('discharge_service', row.caseId, billingMissing),
+            reportKind: 'closed_cases',
+            rowId: row.caseId,
+            details: { missing: billingMissing },
+          }),
+        );
+        continue;
+      }
       succeeded += 1;
       continue;
     }
 
-    if (!row.serviceCode?.trim() || !row.startDate?.trim()) {
+    const billingMissing = validateDischargeServiceBilling(row);
+    if (billingMissing.length) {
       failed += 1;
-      const missing = [
-        !row.serviceCode?.trim() ? 'Service Type' : null,
-        !row.startDate?.trim() ? 'Service Begin Date' : null,
-      ].filter(Boolean);
       exceptions.push(
         buildRowException({
           code: 'parse_error',
-          message: `[discharge_service] row=${row.caseId}: ${missing.join(' and ')} required on every discharge row — fill both in ProviderSoft before HHA can terminate the correct service.`,
+          message: billingGuardMessage('discharge_service', row.caseId, billingMissing),
           reportKind: 'closed_cases',
           rowId: row.caseId,
-          details: {
-            missing: missing.join(', '),
-            serviceCode: row.serviceCode,
-            startDate: row.startDate,
-          },
+          details: { missing: billingMissing },
         }),
       );
       continue;
