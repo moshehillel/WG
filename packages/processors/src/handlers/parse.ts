@@ -67,17 +67,23 @@ export const handler: Handler<ParseEvent, ParseResult> = async (event) => {
       );
     }
 
-    const [openedRaw, closedRaw, sessionsRaw, dischargeRaw, caregiverRaw] = await Promise.all([
+    const [openedRaw, closedRaw, sessionsRaw, dischargeRaw, caregiverRaw, newServicesRaw] =
+      await Promise.all([
       loadReportCsv(bucket, runId, 'opened_cases', download.keys.opened_cases),
       loadReportCsv(bucket, runId, 'closed_cases', download.keys.closed_cases),
       loadReportCsv(bucket, runId, 'verified_sessions', download.keys.verified_sessions),
       loadReportCsv(bucket, runId, 'discharge_service', download.keys.discharge_service),
       loadReportCsv(bucket, runId, 'caregiver_codes', download.keys.caregiver_codes),
+      loadReportCsv(bucket, runId, 'new_services', download.keys.new_services),
     ]);
 
-    const opened = openedRaw
+    const openedFromGluck = openedRaw
       ? parseReport(runId, 'opened_cases', openedRaw, parseOpenedCases)
       : [];
+    const openedFromNewServices = newServicesRaw
+      ? parseReport(runId, 'new_services', newServicesRaw, parseOpenedCases)
+      : [];
+    const opened = [...openedFromGluck, ...openedFromNewServices];
     const closed = closedRaw
       ? parseReport(runId, 'closed_cases', closedRaw, parseClosedCases)
       : [];

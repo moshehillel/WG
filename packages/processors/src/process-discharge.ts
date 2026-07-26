@@ -4,6 +4,7 @@ import { buildHhaRowException, buildRowException } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
 import { isEarlyInterventionCase } from './rules.js';
+import type { ServiceMappingStore } from './service-mapping.js';
 
 export interface DischargeServiceRow {
   caseId: string;
@@ -18,14 +19,21 @@ export interface DischargeServiceRow {
   isEarlyIntervention?: boolean;
 }
 
+function dischargeRowId(row: DischargeServiceRow): string {
+  const service = row.serviceCode?.trim() || 'unknown-service';
+  const start = row.startDate?.trim() || 'unknown-start';
+  return `discharge:${row.caseId}#${service}#${start}`;
+}
+
 export async function processDischargeService(options: {
   runId: string;
   rows: DischargeServiceRow[];
   hha: HhaClient;
   store: IdempotencyStore;
+  mappingStore?: ServiceMappingStore;
   dryRun?: boolean;
 }): Promise<ProcessorResult> {
-  const { runId, hha, store, dryRun } = options;
+  const { runId, hha, store, mappingStore, dryRun } = options;
   const exceptions: PipelineException[] = [];
   let succeeded = 0;
   let skipped = 0;
@@ -57,7 +65,7 @@ export async function processDischargeService(options: {
       continue;
     }
 
-    const { pk, sk } = rowKey('closed_cases', `discharge:${row.caseId}:${row.serviceCode ?? ''}`);
+    const { pk, sk } = rowKey('closed_cases', dischargeRowId(row));
     if (!dryRun && (await store.alreadyProcessed(pk, `${runId}#${sk}`))) {
       skipped += 1;
       continue;
@@ -68,13 +76,21 @@ export async function processDischargeService(options: {
       continue;
     }
 
-    const step = 'updateClosedCase';
+    const step = 'dischargeService';
     try {
-      await hha.updateClosedCase({
+      const mapping =
+        row.serviceCode && row.startDate
+          ? await mappingStore?.get(row.caseId, row.serviceCode, row.startDate)
+          : undefined;
+
+      await hha.dischargeService({
         caseId: row.caseId,
-        patientId: row.patientExternalId ?? row.caseId,
-        closedDate: row.dischargeDate ?? row.endDate,
+        patientId: mapping?.patientId ?? row.patientExternalId ?? row.caseId,
+        serviceCode: row.serviceCode,
+        startDate: row.startDate,
+        dischargeDate: row.dischargeDate ?? row.endDate,
         closedReason: `Service discharge: ${row.serviceCode ?? 'unknown'}`,
+        placementId: mapping?.placementId,
       });
       await store.markProcessed(pk, `${runId}#${sk}`, { caseId: row.caseId });
       succeeded += 1;
@@ -88,6 +104,7 @@ export async function processDischargeService(options: {
           err,
           extraDetails: {
             serviceCode: row.serviceCode,
+            startDate: row.startDate,
             dischargeDate: row.dischargeDate,
           },
         }),

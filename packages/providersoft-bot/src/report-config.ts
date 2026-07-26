@@ -2,12 +2,13 @@ import type { ReportKind } from '@white-glove/shared';
 import { REPORT_FILENAMES } from '@white-glove/shared';
 
 /** Pipeline report kinds plus PS reference reports not yet in every pipeline branch. */
-export type BotReportKind = ReportKind | 'discharge_service' | 'caregiver_codes';
+export type BotReportKind = ReportKind | 'discharge_service' | 'caregiver_codes' | 'new_services';
 
 export const BOT_REPORT_FILENAMES: Record<BotReportKind, string> = {
   ...REPORT_FILENAMES,
   discharge_service: 'discharge-service',
   caregiver_codes: 'caregiver-codes',
+  new_services: 'new-services',
 };
 
 /**
@@ -23,6 +24,7 @@ export function loadReportUserIds(env: NodeJS.ProcessEnv = process.env): ReportU
     verified_sessions: env.PROVIDERSOFT_REPORT_SESSIONS_ID ?? '4026',
     discharge_service: env.PROVIDERSOFT_REPORT_DISCHARGE_ID ?? '4528',
     caregiver_codes: env.PROVIDERSOFT_REPORT_CAREGIVER_CODES_ID ?? '4541',
+    new_services: env.PROVIDERSOFT_REPORT_NEW_SERVICES_ID ?? '4544',
   };
 }
 
@@ -31,6 +33,7 @@ export const REPORT_LINK_NAMES: Record<BotReportKind, string> = {
   opened_cases: 'Gluck open',
   closed_cases: 'gluck closure',
   discharge_service: 'discharge service',
+  new_services: 'new service',
   verified_sessions: 'API Report',
   caregiver_codes: 'caregiver codes',
 };
@@ -55,6 +58,10 @@ export const REPORT_DATE_INPUTS: Record<
     from: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_1_datePicker_dateInput',
     to: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_2_datePicker_dateInput',
   },
+  new_services: {
+    from: '#ctl00_Content_dlREportColumns_ctl33_DLColumControl_32_1_datePicker_dateInput',
+    to: '#ctl00_Content_dlREportColumns_ctl33_DLColumControl_32_2_datePicker_dateInput',
+  },
   verified_sessions: {
     from: '#ctl00_Content_dlREportColumns_ctl07_DLColumControl_6_1_datePicker_dateInput',
     to: '#ctl00_Content_dlREportColumns_ctl07_DLColumControl_6_2_datePicker_dateInput',
@@ -69,6 +76,7 @@ export const ALL_BOT_KINDS: BotReportKind[] = [
   'opened_cases',
   'closed_cases',
   'discharge_service',
+  'new_services',
   'verified_sessions',
   'caregiver_codes',
 ];
@@ -91,6 +99,7 @@ export const DAILY_REPORT_KINDS: BotReportKind[] = [
   'opened_cases',
   'closed_cases',
   'discharge_service',
+  'new_services',
 ];
 
 /** Format a Date as ProviderSoft expects in the date pickers (M/D/YYYY). */

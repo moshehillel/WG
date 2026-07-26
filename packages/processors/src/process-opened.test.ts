@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { MockHhaClient } from '@white-glove/hha-client';
 import { InMemoryIdempotencyStore } from './idempotency.js';
+import { InMemoryServiceMappingStore } from './service-mapping.js';
 import { processOpenedCases } from './process-opened.js';
 
 describe('processOpenedCases', () => {
-  it('creates patient/contract/auth and skips EI', async () => {
+  it('creates patient/contract/auth, stores mapping, and skips EI', async () => {
     const hha = new MockHhaClient();
+    const mappingStore = new InMemoryServiceMappingStore();
     const result = await processOpenedCases({
       runId: 'run1',
       hha,
       store: new InMemoryIdempotencyStore(),
+      mappingStore,
       rows: [
         {
           caseId: 'ei1',
@@ -24,6 +27,7 @@ describe('processOpenedCases', () => {
           programType: 'Extended Home Care Therapy',
           serviceCode: 'OT CHHA EXTENDED',
           authorizationNumber: 'A1',
+          startDate: '07/01/2026',
           dateOfBirth: '01/01/2020',
           address1: '1 Main St',
           city: 'Brooklyn',
@@ -37,5 +41,8 @@ describe('processOpenedCases', () => {
     expect(hha.calls.filter((c) => c === 'upsertPatient')).toHaveLength(1);
     expect(hha.calls).toContain('upsertContract');
     expect(hha.calls).toContain('upsertAuthorization');
+    const mapping = await mappingStore.get('c2', 'OT CHHA EXTENDED', '07/01/2026');
+    expect(mapping?.caseId).toBe('c2');
+    expect(mapping?.placementId).toBeTruthy();
   });
 });

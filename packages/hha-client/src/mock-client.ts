@@ -1,7 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { HhaClockingDetails, HhaPatient, HhaVisit } from '@white-glove/shared';
 import { lookupContractId, lookupServiceCode } from '@white-glove/shared';
-import type { ClosedCaseUpdate, HhaClient, PendingCall, UpsertResult } from './types.js';
+import type {
+  ClosedCaseUpdate,
+  DischargeAllPlacementsOptions,
+  DischargePlacementOptions,
+  DischargeServiceUpdate,
+  HhaClient,
+  PatientPlacementSummary,
+  PendingCall,
+  UpsertResult,
+} from './types.js';
 
 /**
  * In-memory mock used until HHA sandbox + API docs are available.
@@ -12,6 +21,8 @@ export class MockHhaClient implements HhaClient {
   readonly authorizations = new Map<string, UpsertResult>();
   readonly visits = new Map<string, HhaVisit & { id: string; approved: boolean }>();
   readonly closedCases = new Map<string, ClosedCaseUpdate>();
+  readonly placementsByPatient = new Map<string, PatientPlacementSummary[]>();
+  readonly dischargedPlacements = new Set<string>();
   readonly pendingCalls = new Map<string, PendingCall>();
   readonly payCodes = new Map<string, string>([
     ['OT72', 'pay-ot72'],
@@ -55,12 +66,26 @@ export class MockHhaClient implements HhaClient {
 
   async upsertContract(contract: Parameters<HhaClient['upsertContract']>[0]): Promise<UpsertResult> {
     this.calls.push('upsertContract');
-    const key = contract.contractExternalId ?? `${contract.patientId}:${contract.serviceCode ?? ''}`;
-    const existing = this.contracts.get(key);
-    if (existing) return { id: existing.id, created: false };
-    const result = { id: randomUUID(), created: true };
-    this.contracts.set(key, result);
-    return result;
+    const patientKey = contract.patientId;
+    const list = this.placementsByPatient.get(patientKey) ?? [];
+    const existing = list.find(
+      (p) =>
+        !p.dischargeDate &&
+        p.contractId === contract.contractExternalId &&
+        p.startDate === contract.startDate,
+    );
+    if (existing) return { id: existing.placementId, created: false };
+    const placementId = randomUUID();
+    list.push({
+      placementId,
+      contractId: contract.contractExternalId,
+      startDate: contract.startDate,
+    });
+    this.placementsByPatient.set(patientKey, list);
+    const legacyKey =
+      contract.contractExternalId ?? `${contract.patientId}:${contract.serviceCode ?? ''}`;
+    this.contracts.set(legacyKey, { id: placementId, created: true });
+    return { id: placementId, created: true };
   }
 
   async upsertAuthorization(
@@ -165,9 +190,78 @@ export class MockHhaClient implements HhaClient {
     });
   }
 
+  async listPatientPlacements(
+    patientId: string,
+    _visitDate?: string,
+  ): Promise<PatientPlacementSummary[]> {
+    this.calls.push('listPatientPlacements');
+    return [...(this.placementsByPatient.get(patientId) ?? [])];
+  }
+
+  async dischargePlacement(options: DischargePlacementOptions): Promise<void> {
+    this.calls.push('dischargePlacement');
+    const list = this.placementsByPatient.get(options.patientId) ?? [];
+    const idx = list.findIndex((p) => p.placementId === options.placementId);
+    if (idx < 0) {
+      throw new Error(`Mock placement ${options.placementId} not found for patient ${options.patientId}`);
+    }
+    list[idx] = {
+      ...list[idx]!,
+      dischargeDate: options.dischargeDate ?? new Date().toISOString().slice(0, 10),
+    };
+    this.placementsByPatient.set(options.patientId, list);
+    this.dischargedPlacements.add(options.placementId);
+  }
+
+  async dischargeAllPlacements(options: DischargeAllPlacementsOptions): Promise<void> {
+    this.calls.push('dischargeAllPlacements');
+    const active = (this.placementsByPatient.get(options.patientId) ?? []).filter(
+      (p) => !p.dischargeDate,
+    );
+    for (const placement of active) {
+      await this.dischargePlacement({
+        patientId: options.patientId,
+        placementId: placement.placementId,
+        dischargeDate: options.dischargeDate,
+      });
+    }
+  }
+
+  async dischargeService(update: DischargeServiceUpdate): Promise<void> {
+    this.calls.push('dischargeService');
+    const patientId =
+      update.patientId && /^\d+$/.test(update.patientId)
+        ? update.patientId
+        : (await this.findPatient({ caseId: update.caseId, externalId: update.caseId })) ??
+          update.caseId;
+    const active = (this.placementsByPatient.get(patientId) ?? []).filter((p) => !p.dischargeDate);
+    const placementId =
+      update.placementId ??
+      (active.length === 1 ? active[0]!.placementId : undefined);
+    if (!placementId) {
+      throw new Error(
+        `Mock dischargeService: ambiguous placements for ${update.caseId} / ${update.serviceCode ?? 'unknown'}`,
+      );
+    }
+    await this.dischargePlacement({
+      patientId,
+      placementId,
+      dischargeDate: update.dischargeDate,
+    });
+  }
+
   async updateClosedCase(update: ClosedCaseUpdate): Promise<void> {
     this.calls.push('updateClosedCase');
     this.closedCases.set(update.caseId, update);
+    const patientId =
+      update.patientId && /^\d+$/.test(update.patientId)
+        ? update.patientId
+        : (await this.findPatient({ caseId: update.caseId, externalId: update.caseId })) ??
+          update.caseId;
+    await this.dischargeAllPlacements({
+      patientId,
+      dischargeDate: update.closedDate,
+    });
   }
 
   async validateTransfer(externalRefs: string[]): Promise<{ ok: boolean; missing: string[] }> {

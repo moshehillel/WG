@@ -13,11 +13,12 @@ export function normalizedArtifactKey(runId: string, kind: ReportKind): string {
   return `${runPrefix(runId)}/normalized/${REPORT_FILENAMES[kind]}.json`;
 }
 
-export type ReferenceReportKind = 'caregiver_codes' | 'discharge_service';
+export type ReferenceReportKind = 'caregiver_codes' | 'discharge_service' | 'new_services';
 
 const REFERENCE_FILENAMES: Record<ReferenceReportKind, string> = {
   caregiver_codes: 'caregiver-codes',
   discharge_service: 'discharge-service',
+  new_services: 'new-services',
 };
 
 export function rawReferenceKey(runId: string, kind: ReferenceReportKind, ext = 'csv'): string {

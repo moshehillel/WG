@@ -6,6 +6,11 @@ import type {
   HhaVisit,
 } from '@white-glove/shared';
 import type { ClosedCaseUpdate, HhaClient, UpsertResult } from './types.js';
+import type {
+  DischargeAllPlacementsOptions,
+  DischargePlacementOptions,
+  DischargeServiceUpdate,
+} from './types.js';
 
 export interface HttpHhaClientOptions {
   baseUrl: string;
@@ -115,6 +120,25 @@ export class HttpHhaClient implements HhaClient {
 
   async updateClosedCase(update: ClosedCaseUpdate): Promise<void> {
     await this.request('POST', '/cases/close', update);
+  }
+
+  async dischargeService(update: DischargeServiceUpdate): Promise<void> {
+    await this.request('POST', '/services/discharge', update);
+  }
+
+  async dischargePlacement(options: DischargePlacementOptions): Promise<void> {
+    await this.request('POST', '/placements/discharge', options);
+  }
+
+  async dischargeAllPlacements(options: DischargeAllPlacementsOptions): Promise<void> {
+    await this.request('POST', '/placements/discharge-all', options);
+  }
+
+  listPatientPlacements(
+    patientId: string,
+    visitDate?: string,
+  ): Promise<import('./types.js').PatientPlacementSummary[]> {
+    return this.request('POST', '/placements/list', { patientId, visitDate });
   }
 
   validateTransfer(externalRefs: string[]): Promise<{ ok: boolean; missing: string[] }> {

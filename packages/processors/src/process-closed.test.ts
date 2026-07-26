@@ -4,8 +4,24 @@ import { InMemoryIdempotencyStore } from './idempotency.js';
 import { processClosedCases } from './process-closed.js';
 
 describe('processClosedCases', () => {
-  it('updates closed case status in HHA', async () => {
+  it('discharges all active placements when case closes', async () => {
     const hha = new MockHhaClient();
+    const patient = await hha.upsertPatient({
+      caseId: 'C-9',
+      firstName: 'Pat',
+      lastName: 'Closed',
+    });
+    await hha.upsertContract({
+      patientId: patient.id,
+      contractExternalId: '10410',
+      startDate: '2026-01-01',
+    });
+    await hha.upsertContract({
+      patientId: patient.id,
+      contractExternalId: '10411',
+      startDate: '2026-02-01',
+    });
+
     const result = await processClosedCases({
       runId: 'run-c',
       hha,
@@ -14,6 +30,8 @@ describe('processClosedCases', () => {
     });
     expect(result.succeeded).toBe(1);
     expect(hha.closedCases.get('C-9')?.status).toBe('Closed');
+    const placements = await hha.listPatientPlacements(patient.id);
+    expect(placements.every((p) => p.dischargeDate)).toBe(true);
   });
 
   it('ignores Early Intervention closed cases', async () => {

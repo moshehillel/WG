@@ -6,6 +6,7 @@ import {
   defaultDateRange,
   isDailyReport,
   loadReportUserIds,
+  REFERENCE_REPORT_KINDS,
   REPORT_DATE_INPUTS,
   reportViewUrl,
   type BotReportKind,
@@ -120,9 +121,14 @@ export async function downloadOneReportHttp(
     html = step3.html;
     url = step3.url;
   } catch (err) {
+    if (!REFERENCE_REPORT_KINDS.includes(kind)) {
+      throw new Error(
+        `${kind}: HTTP date filter wizard failed — refusing unfiltered export (${err instanceof Error ? err.message : err})`,
+      );
+    }
     onStep?.(
       'http',
-      `${kind}: wizard failed (${err instanceof Error ? err.message : err}); trying direct Export`,
+      `${kind}: wizard failed (${err instanceof Error ? err.message : err}); reference report — direct Export`,
     );
     page = await client.get(pageUrl);
     html = page.html;

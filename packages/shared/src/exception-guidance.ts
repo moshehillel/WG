@@ -19,6 +19,7 @@ const REPORT_LABELS: Record<string, string> = {
   verified_sessions: 'API Report (verified sessions)',
   caregiver_codes: 'Caregiver codes',
   discharge_service: 'Discharge service',
+  new_services: 'New service (existing child)',
 };
 
 const CODE_LABELS: Record<ExceptionCode, string> = {
@@ -78,8 +79,6 @@ export function explainException(ex: PipelineException): ExplainedException {
   const missing =
     typeof ex.details?.missing === 'string' ? ex.details.missing : undefined;
   const step = typeof ex.details?.step === 'string' ? ex.details.step : undefined;
-
-  const modePrefix = isPreview ? 'DRY-RUN CHECK (no HHA changes were made)' : 'LIVE RUN';
 
   switch (ex.code) {
     case 'unknown_service_code':

@@ -123,6 +123,7 @@ export class WhiteGloveStack extends cdk.Stack {
       PROVIDERSOFT_REPORT_DISCHARGE_ID: '4528',
       PROVIDERSOFT_REPORT_SESSIONS_ID: '4026',
       PROVIDERSOFT_REPORT_CAREGIVER_CODES_ID: '4541',
+      PROVIDERSOFT_REPORT_NEW_SERVICES_ID: '4544',
       PROVIDERSOFT_REPORT_KINDS: 'opened_cases,closed_cases,verified_sessions',
     };
 
@@ -355,7 +356,7 @@ export class WhiteGloveStack extends cdk.Stack {
         input: {
           runId: events.EventField.fromPath('$.id'),
           dryRun: false,
-          reportKinds: ['opened_cases', 'closed_cases', 'discharge_service'],
+          reportKinds: ['opened_cases', 'closed_cases', 'discharge_service', 'new_services'],
         },
       });
 
@@ -366,7 +367,7 @@ export class WhiteGloveStack extends cdk.Stack {
         input: {
           runId: events.EventField.fromPath('$.id'),
           dryRun: true,
-          reportKinds: ['opened_cases', 'closed_cases', 'verified_sessions', 'caregiver_codes'],
+          reportKinds: ['opened_cases', 'closed_cases', 'new_services', 'verified_sessions', 'caregiver_codes'],
         },
       });
 

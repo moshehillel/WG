@@ -91,6 +91,39 @@ Preview must flag new Service Types **and** pay codes that fail the discipline+r
 | **Discharge service** | **Yes** with same discharge default | |
 | **API Report** | **Yes** | Pay Rate + Service Type for pay code; Provider Name for caregiver lookup |
 | **Caregiver codes** | **Yes** | UserReportId **4541** (network capture Jul 2026) |
+| **New service** (existing child) | **Yes** — see below | Filter **Service Begin Date** in PS; save as **"new service"** |
+
+## New service report (existing child, new service line)
+
+Use when the child already exists in ProviderSoft/HHA but a **new Service Type** row starts (not a new intake).
+
+**ProviderSoft setup** (Service Report type, UserReportId **4544**)
+
+1. **Report name:** `new service` (bot link name must match).
+2. **Step 1:** Service Report (not Children).
+3. **Step 2 — include these columns:**
+
+| # | Column | Why |
+|---|--------|-----|
+| 1 | Child's Name | Patient match |
+| 2 | Program Id | Case ID |
+| 3 | Date of Birth | HHA patient |
+| 4 | Provider Name | Reference |
+| 7–9 | Child's Address / City / State | HHA address |
+| 10–11 | Primary Contact Name / Phone | HHA contact |
+| 14 | Child's Zip Code | HHA address |
+| 20 | **Service Type** | HHA service code mapping |
+| 36–37 | **Service Begin Date / Service End Date** | Contract + auth dates; bot filters on Begin Date |
+| 65 | **Authorization Number** | HHA authorization |
+| 75 | **Program Type** | Contract ID mapping |
+| 118 | Real DOB (For school Cases) | School cases only |
+
+4. **Step 3 — filter:** leave empty; bot sets **Service Begin Date** at download time (today → today).
+5. **UserReportId:** `4544` → `PROVIDERSOFT_REPORT_NEW_SERVICES_ID=4544`.
+
+**Pipeline:** merged with Gluck open → same HHA flow (`upsertPatient` → contract → authorization). One row per service line; same Program Id can appear multiple times.
+
+**Skip** closure, billing, mandate, SC/ABA, and referral columns unless you need them for manual review only.
 
 ## Still need from client
 

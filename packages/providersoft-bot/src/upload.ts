@@ -13,7 +13,7 @@ const PIPELINE_KINDS = new Set<ReportKind>([
   'verified_sessions',
 ]);
 
-const REFERENCE_KINDS = new Set<BotReportKind>(['caregiver_codes', 'discharge_service']);
+const REFERENCE_KINDS = new Set<BotReportKind>(['caregiver_codes', 'discharge_service', 'new_services']);
 
 export async function uploadReportsToS3(options: {
   runId: string;
@@ -33,8 +33,8 @@ export async function uploadReportsToS3(options: {
       key = rawReportKey(options.runId, kind as ReportKind, ext);
       keys[kind as ReportKind] = key;
     } else if (REFERENCE_KINDS.has(kind)) {
-      key = rawReferenceKey(options.runId, kind as 'caregiver_codes' | 'discharge_service', ext);
-      keys[kind as 'caregiver_codes' | 'discharge_service'] = key;
+      key = rawReferenceKey(options.runId, kind as 'caregiver_codes' | 'discharge_service' | 'new_services', ext);
+      keys[kind as 'caregiver_codes' | 'discharge_service' | 'new_services'] = key;
     } else {
       continue;
     }

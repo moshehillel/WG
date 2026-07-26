@@ -3,6 +3,7 @@ import { applyHhaSecretFromArn, createHhaClient } from '@white-glove/hha-client'
 import type { OpenedCaseRow, ParseResult, ProcessorResult } from '@white-glove/shared';
 import { getEnv } from '@white-glove/shared';
 import { createIdempotencyStore } from '../idempotency.js';
+import { createServiceMappingStore } from '../service-mapping.js';
 import { processOpenedCases } from '../process-opened.js';
 import { getObjectText } from '../s3.js';
 
@@ -25,6 +26,7 @@ export const handler: Handler<OpenedEvent, ProcessorResult> = async (event) => {
     rows,
     hha: createHhaClient(env),
     store: createIdempotencyStore(env.IDEMPOTENCY_TABLE),
+    mappingStore: createServiceMappingStore(env.IDEMPOTENCY_TABLE),
     dryRun: event.dryRun ?? env.DRY_RUN,
   });
 };

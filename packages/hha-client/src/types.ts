@@ -19,6 +19,37 @@ export interface ClosedCaseUpdate {
   closedReason?: string;
 }
 
+/** Discharge one service line on an active case (discharge service report). */
+export interface DischargeServiceUpdate {
+  caseId: string;
+  patientId?: string;
+  serviceCode?: string;
+  startDate?: string;
+  dischargeDate?: string;
+  closedReason?: string;
+  /** From Dynamo mapping when automation opened this service. */
+  placementId?: string;
+}
+
+export interface DischargePlacementOptions {
+  patientId: string;
+  placementId: string;
+  dischargeDate?: string;
+}
+
+export interface DischargeAllPlacementsOptions {
+  patientId: string;
+  dischargeDate?: string;
+}
+
+export interface PatientPlacementSummary {
+  placementId: string;
+  contractId?: string;
+  serviceCodeId?: string;
+  startDate?: string;
+  dischargeDate?: string;
+}
+
 export interface PendingCall {
   callDashboardId: string;
   callTime?: string;
@@ -51,6 +82,15 @@ export interface HhaClient {
   ): Promise<string | undefined>;
   getClockingDetails(visitId: string, expected: HhaVisit): Promise<HhaClockingDetails>;
   approveVisit(visitId: string): Promise<void>;
+  /** Gluck closure — discharge every active placement on the patient. */
   updateClosedCase(update: ClosedCaseUpdate): Promise<void>;
+  /** Discharge service report — one placement only. */
+  dischargeService(update: DischargeServiceUpdate): Promise<void>;
+  dischargePlacement(options: DischargePlacementOptions): Promise<void>;
+  dischargeAllPlacements(options: DischargeAllPlacementsOptions): Promise<void>;
+  listPatientPlacements(
+    patientId: string,
+    visitDate?: string,
+  ): Promise<PatientPlacementSummary[]>;
   validateTransfer(externalRefs: string[]): Promise<{ ok: boolean; missing: string[] }>;
 }

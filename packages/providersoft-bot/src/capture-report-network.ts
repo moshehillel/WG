@@ -225,6 +225,7 @@ async function main() {
   console.log(`PROVIDERSOFT_REPORT_OPENED_ID=${reportIds.opened_cases ?? '4526'}`);
   console.log(`PROVIDERSOFT_REPORT_CLOSED_ID=${reportIds.closed_cases ?? ''}`);
   console.log(`PROVIDERSOFT_REPORT_DISCHARGE_ID=${reportIds.discharge_service ?? ''}`);
+  console.log(`PROVIDERSOFT_REPORT_NEW_SERVICES_ID=${reportIds.new_services ?? ''}`);
   console.log(`PROVIDERSOFT_REPORT_SESSIONS_ID=${reportIds.verified_sessions ?? '4026'}`);
   console.log(`PROVIDERSOFT_REPORT_CAREGIVER_CODES_ID=${reportIds.caregiver_codes ?? ''}`);
 }

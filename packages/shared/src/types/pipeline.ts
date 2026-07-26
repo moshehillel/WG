@@ -3,7 +3,7 @@ import { ReportKindSchema, SessionTriageSchema } from './reports.js';
 
 export const PipelineReportKindSchema = z.union([
   ReportKindSchema,
-  z.enum(['caregiver_codes', 'discharge_service']),
+  z.enum(['caregiver_codes', 'discharge_service', 'new_services']),
 ]);
 
 export const PipelineRunInputSchema = z.object({
@@ -26,6 +26,7 @@ export const DownloadResultSchema = z.object({
     verified_sessions: z.string().optional(),
     caregiver_codes: z.string().optional(),
     discharge_service: z.string().optional(),
+    new_services: z.string().optional(),
   }),
   downloadedAt: z.string(),
 });

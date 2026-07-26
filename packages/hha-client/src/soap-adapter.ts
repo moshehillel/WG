@@ -7,7 +7,16 @@ import type {
 } from '@white-glove/shared';
 import { resolveDischargeToId } from '@white-glove/shared';
 import { lookupContractId, lookupServiceCode } from '@white-glove/shared';
-import type { ClosedCaseUpdate, HhaClient, PendingCall, UpsertResult } from './types.js';
+import type {
+  ClosedCaseUpdate,
+  DischargeAllPlacementsOptions,
+  DischargePlacementOptions,
+  DischargeServiceUpdate,
+  HhaClient,
+  PatientPlacementSummary,
+  PendingCall,
+  UpsertResult,
+} from './types.js';
 import { compareSessionClock, psDateToIso, splitProviderName } from './hha-time.js';
 import {
   matchByName,
@@ -32,6 +41,8 @@ import {
   type CreatePatientReferenceIds,
 } from './create-patient-builder.js';
 import { HhaSoapClient, type HhaSoapAuth, type SoapCallResult } from './soap-client.js';
+import { activePlacements, parsePatientPlacements } from './placements.js';
+import { resolvePlacementForService } from './resolve-placement.js';
 import {
   buildConfirmVisitsBody,
   buildConfirmVisitsEvvBody,
@@ -246,8 +257,12 @@ export class SoapHhaClientAdapter implements HhaClient {
 </PatientContractInfo>`,
     );
     assertOk(result, 'AddPatientContract');
+    const placementId =
+      pickId(result.raw, ['PlacementID', 'PatientContractID', 'ID']) ??
+      (result.bodyXml ? parsePatientPlacements(result.bodyXml)[0]?.placementId : undefined) ??
+      contract.contractExternalId;
     return {
-      id: pickId(result.raw, ['ID', 'ContractID', 'PatientContractID']) ?? contract.contractExternalId,
+      id: placementId,
       created: true,
     };
   }
@@ -613,28 +628,18 @@ export class SoapHhaClientAdapter implements HhaClient {
     return parseVisitEditReasonPairs(res.bodyXml);
   }
 
-  async updateClosedCase(update: ClosedCaseUpdate): Promise<void> {
-    // HHA models "closed" via patient contract discharge fields (UpdatePatientContract).
-    if (!update.patientId && !update.caseId) {
-      throw new Error('updateClosedCase requires patientId or resolvable caseId');
-    }
-    const patientId = update.patientId;
-    if (!patientId) {
-      throw new Error(
-        'Closed-case updates need HHA PatientID mapping from ProviderSoft caseId before UpdatePatientContract discharge can run',
-      );
-    }
-    const contracts = await this.soap.getPatientContracts(
-      Number(patientId),
-      update.closedDate ?? new Date().toISOString().slice(0, 10),
-    );
+  async listPatientPlacements(
+    patientId: string,
+    visitDate?: string,
+  ): Promise<PatientPlacementSummary[]> {
+    const date = visitDate ?? new Date().toISOString().slice(0, 10);
+    const contracts = await this.soap.getPatientContracts(Number(patientId), date);
     assertOk(contracts, 'GetPatientContracts');
-    const contractId =
-      pickId(contracts.raw, ['PlacementID', 'ID', 'ContractID']) ??
-      pickNestedContractId(contracts.raw);
-    if (!contractId) {
-      throw new Error(`No patient contract found to discharge for patient ${patientId}`);
-    }
+    const xml = contracts.bodyXml ?? '';
+    return parsePatientPlacements(xml);
+  }
+
+  async dischargePlacement(options: DischargePlacementOptions): Promise<void> {
     const dischargeToId = resolveDischargeToId();
     const dischargeToXml = dischargeToId
       ? `\n  <DischargeToID>${escape(dischargeToId)}</DischargeToID>`
@@ -642,13 +647,72 @@ export class SoapHhaClientAdapter implements HhaClient {
     const result = await this.soap.call(
       'UpdatePatientContract',
       `<PatientContractInfo>
-  <PatientID>${escape(patientId)}</PatientID>
-  <PlacementID>${escape(contractId)}</PlacementID>
+  <PatientID>${escape(options.patientId)}</PatientID>
+  <PlacementID>${escape(options.placementId)}</PlacementID>
   <UpdateDischargeDate>true</UpdateDischargeDate>
-  <DischargeDate>${escape(update.closedDate ?? '')}</DischargeDate>${dischargeToXml}
+  <DischargeDate>${escape(options.dischargeDate ?? '')}</DischargeDate>${dischargeToXml}
 </PatientContractInfo>`,
     );
     assertOk(result, 'UpdatePatientContract');
+  }
+
+  async dischargeAllPlacements(options: DischargeAllPlacementsOptions): Promise<void> {
+    const placements = activePlacements(
+      await this.listPatientPlacements(options.patientId, options.dischargeDate),
+    );
+    if (!placements.length) {
+      throw new Error(`No active HHA placements to discharge for patient ${options.patientId}`);
+    }
+    for (const placement of placements) {
+      await this.dischargePlacement({
+        patientId: options.patientId,
+        placementId: placement.placementId,
+        dischargeDate: options.dischargeDate,
+      });
+    }
+  }
+
+  async dischargeService(update: DischargeServiceUpdate): Promise<void> {
+    const patientId = await this.resolvePatientId(update.patientId, update.caseId);
+    const active = activePlacements(
+      await this.listPatientPlacements(patientId, update.dischargeDate),
+    );
+    const placementId = resolvePlacementForService({
+      placementId: update.placementId,
+      serviceCode: update.serviceCode,
+      startDate: update.startDate,
+      active,
+    });
+    await this.dischargePlacement({
+      patientId,
+      placementId,
+      dischargeDate: update.dischargeDate,
+    });
+  }
+
+  async updateClosedCase(update: ClosedCaseUpdate): Promise<void> {
+    const patientId = await this.resolvePatientId(update.patientId, update.caseId);
+    await this.dischargeAllPlacements({
+      patientId,
+      dischargeDate: update.closedDate,
+    });
+  }
+
+  private async resolvePatientId(
+    patientId: string | undefined,
+    caseId: string | undefined,
+  ): Promise<string> {
+    if (patientId && /^\d+$/.test(patientId)) return patientId;
+    const found = await this.findPatient({
+      caseId,
+      externalId: caseId,
+    });
+    if (!found) {
+      throw new Error(
+        `HHA patient not found for caseId="${caseId ?? '(missing)'}" — cannot discharge safely`,
+      );
+    }
+    return found;
   }
 
   async validateTransfer(externalRefs: string[]): Promise<{ ok: boolean; missing: string[] }> {

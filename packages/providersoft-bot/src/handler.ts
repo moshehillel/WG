@@ -14,7 +14,7 @@ export interface DownloadEvent {
   runId?: string;
   dryRun?: boolean;
   reportDate?: string;
-  reportKinds?: Array<ReportKind | 'caregiver_codes' | 'discharge_service'>;
+  reportKinds?: Array<ReportKind | 'caregiver_codes' | 'discharge_service' | 'new_services'>;
   /** When true, write stub CSVs instead of hitting ProviderSoft (useful for pipeline tests). */
   useStubs?: boolean;
 }

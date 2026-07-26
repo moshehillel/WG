@@ -7,6 +7,7 @@ import {
 } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
 import { rowKey } from './idempotency.js';
+import type { ServiceMappingStore } from './service-mapping.js';
 import { previewOpenedCase } from './preview-scan.js';
 import { openedCaseToHhaPatient } from './opened-to-hha-patient.js';
 import { filterOpenedCases } from './rules.js';
@@ -16,14 +17,21 @@ function missingFieldMessage(reportKind: string, rowId: string | undefined, fiel
   return `[${reportKind}] ${id} missing required field(s): ${fields.join(', ')}`;
 }
 
+function openedRowId(row: OpenedCaseRow): string {
+  const service = row.serviceCode?.trim() || 'unknown-service';
+  const start = row.startDate?.trim() || 'unknown-start';
+  return `${row.caseId}#${service}#${start}`;
+}
+
 export async function processOpenedCases(options: {
   runId: string;
   rows: OpenedCaseRow[];
   hha: HhaClient;
   store: IdempotencyStore;
+  mappingStore?: ServiceMappingStore;
   dryRun?: boolean;
 }): Promise<ProcessorResult> {
-  const { runId, hha, store, dryRun } = options;
+  const { runId, hha, store, mappingStore, dryRun } = options;
   const { kept, skippedEi } = filterOpenedCases(options.rows);
   const exceptions: PipelineException[] = skippedEi.map((row) => ({
     code: 'skipped_by_rule',
@@ -55,7 +63,7 @@ export async function processOpenedCases(options: {
       continue;
     }
 
-    const { pk, sk } = rowKey('opened_cases', row.caseId);
+    const { pk, sk } = rowKey('opened_cases', openedRowId(row));
     if (!dryRun && (await store.alreadyProcessed(pk, `${runId}#${sk}`))) {
       skipped += 1;
       continue;
@@ -110,7 +118,7 @@ export async function processOpenedCases(options: {
 
       const patient = await hha.upsertPatient(openedCaseToHhaPatient(row));
       step = 'upsertContract';
-      await hha.upsertContract({
+      const contract = await hha.upsertContract({
         patientId: patient.id,
         contractExternalId: contractId,
         serviceCode: row.serviceCode,
@@ -118,7 +126,7 @@ export async function processOpenedCases(options: {
         endDate: row.endDate,
       });
       step = 'upsertAuthorization';
-      await hha.upsertAuthorization({
+      const authorization = await hha.upsertAuthorization({
         patientId: patient.id,
         authorizationNumber: row.authorizationNumber,
         serviceCode: row.serviceCode,
@@ -126,6 +134,18 @@ export async function processOpenedCases(options: {
         startDate: row.startDate,
         endDate: row.endDate,
       });
+      if (mappingStore && row.startDate?.trim()) {
+        await mappingStore.put({
+          caseId: row.caseId,
+          serviceCode: row.serviceCode,
+          startDate: row.startDate,
+          patientId: patient.id,
+          placementId: contract.id,
+          authorizationId: authorization.id,
+          contractId,
+          updatedAt: new Date().toISOString(),
+        });
+      }
       await store.markProcessed(pk, `${runId}#${sk}`, { caseId: row.caseId });
       succeeded += 1;
     } catch (err) {
