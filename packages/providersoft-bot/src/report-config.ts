@@ -59,11 +59,12 @@ export const REPORT_DATE_INPUTS: Record<
     to: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_2_datePicker_dateInput',
   },
   new_services: {
-    /** Date of Intake — sync services entered today even when Service Begin Date is in the future. */
+    /** Service Begin Date — lookback window catches rows whose begin date predates auth approval. */
     from: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_1_datePicker_dateInput',
     to: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_2_datePicker_dateInput',
   },
   verified_sessions: {
+    /** Verified Date — sessions verified in the window (not Session Date). */
     from: '#ctl00_Content_dlREportColumns_ctl07_DLColumControl_6_1_datePicker_dateInput',
     to: '#ctl00_Content_dlREportColumns_ctl07_DLColumControl_6_2_datePicker_dateInput',
   },
@@ -146,10 +147,28 @@ export function dailyLookbackDays(env: NodeJS.ProcessEnv = process.env): number 
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
+/** How many days back the API Report Verified Date filter spans (default 7). */
+export function verifiedSessionLookbackDays(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.PROVIDERSOFT_SESSION_LOOKBACK_DAYS ?? '7';
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 7;
+}
+
 /**
- * Computed date windows (never hardcode calendar days):
- * - Daily reports: Eastern calendar day minus lookback (default same day for ~11 PM run)
- * - API Report (verified_sessions): 7 days ending on that same business day
+ * Service Begin Date lookback for new-service report.
+ * Auth can arrive days after the request date stored as Service Begin Date.
+ */
+export function newServiceLookbackDays(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.PROVIDERSOFT_NEW_SERVICE_LOOKBACK_DAYS ?? '14';
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 14;
+}
+
+/**
+ * Computed date windows (never hardcode calendar days) — used for both live and sandbox downloads:
+ * - Gluck open / closure / discharge: Eastern calendar day minus lookback (default same day)
+ * - new_services: Service Begin Date from N days ago through business day (default 14)
+ * - API Report (verified_sessions): Verified Date, 7 days ending on business day
  */
 export function defaultDateRange(
   kind: BotReportKind,
@@ -162,7 +181,12 @@ export function defaultDateRange(
   const businessDay = addCalendarDays(calendarDate(year, month, day), -lookback);
 
   if (kind === 'verified_sessions') {
-    const from = addCalendarDays(businessDay, -7);
+    const from = addCalendarDays(businessDay, -verifiedSessionLookbackDays(env));
+    return { from: formatPsDate(from), to: formatPsDate(businessDay) };
+  }
+
+  if (kind === 'new_services') {
+    const from = addCalendarDays(businessDay, -newServiceLookbackDays(env));
     return { from: formatPsDate(from), to: formatPsDate(businessDay) };
   }
 
