@@ -188,10 +188,21 @@ const HTML_TABLE_COLUMNS: Array<{ key: keyof ResultCsvRow; label: string }> = [
 export function formatResultsTableHtml(rows: ResultCsvRow[]): string {
   const failed = rows.filter((r) => r.status === 'failed').length;
   const succeeded = rows.filter((r) => r.status === 'succeeded').length;
-  const headerCells = HTML_TABLE_COLUMNS.map(
-    (c) =>
-      `<th style="padding:8px 10px;text-align:left;font-size:11px;letter-spacing:0.04em;text-transform:uppercase;background:#0f766e;color:#ffffff;border:1px solid #0d9488;">${htmlEscape(c.label)}</th>`,
-  ).join('');
+  const cellBase =
+    'padding:4px 6px;font-size:10px;line-height:1.35;border:1px solid #e2e8f0;vertical-align:top;word-break:break-word;overflow-wrap:anywhere;';
+  const headerCells = HTML_TABLE_COLUMNS.map((c) => {
+    const width =
+      c.key === 'status'
+        ? 'width:52px;'
+        : c.key === 'reportLabel'
+          ? 'width:72px;'
+          : c.key === 'code'
+            ? 'width:64px;'
+            : c.key === 'reason'
+              ? 'width:28%;'
+              : '';
+    return `<th style="padding:4px 6px;text-align:left;font-size:9px;line-height:1.3;letter-spacing:0.03em;text-transform:uppercase;background:#0f766e;color:#ffffff;border:1px solid #0d9488;word-break:break-word;overflow-wrap:anywhere;${width}">${htmlEscape(c.label)}</th>`;
+  }).join('');
   const bodyRows = rows
     .map((row, i) => {
       const bg = i % 2 === 0 ? '#ffffff' : '#f8fafc';
@@ -200,19 +211,19 @@ export function formatResultsTableHtml(rows: ResultCsvRow[]): string {
         const raw = String(row[c.key] ?? '');
         const style =
           c.key === 'status'
-            ? `padding:8px 10px;font-size:12px;font-weight:700;color:${statusColor};border:1px solid #e2e8f0;background:${bg};`
-            : `padding:8px 10px;font-size:12px;color:#0f172a;border:1px solid #e2e8f0;vertical-align:top;background:${bg};`;
+            ? `${cellBase}font-weight:700;color:${statusColor};background:${bg};`
+            : `${cellBase}color:#0f172a;background:${bg};`;
         return `<td style="${style}">${htmlEscape(raw)}</td>`;
       }).join('');
       return `<tr>${cells}</tr>`;
     })
     .join('\n');
 
-  return `<p style="margin:0 0 10px;font-size:13px;color:#475569;">${failed} failed · ${succeeded} succeeded</p>
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;background:#ffffff;">
+  return `<p style="margin:0 0 6px;font-size:11px;color:#475569;">${failed} failed · ${succeeded} succeeded</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;font-size:10px;background:#ffffff;">
   <thead><tr>${headerCells}</tr></thead>
   <tbody>
-${bodyRows || `<tr><td colspan="8" style="padding:14px;color:#64748b;border:1px solid #e2e8f0;">No rows</td></tr>`}
+${bodyRows || `<tr><td colspan="8" style="padding:8px 6px;font-size:10px;color:#64748b;border:1px solid #e2e8f0;">No rows</td></tr>`}
   </tbody>
 </table>`;
 }
