@@ -1,56 +1,70 @@
-# ProviderSoft bot → AWS (Playwright production path)
+# ProviderSoft bot → AWS (ECR container Lambda)
 
-The daily pipeline will run the **Playwright bot in a container Lambda** (Chromium included). Until go-live, the deployed download step still uses **stub CSVs** so AWS works without hitting ProviderSoft.
+The download step runs a **Docker image** from ECR (`white-glove/providersoft-bot`). EventBridge schedules only *invoke* that Lambda — they never rebuild the image.
 
-## What is already prepared
+## Critical: schedules vs bot image
 
-| Piece | Status |
-|--------|--------|
-| Local bot (`train:bot`) | Working (Gluck open proven) |
-| Retries (3×) + HTTP backup | In code |
-| `Dockerfile` (Playwright + Lambda RIC) | Ready |
-| CDK flag `providerSoftLiveBot` | Ready (default **false**) |
-| Live `handler.ts` (stubs or Playwright) | Ready |
-| Lambda Chromium launch flags | Ready |
+| Action | Rebuilds bot image? |
+|--------|---------------------|
+| Re-enable nightly / sessions schedules | **No** — uses whatever image the download Lambda already points at |
+| `cdk deploy` (processors / stack flags) | **No** — does not run CodeBuild |
+| `npm run deploy:aws:live` / `bot:deploy:aws -- --local` | **Yes** — CodeBuild → ECR → retarget Lambda |
 
-## Current deploy (safe default)
+**When you turn schedules back on, you do not need another bot update** if today’s fixed image is already on the download Lambda (`npm run bot:check-fresh` passes). You only need a bot rebuild if someone redeployed an older image or shipped bot source without `deploy:aws:live`.
+
+That Aug 21 vs Aug 24 gap happened because `bot:deploy:aws` was a **separate manual step** from normal CDK deploys.
+
+## Standard live deploy (use this)
+
+Always rebuild + tag the bot when shipping ProviderSoft download changes:
 
 ```powershell
 cd C:\Users\Moshe\Desktop\custom-projects\White-glove
-npm run deploy -w @white-glove/infra -- --require-approval never
+npm run deploy:aws:live
+# same as: npm run bot:deploy:aws -- --local
 ```
 
-- Zip Lambda + `PROVIDERSOFT_USE_STUBS=true`
-- **No Docker required**
+This:
 
-## When ready for production bot (not yet)
+1. CDK-deploys stack (live bot on, **schedules stay off**)
+2. Zips local `providersoft-bot` + `shared`, CodeBuild builds/pushes ECR
+3. Tags image `latest` **and** `src-<fingerprint>`
+4. Pins the download Lambda to the new image **digest**
 
-Needs Docker Desktop running, then:
+Then verify:
 
 ```powershell
-# 1) Put real ProviderSoft creds in Secrets Manager (ProviderSoftSecretArn from stack outputs)
-#    JSON: { "baseUrl": "https://web2.providersoftllc.com/WhiteGloveCommunityCareInc", "username": "...", "password": "..." }
-
-# 2) Deploy Playwright image (still stubs until you flip the next flag)
-npm run deploy -w @white-glove/infra -- -c providerSoftLiveBot=true --require-approval never
-
-# 3) After local train:bot proves all reports + parsers are ready:
-npm run deploy -w @white-glove/infra -- -c providerSoftLiveBot=true -c providerSoftUseStubs=false --require-approval never
+npm run bot:check-fresh
 ```
 
-## Go-live checklist (do not flip stubs off until all are done)
+## Enable schedules (only when asked)
 
-- [ ] Gluck open, closure, discharge, API Report all download via `train:bot`
-- [ ] `UserReportId` for closure + discharge set (env / Lambda config)
-- [ ] Real CSV column mapping in `parse-reports.ts`
-- [ ] ProviderSoft secret filled (not `CHANGE_ME`)
-- [ ] HHA secret + mock off when write path is approved
-- [ ] SNS `alertEmail` configured
-- [ ] Docker deploy with `providerSoftLiveBot=true`
-- [ ] One manual Step Functions run with `providerSoftUseStubs=false`
-- [ ] Only then leave daily schedule on live mode
+```powershell
+npm run schedules:enable
+```
 
-## Useful IDs already known
+Runs `bot:check-fresh` first; **fails** if local bot/shared sources do not match the ECR `src-*` tag. Does not rebuild the image — it only flips EventBridge on when the image is current.
 
-- Gluck open: `4526`
+## Do not rely on plain CDK for bot code
+
+```powershell
+# Updates processors / flags only — NOT the Playwright/HTTP bot image
+npm run deploy -w @white-glove/infra -- -c providerSoftLiveBot=true ...
+```
+
+## GitHub bootstrap path
+
+`npm run bot:deploy:aws` without `--local` downloads **GitHub `main`**. Push bot fixes before using that path, or prefer `deploy:aws:live` (local zip).
+
+## Go-live checklist
+
+- [ ] `npm run deploy:aws:live` succeeded
+- [ ] `npm run bot:check-fresh` OK
+- [ ] Manual Step Functions run with dateRanges / empty-CSV OK
+- [ ] Only then `npm run schedules:enable` (when explicitly requested)
+
+## Useful report IDs
+
+- Gluck open: `4566` (Gender: column)
+- New service: `4567` / rebuilt ids via env
 - API Report: `4026`

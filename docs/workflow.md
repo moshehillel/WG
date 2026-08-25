@@ -42,7 +42,7 @@ To enable nightly schedules (11:00 PM Eastern):
 
 Legacy 06:00 UTC daily: `-c enableDailySchedule=true`
 
-1. **Download** Lambda — default **stub zip**; production path is **Playwright container** (`-c providerSoftLiveBot=true`). See [providersoft-bot-aws.md](./providersoft-bot-aws.md).
+1. **Download** Lambda — production path is the **ECR bot image** (`npm run deploy:aws:live`). Plain `cdk deploy` does not rebuild it; re-enabling schedules only invokes the current image. See [providersoft-bot-aws.md](./providersoft-bot-aws.md).
 2. **Parse** Lambda normalizes CSV → JSON artifacts under `runs/{runId}/normalized/`.
 3. Parallel HHA sync: opened / closed / sessions processors.
 4. **Validate** writes summary + exceptions to S3 and publishes to SNS when needed.

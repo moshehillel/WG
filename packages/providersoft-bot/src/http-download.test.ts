@@ -76,7 +76,8 @@ describe('Telerik ClientState helpers', () => {
         minDateStr: '1753-01-01-00-00-00',
         maxDateStr: '9999-12-31-00-00-00',
       }),
-    );    const state = JSON.parse(
+    );
+    const state = JSON.parse(
       body.get(clientStateNameForDateInput(name))!,
     ) as Record<string, string>;
     expect(state.validationText).toBe('2026-08-13-00-00-00');

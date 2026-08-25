@@ -33,13 +33,27 @@ phases:
           \&\& rm -rf /var/lib/apt/lists/*' "$DF"
           fi
         fi
-      - echo "Building Docker image..."
-      - docker build -f packages/providersoft-bot/Dockerfile -t $ECR_REPO_URI:latest .
+      - echo "Building Docker image (BOT_SOURCE_HASH=${BOT_SOURCE_HASH:-unknown})..."
+      - |
+        if [ -n "$BOT_SOURCE_HASH" ]; then
+          docker build -f packages/providersoft-bot/Dockerfile \
+            -t $ECR_REPO_URI:latest \
+            -t $ECR_REPO_URI:src-$BOT_SOURCE_HASH \
+            .
+        else
+          docker build -f packages/providersoft-bot/Dockerfile -t $ECR_REPO_URI:latest .
+        fi
   post_build:
     commands:
       - echo "Pushing image..."
       - docker push $ECR_REPO_URI:latest
-      - echo "Done — image $ECR_REPO_URI:latest"
+      - |
+        if [ -n "$BOT_SOURCE_HASH" ]; then
+          docker push $ECR_REPO_URI:src-$BOT_SOURCE_HASH
+          echo "Done — image $ECR_REPO_URI:latest and src-$BOT_SOURCE_HASH"
+        else
+          echo "Done — image $ECR_REPO_URI:latest (no BOT_SOURCE_HASH — freshness check will fail until next tagged build)"
+        fi
 
 artifacts:
   files: []

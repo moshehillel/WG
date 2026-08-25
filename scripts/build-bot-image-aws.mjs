@@ -17,12 +17,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { botSourceFingerprint, botSourceTag } from './bot-source-fingerprint.mjs';
 
 const deployLive = process.argv.includes('--deploy-live') || process.argv[1]?.includes('bot:deploy');
 const useLocal = process.argv.includes('--local');
 const stackName = process.env.STACK_NAME ?? 'WhiteGloveStack';
 const region = process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-1';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const botHash = botSourceFingerprint();
+const botTag = botSourceTag(botHash);
 
 function aws(cmd) {
   return execSync(`aws ${cmd} --region ${region}`, { encoding: 'utf8' }).trim();
@@ -126,17 +129,19 @@ async function uploadLocalAndBuild(bootstrapFn) {
     console.log(`Local zip ${mb} MB exceeds Lambda payload — uploading to s3://${bucket}/source.zip …`);
     aws(`s3 cp "${zipPath.replace(/\\/g, '/')}" "s3://${bucket}/source.zip"`);
     fs.unlinkSync(zipPath);
-    const started = awsJson(`codebuild start-build --project-name ${project}`);
+    const started = awsJson(
+      `codebuild start-build --project-name ${project} --environment-variables-override name=BOT_SOURCE_HASH,value=${botHash},type=PLAINTEXT`,
+    );
     const buildId = started.build?.id;
     if (!buildId) throw new Error(`CodeBuild start failed: ${JSON.stringify(started)}`);
-    console.log(`Started CodeBuild from S3 source: ${buildId}`);
+    console.log(`Started CodeBuild from S3 source: ${buildId} (${botTag})`);
     return buildId;
   }
 
   console.log(`Uploading ${mb} MB via bootstrap Lambda…`);
   fs.unlinkSync(zipPath);
   const payloadPath = path.join(os.tmpdir(), `ps-bootstrap-payload-${Date.now()}.json`);
-  fs.writeFileSync(payloadPath, JSON.stringify({ zipBase64 }));
+  fs.writeFileSync(payloadPath, JSON.stringify({ zipBase64, botSourceHash: botHash }));
   const outFile = path.join(os.tmpdir(), `ps-bootstrap-out-${Date.now()}.json`);
   aws(
     `lambda invoke --function-name ${bootstrapFn} --cli-binary-format raw-in-base64-out --payload fileb://${payloadPath.replace(/\\/g, '/')} ${outFile.replace(/\\/g, '/')}`,
@@ -148,18 +153,71 @@ async function uploadLocalAndBuild(bootstrapFn) {
   return result.buildId;
 }
 
+function resolveLatestDigest(ecrUri) {
+  const repoName = ecrUri.replace(/^[^/]+\//, '');
+  const images = awsJson(
+    `ecr describe-images --repository-name ${repoName} --image-ids imageTag=latest`,
+  );
+  const digest = images.imageDetails?.[0]?.imageDigest;
+  if (!digest) throw new Error('Could not resolve ECR :latest digest after push');
+  return digest;
+}
+
 function forceUpdateDownloadFn(ecrUri) {
   const fn = awsJson(
     `cloudformation describe-stack-resources --stack-name ${stackName} --query "StackResources[?LogicalResourceId=='ProviderSoftDownloadFn4EFDACE3'].PhysicalResourceId | [0]"`,
   );
   if (!fn) throw new Error('ProviderSoftDownloadFn not found in stack');
-  aws(`lambda update-function-code --function-name ${fn} --image-uri ${ecrUri}:latest`);
-  console.log(`Forced Lambda ${fn} to pull ${ecrUri}:latest`);
+  // Prefer immutable digest so a later accidental :latest overwrite is visible in Lambda config.
+  const digest = resolveLatestDigest(ecrUri);
+  const imageUri = `${ecrUri}@${digest}`;
+  aws(`lambda update-function-code --function-name ${fn} --image-uri ${imageUri}`);
+  console.log(`Forced Lambda ${fn} to pull ${imageUri} (also tagged ${botTag} when hash was passed)`);
+}
+
+async function cdkDeployLive() {
+  console.log('\nDeploying CDK (buildspec/bootstrap + live bot flags; schedules stay OFF)...');
+  const infraDir = path.join(repoRoot, 'infra');
+  const code = spawnSync(
+    'npx',
+    [
+      'cdk',
+      'deploy',
+      '--all',
+      '--require-approval',
+      'never',
+      '-c',
+      'providerSoftLiveBot=true',
+      '-c',
+      'providerSoftUseStubs=false',
+      '-c',
+      'enableNightSchedule=false',
+      '-c',
+      'enableSessionsSchedule=false',
+      '-c',
+      'hhaUseMock=false',
+      '-c',
+      `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net'}`,
+    ],
+    { cwd: infraDir, stdio: 'inherit', shell: true },
+  );
+  if (code.status !== 0) throw new Error('CDK deploy failed');
 }
 
 async function main() {
   console.log('=== Build ProviderSoft bot in AWS (CodeBuild — no local Docker) ===\n');
-  if (!useLocal) console.log('Note: Bootstrap Lambda downloads from GitHub. Push latest code first.\n');
+  console.log(`Bot source fingerprint: ${botHash} → ECR tag ${botTag}`);
+  if (!useLocal) {
+    console.log(
+      'Note: Bootstrap Lambda downloads from GitHub. Push latest code first.\n' +
+        'Prefer: npm run deploy:aws:live  (local zip + hash tag + CDK).\n',
+    );
+  }
+
+  // CDK first so CodeBuild buildspec + bootstrap Lambda pick up BOT_SOURCE_HASH tagging.
+  if (deployLive) {
+    await cdkDeployLive();
+  }
 
   const bootstrapFn = getOutput('BotBootstrapFunctionName');
   const ecrUri = getOutput('BotEcrRepositoryUri');
@@ -171,9 +229,12 @@ async function main() {
   } else {
     console.log(`Invoking ${bootstrapFn} ...`);
     const outFile = path.join(os.tmpdir(), `bot-bootstrap-${Date.now()}.json`);
+    const payloadPath = path.join(os.tmpdir(), `bot-bootstrap-payload-${Date.now()}.json`);
+    fs.writeFileSync(payloadPath, JSON.stringify({ botSourceHash: botHash }));
     const invokeMeta = awsJson(
-      `lambda invoke --function-name ${bootstrapFn} --cli-binary-format raw-in-base64-out --payload "{}" ${outFile.replace(/\\/g, '/')}`,
+      `lambda invoke --function-name ${bootstrapFn} --cli-binary-format raw-in-base64-out --payload fileb://${payloadPath.replace(/\\/g, '/')} ${outFile.replace(/\\/g, '/')}`,
     );
+    fs.unlinkSync(payloadPath);
     if (invokeMeta.FunctionError) {
       const errBody = fs.readFileSync(outFile, 'utf8');
       throw new Error(`Bootstrap Lambda failed: ${invokeMeta.FunctionError}\n${errBody}`);
@@ -187,39 +248,11 @@ async function main() {
 
   await waitForBuild(buildId);
 
-  console.log(`\nImage ready: ${ecrUri}:latest`);
+  console.log(`\nImage ready: ${ecrUri}:latest (+ ${botTag} when hash passed)`);
   forceUpdateDownloadFn(ecrUri);
 
-  if (deployLive) {
-    console.log('\nDeploying live bot Lambda (CDK)...');
-    const infraDir = path.join(repoRoot, 'infra');
-    const code = spawnSync(
-      'npx',
-      [
-        'cdk',
-        'deploy',
-        '--all',
-        '--require-approval',
-        'never',
-        '-c',
-        'providerSoftLiveBot=true',
-        '-c',
-        'providerSoftUseStubs=false',
-        '-c',
-        'enableNightSchedule=false',
-        '-c',
-        'enableSessionsSchedule=false',
-        '-c',
-        'hhaUseMock=false',
-        '-c',
-        `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net'}`,
-      ],
-      { cwd: infraDir, stdio: 'inherit', shell: true },
-    );
-    if (code.status !== 0) throw new Error('CDK deploy failed');
-  }
-
-  console.log('\nDone. Live bot deployed. Nightly schedules stay off unless you pass enableNightSchedule / enableSessionsSchedule.');
+  console.log('\nDone. Live bot deployed. Nightly schedules stay off unless you run: npm run schedules:enable');
+  console.log('Verify: npm run bot:check-fresh');
   console.log('Verify stack outputs: ProviderSoftLiveBot=true, ProviderSoftUseStubs=false');
 }
 

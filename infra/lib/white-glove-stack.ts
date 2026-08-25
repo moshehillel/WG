@@ -921,7 +921,7 @@ export class WhiteGloveStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ProviderSoftLiveBot', {
       value: providerSoftLiveBot ? 'true' : 'false',
       description:
-        'When false, download Lambda uses stub zip. Set true after: node scripts/build-bot-image-aws.mjs --deploy-live',
+        'When false, download Lambda uses stub zip. Live image is built only by deploy:aws:live / bot:deploy:aws — plain cdk deploy does not rebuild ECR.',
     });
     new cdk.CfnOutput(this, 'ProviderSoftUseStubs', {
       value: providerSoftUseStubs ? 'true' : 'false',
