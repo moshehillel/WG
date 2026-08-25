@@ -7,12 +7,19 @@ export const OpenedCaseRowSchema = z.object({
   firstName: z.string().min(1),
   lastName: z.string().min(1),
   dateOfBirth: z.string().optional(),
+  gender: z.string().optional(),
   programType: z.string().optional(),
   serviceCode: z.string().optional(),
   authorizationNumber: z.string().optional(),
   contractId: z.string().optional(),
+  /** Gluck "Times per Basic Mandate". */
+  mandateTimes: z.string().optional(),
+  /** Gluck "Basic Mandate Frequency" (Weekly, Monthly, Authorization, …). */
+  mandateFrequency: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
+  /** ProviderSoft "Provider Name" on Gluck open / new service (therapist for this service line). */
+  providerName: z.string().optional(),
   intakeDate: z.string().optional(),
   address1: z.string().optional(),
   city: z.string().optional(),
@@ -28,6 +35,8 @@ export const OpenedCaseRowSchema = z.object({
   schoolDistrict: z.string().optional(),
   countyOfService: z.string().optional(),
   isEarlyIntervention: z.boolean().optional(),
+  /** Which ProviderSoft export this row came from (Gluck open vs new service). */
+  sourceReport: z.enum(['opened_cases', 'new_services']).optional(),
   raw: z.record(z.string(), z.string()).optional(),
 });
 
@@ -38,6 +47,7 @@ export const ClosedCaseRowSchema = z.object({
   patientExternalId: z.string().optional(),
   firstName: z.string().optional(),
   lastName: z.string().optional(),
+  dateOfBirth: z.string().optional(),
   programType: z.string().optional(),
   isEarlyIntervention: z.boolean().optional(),
   closedDate: z.string().optional(),
@@ -55,6 +65,10 @@ export const VerifiedSessionRowSchema = z.object({
   sessionId: z.string().min(1),
   caseId: z.string().optional(),
   patientExternalId: z.string().optional(),
+  /** From ProviderSoft "Child's Name" when present — used in alert emails. */
+  patientName: z.string().optional(),
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
   programType: z.string().optional(),
   isEarlyIntervention: z.boolean().optional(),
   serviceCode: z.string().optional(),

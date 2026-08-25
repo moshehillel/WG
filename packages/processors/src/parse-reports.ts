@@ -58,6 +58,7 @@ export function parseOpenedCases(content: string): OpenedCaseRow[] {
       dateOfBirth:
         firstField(row, 'date_of_birth', 'dob', 'birth_date') ??
         firstField(row, 'real_dob_for_school_cases', 'real_dob', 'real_date_of_birth'),
+      gender: firstField(row, 'gender', 'childs_gender', 'child_gender', 'sex'),
       programType,
       serviceCode: firstField(
         row,
@@ -71,6 +72,17 @@ export function parseOpenedCases(content: string): OpenedCaseRow[] {
         'authorization_number',
         'auth_number',
         'authorization',
+      ),
+      mandateTimes: firstField(
+        row,
+        'times_per_basic_mandate',
+        'times_per_mandate',
+        'mandate_times',
+      ),
+      mandateFrequency: firstField(
+        row,
+        'basic_mandate_frequency',
+        'mandate_frequency',
       ),
       contractId: firstField(row, 'contract_id', 'contract'),
       intakeDate: firstField(row, 'date_of_intake', 'intake_date'),
@@ -111,6 +123,7 @@ export function parseOpenedCases(content: string): OpenedCaseRow[] {
         'service_begin_date',
       ),
       endDate: firstField(row, 'end_date', 'auth_end_date', 'service_end_date'),
+      providerName: firstField(row, 'provider_name', 'provider', 'therapist_name'),
       isEarlyIntervention,
       raw: row,
     };
@@ -133,6 +146,7 @@ export function parseClosedCases(content: string): ClosedCaseRow[] {
         firstField(row, 'patient_external_id', 'patient_id', 'client_id') ?? programId,
       firstName: firstField(row, 'first_name', 'firstname') ?? parsedName.firstName,
       lastName: firstField(row, 'last_name', 'lastname') ?? parsedName.lastName,
+      dateOfBirth: firstField(row, 'date_of_birth', 'dob', 'birth_date'),
       programType,
       isEarlyIntervention,
       closedDate: firstField(
@@ -162,17 +176,27 @@ export function parseVerifiedSessions(content: string): VerifiedSessionRow[] {
     const programId = firstField(row, 'program_id', 'programid', 'patient_id') ?? '';
     const visitDate = firstField(row, 'visit_date', 'session_date', 'date') ?? '';
     const startTime = firstField(row, 'start_time', 'start', 'clock_in', 'begin_time') ?? '';
+    const childName = firstField(row, 'childs_name', "child's_name", 'child_name');
+    const parsedName = parseChildName(childName);
     const providerName = firstField(row, 'provider_name', 'provider') ?? '';
     const supplierNumber = firstField(row, 'supplier_number', 'supplier #') ?? '';
     const sessionId =
       firstField(row, 'session_id', 'sessionid', 'visit_id', 'id') ??
       [programId, visitDate, startTime, providerName, String(index)].filter(Boolean).join('|');
 
+    const patientName =
+      [parsedName.firstName, parsedName.lastName].filter(Boolean).join(' ').trim() ||
+      childName?.trim() ||
+      undefined;
+
     return {
       sessionId,
       caseId: firstField(row, 'case_id', 'caseid') ?? programId,
       patientExternalId:
         firstField(row, 'patient_external_id', 'patient_id', 'client_id') ?? programId,
+      patientName,
+      firstName: parsedName.firstName || undefined,
+      lastName: parsedName.lastName || undefined,
       programType,
       isEarlyIntervention,
       serviceCode: firstField(
@@ -193,7 +217,15 @@ export function parseVerifiedSessions(content: string): VerifiedSessionRow[] {
         supplierNumber ||
         undefined,
       verifiedAt: firstField(row, 'verified_at', 'verified_date'),
-      status: firstField(row, 'status', 'authorization_number'),
+      // Do not use Authorization Number as status (often "approved" or an auth id).
+      status: firstField(
+        row,
+        'status',
+        'session_status',
+        'attendance',
+        'attendance_status',
+        'visit_status',
+      ),
       raw: row,
     };
   });
@@ -205,6 +237,7 @@ export function parseDischargeService(content: string): Array<{
   patientExternalId?: string;
   firstName?: string;
   lastName?: string;
+  dateOfBirth?: string;
   programType?: string;
   serviceCode?: string;
   startDate?: string;
@@ -223,9 +256,11 @@ export function parseDischargeService(content: string): Array<{
 
     return {
       caseId: programId,
-      patientExternalId: programId,
+      // Program Id is not an HHA PatientID — leave unset unless a real patient_id column exists.
+      patientExternalId: firstField(row, 'patient_external_id', 'patient_id', 'client_id'),
       firstName: parsedName.firstName,
       lastName: parsedName.lastName,
+      dateOfBirth: firstField(row, 'date_of_birth', 'dob', 'birth_date'),
       programType,
       serviceCode: firstField(row, 'service_type', 'service_code'),
       startDate: firstField(row, 'service_begin_date', 'start_date'),

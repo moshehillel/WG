@@ -43,4 +43,98 @@ describe('processDischargeService', () => {
     const stillActive = (await hha.listPatientPlacements(patient.id)).filter((p) => !p.dischargeDate);
     expect(stillActive).toHaveLength(1);
   });
+
+  it('looks up via findPatient when patientExternalId equals Program Id (ErrorID=-56 footgun)', async () => {
+    const hha = new MockHhaClient();
+    const patient = await hha.upsertPatient({
+      caseId: '49247',
+      firstName: 'Tianming',
+      lastName: 'Chen',
+    });
+    const placement = await hha.upsertContract({
+      patientId: patient.id,
+      contractExternalId: 'americare',
+      serviceCode: 'PT HC Eval',
+      startDate: '07/20/2026',
+    });
+
+    const result = await processDischargeService({
+      runId: 'run-56',
+      hha,
+      store: new InMemoryIdempotencyStore(),
+      rows: [
+        {
+          caseId: '49247',
+          patientExternalId: '49247',
+          firstName: 'Tianming',
+          lastName: 'Chen',
+          dateOfBirth: '12/25/1995',
+          serviceCode: 'PT HC Eval',
+          startDate: '07/20/2026',
+          dischargeDate: '08/25/2026',
+        },
+      ],
+    });
+
+    expect(result.failed).toBe(0);
+    expect(result.succeeded).toBe(1);
+    expect(hha.calls).toContain('findPatient');
+    expect(hha.dischargedPlacements.has(placement.id)).toBe(true);
+  });
+
+  it('skips duplicate discharge when no active placements remain (Milez pattern)', async () => {
+    const hha = new MockHhaClient();
+    const patient = await hha.upsertPatient({
+      caseId: 'P0100012106301',
+      firstName: 'Milez',
+      lastName: 'Hall',
+    });
+    await hha.upsertContract({
+      patientId: patient.id,
+      contractExternalId: 'americare',
+      serviceCode: 'SLP HC EVAL',
+      startDate: '07/12/2026',
+    });
+
+    const store = new InMemoryIdempotencyStore();
+    const first = await processDischargeService({
+      runId: 'run-milez',
+      hha,
+      store,
+      rows: [
+        {
+          caseId: 'P0100012106301',
+          firstName: 'Milez',
+          lastName: 'Hall',
+          serviceCode: 'SLP HC EVAL',
+          startDate: '07/12/2026',
+          dischargeDate: '08/25/2026',
+          programType: 'Americare Certified',
+        },
+      ],
+    });
+    expect(first.succeeded).toBe(1);
+
+    const second = await processDischargeService({
+      runId: 'run-milez',
+      hha,
+      store,
+      rows: [
+        {
+          caseId: 'P0100012106301',
+          firstName: 'Milez',
+          lastName: 'Hall',
+          serviceCode: 'SLP HC EVAL',
+          startDate: '08/12/2026',
+          dischargeDate: '08/25/2026',
+          programType: 'Americare Certified',
+        },
+      ],
+    });
+
+    expect(second.failed).toBe(0);
+    expect(second.skipped).toBe(1);
+    expect(second.exceptions[0]?.code).toBe('skipped_by_rule');
+    expect(second.exceptions[0]?.details?.triageReason).toBe('already_discharged');
+  });
 });

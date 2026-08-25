@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { HhaClockingDetails, HhaPatient, HhaVisit } from '@white-glove/shared';
-import { lookupContractId, lookupServiceCode } from '@white-glove/shared';
+import { lookupContractId, lookupServiceCode, lookupServiceCodeAlias } from '@white-glove/shared';
+import { stripLeadingZerosFromNumericId } from './create-patient-builder.js';
 import { resolvePlacementForService } from './resolve-placement.js';
+import { isTrustedHhaPatientId, toFindPatientOptions } from './resolve-patient-id.js';
 import type {
   ClosedCaseUpdate,
   DischargeAllPlacementsOptions,
   DischargePlacementOptions,
   DischargeServiceUpdate,
+  FindPatientOptions,
   HhaClient,
   PatientPlacementSummary,
   PendingCall,
@@ -29,24 +32,96 @@ export class MockHhaClient implements HhaClient {
     ['OT72', 'pay-ot72'],
     ['OT70', 'pay-ot70'],
   ]);
-  readonly caregiverByName = new Map<string, string>();
+  readonly caregiverByName = new Map<string, string | undefined>();
   readonly calls: string[] = [];
 
-  async findPatient(options: {
-    externalId?: string;
-    caseId?: string;
-  }): Promise<string | undefined> {
+  async findPatient(options: FindPatientOptions): Promise<string | undefined> {
     this.calls.push('findPatient');
-    for (const [, patient] of this.patients) {
-      if (options.externalId && patient.externalId === options.externalId) return patient.id;
-      if (options.caseId && patient.caseId === options.caseId) return patient.id;
+    const matchKeys = (keys: Array<string | undefined>): string | undefined => {
+      for (const want of keys) {
+        if (!want) continue;
+        for (const [, patient] of this.patients) {
+          if (patient.externalId === want || patient.caseId === want) return patient.id;
+        }
+        const existing = this.patients.get(want);
+        if (existing) return existing.id;
+      }
+      return undefined;
+    };
+
+    const exact = matchKeys([options.externalId, options.caseId]);
+    if (exact) return exact;
+
+    const stripped = matchKeys([
+      stripLeadingZerosFromNumericId(options.externalId),
+      stripLeadingZerosFromNumericId(options.caseId),
+    ]);
+    if (stripped) return stripped;
+
+    return this.findPatientByExactName(options);
+  }
+
+  private findPatientByExactName(
+    options: FindPatientOptions,
+  ): string | undefined {
+    const first = options.firstName?.trim();
+    const last = options.lastName?.trim();
+    if (!first || !last) return undefined;
+
+    const nameEq = (a?: string, b?: string) =>
+      (a ?? '').trim().toLowerCase() === (b ?? '').trim().toLowerCase();
+    const dobKey = (d?: string) => {
+      if (!d?.trim()) return undefined;
+      const m = d.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (m) return `${m[3]}-${m[1]!.padStart(2, '0')}-${m[2]!.padStart(2, '0')}`;
+      return d.trim().slice(0, 10);
+    };
+    const wantDob = dobKey(options.dateOfBirth);
+
+    const collect = (expectFirst: string, expectLast: string) => {
+      const hits: Array<{ id: string; dob?: string }> = [];
+      for (const [, patient] of this.patients) {
+        const asIs = nameEq(patient.firstName, expectFirst) && nameEq(patient.lastName, expectLast);
+        const swapped =
+          nameEq(patient.firstName, expectLast) && nameEq(patient.lastName, expectFirst);
+        if (asIs || swapped) hits.push({ id: patient.id, dob: patient.dateOfBirth });
+      }
+      return hits;
+    };
+
+    let hits = collect(first, last);
+    if (hits.length === 0) hits = collect(last, first);
+
+    if (wantDob) {
+      const dobHits = hits.filter((h) => dobKey(h.dob) === wantDob);
+      if (dobHits.length === 1) return dobHits[0]!.id;
+      if (dobHits.length > 1) return undefined;
     }
-    const key = options.externalId ?? options.caseId;
-    if (key) {
-      const existing = this.patients.get(key);
-      if (existing) return existing.id;
-    }
+    if (hits.length === 1) return hits[0]!.id;
     return undefined;
+  }
+
+  async getPatientGender(patientId: string): Promise<string | undefined> {
+    this.calls.push('getPatientGender');
+    const demo = await this.getPatientDemographicsFields(patientId);
+    return demo.gender;
+  }
+
+  async getPatientDemographicsFields(
+    patientId: string,
+  ): Promise<import('./types.js').PatientDemoFields> {
+    this.calls.push('getPatientDemographicsFields');
+    const patient =
+      this.patients.get(patientId) ??
+      [...this.patients.values()].find((p) => p.id === patientId);
+    if (!patient) return {};
+    return {
+      gender: patient.gender,
+      address1: patient.address1,
+      city: patient.city,
+      state: patient.state,
+      zipCode: patient.zipCode,
+    };
   }
 
   async upsertPatient(patient: HhaPatient): Promise<UpsertResult> {
@@ -140,9 +215,11 @@ export class MockHhaClient implements HhaClient {
 
   async resolveCaregiverId(providerName: string | undefined): Promise<string | undefined> {
     this.calls.push('resolveCaregiverId');
-    if (!providerName?.trim()) return 'mock-caregiver-1';
+    if (!providerName?.trim()) return undefined;
     const key = providerName.trim().toUpperCase();
-    return this.caregiverByName.get(key) ?? 'mock-caregiver-1';
+    // Explicit map entry (including undefined) wins — tests can force "not found".
+    if (this.caregiverByName.has(key)) return this.caregiverByName.get(key);
+    return 'mock-caregiver-1';
   }
 
   async resolvePayCodeId(payCodeName: string): Promise<string | undefined> {
@@ -158,8 +235,14 @@ export class MockHhaClient implements HhaClient {
   async resolveServiceCodeId(
     serviceType: string | undefined,
     _contractId?: number,
+    programType?: string,
   ): Promise<string | undefined> {
     this.calls.push('resolveServiceCodeId');
+    const alias = lookupServiceCodeAlias(serviceType, programType);
+    if (alias?.hhaCode) return alias.hhaCode;
+    // Mock has no contract rows: expose mapped HHA *name* as a sentinel so callers
+    // can assert map-first behavior without live HHA.
+    if (alias?.hhaServiceCodeName) return `alias:${alias.hhaServiceCodeName}`;
     return lookupServiceCode(serviceType)?.hhaCode;
   }
 
@@ -233,10 +316,19 @@ export class MockHhaClient implements HhaClient {
   async dischargeService(update: DischargeServiceUpdate): Promise<void> {
     this.calls.push('dischargeService');
     const patientId =
-      update.patientId && /^\d+$/.test(update.patientId)
-        ? update.patientId
-        : (await this.findPatient({ caseId: update.caseId, externalId: update.caseId })) ??
-          update.caseId;
+      (isTrustedHhaPatientId(update.patientId, update.caseId)
+        ? update.patientId!.trim()
+        : undefined) ??
+      (await this.findPatient(
+        toFindPatientOptions({
+          caseId: update.caseId,
+          patientExternalId: update.caseId,
+          firstName: update.firstName,
+          lastName: update.lastName,
+          dateOfBirth: update.dateOfBirth,
+        }),
+      )) ??
+      update.caseId;
     const active = (this.placementsByPatient.get(patientId) ?? []).filter((p) => !p.dischargeDate);
     const contractId = await this.resolveContractId(update.programType);
     const placementId = resolvePlacementForService({
@@ -256,10 +348,19 @@ export class MockHhaClient implements HhaClient {
     this.calls.push('updateClosedCase');
     this.closedCases.set(update.caseId, update);
     const patientId =
-      update.patientId && /^\d+$/.test(update.patientId)
-        ? update.patientId
-        : (await this.findPatient({ caseId: update.caseId, externalId: update.caseId })) ??
-          update.caseId;
+      (isTrustedHhaPatientId(update.patientId, update.caseId)
+        ? update.patientId!.trim()
+        : undefined) ??
+      (await this.findPatient(
+        toFindPatientOptions({
+          caseId: update.caseId,
+          patientExternalId: update.caseId,
+          firstName: update.firstName,
+          lastName: update.lastName,
+          dateOfBirth: update.dateOfBirth,
+        }),
+      )) ??
+      update.caseId;
     await this.dischargeAllPlacements({
       patientId,
       dischargeDate: update.closedDate,

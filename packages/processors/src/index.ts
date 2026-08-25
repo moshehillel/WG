@@ -7,6 +7,8 @@ export * from './process-opened.js';
 export * from './process-closed.js';
 export * from './process-sessions.js';
 export * from './process-discharge.js';
+export * from './resolve-hha-patient.js';
 export * from './preview-scan.js';
 export * from './session-resolve.js';
+export * from './remap-group-service.js';
 export * from './validate.js';
