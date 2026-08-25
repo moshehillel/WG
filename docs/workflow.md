@@ -25,13 +25,18 @@ Applies to all three reports when the field is present:
 Detection: `program_type` / `program` contains “early intervention” or equals `EI` (case-insensitive), or an explicit EI flag column.
 ## Pipeline (AWS)
 
-**Manual only by default** — no automatic daily run. Open [PipelineConsoleUrl from stack outputs](https://console.aws.amazon.com/cloudformation) (or run `aws cloudformation describe-stacks --stack-name WhiteGloveStack --query "Stacks[0].Outputs[?OutputKey=='PipelineConsoleUrl'].OutputValue" --output text`), click **Start execution**, input:
+**Manual only by default** — no automatic daily run. Two ways to start:
+
+1. **Live sessions Function URL** — CloudFormation output `LiveTriggerUrl` (includes `?key=…&confirm=LIVE`). Starts production: `dryRun=false`, `sandbox=false`, **only** `verified_sessions` (API Report) + `caregiver_codes` (visits / pay-code testing). Does **not** download opened/closed/new_services/discharge. Does **not** enable NightlyCaseReports / TuesdaySessions EventBridge rules.
+2. **Step Functions console** — Open [PipelineConsoleUrl from stack outputs](https://console.aws.amazon.com/cloudformation) (or run `aws cloudformation describe-stacks --stack-name WhiteGloveStack --query "Stacks[0].Outputs[?OutputKey=='PipelineConsoleUrl'].OutputValue" --output text`), click **Start execution**, input:
 
 ```json
-{ "runId": "manual-2026-07-22" }
+{ "runId": "manual-live-sessions", "dryRun": false, "sandbox": false, "reportKinds": ["verified_sessions", "caregiver_codes"] }
 ```
 
-To enable nightly schedules (2:00 AM Eastern):
+**Sandbox** (read-only HHA): output `SandboxTriggerUrl`. MFA renew: `MfaDashboardApiUrl` (status / start / complete only — does not start the pipeline).
+
+To enable nightly schedules (11:00 PM Eastern):
 
 `npm run deploy -w @white-glove/infra -- -c enableNightSchedule=true`
 

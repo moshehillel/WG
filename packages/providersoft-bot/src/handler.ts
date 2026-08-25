@@ -10,13 +10,38 @@ import { DownloadFailureError } from './errors.js';
 import { ALL_BOT_KINDS, type BotReportKind } from './report-config.js';
 import { uploadReportsToS3 } from './upload.js';
 
+type PipelineKind = ReportKind | 'caregiver_codes' | 'discharge_service' | 'new_services';
+
 export interface DownloadEvent {
   runId?: string;
   dryRun?: boolean;
   reportDate?: string;
-  reportKinds?: Array<ReportKind | 'caregiver_codes' | 'discharge_service' | 'new_services'>;
+  reportKinds?: Array<PipelineKind>;
+  /** Per-kind date windows (ISO YYYY-MM-DD or M/D/YYYY). */
+  dateRanges?: Partial<Record<PipelineKind, { from: string; to: string }>>;
   /** When true, write stub CSVs instead of hitting ProviderSoft (useful for pipeline tests). */
   useStubs?: boolean;
+}
+
+/** Normalize ISO YYYY-MM-DD or M/D/YYYY → ProviderSoft M/D/YYYY. */
+function toPsDate(raw: string): string {
+  const s = raw.trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (iso) return `${Number(iso[2])}/${Number(iso[3])}/${iso[1]}`;
+  return s;
+}
+
+function normalizeDateRanges(
+  ranges: DownloadEvent['dateRanges'] | undefined,
+): Partial<Record<BotReportKind, { from: string; to: string }>> | undefined {
+  if (!ranges || typeof ranges !== 'object') return undefined;
+  const out: Partial<Record<BotReportKind, { from: string; to: string }>> = {};
+  for (const [kind, range] of Object.entries(ranges)) {
+    if (!range?.from || !range?.to) continue;
+    if (!ALL_BOT_KINDS.includes(kind as BotReportKind)) continue;
+    out[kind as BotReportKind] = { from: toPsDate(range.from), to: toPsDate(range.to) };
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 function resolveDownloadKinds(event: DownloadEvent): BotReportKind[] {
@@ -49,8 +74,9 @@ function pipelineKindsFromEnv(): BotReportKind[] {
 }
 
 /**
- * Live ProviderSoft download handler (Playwright in Docker Lambda, or stubs).
- * Flip PROVIDERSOFT_USE_STUBS=false after secrets + report IDs are ready.
+ * Live ProviderSoft download handler (HTTP-primary + Playwright fallback in Docker Lambda, or stubs).
+ * HTTP exports include Gender:; Playwright is kept as fallback. Set
+ * PROVIDERSOFT_PREFER_PLAYWRIGHT=true only to force Playwright-first (e.g. debugging).
  */
 export const handler: Handler<DownloadEvent, DownloadResult> = async (event) => {
   const input = PipelineRunInputSchema.parse({
@@ -58,7 +84,9 @@ export const handler: Handler<DownloadEvent, DownloadResult> = async (event) => 
     dryRun: event.dryRun ?? false,
     reportDate: event.reportDate,
     reportKinds: event.reportKinds,
+    dateRanges: event.dateRanges,
   });
+  const dateRanges = normalizeDateRanges(event.dateRanges ?? input.dateRanges);
 
   const env = getEnv();
   const bucket = env.REPORTS_BUCKET;
@@ -71,6 +99,12 @@ export const handler: Handler<DownloadEvent, DownloadResult> = async (event) => 
   const downloadDir = await mkdtemp(path.join(tmpdir(), 'wg-ps-'));
   try {
     const stubs = useStubs(event);
+    const preferPlaywright =
+      process.env.PROVIDERSOFT_PREFER_PLAYWRIGHT === 'true' ||
+      process.env.PROVIDERSOFT_PREFER_PLAYWRIGHT === '1';
+    console.log(
+      `[ps-bot] handler: preferPlaywright=${preferPlaywright} stubs=${stubs} kinds=${resolveDownloadKinds(event).join(',')}`,
+    );
     const local = stubs
       ? await writeStubReports(downloadDir)
       : await downloadReports({
@@ -78,6 +112,9 @@ export const handler: Handler<DownloadEvent, DownloadResult> = async (event) => 
           downloadDir,
           headless: env.HEADLESS ?? true,
           kinds: resolveDownloadKinds(event),
+          dateRanges,
+          preferPlaywright,
+          onStep: (step, detail) => console.log(`[ps-bot] ${step}: ${detail}`),
         });
 
     const pipelineFiles: Partial<Record<BotReportKind, string>> = {};
