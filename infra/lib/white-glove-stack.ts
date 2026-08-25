@@ -730,26 +730,42 @@ export class WhiteGloveStack extends cdk.Stack {
       });
     }
 
-    if (enableNightSchedule) {
-      this.addEasternNightSchedule(this, 'NightlyCaseReportsSchedule', {
-        weekDay: 'MON-SUN',
-        description: 'Nightly Gluck open + closure (11:00 PM Eastern)',
-        stateMachine,
-        input: {
-          runId: events.EventField.fromPath('$.id'),
-          dryRun: false,
-          reportKinds: ['opened_cases', 'closed_cases', 'discharge_service', 'new_services'],
-        },
-      });
+    // Live schedules are always provisioned (DISABLED by default). The MFA dashboard
+    // toggles EventBridge State via enable-rule / disable-rule. CDK deploys reset State
+    // to DISABLED (safe default). Monday dry-run preview stays opt-in and is NOT toggled.
+    const nightlyCaseReportsRule = this.addEasternNightSchedule(this, 'NightlyCaseReportsSchedule', {
+      weekDay: 'MON-SUN',
+      description: 'Nightly Gluck open + closure (11:00 PM Eastern)',
+      enabled: false,
+      stateMachine,
+      input: {
+        runId: events.EventField.fromPath('$.id'),
+        dryRun: false,
+        reportKinds: ['opened_cases', 'closed_cases', 'discharge_service', 'new_services'],
+      },
+    });
 
+    const tuesdaySessionsRule = this.addEasternNightSchedule(this, 'TuesdaySessionsSchedule', {
+      weekDay: 'TUE',
+      description: 'Tuesday night live verified sessions / API Report (11:00 PM Eastern)',
+      enabled: false,
+      stateMachine,
+      input: {
+        runId: events.EventField.fromPath('$.id'),
+        dryRun: false,
+        reportKinds: ['verified_sessions', 'caregiver_codes'],
+      },
+    });
+
+    if (enableNightSchedule) {
       this.addEasternNightSchedule(this, 'MondayPreviewSchedule', {
         weekDay: 'MON',
         description: 'Monday night dry-run — flag missing mappings (11:00 PM Eastern)',
+        enabled: true,
         stateMachine,
         input: {
           runId: events.EventField.fromPath('$.id'),
           dryRun: true,
-          // API Report only when Tuesday sessions schedule is also enabled.
           reportKinds: enableSessionsSchedule
             ? [
                 'opened_cases',
@@ -761,19 +777,6 @@ export class WhiteGloveStack extends cdk.Stack {
             : ['opened_cases', 'closed_cases', 'new_services', 'caregiver_codes'],
         },
       });
-
-      if (enableSessionsSchedule) {
-        this.addEasternNightSchedule(this, 'TuesdaySessionsSchedule', {
-          weekDay: 'TUE',
-          description: 'Tuesday night live verified sessions / API Report (11:00 PM Eastern)',
-          stateMachine,
-          input: {
-            runId: events.EventField.fromPath('$.id'),
-            dryRun: false,
-            reportKinds: ['verified_sessions', 'caregiver_codes'],
-          },
-        });
-      }
     }
 
     const pipelineConsoleUrl = `https://${this.region}.console.aws.amazon.com/states/home?region=${this.region}#/statemachines/view/${stateMachine.stateMachineArn}`;
@@ -861,6 +864,8 @@ export class WhiteGloveStack extends cdk.Stack {
         SANDBOX_API_KEY: sandboxApiKey,
         STATE_MACHINE_ARN: stateMachine.stateMachineArn,
         PIPELINE_CONSOLE_URL: pipelineConsoleUrl,
+        LIVE_SCHEDULE_NIGHTLY_RULE: nightlyCaseReportsRule.ruleName,
+        LIVE_SCHEDULE_TUESDAY_RULE: tuesdaySessionsRule.ruleName,
         ...(cookiesSecretArn ? { HHA_ENT_COOKIES_SECRET_ARN: cookiesSecretArn } : {}),
       },
       bundling,
@@ -873,6 +878,12 @@ export class WhiteGloveStack extends cdk.Stack {
     reportsBucket.grantReadWrite(mfaDashboardFn, 'mfa-pending/*');
     // Last-week summary reads validate-summary.json under runs/*
     reportsBucket.grantRead(mfaDashboardFn, 'runs/*');
+    mfaDashboardFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['events:DescribeRule', 'events:EnableRule', 'events:DisableRule'],
+        resources: [nightlyCaseReportsRule.ruleArn, tuesdaySessionsRule.ruleArn],
+      }),
+    );
     if (cookiesSecretArn) {
       const cookiesSecret = secretsmanager.Secret.fromSecretCompleteArn(
         this,
@@ -970,11 +981,14 @@ export class WhiteGloveStack extends cdk.Stack {
       description: string;
       stateMachine: sfn.IStateMachine;
       input: Record<string, unknown>;
+      /** Defaults to true (EventBridge / CDK default). Live toggle rules pass false. */
+      enabled?: boolean;
     },
   ): events.Rule {
     return new events.Rule(scope, id, {
       schedule: events.Schedule.cron({ minute: '0', hour: '3', weekDay: props.weekDay }),
       description: `${props.description} (03:00 UTC ≈ 11:00 PM EDT)`,
+      enabled: props.enabled ?? true,
       targets: [
         new targets.SfnStateMachine(props.stateMachine, {
           input: events.RuleTargetInput.fromObject({

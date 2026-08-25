@@ -1,3 +1,9 @@
+import {
+  DescribeRuleCommand,
+  DisableRuleCommand,
+  EnableRuleCommand,
+  EventBridgeClient,
+} from '@aws-sdk/client-eventbridge';
 import { SFNClient, StartExecutionCommand } from '@aws-sdk/client-sfn';
 import type { APIGatewayProxyHandlerV2 } from 'aws-lambda';
 import {
@@ -21,6 +27,7 @@ import {
 import { renderDashboardHtml } from './mfa-dashboard-ui.js';
 
 const sfn = new SFNClient({});
+const eventbridge = new EventBridgeClient({});
 
 const cors = {
   'access-control-allow-origin': '*',
@@ -36,6 +43,24 @@ const ALLOWED_KINDS = new Set([
   'verified_sessions',
   'caregiver_codes',
 ]);
+
+/** Live dryRun=false schedules controlled by the dashboard toggle (not Monday preview). */
+const LIVE_SCHEDULE_DEFS = [
+  {
+    envKey: 'LIVE_SCHEDULE_NIGHTLY_RULE',
+    id: 'nightly_cases',
+    label: 'Nightly case reports',
+    detail:
+      'Gluck open/closure, new services, discharge — every night ~11pm Eastern (dryRun:false)',
+  },
+  {
+    envKey: 'LIVE_SCHEDULE_TUESDAY_RULE',
+    id: 'tuesday_sessions',
+    label: 'Tuesday sessions',
+    detail:
+      'Verified visits (API Report) + caregiver codes — Tuesday ~11pm Eastern (dryRun:false)',
+  },
+] as const;
 
 function json(statusCode: number, body: unknown) {
   return {
@@ -59,6 +84,126 @@ function unauthorized() {
 
 function buildLiveRunId(now: Date = new Date()): string {
   return `manual-live-${now.toISOString().replace(/[:.]/g, '-')}`;
+}
+
+function configuredLiveScheduleRules(): Array<{
+  envKey: string;
+  id: string;
+  label: string;
+  detail: string;
+  name: string;
+}> {
+  return LIVE_SCHEDULE_DEFS.map((def) => {
+    const name = process.env[def.envKey]?.trim() ?? '';
+    return { ...def, name };
+  }).filter((r) => r.name);
+}
+
+async function loadLiveScheduleStatus() {
+  const configured = configuredLiveScheduleRules();
+  if (!configured.length) {
+    return {
+      configured: false,
+      enabled: false,
+      rules: [] as Array<{
+        id: string;
+        name: string;
+        label: string;
+        detail: string;
+        state: string | null;
+      }>,
+      note: 'Live schedule rule names are not configured on this Lambda yet.',
+      excludes:
+        'Monday dry-run preview (MondayPreviewSchedule) is not controlled by this toggle.',
+    };
+  }
+
+  const rules = await Promise.all(
+    configured.map(async (rule) => {
+      try {
+        const described = await eventbridge.send(
+          new DescribeRuleCommand({ Name: rule.name }),
+        );
+        return {
+          id: rule.id,
+          name: rule.name,
+          label: rule.label,
+          detail: rule.detail,
+          state: described.State ?? null,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(`[mfa-dashboard] describe rule ${rule.name}: ${message}`);
+        return {
+          id: rule.id,
+          name: rule.name,
+          label: rule.label,
+          detail: rule.detail,
+          state: null as string | null,
+          error: message,
+        };
+      }
+    }),
+  );
+
+  const known = rules.filter((r) => r.state === 'ENABLED' || r.state === 'DISABLED');
+  const enabled = known.length > 0 && known.every((r) => r.state === 'ENABLED');
+
+  return {
+    configured: true,
+    enabled,
+    rules,
+    note: enabled
+      ? 'Live EventBridge schedules are ON (nightly cases + Tuesday sessions).'
+      : 'Live EventBridge schedules are OFF.',
+    excludes:
+      'Monday dry-run preview (MondayPreviewSchedule) is not controlled by this toggle.',
+  };
+}
+
+async function setLiveSchedules(body: {
+  enabled?: boolean;
+  confirm?: string;
+}) {
+  const wantEnabled = body.enabled === true;
+  const expectedConfirm = wantEnabled ? 'SCHEDULE_ON' : 'SCHEDULE_OFF';
+  if (body.confirm !== expectedConfirm) {
+    return json(400, {
+      error: `Safety check failed — POST body must include confirm:"${expectedConfirm}" and enabled:${wantEnabled}`,
+    });
+  }
+
+  const configured = configuredLiveScheduleRules();
+  if (!configured.length) {
+    return json(503, {
+      error: 'Live schedule rules are not configured (LIVE_SCHEDULE_*_RULE env missing)',
+    });
+  }
+
+  for (const rule of configured) {
+    if (wantEnabled) {
+      await eventbridge.send(new EnableRuleCommand({ Name: rule.name }));
+    } else {
+      await eventbridge.send(new DisableRuleCommand({ Name: rule.name }));
+    }
+    console.info(
+      JSON.stringify({
+        event: 'setLiveSchedules',
+        rule: rule.name,
+        id: rule.id,
+        enabled: wantEnabled,
+      }),
+    );
+  }
+
+  const status = await loadLiveScheduleStatus();
+  return json(200, {
+    ok: true,
+    ...status,
+    message: wantEnabled
+      ? 'Live schedules enabled (nightly cases + Tuesday sessions).'
+      : 'Live schedules disabled.',
+  });
 }
 
 async function loadWeekSummary(): Promise<ReturnType<typeof aggregateWeekSummaries>> {
@@ -165,11 +310,26 @@ async function startLiveRun(body: ReturnType<typeof parseStartLiveBody>) {
   };
 
   const executionName = input.runId.replace(/[^a-zA-Z0-9-_]/g, '-').slice(0, 80);
+  console.info(
+    JSON.stringify({
+      event: 'startLiveRun',
+      runId: input.runId,
+      reportKinds: input.reportKinds,
+      dateRanges: input.dateRanges,
+    }),
+  );
   const started = await sfn.send(
     new StartExecutionCommand({
       stateMachineArn,
       name: executionName,
       input: JSON.stringify(input),
+    }),
+  );
+  console.info(
+    JSON.stringify({
+      event: 'startLiveRun.started',
+      runId: input.runId,
+      executionArn: started.executionArn ?? null,
     }),
   );
 
@@ -239,6 +399,17 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       });
     }
 
+    if (action === 'scheduleStatus' && event.requestContext.http.method === 'GET') {
+      return json(200, { ok: true, ...(await loadLiveScheduleStatus()) });
+    }
+
+    if (action === 'setLiveSchedules' && event.requestContext.http.method === 'POST') {
+      const body = event.body
+        ? (JSON.parse(event.body) as { enabled?: boolean; confirm?: string })
+        : {};
+      return await setLiveSchedules(body);
+    }
+
     if (action === 'startLiveRun' && event.requestContext.http.method === 'POST') {
       return await startLiveRun(parseStartLiveBody(event.body));
     }
@@ -246,10 +417,12 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     await applyHhaSecretFromArn();
 
     if (action === 'status' || (event.requestContext.http.method === 'GET' && !action)) {
+      const liveSchedules = await loadLiveScheduleStatus();
       return json(200, {
         ...mfaStatusFromEnv(),
         sandboxTriggerConfigured: Boolean(process.env.SANDBOX_API_KEY),
         liveRunConfigured: Boolean(process.env.STATE_MACHINE_ARN),
+        liveSchedules,
       });
     }
 
@@ -269,7 +442,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
 
     return json(400, {
       error:
-        'Unknown action — use ui, status, weekSummary, start, complete, or startLiveRun',
+        'Unknown action — use ui, status, weekSummary, scheduleStatus, setLiveSchedules, start, complete, or startLiveRun',
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
