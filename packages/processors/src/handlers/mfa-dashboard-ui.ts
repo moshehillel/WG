@@ -163,6 +163,7 @@ input[type=date]{background:#0f172a;border:1px solid var(--border);color:var(--t
     try {
       const reportKinds = [];
       const dateRanges = {};
+      const swapped = [];
       document.querySelectorAll('input[data-kind]').forEach(cb => {
         if (!cb.checked) return;
         const kind = cb.getAttribute('data-kind');
@@ -170,10 +171,22 @@ input[type=date]{background:#0f172a;border:1px solid var(--border);color:var(--t
         const fromEl = document.querySelector('input[data-from="'+kind+'"]');
         const toEl = document.querySelector('input[data-to="'+kind+'"]');
         if (fromEl && toEl && fromEl.value && toEl.value) {
-          dateRanges[kind] = { from: fromEl.value, to: toEl.value };
+          let from = fromEl.value, to = toEl.value;
+          if (from > to) {
+            const tmp = from; from = to; to = tmp;
+            fromEl.value = from; toEl.value = to;
+            swapped.push(kind);
+          }
+          dateRanges[kind] = { from, to };
         }
       });
       if (!reportKinds.length) throw new Error('Select at least one report');
+      if (swapped.length) {
+        throw new Error(
+          'From date is after To for: ' + swapped.join(', ') +
+          '. Inputs were corrected — review the dates and click Start again.',
+        );
+      }
       const body = await api('startLiveRun', {
         method: 'POST',
         body: JSON.stringify({ confirm: 'LIVE', reportKinds, dateRanges }),

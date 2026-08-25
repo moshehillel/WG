@@ -17,6 +17,7 @@ import {
   type PipelineRunInput,
 } from '@white-glove/shared';
 import { getObjectText, listAllObjects } from '../s3.js';
+import { normalizeLiveDateRange } from '../live-date-range.js';
 import {
   aggregateWeekSummaries,
   previousEasternWeekWindow,
@@ -252,6 +253,9 @@ async function loadWeekSummary(): Promise<ReturnType<typeof aggregateWeekSummari
   return aggregateWeekSummaries(listed, window);
 }
 
+/** ISO YYYY-MM-DD (and similar) compare lexicographically; swap if from > to. */
+export { normalizeLiveDateRange } from '../live-date-range.js';
+
 function parseStartLiveBody(raw: string | undefined): {
   confirm?: string;
   reportKinds?: string[];
@@ -288,14 +292,17 @@ async function startLiveRun(body: ReturnType<typeof parseStartLiveBody>) {
   }
 
   const dateRanges: NonNullable<PipelineRunInput['dateRanges']> = {};
+  const swappedKinds: string[] = [];
   for (const kind of reportKinds) {
     const range = body.dateRanges?.[kind];
     if (!range?.from || !range?.to) continue;
     // caregiver_codes is a reference export — dates are ignored by the bot
     if (kind === 'caregiver_codes') continue;
+    const normalized = normalizeLiveDateRange(String(range.from), String(range.to));
+    if (normalized.swapped) swappedKinds.push(kind);
     dateRanges[kind as keyof typeof dateRanges] = {
-      from: String(range.from).trim(),
-      to: String(range.to).trim(),
+      from: normalized.from,
+      to: normalized.to,
     };
   }
 
@@ -316,6 +323,7 @@ async function startLiveRun(body: ReturnType<typeof parseStartLiveBody>) {
       runId: input.runId,
       reportKinds: input.reportKinds,
       dateRanges: input.dateRanges,
+      swappedDateKinds: swappedKinds,
     }),
   );
   const started = await sfn.send(
@@ -333,6 +341,9 @@ async function startLiveRun(body: ReturnType<typeof parseStartLiveBody>) {
     }),
   );
 
+  const swapNote = swappedKinds.length
+    ? ` Corrected reversed dates for: ${swappedKinds.join(', ')}.`
+    : '';
   return json(202, {
     ok: true,
     runId: input.runId,
@@ -341,8 +352,10 @@ async function startLiveRun(body: ReturnType<typeof parseStartLiveBody>) {
     sandbox: false,
     reportKinds: input.reportKinds,
     dateRanges: input.dateRanges,
+    swappedDateKinds: swappedKinds.length ? swappedKinds : undefined,
     message:
-      'LIVE run started with selected reports only. Nightly EventBridge schedules are unchanged.',
+      'LIVE run started with selected reports only. Nightly EventBridge schedules are unchanged.' +
+      swapNote,
     pipelineConsoleUrl: process.env.PIPELINE_CONSOLE_URL || null,
   });
 }
