@@ -4,9 +4,11 @@ import type { BotReportKind } from './report-config.js';
 export type DownloadFailureStage =
   | 'login'
   | 'playwright_report'
+  | 'playwright_fallback'
   | 'http_fallback'
   | 'http_login'
   | 'no_reports'
+  | 'incomplete_reports'
   | 'upload'
   | 'handler';
 

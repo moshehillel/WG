@@ -48,12 +48,17 @@ export function pickHidden(html: string, name: string): string | undefined {
   return m2?.[1] !== undefined ? decodeHtml(m2[1]) : undefined;
 }
 
+/** Match <input>/<button> tags even when attribute values contain ">" (e.g. value="Next >>"). */
+function matchInputOrButtonTags(html: string): string[] {
+  const re = /<(?:input|button)\b(?:[^"'<>]*|"[^"]*"|'[^']*')*>/gi;
+  return html.match(re) ?? [];
+}
+
 /** Collect ASP.NET hidden fields into a URLSearchParams body. */
 export function collectHiddenFields(html: string): URLSearchParams {
   const body = new URLSearchParams();
-  const re =
-    /<input[^>]*type=["']hidden["'][^>]*>/gi;
-  for (const tag of html.match(re) ?? []) {
+  for (const tag of matchInputOrButtonTags(html)) {
+    if (!/\btype\s*=\s*["']hidden["']/i.test(tag)) continue;
     const name = attr(tag, 'name');
     if (!name) continue;
     const value = attr(tag, 'value') ?? '';
@@ -62,25 +67,102 @@ export function collectHiddenFields(html: string): URLSearchParams {
   return body;
 }
 
+const SKIP_INPUT_TYPES = new Set([
+  'submit',
+  'button',
+  'image',
+  'reset',
+  'file',
+]);
+
+/**
+ * Collect a browser-like form POST body: hidden + text + checked boxes/radios +
+ * selected <select> + <textarea>. Needed for Report Wizard Step 2 (column checkboxes).
+ */
+export function collectFormFields(html: string): URLSearchParams {
+  const body = new URLSearchParams();
+
+  for (const tag of matchInputOrButtonTags(html)) {
+    const name = attr(tag, 'name');
+    if (!name) continue;
+    const type = (attr(tag, 'type') ?? 'text').toLowerCase();
+    if (SKIP_INPUT_TYPES.has(type)) continue;
+    if (type === 'checkbox' || type === 'radio') {
+      if (!/\bchecked\b/i.test(tag)) continue;
+      body.append(decodeHtml(name), decodeHtml(attr(tag, 'value') ?? 'on'));
+      continue;
+    }
+    body.set(decodeHtml(name), decodeHtml(attr(tag, 'value') ?? ''));
+  }
+
+  const selectRe =
+    /<select\b([^>]*(?:"[^"]*"|'[^']*'|[^>])*)>([\s\S]*?)<\/select>/gi;
+  let sm: RegExpExecArray | null;
+  while ((sm = selectRe.exec(html))) {
+    const selectTag = `<select${sm[1]}>`;
+    const name = attr(selectTag, 'name');
+    if (!name) continue;
+    const multiple = /\bmultiple\b/i.test(selectTag);
+    const inner = sm[2] ?? '';
+    const optRe = /<option\b([^>]*(?:"[^"]*"|'[^']*'|[^>])*)>([\s\S]*?)<\/option>/gi;
+    let om: RegExpExecArray | null;
+    const selectedVals: string[] = [];
+    let first: string | undefined;
+    while ((om = optRe.exec(inner))) {
+      const optTag = `<option${om[1]}>`;
+      const val = attr(optTag, 'value') ?? om[2]?.replace(/<[^>]+>/g, '').trim() ?? '';
+      if (first === undefined) first = val;
+      if (/\bselected\b/i.test(optTag)) selectedVals.push(val);
+    }
+    if (multiple) {
+      // Unselected multi-selects must NOT post the first option — that ANDs a
+      // bogus filter (e.g. Closure Reason=Age Out) and returns empty open reports.
+      for (const v of selectedVals) {
+        body.append(decodeHtml(name), decodeHtml(v));
+      }
+      continue;
+    }
+    body.set(decodeHtml(name), decodeHtml(selectedVals[0] ?? first ?? ''));
+  }
+
+  const taRe =
+    /<textarea\b([^>]*(?:"[^"]*"|'[^']*'|[^>])*)>([\s\S]*?)<\/textarea>/gi;
+  let tm: RegExpExecArray | null;
+  while ((tm = taRe.exec(html))) {
+    const name = attr(`<textarea${tm[1]}>`, 'name');
+    if (!name) continue;
+    body.set(decodeHtml(name), decodeHtml(tm[2] ?? ''));
+  }
+
+  return body;
+}
+
 export function findSubmitByValue(
   html: string,
   value: string,
-): { name: string; value: string } | undefined {
-  const re = /<(?:input|button)[^>]*>/gi;
-  for (const tag of html.match(re) ?? []) {
-    const v = attr(tag, 'value');
+): { name: string; value: string; type?: string } | undefined {
+  const want = value.trim().toLowerCase();
+  for (const tag of matchInputOrButtonTags(html)) {
+    const raw = attr(tag, 'value');
     const name = attr(tag, 'name');
-    if (!name || !v) continue;
-    if (v.trim().toLowerCase() === value.trim().toLowerCase()) {
-      return { name, value: v };
+    if (!name || raw === undefined) continue;
+    const v = decodeHtml(raw);
+    if (v.trim().toLowerCase() === want) {
+      // Post the decoded label (ASP.NET expects "Next >>", not "Next &gt;&gt;")
+      return {
+        name: decodeHtml(name),
+        value: v,
+        type: (attr(tag, 'type') ?? 'submit').toLowerCase(),
+      };
     }
   }
   // Buttons sometimes put text between tags
   const btnRe = /<button[^>]*name=["']([^"']+)["'][^>]*>([^<]*)<\/button>/gi;
   let m: RegExpExecArray | null;
   while ((m = btnRe.exec(html))) {
-    if (m[2]?.trim().toLowerCase() === value.trim().toLowerCase()) {
-      return { name: m[1]!, value: m[2]!.trim() };
+    const label = decodeHtml(m[2] ?? '').trim();
+    if (label.toLowerCase() === want) {
+      return { name: decodeHtml(m[1]!), value: label, type: 'submit' };
     }
   }
   return undefined;
@@ -89,16 +171,12 @@ export function findSubmitByValue(
 /** Resolve form `name` for an element id (Telerik/ASP.NET). */
 export function pickNameById(html: string, id: string): string | undefined {
   const clean = id.replace(/^#/, '');
-  const re = new RegExp(
-    `<input[^>]*id=["']${escapeRe(clean)}["'][^>]*>`,
-    'i',
-  );
-  const tag = html.match(re)?.[0];
-  if (!tag) {
-    // try name that mirrors id with $ instead of _
-    return clean.includes('_') ? clean.replace(/_/g, '$') : undefined;
+  for (const tag of matchInputOrButtonTags(html)) {
+    if (attr(tag, 'id') === clean) {
+      return attr(tag, 'name') ?? clean.replace(/_/g, '$');
+    }
   }
-  return attr(tag, 'name') ?? clean.replace(/_/g, '$');
+  return undefined;
 }
 
 function attr(tag: string, name: string): string | undefined {

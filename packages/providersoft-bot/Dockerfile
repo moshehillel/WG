@@ -4,7 +4,7 @@
 #
 # Default stack still uses the zip stub Lambda (no Docker required).
 
-ARG PLAYWRIGHT_VERSION=1.49.1
+ARG PLAYWRIGHT_VERSION=1.62.1
 
 FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-jammy AS build
 WORKDIR /app

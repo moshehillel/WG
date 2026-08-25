@@ -16,15 +16,18 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "local:download": "tsx src/local-cli.ts",
+    "download:http": "tsx scripts/download-http.ts",
     "login:probe": "tsx src/login-probe.ts",
     "train:bot": "tsx src/train-bot.ts",
-    "capture:reports": "tsx src/capture-report-network.ts"
+    "train:rebuild-gender": "tsx scripts/repair-gluck-gender-reports.ts",
+    "capture:reports": "tsx src/capture-report-network.ts",
+    "codegen:ps": "playwright codegen"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.716.0",
     "@aws-sdk/client-secrets-manager": "^3.716.0",
     "@white-glove/shared": "*",
-    "playwright": "^1.49.1"
+    "playwright": "1.62.1"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.146",

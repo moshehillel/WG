@@ -222,7 +222,7 @@ async function main() {
   console.log('Report IDs:', reportIds);
 
   console.log('\nSuggested .env lines:');
-  console.log(`PROVIDERSOFT_REPORT_OPENED_ID=${reportIds.opened_cases ?? '4526'}`);
+  console.log(`PROVIDERSOFT_REPORT_OPENED_ID=${reportIds.opened_cases ?? '4566'}`);
   console.log(`PROVIDERSOFT_REPORT_CLOSED_ID=${reportIds.closed_cases ?? ''}`);
   console.log(`PROVIDERSOFT_REPORT_DISCHARGE_ID=${reportIds.discharge_service ?? ''}`);
   console.log(`PROVIDERSOFT_REPORT_NEW_SERVICES_ID=${reportIds.new_services ?? ''}`);

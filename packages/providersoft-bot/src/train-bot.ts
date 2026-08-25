@@ -6,7 +6,11 @@
  *   npm run train:bot -w @white-glove/providersoft-bot
  *   npm run train:bot -w @white-glove/providersoft-bot -- --login-only
  *   npm run train:bot -w @white-glove/providersoft-bot -- --report=opened_cases
+ *   npm run train:bot -w @white-glove/providersoft-bot -- --report=opened_cases,new_services
  *   npm run train:bot -w @white-glove/providersoft-bot -- --keep-open
+ *
+ * Gender-focused (Gluck open + new service + header check):
+ *   npm run train:opened-gender -w @white-glove/providersoft-bot
  *
  * Dates are computed automatically (not hardcoded):
  *   daily reports  → today → today
@@ -61,13 +65,15 @@ function onStep(step: string, detail: string) {
 function parseKinds(reportArg: string | undefined): BotReportKind[] | undefined {
   if (!reportArg) return undefined;
   if (reportArg === 'all') return [...ALL_BOT_KINDS];
-  const kind = reportArg as BotReportKind;
-  if (!ALL_BOT_KINDS.includes(kind)) {
-    throw new Error(
-      `Unknown --report=${reportArg}. Use: ${ALL_BOT_KINDS.join(' | ')} | all`,
-    );
+  const kinds = reportArg.split(',').map((s) => s.trim()).filter(Boolean) as BotReportKind[];
+  for (const kind of kinds) {
+    if (!ALL_BOT_KINDS.includes(kind)) {
+      throw new Error(
+        `Unknown --report=${reportArg}. Use comma-separated: ${ALL_BOT_KINDS.join(' | ')} | all`,
+      );
+    }
   }
-  return [kind];
+  return kinds;
 }
 
 async function main() {
@@ -128,6 +134,7 @@ async function main() {
       reportIds,
       dateRange,
       keepOpen,
+      preferPlaywright: true,
       onStep,
     });
     console.log('\nDownloaded files:');

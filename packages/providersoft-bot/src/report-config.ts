@@ -13,18 +13,20 @@ export const BOT_REPORT_FILENAMES: Record<BotReportKind, string> = {
 
 /**
  * ProviderSoft saved-report IDs (ReportView.aspx?UserReportId=…).
- * From codegen / Network: open=4526, API Report=4026.
+ * Defaults (Aug 2026): Gluck open=4566, new service=4559, closure=4527,
+ * discharge=4528, caregiver=4541, API/sessions=4026.
+ * HAR of UI exports used open=4558 temporarily — prefer 4566 (Gender: rebuild).
  */
 export type ReportUserIds = Partial<Record<BotReportKind, string>>;
 
 export function loadReportUserIds(env: NodeJS.ProcessEnv = process.env): ReportUserIds {
   return {
-    opened_cases: env.PROVIDERSOFT_REPORT_OPENED_ID ?? '4526',
+    opened_cases: env.PROVIDERSOFT_REPORT_OPENED_ID ?? '4566',
     closed_cases: env.PROVIDERSOFT_REPORT_CLOSED_ID ?? '4527',
     verified_sessions: env.PROVIDERSOFT_REPORT_SESSIONS_ID ?? '4026',
     discharge_service: env.PROVIDERSOFT_REPORT_DISCHARGE_ID ?? '4528',
     caregiver_codes: env.PROVIDERSOFT_REPORT_CAREGIVER_CODES_ID ?? '4541',
-    new_services: env.PROVIDERSOFT_REPORT_NEW_SERVICES_ID ?? '4544',
+    new_services: env.PROVIDERSOFT_REPORT_NEW_SERVICES_ID ?? '4559',
   };
 }
 
@@ -39,8 +41,25 @@ export const REPORT_LINK_NAMES: Record<BotReportKind, string> = {
 };
 
 /**
- * Date filter inputs after "Modify Report" → "Next >>".
- * Gluck-style reports share ctl04…3_*; API Report uses ctl07…6_*.
+ * Human filter label on Report Wizard Step 3 (preferred over brittle ctl* ids).
+ * Bot fills the from/to date pickers in the row matching this label.
+ */
+export const REPORT_DATE_FILTER_LABELS: Record<BotReportKind, string> = {
+  opened_cases: 'Date of Intake',
+  closed_cases: 'Closure Date',
+  discharge_service: 'Service Discharge Date',
+  new_services: 'Service Begin Date',
+  verified_sessions: 'Verified Date',
+  caregiver_codes: 'Date of Birth',
+};
+
+/**
+ * Fallback date filter input ids after "Modify Report" → "Next >>".
+ * Prefer REPORT_DATE_FILTER_LABELS; these ids drift when saved-report columns change.
+ * Always target `..._datePicker_dateInput` (fill text) — not calendar popupButton clicks.
+ * Codegen Aug 2026: Gluck open/closure/discharge stay ctl04/DLColumControl_3;
+ * new_services Service Begin → ctl33/DLColumControl_32; API Verified Date → ctl28/DLColumControl_27.
+ * (Gluck closure codegen may also show ctl11 — prefer label fill; ctl04 is Closure Date.)
  */
 export const REPORT_DATE_INPUTS: Record<
   BotReportKind,
@@ -51,22 +70,24 @@ export const REPORT_DATE_INPUTS: Record<
     to: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_2_datePicker_dateInput',
   },
   closed_cases: {
-    from: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_1_datePicker_dateInput',
-    to: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_2_datePicker_dateInput',
+    /** Closure Date — HAR Aug 2026: ctl11 / DLColumControl_10 (not Date of Intake ctl04). */
+    from: '#ctl00_Content_dlREportColumns_ctl11_DLColumControl_10_1_datePicker_dateInput',
+    to: '#ctl00_Content_dlREportColumns_ctl11_DLColumControl_10_2_datePicker_dateInput',
   },
   discharge_service: {
-    from: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_1_datePicker_dateInput',
-    to: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_2_datePicker_dateInput',
+    /** Service Discharge Date — HAR: ctl35 / DLColumControl_34. */
+    from: '#ctl00_Content_dlREportColumns_ctl35_DLColumControl_34_1_datePicker_dateInput',
+    to: '#ctl00_Content_dlREportColumns_ctl35_DLColumControl_34_2_datePicker_dateInput',
   },
   new_services: {
     /** Service Begin Date — lookback window catches rows whose begin date predates auth approval. */
-    from: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_1_datePicker_dateInput',
-    to: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_2_datePicker_dateInput',
+    from: '#ctl00_Content_dlREportColumns_ctl33_DLColumControl_32_1_datePicker_dateInput',
+    to: '#ctl00_Content_dlREportColumns_ctl33_DLColumControl_32_2_datePicker_dateInput',
   },
   verified_sessions: {
     /** Verified Date — sessions verified in the window (not Session Date). */
-    from: '#ctl00_Content_dlREportColumns_ctl07_DLColumControl_6_1_datePicker_dateInput',
-    to: '#ctl00_Content_dlREportColumns_ctl07_DLColumControl_6_2_datePicker_dateInput',
+    from: '#ctl00_Content_dlREportColumns_ctl28_DLColumControl_27_1_datePicker_dateInput',
+    to: '#ctl00_Content_dlREportColumns_ctl28_DLColumControl_27_2_datePicker_dateInput',
   },
   caregiver_codes: {
     from: '#ctl00_Content_dlREportColumns_ctl04_DLColumControl_3_1_datePicker_dateInput',
@@ -147,7 +168,10 @@ export function dailyLookbackDays(env: NodeJS.ProcessEnv = process.env): number 
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
-/** How many days back the API Report Verified Date filter spans (default 7). */
+/**
+ * @deprecated Prefer Tuesday→Monday week via verifiedSessionsTueMonRange.
+ * Kept for env docs / callers that still read PROVIDERSOFT_SESSION_LOOKBACK_DAYS.
+ */
 export function verifiedSessionLookbackDays(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.PROVIDERSOFT_SESSION_LOOKBACK_DAYS ?? '7';
   const n = Number(raw);
@@ -165,10 +189,40 @@ export function newServiceLookbackDays(env: NodeJS.ProcessEnv = process.env): nu
 }
 
 /**
+ * API Report Verified Date window: Tuesday through Monday (7 calendar days).
+ *
+ * Week starts Tuesday in Eastern business-day terms:
+ * - if businessDay is Sun or Mon → go back to the previous Tuesday
+ * - if businessDay is Tue–Sat → use this week's Tuesday
+ * - to = that Tuesday + 6 days (the Monday that closes the week)
+ *
+ * Mid-week nightly runs therefore use the in-progress Tue→next-Mon span
+ * (to may be in the future relative to today).
+ */
+export function verifiedSessionsTueMonRange(businessDay: Date): { from: Date; to: Date } {
+  const dow = businessDay.getDay(); // Sun=0 … Sat=6
+  // Days since Tuesday: Tue→0, Wed→1, …, Mon→6
+  const daysSinceTuesday = (dow + 5) % 7;
+  const from = addCalendarDays(businessDay, -daysSinceTuesday);
+  const to = addCalendarDays(from, 6);
+  return { from, to };
+}
+
+/**
+ * If a codegen selector points at the calendar popup button, map to the text input.
+ * Prefer filling `..._datePicker_dateInput` over clicking popupButton + day cells.
+ */
+export function preferDateInputSelector(selector: string): string {
+  return selector
+    .replace(/_datePicker_popupButton$/, '_datePicker_dateInput')
+    .replace(/_popupButton$/, '_dateInput');
+}
+
+/**
  * Computed date windows (never hardcode calendar days) — used for both live and sandbox downloads:
  * - Gluck open / closure / discharge: Eastern calendar day minus lookback (default same day)
- * - new_services: Service Begin Date from N days ago through business day (default 14)
- * - API Report (verified_sessions): Verified Date, 7 days ending on business day
+ * - new_services: Service Begin Date from today−14 through today (default 14-day lookback)
+ * - API Report (verified_sessions): Verified Date Tuesday→Monday week (see verifiedSessionsTueMonRange)
  */
 export function defaultDateRange(
   kind: BotReportKind,
@@ -181,8 +235,8 @@ export function defaultDateRange(
   const businessDay = addCalendarDays(calendarDate(year, month, day), -lookback);
 
   if (kind === 'verified_sessions') {
-    const from = addCalendarDays(businessDay, -verifiedSessionLookbackDays(env));
-    return { from: formatPsDate(from), to: formatPsDate(businessDay) };
+    const { from, to } = verifiedSessionsTueMonRange(businessDay);
+    return { from: formatPsDate(from), to: formatPsDate(to) };
   }
 
   if (kind === 'new_services') {
