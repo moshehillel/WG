@@ -17,7 +17,9 @@
     "test": "vitest run",
     "sandbox:smoke": "tsx src/sandbox-smoke.ts",
     "sandbox:create-patient": "node scripts/create-patient-sandbox.mjs",
-    "sandbox:session-flow": "tsx src/sandbox-session-flow.ts"
+    "sandbox:session-flow": "tsx src/sandbox-session-flow.ts",
+    "sandbox:field-visits": "node scripts/probe-field-visits.mjs",
+    "sandbox:field-visits:write": "node scripts/probe-field-visits.mjs --write"
   },
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.716.0",
