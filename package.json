@@ -38,10 +38,11 @@
     "hha:sync-env": "node scripts/sync-hha-ent-env.mjs",
     "hha:push-secret": "node scripts/push-hha-secret-from-env.mjs",
     "hha:probe-unscheduled-create": "npm run build -w @white-glove/shared -w @white-glove/hha-client && npm run probe:unscheduled-create -w @white-glove/hha-client --",
-    "test:sessions": "npx tsx scripts/test-api-report-sessions.mjs",
-    "hha:sessions:deploy:aws": "node scripts/build-hha-sessions-image-aws.mjs",
     "sandbox:field-visits": "npm run sandbox:field-visits -w @white-glove/hha-client",
-    "sandbox:field-visits:write": "npm run sandbox:field-visits:write -w @white-glove/hha-client"
+    "sandbox:field-visits:write": "npm run sandbox:field-visits:write -w @white-glove/hha-client",
+    "prod:field-visits-readonly": "npm run prod:field-visits-readonly -w @white-glove/hha-client",
+    "test:sessions": "npx tsx scripts/test-api-report-sessions.mjs",
+    "hha:sessions:deploy:aws": "node scripts/build-hha-sessions-image-aws.mjs"
   },
 
   "devDependencies": {
