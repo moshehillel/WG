@@ -36,7 +36,7 @@ Detection: `program_type` / `program` contains “early intervention” or equal
 
 **Sandbox** (read-only HHA): output `SandboxTriggerUrl`. MFA renew: `MfaDashboardApiUrl` (status / start / complete only — does not start the pipeline).
 
-To enable nightly schedules (11:00 PM Eastern):
+To enable schedules (nightly cases ~5:00 PM Eastern; Tuesday sessions ~11:00 PM Eastern):
 
 `npm run deploy -w @white-glove/infra -- -c enableNightSchedule=true`
 

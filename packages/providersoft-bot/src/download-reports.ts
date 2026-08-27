@@ -62,7 +62,7 @@ export interface DownloadReportsOptions {
   reportIds?: ReportUserIds;
   /**
    * Optional override for **daily** reports only.
-   * API Report always uses past-week → today unless `dateRanges.verified_sessions` is set.
+   * API Report uses Verified Date lookback → today unless `dateRanges.verified_sessions` is set.
    */
   dateRange?: DateRange;
   /** Per-kind date overrides (escape hatch). */
