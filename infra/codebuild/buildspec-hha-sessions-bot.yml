@@ -1,0 +1,25 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to Amazon ECR..."
+      - REGISTRY="${ECR_REPO_URI%%/*}"
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $REGISTRY
+      - echo "Source layout (archive zip extracts to one top-level folder)..."
+      - ls -la $CODEBUILD_SRC_DIR
+      - cd $CODEBUILD_SRC_DIR/*/
+      - pwd && ls -la
+      - test -f infra/dockerignore.hha-sessions || (echo "Missing infra/dockerignore.hha-sessions" && exit 1)
+  build:
+    commands:
+      - cp infra/dockerignore.hha-sessions .dockerignore
+      - echo "Building HHA Sessions Playwright Lambda image..."
+      - docker build -f packages/processors/Dockerfile.hha-sessions -t $ECR_REPO_URI:latest .
+  post_build:
+    commands:
+      - docker push $ECR_REPO_URI:latest
+      - echo "Done — image $ECR_REPO_URI:latest"
+
+artifacts:
+  files: []

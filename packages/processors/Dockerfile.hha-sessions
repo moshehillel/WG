@@ -1,0 +1,51 @@
+# Playwright Chromium image for HHA ENT Sessions Lambda (SPA token + unscheduled GraphQL).
+# Build context: repo root.
+# Enable with: cdk deploy -c hhaEntLiveBot=true
+
+ARG PLAYWRIGHT_VERSION=1.62.1
+
+FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-jammy AS build
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/hha-client/package.json packages/hha-client/
+COPY packages/processors/package.json packages/processors/
+COPY tsconfig.base.json ./
+
+RUN npm ci --workspace=@white-glove/shared --workspace=@white-glove/hha-client --workspace=@white-glove/processors \
+  || npm install --workspace=@white-glove/shared --workspace=@white-glove/hha-client --workspace=@white-glove/processors
+
+COPY packages/shared packages/shared
+COPY packages/hha-client packages/hha-client
+COPY packages/processors packages/processors
+
+RUN npm run build -w @white-glove/shared \
+  && npm run build -w @white-glove/hha-client \
+  && npm run build -w @white-glove/processors
+
+FROM mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION}-jammy
+
+WORKDIR /var/task
+
+RUN apt-get update && apt-get install -y --no-install-recommends cmake g++ make python3 xz-utils \
+  && npm install -g aws-lambda-ric@4.0.2 \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages/shared/package.json ./node_modules/@white-glove/shared/package.json
+COPY --from=build /app/packages/shared/dist ./node_modules/@white-glove/shared/dist
+COPY --from=build /app/packages/hha-client/package.json ./node_modules/@white-glove/hha-client/package.json
+COPY --from=build /app/packages/hha-client/dist ./node_modules/@white-glove/hha-client/dist
+COPY --from=build /app/packages/processors/package.json ./package.json
+COPY --from=build /app/packages/processors/dist ./dist
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV NODE_OPTIONS=--enable-source-maps
+ENV HOME=/tmp
+ENV XDG_CACHE_HOME=/tmp/.cache
+ENV HEADLESS=true
+ENV HHA_ENT_AUTO_LOGIN=true
+
+ENTRYPOINT ["/usr/bin/npx", "aws-lambda-ric"]
+CMD ["dist/handlers/sessions.handler"]
