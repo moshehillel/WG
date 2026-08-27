@@ -216,9 +216,12 @@ export class WhiteGloveStack extends cdk.Stack {
       });
     }
 
-    new ses.EmailIdentity(this, 'AlertFromEmail', {
-      identity: ses.Identity.email(alertFromEmail),
-    });
+    /** From-address identity usually already exists in SES — only create when explicitly asked. */
+    if (String(this.node.tryGetContext('manageSesFromIdentity') ?? 'false') === 'true') {
+      new ses.EmailIdentity(this, 'AlertFromEmail', {
+        identity: ses.Identity.email(alertFromEmail),
+      });
+    }
 
     /** Recipient/fallback SES identities are created manually in the console — do not manage here (already exist). */
 
