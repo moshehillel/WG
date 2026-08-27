@@ -36,3 +36,36 @@ export function exceptionsKey(runId: string): string {
 export function validateSummaryKey(runId: string): string {
   return `${runPrefix(runId)}/validate-summary.json`;
 }
+
+export function parseResultKey(runId: string): string {
+  return `${runPrefix(runId)}/parse-result.json`;
+}
+
+/** Written after the first alert email — prevents duplicate SNS/SES on manual ValidateFn re-invokes. */
+export function alertEmailSentKey(runId: string): string {
+  return `${runPrefix(runId)}/alert-email-sent.json`;
+}
+
+/** CSV deliverable attached to alert emails (also stored on the run for ops). */
+export function resultsCsvKey(runId: string): string {
+  return `${runPrefix(runId)}/results.csv`;
+}
+
+export function failuresCsvKey(runId: string): string {
+  return `${runPrefix(runId)}/failures.csv`;
+}
+
+/** HTML table attachment (primary readable results for ops). */
+export function resultsHtmlKey(runId: string): string {
+  return `${runPrefix(runId)}/results.html`;
+}
+
+export function unscheduledServicesKey(runId: string): string {
+  return `${runPrefix(runId)}/normalized/unscheduled-services.json`;
+}
+
+export type ProcessorBranch = 'opened' | 'closed' | 'discharge' | 'sessions' | 'new_services';
+
+export function processorBranchResultKey(runId: string, branch: ProcessorBranch): string {
+  return `${runPrefix(runId)}/processor/${branch}.json`;
+}
