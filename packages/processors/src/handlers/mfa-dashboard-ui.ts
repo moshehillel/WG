@@ -124,23 +124,18 @@ input[type=date]{background:#0f172a;border:1px solid var(--border);color:var(--t
   }
   function easternDate(d){ const p=easternParts(d); return new Date(Date.UTC(p.y,p.m-1,p.day)); }
   function addDays(d,n){ const x=new Date(d.getTime()); x.setUTCDate(x.getUTCDate()+n); return x; }
-  function tueMon(business){
-    const dow = business.getUTCDay();
-    const daysSinceTue = (dow + 5) % 7;
-    const from = addDays(business, -daysSinceTue);
-    return { from: iso(from), to: iso(addDays(from, 6)) };
-  }
   function fillDefaults(){
     const today = easternDate(new Date());
     const todayIso = iso(today);
     const nsFrom = iso(addDays(today, -14));
-    const sessions = tueMon(today);
+    // API Report: Verified Date TO=today, FROM=today−14 (matches bot defaultDateRange)
+    const sessionsFrom = iso(addDays(today, -14));
     const map = {
       opened_cases: [todayIso, todayIso],
       closed_cases: [todayIso, todayIso],
       discharge_service: [todayIso, todayIso],
       new_services: [nsFrom, todayIso],
-      verified_sessions: [sessions.from, sessions.to],
+      verified_sessions: [sessionsFrom, todayIso],
     };
     for (const [kind,[f,t]] of Object.entries(map)){
       const fromEl = document.querySelector('input[data-from="'+kind+'"]');

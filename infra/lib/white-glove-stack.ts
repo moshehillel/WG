@@ -735,7 +735,9 @@ export class WhiteGloveStack extends cdk.Stack {
     // to DISABLED (safe default). Monday dry-run preview stays opt-in and is NOT toggled.
     const nightlyCaseReportsRule = this.addEasternNightSchedule(this, 'NightlyCaseReportsSchedule', {
       weekDay: 'MON-SUN',
-      description: 'Nightly Gluck open + closure (11:00 PM Eastern)',
+      /** 21:00 UTC ≈ 5:00 PM EDT (4:00 PM EST). */
+      hour: 21,
+      description: 'Nightly Gluck open + closure / new services / discharge (~5:00 PM Eastern)',
       enabled: false,
       stateMachine,
       input: {
@@ -970,8 +972,9 @@ export class WhiteGloveStack extends cdk.Stack {
   }
 
   /**
-   * ~11:00 PM Eastern via 03:00 UTC (EDT). During EST (winter) this fires ~10:00 PM Eastern.
-   * EventBridge Rules in this account reject ScheduleExpressionTimezone.
+   * Eastern-intent cron via fixed UTC hour (account EventBridge rejects ScheduleExpressionTimezone).
+   * Default hour 3 → ~11:00 PM EDT / ~10:00 PM EST.
+   * Nightly cases pass hour 21 → ~5:00 PM EDT / ~4:00 PM EST.
    */
   private addEasternNightSchedule(
     scope: Construct,
@@ -981,13 +984,20 @@ export class WhiteGloveStack extends cdk.Stack {
       description: string;
       stateMachine: sfn.IStateMachine;
       input: Record<string, unknown>;
+      /** UTC hour (0–23). Default 3 ≈ 11 PM EDT. */
+      hour?: number;
       /** Defaults to true (EventBridge / CDK default). Live toggle rules pass false. */
       enabled?: boolean;
     },
   ): events.Rule {
+    const hour = props.hour ?? 3;
     return new events.Rule(scope, id, {
-      schedule: events.Schedule.cron({ minute: '0', hour: '3', weekDay: props.weekDay }),
-      description: `${props.description} (03:00 UTC ≈ 11:00 PM EDT)`,
+      schedule: events.Schedule.cron({
+        minute: '0',
+        hour: String(hour),
+        weekDay: props.weekDay,
+      }),
+      description: `${props.description} (${String(hour).padStart(2, '0')}:00 UTC)`,
       enabled: props.enabled ?? true,
       targets: [
         new targets.SfnStateMachine(props.stateMachine, {

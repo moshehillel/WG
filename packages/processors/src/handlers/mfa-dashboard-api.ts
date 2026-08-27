@@ -52,7 +52,7 @@ const LIVE_SCHEDULE_DEFS = [
     id: 'nightly_cases',
     label: 'Nightly case reports',
     detail:
-      'Gluck open/closure, new services, discharge — every night ~11pm Eastern (dryRun:false)',
+      'Gluck open/closure, new services, discharge — every day ~5pm Eastern (dryRun:false)',
   },
   {
     envKey: 'LIVE_SCHEDULE_TUESDAY_RULE',
