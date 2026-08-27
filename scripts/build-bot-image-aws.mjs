@@ -197,6 +197,8 @@ async function cdkDeployLive() {
       '-c',
       'hhaUseMock=false',
       '-c',
+      'enableGuardDuty=false',
+      '-c',
       `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net'}`,
     ],
     { cwd: infraDir, stdio: 'inherit', shell: true },
