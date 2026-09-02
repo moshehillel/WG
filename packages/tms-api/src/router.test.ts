@@ -214,6 +214,75 @@ describe('TMS API weekly loop', () => {
     expect(res.status).toBe(201);
   });
 
+  it('creates therapist as provider in one call and links existing login by email', async () => {
+    const { store } = storeWithTherapist();
+    const created = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/therapists',
+      headers: adminH,
+      query: {},
+      body: {
+        email: 'one@whiteglove.local',
+        firstName: 'One',
+        lastName: 'Shot',
+        discipline: 'OT',
+        payRate: 75,
+        hhaCaregiverCode: 'HHA1',
+      },
+    });
+    expect(created.status).toBe(201);
+    const body = created.body as {
+      user: { id: string; email: string; providerId: string };
+      provider: { id: string; userId: string; discipline: string; hhaCaregiverCode: string };
+    };
+    expect(body.user.email).toBe('one@whiteglove.local');
+    expect(body.user.providerId).toBe(body.provider.id);
+    expect(body.provider.userId).toBe(body.user.id);
+    expect(body.provider.discipline).toBe('OT');
+    expect(body.provider.hhaCaregiverCode).toBe('HHA1');
+
+    const me = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/me',
+      headers: {
+        'x-tms-role': 'therapist',
+        'x-tms-email': 'one@whiteglove.local',
+        authorization: 'Bearer therapist',
+      },
+      query: {},
+      body: {},
+    });
+    expect(me.status).toBe(200);
+    expect((me.body as { provider: { id: string } }).provider.id).toBe(body.provider.id);
+
+    store.upsertUser({
+      id: 'orphan-u',
+      cognitoSub: 'sub-orphan',
+      email: 'orphan@whiteglove.local',
+      role: 'therapist',
+      displayName: 'Orphan',
+      providerId: '',
+      active: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
+    const linked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/therapists',
+      headers: adminH,
+      query: {},
+      body: { email: 'orphan@whiteglove.local', firstName: 'Or', lastName: 'Phan', discipline: 'SLP' },
+    });
+    expect(linked.status).toBe(200);
+    const linkedBody = linked.body as {
+      user: { id: string; providerId: string };
+      provider: { id: string; userId: string; discipline: string };
+    };
+    expect(linkedBody.user.id).toBe('orphan-u');
+    expect(linkedBody.user.providerId).toBe(linkedBody.provider.id);
+    expect(linkedBody.provider.userId).toBe('orphan-u');
+    expect(linkedBody.provider.discipline).toBe('SLP');
+  });
+
   it('lists admin weeks and links provider email to a login', async () => {
     const { store, provider } = storeWithTherapist();
     const weekStart = '2026-08-31';
@@ -257,6 +326,37 @@ describe('TMS API weekly loop', () => {
     });
     expect(invited.status).toBe(201);
     expect((invited.body as { user: { providerId: string } }).user.providerId).toBe(provider.id);
+
+    const adminInvite = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/users',
+      headers: adminH,
+      query: {},
+      body: { email: 'second-admin@whiteglove.local', displayName: 'Second Admin', role: 'admin' },
+    });
+    expect(adminInvite.status).toBe(201);
+    expect((adminInvite.body as { user: { role: string; email: string } }).user.role).toBe('admin');
+    expect((adminInvite.body as { message: string }).message).toMatch(/Admin invite/i);
+
+    const secondId = (adminInvite.body as { user: { id: string } }).user.id;
+    const deactivated = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/users/${secondId}/deactivate`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(deactivated.status).toBe(200);
+    expect((deactivated.body as { user: { active: boolean } }).user.active).toBe(false);
+
+    const lastAdminBlocked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/users/${store.userByEmail('admin@whiteglove.local')!.id}/deactivate`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(lastAdminBlocked.status).toBe(400);
   });
 
   it('lets admin correct mandate and student after parse', async () => {
@@ -426,6 +526,17 @@ describe('TMS API weekly loop', () => {
       body: {},
     });
     expect((week.body as { warnings: string[] }).warnings.length).toBeGreaterThan(0);
+    expect((week.body as { errors: string[] }).errors.some((e) => /incomplete/i.test(e))).toBe(true);
+    const blockedSubmit = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/weeks/${weekId}/submit`,
+      headers: thH,
+      query: {},
+      body: {},
+    });
+    expect(blockedSubmit.status).toBe(400);
+    expect((blockedSubmit.body as { errors: string[] }).errors.some((e) => /incomplete/i.test(e))).toBe(true);
+    expect(store.data.weeks.find((w) => w.id === weekId)?.status).toBe('draft');
     const missing = await handleTmsRequest(store, {
       method: 'GET',
       path: '/admin/reports/missing-notes',
@@ -448,6 +559,17 @@ describe('TMS API weekly loop', () => {
     expect(patched.status).toBe(200);
     expect((patched.body as { session: { dateOfService: string; notes: string } }).session.dateOfService).toBe('08/31/2026');
     expect((patched.body as { session: { notes: string } }).session.notes).toMatch(/gait/);
+
+    // Still under-mandate (1 of 2) — warning only; AI block cleared after longer notes.
+    const weekAfter = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/week',
+      headers: thH,
+      query: { weekStart },
+      body: {},
+    });
+    expect((weekAfter.body as { errors: string[] }).errors.some((e) => /incomplete/i.test(e))).toBe(false);
+    expect((weekAfter.body as { warnings: string[] }).warnings.length).toBeGreaterThan(0);
   });
 
   it('rejects unauthenticated requests when dev headers are disabled', async () => {

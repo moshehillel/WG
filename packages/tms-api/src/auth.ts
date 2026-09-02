@@ -34,7 +34,16 @@ function ensureUser(
   displayName: string,
 ): AppUser {
   const existing = store.userByEmail(email) || (sub ? store.userBySub(sub) : undefined);
-  if (existing) return existing;
+  if (existing) {
+    if (sub && existing.cognitoSub !== sub) {
+      return store.upsertUser({
+        ...existing,
+        cognitoSub: sub,
+        displayName: displayName || existing.displayName,
+      });
+    }
+    return existing;
+  }
   const user: AppUser = {
     id: newId(),
     cognitoSub: sub || newId(),
@@ -92,7 +101,11 @@ export async function authenticate(
   if (user.role !== 'admin' && role === 'admin') {
     store.upsertUser({ ...user, role: 'admin' });
   }
-  return { user: store.userByEmail(email)! };
+  const resolved = store.userByEmail(email)!;
+  if (resolved.active === false) {
+    return { error: 'This account is deactivated. Ask another admin to restore access.', status: 403 };
+  }
+  return { user: resolved };
 }
 
 export function requireAdmin(ctx: AuthContext): string | null {

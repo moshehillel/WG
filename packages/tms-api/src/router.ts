@@ -1,6 +1,7 @@
 import {
   adminWeeksList,
   checkMandatesForWeek,
+  collectHeuristicAiIssues,
   dashboard,
   dueDateReport,
   lastServiceByStudent,
@@ -10,6 +11,7 @@ import {
   nowIso,
   parseMandatePdfText,
   parseWeeklySessionText,
+  screenServiceNote,
   splitPersonName,
   therapistCanEdit,
   unusedMissedForStudent,
@@ -26,7 +28,7 @@ import { screenNoteWithOptionalBedrock } from './bedrock.js';
 import { transferLockedWeek } from './hha-transfer.js';
 import { buildTimesheetPdf } from './timesheet.js';
 import { createSignEnvelope, envelopeCompleted } from './esign.js';
-import { inviteTherapist } from './invite.js';
+import { deactivateCognitoLogin, inviteTherapist } from './invite.js';
 import { pdfTextFromBody } from './pdf-text.js';
 import { runDueNags } from './due-nags.js';
 import { putLockerPdf } from './s3-state.js';
@@ -81,6 +83,101 @@ function linkUserToProvider(store: MemoryStore, userId: string, providerId: stri
   if (user) store.upsertUser({ ...user, providerId });
   const provider = store.data.providers.find((p) => p.id === providerId);
   if (provider) store.upsertProvider({ ...provider, userId });
+}
+
+function parseDiscipline(raw: unknown, fallback: Discipline = 'PT'): Discipline {
+  const d = String(raw || fallback);
+  return ['OT', 'PT', 'SLP'].includes(d) ? (d as Discipline) : fallback;
+}
+
+function therapistDisplayName(b: Record<string, unknown>, email: string): string {
+  const fromParts = `${String(b.firstName || '')} ${String(b.lastName || '')}`.trim();
+  return String(b.displayName || fromParts || email).trim() || email;
+}
+
+function splitDisplayName(displayName: string): { firstName: string; lastName: string } {
+  const parts = displayName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return { firstName: '', lastName: '' };
+  if (parts.length === 1) return { firstName: parts[0], lastName: '' };
+  return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+}
+
+/** Create Cognito invite (best-effort) + AppUser + Provider and link both ways. Links existing login by email. */
+async function upsertTherapistAsProvider(
+  store: MemoryStore,
+  b: Record<string, unknown>,
+): Promise<{ user: AppUser; provider: ReturnType<MemoryStore['upsertProvider']>; createdUser: boolean }> {
+  const email = String(b.email || '').trim().toLowerCase();
+  if (!email) throw new Error('Email is required.');
+  const displayName = therapistDisplayName(b, email);
+  const fromDisplay = splitDisplayName(displayName);
+  const firstName = String(b.firstName || fromDisplay.firstName || '').trim();
+  const lastName = String(b.lastName || fromDisplay.lastName || '').trim();
+  const discipline = parseDiscipline(b.discipline);
+  const payRate = b.payRate == null || b.payRate === '' ? null : Number(b.payRate);
+  const hhaCaregiverCode = String(b.hhaCaregiverCode || '');
+
+  let user = store.userByEmail(email);
+  let createdUser = false;
+  if (!user) {
+    let cognitoSub = `invite-${email}`;
+    try {
+      cognitoSub = await inviteTherapist(email, displayName, 'therapist');
+    } catch {
+      cognitoSub = `invite-${email}`;
+    }
+    user = store.upsertUser({
+      id: newId(),
+      cognitoSub,
+      email,
+      role: 'therapist',
+      displayName,
+      providerId: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    createdUser = true;
+  } else {
+    user = store.upsertUser({
+      ...user,
+      displayName: displayName || user.displayName,
+      role: user.role === 'admin' ? 'admin' : 'therapist',
+      active: true,
+    });
+  }
+
+  let provider = providerFor(store, user);
+  if (!provider) {
+    provider = store.upsertProvider({
+      id: newId(),
+      userId: user.id,
+      firstName,
+      lastName,
+      discipline,
+      payRate,
+      hhaCaregiverCode,
+      active: true,
+      createdAt: nowIso(),
+    });
+  } else {
+    provider = store.upsertProvider({
+      ...provider,
+      firstName: firstName || provider.firstName,
+      lastName: lastName || provider.lastName,
+      discipline: b.discipline != null && String(b.discipline) ? discipline : provider.discipline,
+      payRate: b.payRate === undefined ? provider.payRate : payRate,
+      hhaCaregiverCode:
+        b.hhaCaregiverCode === undefined ? provider.hhaCaregiverCode : hhaCaregiverCode,
+      active: true,
+      userId: user.id,
+    });
+  }
+  linkUserToProvider(store, user.id, provider.id);
+  return {
+    user: store.userById(user.id)!,
+    provider: store.data.providers.find((p) => p.id === provider!.id)!,
+    createdUser,
+  };
 }
 
 function visibleStudents(store: MemoryStore, user: AppUser, weekStart: string): Student[] {
@@ -178,12 +275,63 @@ export async function handleTmsRequest(
     return fn(ctx);
   };
 
+  if (req.method === 'POST' && path === '/admin/therapists') {
+    return adminUser(async () => {
+      const b = obj(req);
+      try {
+        const out = await upsertTherapistAsProvider(store, b);
+        store.audit(ctx.user.id, 'upsert_therapist', `user:${out.user.id}`, null, {
+          user: out.user,
+          provider: out.provider,
+        });
+        return json(out.createdUser ? 201 : 200, {
+          user: out.user,
+          provider: out.provider,
+          message: out.createdUser
+            ? 'Therapist created and linked as provider. They will get a Cognito invite when the user pool is configured.'
+            : 'Existing login linked to therapist (provider) profile.',
+        });
+      } catch (err) {
+        return json(400, { error: err instanceof Error ? err.message : 'Could not create therapist.' });
+      }
+    });
+  }
+
   if (req.method === 'POST' && path === '/admin/users') {
     return adminUser(async () => {
       const b = obj(req);
       const email = String(b.email || '').trim().toLowerCase();
       const role = b.role === 'admin' ? 'admin' : 'therapist';
       if (!email) return json(400, { error: 'Email is required.' });
+
+      // Therapist with profile fields → one-shot user + provider + link (same as /admin/therapists).
+      const wantsProvider =
+        role === 'therapist' &&
+        (b.discipline != null ||
+          b.firstName != null ||
+          b.lastName != null ||
+          b.payRate != null ||
+          b.hhaCaregiverCode != null ||
+          b.createProvider === true);
+      if (wantsProvider) {
+        try {
+          const out = await upsertTherapistAsProvider(store, { ...b, email });
+          store.audit(ctx.user.id, 'invite_user', `user:${out.user.id}`, null, {
+            user: out.user,
+            provider: out.provider,
+          });
+          return json(out.createdUser ? 201 : 200, {
+            user: out.user,
+            provider: out.provider,
+            message: out.createdUser
+              ? 'Therapist login created and linked as provider.'
+              : 'Existing login linked to therapist (provider) profile.',
+          });
+        } catch (err) {
+          return json(400, { error: err instanceof Error ? err.message : 'Could not create therapist.' });
+        }
+      }
+
       if (store.userByEmail(email)) return json(400, { error: 'User already exists.' });
       let cognitoSub = String(b.cognitoSub || `invite-${email}`);
       try {
@@ -205,12 +353,51 @@ export async function handleTmsRequest(
       store.upsertUser(user);
       if (user.providerId) linkUserToProvider(store, user.id, user.providerId);
       store.audit(ctx.user.id, 'invite_user', `user:${user.id}`, null, user);
-      return json(201, { user: store.userById(user.id), message: 'Therapist login created. They will get a Cognito invite email when the user pool is configured.' });
+      const who = role === 'admin' ? 'Admin' : 'Therapist';
+      return json(201, {
+        user: store.userById(user.id),
+        message: `${who} invite created. They will get a Cognito email when the user pool is configured.`,
+      });
     });
   }
 
   if (req.method === 'GET' && path === '/admin/users') {
     return adminUser(() => json(200, { users: store.data.users }));
+  }
+
+  if (req.method === 'POST' && /^\/admin\/users\/[^/]+\/deactivate$/.test(path)) {
+    return adminUser(async () => {
+      const id = path.split('/')[3];
+      const target = store.userById(id);
+      if (!target) return json(404, { error: 'User not found.' });
+      if (target.id === ctx.user.id) {
+        return json(400, { error: 'You cannot deactivate your own admin account.' });
+      }
+      if (target.role === 'admin') {
+        const otherActiveAdmins = store.data.users.filter(
+          (u) => u.role === 'admin' && u.active !== false && u.id !== target.id,
+        );
+        if (otherActiveAdmins.length === 0) {
+          return json(400, { error: 'Cannot deactivate the last active admin.' });
+        }
+      }
+      if (target.active === false) {
+        return json(200, { user: target, message: 'Already deactivated.' });
+      }
+      const before = { ...target };
+      const updated = store.upsertUser({ ...target, active: false });
+      try {
+        await deactivateCognitoLogin(target.email, target.role);
+      } catch (err) {
+        // App state still deactivates; Cognito may lag if username differs.
+        void err;
+      }
+      store.audit(ctx.user.id, 'deactivate_user', `user:${updated.id}`, before, updated);
+      return json(200, {
+        user: updated,
+        message: `${target.role === 'admin' ? 'Admin' : 'User'} deactivated.`,
+      });
+    });
   }
 
   if (req.method === 'POST' && path === '/admin/schools') {
@@ -235,48 +422,38 @@ export async function handleTmsRequest(
   if (req.method === 'POST' && path === '/admin/providers') {
     return adminUser(async () => {
       const b = obj(req);
-      const discipline = String(b.discipline || 'PT') as Discipline;
       const email = String(b.email || '').trim().toLowerCase();
-      let userId = String(b.userId || '');
+      // Email means therapist-as-provider: create/link login + provider in one step.
       if (email) {
-        let user = store.userByEmail(email);
-        if (!user) {
-          let cognitoSub = `invite-${email}`;
-          try {
-            cognitoSub = await inviteTherapist(
-              email,
-              String(b.displayName || `${b.firstName || ''} ${b.lastName || ''}`.trim() || email),
-              'therapist',
-            );
-          } catch {
-            cognitoSub = `invite-${email}`;
-          }
-          user = store.upsertUser({
-            id: newId(),
-            cognitoSub,
-            email,
-            role: 'therapist',
-            displayName: String(b.displayName || `${b.firstName || ''} ${b.lastName || ''}`.trim() || email),
-            providerId: '',
-            active: true,
-            createdAt: nowIso(),
+        try {
+          const out = await upsertTherapistAsProvider(store, b);
+          store.audit(ctx.user.id, 'upsert_provider', `provider:${out.provider.id}`, null, out);
+          return json(out.createdUser ? 201 : 200, {
+            provider: out.provider,
+            user: out.user,
           });
+        } catch (err) {
+          return json(400, { error: err instanceof Error ? err.message : 'Could not save provider.' });
         }
-        userId = user.id;
       }
+      const discipline = parseDiscipline(b.discipline);
+      const userId = String(b.userId || '');
       const provider = store.upsertProvider({
         id: String(b.id || newId()),
         userId,
         firstName: String(b.firstName || ''),
         lastName: String(b.lastName || ''),
-        discipline: ['OT', 'PT', 'SLP'].includes(discipline) ? discipline : 'PT',
+        discipline,
         payRate: b.payRate == null || b.payRate === '' ? null : Number(b.payRate),
         hhaCaregiverCode: String(b.hhaCaregiverCode || ''),
         active: b.active === false ? false : true,
         createdAt: nowIso(),
       });
       if (provider.userId) linkUserToProvider(store, provider.userId, provider.id);
-      return json(201, { provider: store.data.providers.find((p) => p.id === provider.id), user: provider.userId ? store.userById(provider.userId) : undefined });
+      return json(201, {
+        provider: store.data.providers.find((p) => p.id === provider.id),
+        user: provider.userId ? store.userById(provider.userId) : undefined,
+      });
     });
   }
 
@@ -490,14 +667,24 @@ export async function handleTmsRequest(
     const check = week
       ? checkMandatesForWeek(store.data.mandates, sessions)
       : { errors: [] as string[], warnings: [] as string[] };
+    const ai = week ? collectHeuristicAiIssues(sessions) : { errors: [] as string[], warnings: [] as string[] };
     const students = visibleStudents(store, ctx.user, weekStart || week?.weekStart || '');
+    const sessionsOut = sessions.map((s) => {
+      const local = screenServiceNote(s);
+      const flags = [...new Set([...(s.aiFlags || []), ...local.flags])];
+      return {
+        ...s,
+        aiFlags: flags,
+        aiBlock: Boolean(s.aiBlock) || local.block,
+      };
+    });
     return json(200, {
       week,
-      sessions,
+      sessions: sessionsOut,
       students,
       mandates: store.data.mandates.filter((m) => students.some((s) => s.id === m.studentId) || ctx.user.role === 'admin'),
-      warnings: check.warnings,
-      errors: check.errors,
+      warnings: [...new Set([...check.warnings, ...ai.warnings])],
+      errors: [...new Set([...check.errors, ...ai.errors])],
     });
   }
 
@@ -584,6 +771,7 @@ export async function handleTmsRequest(
         location: row.location,
         notes: row.notes,
         aiFlags: [],
+        aiBlock: false,
       });
       created.push(session);
     }
@@ -621,19 +809,23 @@ export async function handleTmsRequest(
       location: pickStr(b.location, existing?.location || ''),
       notes: pickStr(b.notes, existing?.notes || ''),
       aiFlags: Array.isArray(b.aiFlags) ? (b.aiFlags as string[]) : existing?.aiFlags || [],
+      aiBlock: typeof b.aiBlock === 'boolean' ? b.aiBlock : existing?.aiBlock || false,
     };
     const makeupErr = validateMakeup(
       session,
       store.data.sessions.filter((s) => s.id !== session.id).concat(session),
     );
     if (makeupErr) return json(400, { error: makeupErr });
+    const screenedLocal = screenServiceNote(session);
+    session.aiFlags = screenedLocal.flags;
+    session.aiBlock = screenedLocal.block;
     store.upsertSession(session);
     const check = checkMandatesForWeek(store.data.mandates, store.sessionsForWeek(week.id));
     if (check.errors.length) {
       store.removeSession(session.id);
       return json(400, { error: 'Over mandate', errors: check.errors });
     }
-    return json(200, { session, warnings: check.warnings });
+    return json(200, { session, warnings: [...check.warnings, ...screenedLocal.warnFlags] });
   }
 
   if (req.method === 'GET' && /^\/students\/[^/]+\/missed$/.test(path)) {
@@ -646,7 +838,11 @@ export async function handleTmsRequest(
     const session = store.data.sessions.find((s) => s.id === id);
     if (!session) return json(404, { error: 'Session not found.' });
     const screened = await screenNoteWithOptionalBedrock(session);
-    store.upsertSession({ ...session, aiFlags: screened.flags });
+    store.upsertSession({
+      ...session,
+      aiFlags: screened.flags,
+      aiBlock: screened.block,
+    });
     return json(200, screened);
   }
 
@@ -659,13 +855,30 @@ export async function handleTmsRequest(
     const sessions = store.sessionsForWeek(week.id);
     const check = checkMandatesForWeek(store.data.mandates, sessions);
     if (check.errors.length) return json(400, { error: 'Over mandate', errors: check.errors });
+    const aiErrors: string[] = [];
     for (const s of sessions) {
       const makeupErr = validateMakeup(s, store.data.sessions);
       if (makeupErr) return json(400, { error: makeupErr });
       if (s.attendance !== 'missed') {
         const screened = await screenNoteWithOptionalBedrock(s);
-        store.upsertSession({ ...s, aiFlags: screened.flags });
+        store.upsertSession({
+          ...s,
+          aiFlags: screened.flags,
+          aiBlock: screened.block,
+        });
+        if (screened.block) {
+          for (const f of screened.blockFlags) {
+            aiErrors.push(`${s.dateOfService}: ${f}`);
+          }
+        }
       }
+    }
+    if (aiErrors.length) {
+      return json(400, {
+        error: 'AI note screening blocked submit',
+        errors: aiErrors,
+        warnings: check.warnings,
+      });
     }
     const b = obj(req);
     const next = store.upsertWeek({

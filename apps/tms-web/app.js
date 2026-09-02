@@ -1,5 +1,5 @@
 const CFG = (typeof window !== 'undefined' && window.TMS_CONFIG) || {};
-const API = localStorage.getItem('tmsApi') || CFG.apiUrl || 'http://127.0.0.1:8787';
+const API = (localStorage.getItem('tmsApi') || CFG.apiUrl || 'http://127.0.0.1:8787').replace(/\/$/, '');
 const USER_POOL_ID = CFG.userPoolId || '';
 const CLIENT_ID = CFG.clientId || '';
 // Real sign-in only when the build gives us a Cognito app client id.
@@ -10,6 +10,7 @@ const state = {
   role: 'therapist',
   email: '',
   idToken: localStorage.getItem('tmsIdToken') || '',
+  accessToken: localStorage.getItem('tmsAccessToken') || '',
   weekId: '',
   weekStart: mondayIso(),
   last: null,
@@ -39,11 +40,18 @@ function headers() {
 }
 
 async function api(method, path, body) {
-  const res = await fetch(API + path, {
-    method,
-    headers: headers(),
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res;
+  try {
+    res = await fetch(API + path, {
+      method,
+      headers: headers(),
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new Error(
+      'Could not reach the server. If you use NetFree, the app must use the /api proxy. Try refresh.',
+    );
+  }
   if (res.status === 401 && COGNITO_MODE) {
     signOut('Your sign in ended. Please sign in again.');
     throw new Error('Please sign in again.');
@@ -55,6 +63,28 @@ async function api(method, path, body) {
     throw new Error(msg);
   }
   return data;
+}
+
+function openingAccountView() {
+  view(`
+    <div class="card">
+      <h2>Opening your account…</h2>
+      <p>Please wait a moment.</p>
+    </div>
+  `);
+}
+
+function homeLoadErrorView(err) {
+  view(`
+    <div class="card">
+      <h2>Could not load</h2>
+      <div class="err-box">${esc(err?.message || 'Something went wrong.')}</div>
+      <button type="button" class="btn-primary" id="retryHome">Retry</button>
+    </div>
+  `);
+  document.getElementById('retryHome').onclick = () => {
+    showRole();
+  };
 }
 
 function setStatus(msg, kind) {
@@ -144,70 +174,140 @@ function bindMakeupPickers() {
   sync();
 }
 
-async function therapistWeek() {
+function weekApprovalLabel(status) {
+  if (status === 'locked' || status === 'signed') {
+    return {
+      key: 'approved',
+      title: 'Approved',
+      detail: 'Your timesheet is signed and locked. You will be paid.',
+      box: 'ok-box',
+    };
+  }
+  if (status === 'submitted') {
+    return {
+      key: 'pending',
+      title: 'Pending',
+      detail: 'Waiting for the school signer (or admin) to approve. This will change to Approved when it is signed.',
+      box: 'warn-box',
+    };
+  }
+  if (status === 'reopened') {
+    return {
+      key: 'reopened',
+      title: 'Needs fixes',
+      detail: 'An admin reopened this week. Fix it and send the timesheet again.',
+      box: 'warn-box',
+    };
+  }
+  return {
+    key: 'draft',
+    title: 'Not sent yet',
+    detail: 'Upload notes or add sessions, then send the timesheet.',
+    box: 'warn-box',
+  };
+}
+
+function approvalBanner(status) {
+  const a = weekApprovalLabel(status);
+  return `<div class="${a.box}"><strong>Status: ${esc(a.title)}</strong><div>${esc(a.detail)}</div></div>`;
+}
+
+async function therapistHome() {
   let banner = '';
+  let week = null;
+  let sessions = [];
   let students = [];
-  let weekBlock = '';
+  let errors = [];
+  let warnings = [];
+  let signerName = '';
+  let signerEmail = '';
+  let providerId = '';
+
   try {
     const me = await api('GET', '/me');
+    providerId = me.provider?.id || '';
     const dues = (me.dueDates || []).filter((d) => d.status !== 'done');
     const alerts = me.alerts || [];
     if (dues.length || alerts.length) {
-      banner = `<div class="warn-box">${[...alerts.map((a) => a.body), ...dues.map((d) => `${d.kind} due ${d.dueOn} (${d.status})`)].map((t) => `<div>${esc(t)}</div>`).join('')}</div>`;
+      banner = `<div class="warn-box">${[...alerts.map((a) => a.body), ...dues.map((d) => `${d.kind} due ${d.dueOn}`)].map((t) => `<div>${esc(t)}</div>`).join('')}</div>`;
     }
-  } catch {
-    banner = '';
+    if (providerId) {
+      const ensured = await api('POST', '/week/ensure', { weekStart: state.weekStart, providerId });
+      week = ensured.week;
+      state.weekId = week.id;
+      signerName = week.signerName || '';
+      signerEmail = week.signerEmail || '';
+    }
+  } catch (e) {
+    setStatus(e.message, 'err');
   }
+
   try {
     const list = await api('GET', `/students?weekStart=${encodeURIComponent(state.weekStart)}`);
     students = list.students || [];
   } catch {
     students = [];
   }
+
   try {
     const data = await api('GET', `/week?weekStart=${encodeURIComponent(state.weekStart)}`);
     if (data.week) {
-      state.weekId = data.week.id;
-      const warnings = data.warnings || [];
-      const errors = data.errors || [];
-      const sessions = data.sessions || [];
-      weekBlock = `
-        <div class="card">
-          <h3>Week status: ${esc(data.week.status)}</h3>
-          ${errors.length ? `<div class="err-box">${errors.map((e) => `<div>${esc(e)}</div>`).join('')}</div>` : ''}
-          ${warnings.length ? `<div class="warn-box">${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}</div>` : ''}
-          <table>
-            <tr><th>Date</th><th>Child</th><th>Time</th><th>Attendance</th><th>Notes</th></tr>
-            ${sessions.map((s) => {
-              const name = studentName(data.students || students, s.studentId);
-              const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ');
-              return `<tr><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${esc(s.notes || '')}</td></tr>`;
-            }).join('') || '<tr><td colspan="5">No sessions yet.</td></tr>'}
-          </table>
-        </div>`;
+      week = data.week;
+      state.weekId = week.id;
+      sessions = data.sessions || [];
+      if ((data.students || []).length) students = data.students;
+      errors = data.errors || [];
+      warnings = data.warnings || [];
+      signerName = week.signerName || signerName;
+      signerEmail = week.signerEmail || signerEmail;
     }
   } catch {
-    weekBlock = '';
+    /* keep empty week */
   }
+
+  const status = week?.status || 'draft';
+  const locked = status === 'submitted' || status === 'signed' || status === 'locked';
+  const canSend = Boolean(week) && sessions.length > 0 && !locked && errors.length === 0;
+
   view(`
     <div class="card">
-      <h2>This week</h2>
+      <h2>My week</h2>
       ${banner}
-      <p>Upload the service notes PDF, or add a row. Over-mandate is blocked. Under-mandate is a warning.</p>
-      <label>Week starting (Monday)
-        <input id="weekStart" value="${esc(state.weekStart)}" />
-      </label>
-      <button class="btn-primary big" id="ensure">Open this week</button>
+      ${week ? approvalBanner(status) : '<div class="warn-box">Ask the office to finish setting up your therapist profile.</div>'}
+      <p class="muted">Week of ${esc(state.weekStart)}</p>
+      <button class="btn" id="refreshHome">Refresh status</button>
+      ${errors.length ? `<div class="err-box"><strong>Fix these before sending.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}</div>` : ''}
+      ${warnings.length ? `<div class="warn-box"><strong>Warnings (you can still send).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}</div>` : ''}
+      <p class="muted">Red = blocked (over-mandate or AI note issues). Yellow = under-mandate / soft warnings only.</p>
+      <table>
+        <tr><th>Date</th><th>Child</th><th>Time</th><th>Attendance</th><th>Flags</th><th>Notes</th></tr>
+        ${sessions.map((s) => {
+          const name = studentName(students, s.studentId);
+          const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ');
+          const flags = s.aiFlags || [];
+          const hard = Boolean(s.aiBlock);
+          const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
+          const pill = hard ? 'pill-err' : 'pill-warn';
+          return `<tr class="${rowClass}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${flags.length ? `<span class="${pill}">${esc(flags.join('; '))}</span>` : ''}</td><td>${esc(s.notes || '')}</td></tr>`;
+        }).join('') || '<tr><td colspan="6">No sessions yet.</td></tr>'}
+      </table>
     </div>
-    ${weekBlock}
+
+    ${locked ? `
     <div class="card">
-      <h3>Upload notes PDF or paste text</h3>
-      <input id="pdfFile" type="file" accept="application/pdf,.pdf,text/plain" />
-      <textarea id="pdfText" rows="8" placeholder="Student Name: ...&#10;09/01/2026 9:00 am 9:30 am Service Provided: ..."></textarea>
-      <button class="btn big" id="upload">Read notes into this week</button>
+      <p>This week is ${esc(weekApprovalLabel(status).title.toLowerCase())}. You cannot edit it.</p>
     </div>
+    ` : `
     <div class="card">
-      <h3>Add one session</h3>
+      <h2>1. Upload weekly report</h2>
+      <p>Choose your service notes PDF. The system reads the sessions for you.</p>
+      <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
+      <button class="btn-primary big" id="upload">Read PDF</button>
+    </div>
+
+    <div class="card">
+      <h2>2. Add a session</h2>
+      <p>Use this when you need to add or fix one visit by hand.</p>
       <div class="row">
         <label>Student
           <select id="studentId">${studentOptions(students)}</select>
@@ -221,9 +321,9 @@ async function therapistWeek() {
       <div class="row">
         <label>Attendance
           <select id="att">
-            <option>attended</option>
-            <option>missed</option>
-            <option>makeup</option>
+            <option value="attended">attended</option>
+            <option value="missed">missed</option>
+            <option value="makeup">makeup</option>
           </select>
         </label>
         <label id="makeupWrap" hidden>Makeup of missed
@@ -231,175 +331,77 @@ async function therapistWeek() {
         </label>
       </div>
       <label>Notes <textarea id="notes" rows="3"></textarea></label>
-      <button class="btn" id="add">Save session</button>
+      <button class="btn big" id="add">Save session</button>
     </div>
-  `);
-  bindMakeupPickers();
-  document.getElementById('ensure').onclick = async () => {
-    try {
-      state.weekStart = document.getElementById('weekStart').value;
-      const me = await api('GET', '/me');
-      const providerId = me.provider?.id;
-      const out = await api('POST', '/week/ensure', { weekStart: state.weekStart, providerId });
-      state.weekId = out.week.id;
-      setStatus('Week open. Status: ' + out.week.status, 'ok');
-      await therapistWeek();
-    } catch (e) {
-      setStatus(e.message, 'err');
-    }
-  };
-  document.getElementById('upload').onclick = async () => {
-    try {
-      const me = await api('GET', '/me');
-      const file = document.getElementById('pdfFile').files[0];
-      const pdfText = document.getElementById('pdfText').value;
-      const pdfBase64 = await fileToBase64(file);
-      const out = await api('POST', '/week/upload-sessions', {
-        weekStart: document.getElementById('weekStart').value,
-        providerId: me.provider?.id,
-        pdfText,
-        pdfBase64,
-      });
-      state.weekId = out.week.id;
-      state.weekStart = document.getElementById('weekStart').value;
-      setStatus(`Loaded ${out.parsed} session(s). ${out.warnings?.length ? out.warnings.join(' ') : ''}`, out.warnings?.length ? '' : 'ok');
-      await therapistWeek();
-    } catch (e) {
-      setStatus(e.message, 'err');
-    }
-  };
-  document.getElementById('add').onclick = async () => {
-    try {
-      if (!state.weekId) throw new Error('Open the week first.');
-      await api('POST', '/week/sessions', {
-        weekId: state.weekId,
-        studentId: document.getElementById('studentId').value,
-        dateOfService: document.getElementById('dos').value,
-        beginTime: document.getElementById('beginTime').value,
-        endTime: document.getElementById('endTime').value,
-        attendance: document.getElementById('att').value,
-        makeupOfSessionId: document.getElementById('makeupOf').value,
-        notes: document.getElementById('notes').value,
-      });
-      setStatus('Session saved.', 'ok');
-      await therapistWeek();
-    } catch (e) {
-      setStatus(e.message, 'err');
-    }
-  };
-}
 
-async function therapistFix() {
-  if (!state.weekId) {
-    view('<div class="card">Open a week first.</div>');
-    return;
-  }
-  const data = await api('GET', `/week?weekStart=${encodeURIComponent(state.weekStart)}`);
-  const sessions = data.sessions || [];
-  const errors = data.errors || [];
-  const warnings = data.warnings || [];
-  view(`
     <div class="card">
-      <h2>Fix errors</h2>
-      <p>Red = cannot send. Yellow = you can still send.</p>
-      ${errors.length ? `<div class="err-box"><strong>Cannot send.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}</div>` : ''}
-      ${warnings.length ? `<div class="warn-box">${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}</div>` : ''}
-      <table>
-        <tr><th>Date</th><th>Child</th><th>Attendance</th><th>Flags</th><th>Notes</th></tr>
-        ${sessions.map((s) => {
-          const name = studentName(data.students, s.studentId);
-          const flags = s.aiFlags || [];
-          const used = sessions.filter((x) => x.studentId === s.studentId && (x.attendance === 'attended' || x.attendance === 'makeup')).length;
-          const mandate = (data.mandates || []).find((m) => m.studentId === s.studentId);
-          const over = mandate && Number(mandate.frequencyPerWeek) > 0 && used > Number(mandate.frequencyPerWeek);
-          const rowClass = over ? 'hard' : (flags.length ? 'warn' : '');
-          const flagCell = over
-            ? '<span class="err-box">Over mandate — cannot send</span>'
-            : (flags.length ? `<span class="pill-warn">${esc(flags.join('; '))}</span>` : '');
-          return `<tr class="${rowClass}">
-            <td>${esc(s.dateOfService)}</td>
-            <td>${esc(name)}</td>
-            <td>${esc(s.attendance)}</td>
-            <td>${flagCell}</td>
-            <td>
-              <textarea data-notes="${esc(s.id)}" rows="2">${esc(s.notes || '')}</textarea>
-              <button class="btn" data-save-notes="${esc(s.id)}" data-week="${esc(s.weekId)}">Save notes</button>
-            </td>
-          </tr>`;
-        }).join('') || '<tr><td colspan="5">No sessions.</td></tr>'}
-      </table>
-      <p><button class="btn" id="screen">Screen notes</button></p>
+      <h2>3. Send timesheet</h2>
+      <p>We send it to the school signer on file${signerEmail ? `: ${esc(signerName || signerEmail)} &lt;${esc(signerEmail)}&gt;` : ''}.</p>
+      <button class="btn-primary big" id="submit" ${canSend ? '' : 'disabled'}>Send timesheet</button>
+      ${!canSend && !errors.length ? '<p class="muted">Add at least one session before sending.</p>' : ''}
     </div>
+    `}
   `);
-  document.getElementById('screen').onclick = async () => {
-    try {
-      for (const s of sessions) {
-        if (s.attendance === 'missed') continue;
-        await api('POST', `/sessions/${s.id}/ai-screen`, {});
+
+  document.getElementById('refreshHome').onclick = () => therapistHome();
+
+  if (!locked) {
+    bindMakeupPickers();
+
+    document.getElementById('upload').onclick = async () => {
+      try {
+        const file = document.getElementById('pdfFile').files[0];
+        if (!file) throw new Error('Choose your notes PDF first.');
+        const pdfBase64 = await fileToBase64(file);
+        const out = await api('POST', '/week/upload-sessions', {
+          weekStart: state.weekStart,
+          providerId,
+          pdfBase64,
+        });
+        state.weekId = out.week.id;
+        setStatus(`Loaded ${out.parsed} session(s).`, out.warnings?.length ? '' : 'ok');
+        await therapistHome();
+      } catch (e) {
+        setStatus(e.message, 'err');
       }
-      setStatus('Notes screened. Warnings only — over-mandate is still a hard stop.', 'ok');
-      therapistFix();
-    } catch (e) {
-      setStatus(e.message, 'err');
-    }
-  };
-  document.getElementById('view').onclick = async (e) => {
-    const btn = e.target.closest('[data-save-notes]');
-    if (!btn) return;
-    try {
-      const id = btn.getAttribute('data-save-notes');
-      const notes = document.querySelector(`[data-notes="${id}"]`)?.value || '';
-      await api('POST', '/week/sessions', { id, weekId: btn.getAttribute('data-week') || state.weekId, notes });
-      setStatus('Notes saved.', 'ok');
-      therapistFix();
-    } catch (err) {
-      setStatus(err.message, 'err');
-    }
-  };
-}
+    };
 
-async function therapistSend() {
-  view(`
-    <div class="card">
-      <h2>Send timesheet</h2>
-      <p>This emails the person entered as signer (not always the principal).</p>
-      <label>Signer name <input id="signerName" /></label>
-      <label>Signer email <input id="signerEmail" /></label>
-      <button class="btn-primary big" id="submit">Submit week</button>
-      <button class="btn big" id="pdf">Download timesheet PDF</button>
-    </div>
-  `);
-  document.getElementById('submit').onclick = async () => {
-    try {
-      if (!state.weekId) throw new Error('Open a week first.');
-      const out = await api('POST', `/weeks/${state.weekId}/submit`, {
-        signerName: document.getElementById('signerName').value,
-        signerEmail: document.getElementById('signerEmail').value,
-      });
-      state.last = out;
-      setStatus(out.message || 'Submitted.', 'ok');
-    } catch (e) {
-      setStatus(e.message, 'err');
-    }
-  };
-  document.getElementById('pdf').onclick = async () => {
-    try {
-      if (!state.weekId) throw new Error('Open a week first.');
-      const res = await fetch(`${API}/weeks/${state.weekId}/timesheet`, { headers: headers() });
-      const blob = await res.blob();
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'timesheet.pdf';
-      a.click();
-    } catch (e) {
-      setStatus(e.message, 'err');
-    }
-  };
-}
+    document.getElementById('add').onclick = async () => {
+      try {
+        if (!state.weekId) throw new Error('Your week is not open yet. Ask the office for help.');
+        await api('POST', '/week/sessions', {
+          weekId: state.weekId,
+          studentId: document.getElementById('studentId').value,
+          dateOfService: document.getElementById('dos').value,
+          beginTime: document.getElementById('beginTime').value,
+          endTime: document.getElementById('endTime').value,
+          attendance: document.getElementById('att').value,
+          makeupOfSessionId: document.getElementById('makeupOf').value,
+          notes: document.getElementById('notes').value,
+        });
+        setStatus('Session saved.', 'ok');
+        await therapistHome();
+      } catch (e) {
+        setStatus(e.message, 'err');
+      }
+    };
 
-function therapistDone() {
-  const msg = state.last?.therapistMessage || state.last?.message || 'When the admin marks the timesheet signed, this week locks and you will be paid.';
-  view(`<div class="card"><div class="ok-box">${esc(msg)}</div><p>You cannot edit a locked week. An admin can reopen it if something was wrong.</p></div>`);
+    document.getElementById('submit').onclick = async () => {
+      try {
+        if (!state.weekId) throw new Error('Add sessions first.');
+        if (!signerEmail) throw new Error('No school signer on file. Ask the office to set the signer.');
+        const out = await api('POST', `/weeks/${state.weekId}/submit`, {
+          signerName,
+          signerEmail,
+        });
+        state.last = out;
+        setStatus(out.message || 'Sent. Status is now Pending.', 'ok');
+        await therapistHome();
+      } catch (e) {
+        setStatus(e.message, 'err');
+      }
+    };
+  }
 }
 
 async function adminDash() {
@@ -470,37 +472,68 @@ async function adminPeople() {
   const users = usersOut.users || [];
   const providers = providersOut.providers || [];
   const schools = schoolsOut.schools || [];
+  const therapists = users.filter((u) => u.role === 'therapist');
+  const admins = users.filter((u) => u.role === 'admin');
   view(`
     <div class="card">
-      <h2>People</h2>
-      <h3>Logins</h3>
+      <h2>Add admin</h2>
+      <p class="muted">Invites another office login (Cognito Admin group). Only existing admins can do this.</p>
+      <label>Email <input id="aemail" type="email" autocomplete="off" /></label>
+      <label>Display name <input id="aname" placeholder="Optional" /></label>
+      <button class="btn-primary big" id="createAdmin">Invite admin</button>
+    </div>
+    <div class="card">
+      <h2>Admins</h2>
       <table>
-        <tr><th>Name</th><th>Email</th><th>Role</th><th>Provider</th></tr>
-        ${users.map((u) => {
-          const p = providers.find((x) => x.id === u.providerId);
-          const pname = p ? `${p.firstName} ${p.lastName}` : (u.providerId || '—');
-          return `<tr><td>${esc(u.displayName)}</td><td>${esc(u.email)}</td><td>${esc(u.role)}</td><td>${esc(pname)}</td></tr>`;
-        }).join('') || '<tr><td colspan="4">None</td></tr>'}
-      </table>
-      <h3>Providers</h3>
-      <table>
-        <tr><th>Name</th><th>Discipline</th><th>Pay rate</th></tr>
-        ${providers.map((p) => `<tr><td>${esc(`${p.firstName} ${p.lastName}`)}</td><td>${esc(p.discipline)}</td><td>${esc(p.payRate ?? '')}</td></tr>`).join('') || '<tr><td colspan="3">None</td></tr>'}
-      </table>
-      <h3>Schools</h3>
-      <table>
-        <tr><th>School</th><th>Signer</th></tr>
-        ${schools.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.signerName || s.signerEmail || '')}</td></tr>`).join('') || '<tr><td colspan="2">None</td></tr>'}
+        <tr><th>Name</th><th>Email</th><th>Status</th><th></th></tr>
+        ${admins.map((u) => {
+          const inactive = u.active === false;
+          const self = state.email && u.email && state.email.toLowerCase() === String(u.email).toLowerCase();
+          return `<tr>
+            <td>${esc(u.displayName || '—')}</td>
+            <td>${esc(u.email)}</td>
+            <td>${inactive ? 'Deactivated' : 'Active'}</td>
+            <td>${
+              inactive || self
+                ? '—'
+                : `<button type="button" class="btn" data-deactivate="${esc(u.id)}">Remove</button>`
+            }</td>
+          </tr>`;
+        }).join('') || '<tr><td colspan="4">None yet</td></tr>'}
       </table>
     </div>
     <div class="card">
-      <h2>Create therapist login</h2>
-      <label>Email <input id="email" /></label>
-      <label>Name <input id="dname" /></label>
-      <label>Link to provider
-        <select id="inviteProvider">${providerOptions(providers)}</select>
-      </label>
-      <button class="btn-primary" id="invite">Create login</button>
+      <h2>Add therapist (provider)</h2>
+      <p class="muted">One person = one login + provider profile, already linked.</p>
+      <label>Email <input id="temail" type="email" autocomplete="off" /></label>
+      <div class="row">
+        <label>First name <input id="tfirst" /></label>
+        <label>Last name <input id="tlast" /></label>
+      </div>
+      <div class="row">
+        <label>Discipline
+          <select id="tdisc"><option>OT</option><option selected>PT</option><option>SLP</option></select>
+        </label>
+        <label>Pay rate (optional) <input id="trate" type="number" step="0.01" placeholder="72" /></label>
+      </div>
+      <label>HHA caregiver code (optional) <input id="thha" /></label>
+      <button class="btn-primary big" id="createTherapist">Create therapist</button>
+    </div>
+    <div class="card">
+      <h2>Therapists</h2>
+      <table>
+        <tr><th>Name</th><th>Email</th><th>Provider id</th><th>Discipline</th></tr>
+        ${therapists.map((u) => {
+          const p = providers.find((x) => x.id === u.providerId) || providers.find((x) => x.userId === u.id);
+          const name = p ? `${p.firstName} ${p.lastName}`.trim() : u.displayName;
+          return `<tr>
+            <td>${esc(name || '—')}</td>
+            <td>${esc(u.email)}</td>
+            <td>${esc(p?.id || u.providerId || '—')}</td>
+            <td>${esc(p?.discipline || '—')}</td>
+          </tr>`;
+        }).join('') || '<tr><td colspan="4">None yet</td></tr>'}
+      </table>
     </div>
     <div class="card">
       <h2>School signer (entered, not always principal)</h2>
@@ -508,42 +541,59 @@ async function adminPeople() {
       <label>Signer name <input id="signerName" /></label>
       <label>Signer email <input id="signerEmail" /></label>
       <button class="btn" id="school">Save school</button>
+      <h3>Schools</h3>
+      <table>
+        <tr><th>School</th><th>Signer</th></tr>
+        ${schools.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.signerName || s.signerEmail || '')}</td></tr>`).join('') || '<tr><td colspan="2">None</td></tr>'}
+      </table>
     </div>
     <div class="card">
-      <h2>Provider + pay rate</h2>
-      <div class="row">
-        <label>First <input id="pf" /></label>
-        <label>Last <input id="pl" /></label>
-      </div>
-      <div class="row">
-        <label>Discipline
-          <select id="disc"><option>PT</option><option>OT</option><option>SLP</option></select>
-        </label>
-        <label>Pay rate <input id="rate" value="72" /></label>
-      </div>
-      <label>Therapist email (creates or links login)
-        <input id="pemail" placeholder="therapist@whiteglove.local" />
-      </label>
-      <button class="btn" id="prov">Save provider</button>
-    </div>
-    <div class="card">
-      <h2>Internal provider note</h2>
-      <label>Provider
+      <h2>Internal note</h2>
+      <p class="muted">Hidden from the therapist.</p>
+      <label>Therapist
         <select id="npid">${providerOptions(providers)}</select>
       </label>
       <label>Note <textarea id="nbody" rows="3"></textarea></label>
       <button class="btn" id="nadd">Add note</button>
     </div>
   `);
-  document.getElementById('invite').onclick = async () => {
+  document.getElementById('createAdmin').onclick = async () => {
     try {
-      await api('POST', '/admin/users', {
-        email: document.getElementById('email').value,
-        displayName: document.getElementById('dname').value,
-        role: 'therapist',
-        providerId: document.getElementById('inviteProvider').value,
+      const email = document.getElementById('aemail').value.trim();
+      const displayName = document.getElementById('aname').value.trim();
+      if (!email) throw new Error('Email is required.');
+      const out = await api('POST', '/admin/users', {
+        email,
+        displayName: displayName || email,
+        role: 'admin',
       });
-      setStatus('Therapist login created.', 'ok');
+      setStatus(out.message || `Admin invited: ${out.user?.email}`, 'ok');
+      await adminPeople();
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+  document.querySelectorAll('[data-deactivate]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        if (!confirm('Deactivate this admin? They will no longer be able to sign in.')) return;
+        const id = btn.getAttribute('data-deactivate');
+        const out = await api('POST', `/admin/users/${id}/deactivate`, {});
+        setStatus(out.message || 'Admin deactivated.', 'ok');
+        await adminPeople();
+      } catch (e) { setStatus(e.message, 'err'); }
+    });
+  });
+  document.getElementById('createTherapist').onclick = async () => {
+    try {
+      const rateRaw = document.getElementById('trate').value.trim();
+      const out = await api('POST', '/admin/therapists', {
+        email: document.getElementById('temail').value,
+        firstName: document.getElementById('tfirst').value,
+        lastName: document.getElementById('tlast').value,
+        discipline: document.getElementById('tdisc').value,
+        payRate: rateRaw === '' ? null : Number(rateRaw),
+        hhaCaregiverCode: document.getElementById('thha').value,
+      });
+      setStatus(out.message || `Therapist ready: ${out.user?.email} ↔ ${out.provider?.id}`, 'ok');
       await adminPeople();
     } catch (e) { setStatus(e.message, 'err'); }
   };
@@ -558,23 +608,10 @@ async function adminPeople() {
       await adminPeople();
     } catch (e) { setStatus(e.message, 'err'); }
   };
-  document.getElementById('prov').onclick = async () => {
-    try {
-      const out = await api('POST', '/admin/providers', {
-        firstName: document.getElementById('pf').value,
-        lastName: document.getElementById('pl').value,
-        discipline: document.getElementById('disc').value,
-        payRate: Number(document.getElementById('rate').value),
-        email: document.getElementById('pemail').value,
-      });
-      setStatus('Provider saved' + (out.user ? ` and linked to ${out.user.email}` : '') + '.', 'ok');
-      await adminPeople();
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
   document.getElementById('nadd').onclick = async () => {
     try {
       const id = document.getElementById('npid').value;
-      if (!id) throw new Error('Pick a provider.');
+      if (!id) throw new Error('Pick a therapist.');
       await api('POST', `/admin/providers/${id}/notes`, { body: document.getElementById('nbody').value });
       setStatus('Note saved (hidden from therapist).', 'ok');
     } catch (e) { setStatus(e.message, 'err'); }
@@ -776,26 +813,55 @@ function decodeJwtPayload(token) {
   }
 }
 
+function cognitoType(data) {
+  return String(data?.__type || '').split('#').pop();
+}
+
 function loginErrorMessage(data) {
-  const type = String(data.__type || '').split('#').pop();
+  const type = cognitoType(data);
   const plain = {
     NotAuthorizedException: 'Wrong email or password. Please try again.',
     UserNotFoundException: 'No account with that email. Ask the office to invite you.',
     UserNotConfirmedException: 'This account is not ready yet. Ask the office for help.',
-    PasswordResetRequiredException: 'Your password needs a reset. Ask the office for a new invite.',
+    PasswordResetRequiredException: 'Your password needs a reset. Use Forgot password below, or ask the office for help.',
     InvalidPasswordException: 'That password is too simple. Use at least 8 characters with a capital letter, a small letter, and a number.',
     TooManyRequestsException: 'Too many tries. Wait a minute and try again.',
     LimitExceededException: 'Too many tries. Wait a minute and try again.',
     CodeMismatchException: 'That code is wrong. Please try again.',
-    ExpiredCodeException: 'That code expired. Ask the office for a new invite.',
+    ExpiredCodeException: 'That code expired. Request a new code with Forgot password.',
+    InvalidParameterException: 'Check the email and try again.',
+    ResourceNotFoundException: 'Sign-in is misconfigured (wrong app client). Ask the office for help.',
   };
-  return plain[type] || data.message || 'Sign in did not work. Please try again.';
+  if (plain[type]) return plain[type];
+  if (data?.message) return type ? `${data.message} (${type})` : String(data.message);
+  return 'Sign in did not work. Please try again.';
 }
 
-async function cognitoCall(target, body) {
+function changePasswordErrorMessage(data) {
+  const type = cognitoType(data);
+  const plain = {
+    NotAuthorizedException: 'Wrong current password. Please try again.',
+    InvalidPasswordException: 'That password is too simple. Use at least 8 characters with a capital letter, a small letter, and a number.',
+    InvalidParameterException: 'That password is too simple. Use at least 8 characters with a capital letter, a small letter, and a number.',
+    LimitExceededException: 'Too many tries. Wait a minute and try again.',
+    TooManyRequestsException: 'Too many tries. Wait a minute and try again.',
+    CodeMismatchException: 'That code is wrong. Please try again.',
+    ExpiredCodeException: 'That code expired. Request a new code with Forgot password.',
+    UserNotFoundException: 'No account with that email. Ask the office to invite you.',
+  };
+  if (plain[type]) return plain[type];
+  if (data?.message) return type ? `${data.message} (${type})` : String(data.message);
+  return 'Could not change password. Please try again.';
+}
+
+const COGNITO_NETFREE_HINT =
+  'Could not reach Cognito. If you use NetFree, allowlist cognito-idp.us-east-1.amazonaws.com, then try again.';
+
+async function cognitoCall(target, body, errorFn = loginErrorMessage) {
+  const url = `https://cognito-idp.${cognitoRegion()}.amazonaws.com/`;
   let res;
   try {
-    res = await fetch(`https://cognito-idp.${cognitoRegion()}.amazonaws.com/`, {
+    res = await fetch(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/x-amz-json-1.1',
@@ -804,20 +870,33 @@ async function cognitoCall(target, body) {
       body: JSON.stringify(body),
     });
   } catch {
-    throw new Error('Could not reach the sign-in service. Check your internet and try again.');
+    throw new Error(COGNITO_NETFREE_HINT);
   }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(loginErrorMessage(data));
+  if (!res.ok) {
+    // Cognito uses HTTP 400 for wrong password etc. Empty/opaque bodies often mean a filter mangled the call.
+    if (!data.__type && !data.message) {
+      throw new Error(
+        `Sign-in service returned ${res.status}. If you use NetFree, allowlist cognito-idp.us-east-1.amazonaws.com.`,
+      );
+    }
+    throw new Error(errorFn(data));
+  }
   return data;
 }
 
-function applyToken(idToken) {
+function applyToken(idToken, accessToken) {
   const payload = decodeJwtPayload(idToken) || {};
   const groups = Array.isArray(payload['cognito:groups']) ? payload['cognito:groups'] : [];
   state.idToken = idToken;
   state.email = String(payload.email || payload['cognito:username'] || '');
   state.role = groups.includes('Admin') || groups.includes('admin') ? 'admin' : 'therapist';
   localStorage.setItem('tmsIdToken', idToken);
+  if (arguments.length >= 2) {
+    state.accessToken = accessToken || '';
+    if (accessToken) localStorage.setItem('tmsAccessToken', accessToken);
+    else localStorage.removeItem('tmsAccessToken');
+  }
 }
 
 function tokenStillGood(token) {
@@ -827,8 +906,10 @@ function tokenStillGood(token) {
 
 function signOut(message) {
   state.idToken = '';
+  state.accessToken = '';
   state.email = '';
   localStorage.removeItem('tmsIdToken');
+  localStorage.removeItem('tmsAccessToken');
   showLogin(message || '');
 }
 
@@ -840,10 +921,11 @@ function loginError(msg) {
 }
 
 function showLogin(message) {
-  document.getElementById('adminNav').hidden = true;
-  document.getElementById('therapistNav').hidden = true;
-  document.getElementById('signout').hidden = true;
-  document.getElementById('whoami').textContent = '';
+  if (COGNITO_MODE && tokenStillGood(state.idToken)) {
+    showRole();
+    return;
+  }
+  hideAppChrome();
   setStatus('', '');
   view(`
     <div class="card">
@@ -853,6 +935,7 @@ function showLogin(message) {
       <label>Email <input id="loginEmail" type="email" autocomplete="username" placeholder="you@example.com" /></label>
       <label>Password <input id="loginPassword" type="password" autocomplete="current-password" /></label>
       <button class="btn-primary big" id="loginBtn">Sign in</button>
+      <p><button type="button" class="linkish" id="forgotPasswordBtn">Forgot password?</button></p>
     </div>
   `);
   const submit = async () => {
@@ -876,10 +959,12 @@ function showLogin(message) {
         showNewPassword(email, out.Session);
         return;
       }
-      const idToken = out.AuthenticationResult && out.AuthenticationResult.IdToken;
+      const auth = out.AuthenticationResult || {};
+      const idToken = auth.IdToken;
       if (!idToken) throw new Error('Sign in did not work. Please try again.');
-      applyToken(idToken);
-      showRole();
+      applyToken(idToken, auth.AccessToken || '');
+      openingAccountView();
+      await showRole();
     } catch (e) {
       loginError(e.message);
       btn.disabled = false;
@@ -890,10 +975,110 @@ function showLogin(message) {
   document.getElementById('loginPassword').onkeydown = (e) => {
     if (e.key === 'Enter') submit();
   };
+  document.getElementById('forgotPasswordBtn').onclick = () => {
+    const email = document.getElementById('loginEmail').value.trim();
+    showForgotPassword(email);
+  };
   document.getElementById('loginEmail').focus();
 }
 
+function showForgotPassword(prefillEmail) {
+  hideAppChrome();
+  setStatus('', '');
+  view(`
+    <div class="card">
+      <h2>Forgot password</h2>
+      <p>We will email you a confirmation code. Then you pick a new password.</p>
+      <div id="loginErr" class="err-box" hidden></div>
+      <label>Email <input id="forgotEmail" type="email" autocomplete="username" placeholder="you@example.com" value="${esc(prefillEmail || '')}" /></label>
+      <button class="btn-primary big" id="forgotSendBtn">Email me a code</button>
+      <p><button type="button" class="btn" id="forgotBackBtn">Back to sign in</button></p>
+    </div>
+  `);
+  document.getElementById('forgotBackBtn').onclick = () => showLogin('');
+  document.getElementById('forgotSendBtn').onclick = async () => {
+    const btn = document.getElementById('forgotSendBtn');
+    const email = document.getElementById('forgotEmail').value.trim();
+    loginError('');
+    if (!email) {
+      loginError('Type your email first.');
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+      await cognitoCall('ForgotPassword', {
+        ClientId: CLIENT_ID,
+        Username: email,
+      });
+      showConfirmForgotPassword(email);
+    } catch (e) {
+      loginError(e.message);
+      btn.disabled = false;
+      btn.textContent = 'Email me a code';
+    }
+  };
+  document.getElementById('forgotEmail').focus();
+}
+
+function showConfirmForgotPassword(email) {
+  hideAppChrome();
+  setStatus('', '');
+  view(`
+    <div class="card">
+      <h2>Enter the code</h2>
+      <p>Check <strong>${esc(email)}</strong> for a confirmation code, then choose a new password (at least 8 characters with a capital letter, a small letter, and a number).</p>
+      <div id="loginErr" class="err-box" hidden></div>
+      <label>Confirmation code <input id="forgotCode" type="text" autocomplete="one-time-code" inputmode="numeric" /></label>
+      <label>New password <input id="forgotNew" type="password" autocomplete="new-password" /></label>
+      <label>Type new password again <input id="forgotNew2" type="password" autocomplete="new-password" /></label>
+      <button class="btn-primary big" id="forgotConfirmBtn">Save new password</button>
+      <p><button type="button" class="linkish" id="forgotResendBtn">Send another code</button></p>
+      <p><button type="button" class="btn" id="forgotBackBtn">Back to sign in</button></p>
+    </div>
+  `);
+  document.getElementById('forgotBackBtn').onclick = () => showLogin('');
+  document.getElementById('forgotResendBtn').onclick = () => showForgotPassword(email);
+  const submit = async () => {
+    const btn = document.getElementById('forgotConfirmBtn');
+    const code = document.getElementById('forgotCode').value.trim();
+    const p1 = document.getElementById('forgotNew').value;
+    const p2 = document.getElementById('forgotNew2').value;
+    loginError('');
+    if (!code || !p1 || !p2) {
+      loginError('Fill in the code and both password fields.');
+      return;
+    }
+    if (p1 !== p2) {
+      loginError('The two passwords do not match.');
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+      await cognitoCall('ConfirmForgotPassword', {
+        ClientId: CLIENT_ID,
+        Username: email,
+        ConfirmationCode: code,
+        Password: p1,
+      });
+      setStatus('Password updated. Sign in with your new password.', 'ok');
+      showLogin('');
+    } catch (e) {
+      loginError(e.message);
+      btn.disabled = false;
+      btn.textContent = 'Save new password';
+    }
+  };
+  document.getElementById('forgotConfirmBtn').onclick = submit;
+  document.getElementById('forgotNew2').onkeydown = (e) => {
+    if (e.key === 'Enter') submit();
+  };
+  document.getElementById('forgotCode').focus();
+}
+
 function showNewPassword(email, session) {
+  hideAppChrome();
   view(`
     <div class="card">
       <h2>Choose a new password</h2>
@@ -926,10 +1111,12 @@ function showNewPassword(email, session) {
         Session: session,
         ChallengeResponses: { USERNAME: email, NEW_PASSWORD: p1 },
       });
-      const idToken = out.AuthenticationResult && out.AuthenticationResult.IdToken;
+      const auth = out.AuthenticationResult || {};
+      const idToken = auth.IdToken;
       if (!idToken) throw new Error('Sign in did not work. Please sign in again.');
-      applyToken(idToken);
-      showRole();
+      applyToken(idToken, auth.AccessToken || '');
+      openingAccountView();
+      await showRole();
     } catch (e) {
       loginError(e.message);
       btn.disabled = false;
@@ -943,22 +1130,149 @@ function showNewPassword(email, session) {
   document.getElementById('newPassword').focus();
 }
 
+function changePasswordError(msg) {
+  const box = document.getElementById('changePwErr');
+  if (!box) return;
+  box.textContent = msg || '';
+  box.hidden = !msg;
+}
+
+function showChangePassword() {
+  if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
+    signOut('Your sign in ended. Please sign in again.');
+    return;
+  }
+  if (!state.accessToken) {
+    view(`
+      <div class="card">
+        <h2>Change password</h2>
+        <div class="err-box">Sign out and Sign in again, then you can change your password.</div>
+        <button type="button" class="btn" id="changePwCancel">Back</button>
+      </div>
+    `);
+    document.getElementById('changePwCancel').onclick = () => showRole();
+    return;
+  }
+  view(`
+    <div class="card">
+      <h2>Change password</h2>
+      <p>At least 8 characters with a capital letter, a small letter, and a number.</p>
+      <div id="changePwErr" class="err-box" hidden></div>
+      <label>Current password <input id="changePwCurrent" type="password" autocomplete="current-password" /></label>
+      <label>New password <input id="changePwNew" type="password" autocomplete="new-password" /></label>
+      <label>Type new password again <input id="changePwNew2" type="password" autocomplete="new-password" /></label>
+      <button class="btn-primary big" id="changePwSave">Save</button>
+      <p><button type="button" class="btn" id="changePwCancel">Cancel</button></p>
+    </div>
+  `);
+  const submit = async () => {
+    const btn = document.getElementById('changePwSave');
+    const current = document.getElementById('changePwCurrent').value;
+    const p1 = document.getElementById('changePwNew').value;
+    const p2 = document.getElementById('changePwNew2').value;
+    changePasswordError('');
+    if (!current || !p1 || !p2) {
+      changePasswordError('Fill in all three password fields.');
+      return;
+    }
+    if (p1 !== p2) {
+      changePasswordError('The two new passwords do not match.');
+      return;
+    }
+    if (!state.accessToken) {
+      changePasswordError('Sign out and Sign in again, then you can change your password.');
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+    try {
+      await cognitoCall(
+        'ChangePassword',
+        {
+          PreviousPassword: current,
+          ProposedPassword: p1,
+          AccessToken: state.accessToken,
+        },
+        changePasswordErrorMessage,
+      );
+      setStatus('Password changed. Use the new password next time you sign in.', 'ok');
+      showRole();
+    } catch (e) {
+      changePasswordError(e.message);
+      btn.disabled = false;
+      btn.textContent = 'Save';
+    }
+  };
+  document.getElementById('changePwSave').onclick = submit;
+  document.getElementById('changePwCancel').onclick = () => showRole();
+  document.getElementById('changePwNew2').onkeydown = (e) => {
+    if (e.key === 'Enter') submit();
+  };
+  document.getElementById('changePwCurrent').focus();
+}
+
 // ---- Navigation ----
 
-function showRole() {
+function hideAppChrome() {
+  document.getElementById('whoBar').hidden = true;
+  document.getElementById('rolePick').hidden = true;
+  document.getElementById('adminNav').hidden = true;
+  document.getElementById('therapistNav').hidden = true;
+  document.getElementById('changePassword').hidden = true;
+  document.getElementById('signout').hidden = true;
+  document.getElementById('whoami').textContent = '';
+}
+
+async function showRole() {
+  if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
+    signOut('Your sign in ended. Please sign in again.');
+    return;
+  }
   const admin = state.role === 'admin';
+  // Always show whoBar after login for both therapist and admin
+  const whoBar = document.getElementById('whoBar');
+  whoBar.hidden = false;
+  whoBar.removeAttribute('hidden');
+  // Therapists get one page — never show therapist tab nav
+  document.getElementById('therapistNav').hidden = true;
   document.getElementById('adminNav').hidden = !admin;
-  document.getElementById('therapistNav').hidden = admin;
+  document.getElementById('rolePick').hidden = COGNITO_MODE;
   const label = admin ? 'Admin' : 'Therapist';
   document.getElementById('whoami').textContent = COGNITO_MODE && state.email ? `${state.email} — ${label}` : label;
-  document.getElementById('signout').hidden = !COGNITO_MODE;
-  if (admin) adminDash();
-  else therapistWeek();
+  const changePw = document.getElementById('changePassword');
+  const signOutBtn = document.getElementById('signout');
+  if (COGNITO_MODE) {
+    changePw.hidden = false;
+    changePw.removeAttribute('hidden');
+    signOutBtn.hidden = false;
+    signOutBtn.removeAttribute('hidden');
+  } else {
+    changePw.hidden = true;
+    signOutBtn.hidden = true;
+  }
+  // Replace Sign in (or any prior) content before API calls so chrome never
+  // shows "signed in" while the login form is still stuck on Signing in…
+  openingAccountView();
+  try {
+    if (admin) await adminDash();
+    else await therapistHome();
+  } catch (e) {
+    homeLoadErrorView(e);
+  }
 }
 
 document.getElementById('role').onchange = (e) => {
+  if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
+    hideAppChrome();
+    signOut('');
+    return;
+  }
   state.role = e.target.value;
   showRole();
+};
+
+document.getElementById('changePassword').onclick = () => {
+  showChangePassword();
 };
 
 document.getElementById('signout').onclick = () => {
@@ -966,17 +1280,21 @@ document.getElementById('signout').onclick = () => {
 };
 
 document.getElementById('therapistNav').onclick = (e) => {
-  const btn = e.target.closest('[data-screen]');
-  if (!btn) return;
-  document.querySelectorAll('#therapistNav .nav').forEach((b) => b.classList.toggle('on', b === btn));
-  const screen = btn.getAttribute('data-screen');
-  if (screen === 'week') therapistWeek();
-  if (screen === 'fix') therapistFix();
-  if (screen === 'send') therapistSend();
-  if (screen === 'done') therapistDone();
+  e.preventDefault();
+  if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
+    hideAppChrome();
+    signOut('');
+    return;
+  }
+  therapistHome();
 };
 
 document.getElementById('adminNav').onclick = (e) => {
+  if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
+    hideAppChrome();
+    signOut('');
+    return;
+  }
   const btn = e.target.closest('[data-admin]');
   if (!btn) return;
   document.querySelectorAll('#adminNav .nav').forEach((b) => b.classList.toggle('on', b === btn));
@@ -988,12 +1306,12 @@ document.getElementById('adminNav').onclick = (e) => {
 };
 
 if (COGNITO_MODE) {
-  document.getElementById('rolePick').hidden = true;
+  hideAppChrome();
   if (tokenStillGood(state.idToken)) {
     applyToken(state.idToken);
     showRole();
   } else {
-    signOut('');
+    showLogin('');
   }
 } else {
   showRole();
