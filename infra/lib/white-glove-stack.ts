@@ -18,9 +18,11 @@ import * as sns from 'aws-cdk-lib/aws-sns';
 import * as subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 import { ProviderSoftBotImage } from './providersoft-bot-image.js';
 import { HhaSessionsBotImage } from './hha-sessions-bot-image.js';
+import { addTherapyManagement } from './tms.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '../..');
@@ -35,19 +37,24 @@ export class WhiteGloveStack extends cdk.Stack {
     const alertEmails = alertEmailRaw
       ? alertEmailRaw.split(',').map((e) => e.trim()).filter(Boolean)
       : [];
-    const alertFromEmail = String(
-      this.node.tryGetContext('alertFromEmail') ??
-        (this.node.tryGetContext('alertFromDomain')
-          ? `alerts@${this.node.tryGetContext('alertFromDomain')}`
-          : alertEmails[0] ?? 'alerts@whiteglovecare.net'),
-    );
-    const alertFromName = String(
-      this.node.tryGetContext('alertFromName') ?? 'White Glove Alerts',
-    );
     const alertFromEmailFallback = String(
       this.node.tryGetContext('alertFromEmailFallback') ?? 'moshe@advancedautomations.net',
     );
     const alertFromDomain = this.node.tryGetContext('alertFromDomain') as string | undefined;
+    /** Verified SES sender until domain DKIM is live; avoids unverified alerts@ default. */
+    const alertFromEmail = String(
+      this.node.tryGetContext('alertFromEmail') ??
+        (alertFromDomain?.trim()
+          ? `alerts@${alertFromDomain.trim()}`
+          : alertFromEmailFallback),
+    );
+    const alertFromName = String(
+      this.node.tryGetContext('alertFromName') ?? 'White Glove Pipeline',
+    );
+    const alertReplyTo = String(
+      this.node.tryGetContext('alertReplyTo') ??
+        (alertEmails[0] ?? 'elefkowitz@whiteglovecare.net'),
+    );
 
     /**
      * Customer-managed KMS key for PHI-adjacent stores (S3, DynamoDB, Secrets, SNS, SFN logs).
@@ -194,7 +201,10 @@ export class WhiteGloveStack extends cdk.Stack {
       exceptionTopic.addSubscription(new subscriptions.EmailSubscription(email));
     }
 
-    if (alertFromDomain?.trim()) {
+    /** Domain identity already exists in SES (created outside CloudFormation) — only create when explicitly asked. */
+    const manageSesDomainIdentity =
+      String(this.node.tryGetContext('manageSesDomainIdentity') ?? 'false') === 'true';
+    if (alertFromDomain?.trim() && manageSesDomainIdentity) {
       const domain = alertFromDomain.trim();
       const domainIdentity = new ses.EmailIdentity(this, 'AlertFromDomain', {
         identity: ses.Identity.domain(domain),
@@ -237,6 +247,7 @@ export class WhiteGloveStack extends cdk.Stack {
       ALERT_FROM_EMAIL: alertFromEmail,
       ALERT_FROM_EMAIL_FALLBACK: alertFromEmailFallback,
       ALERT_FROM_NAME: alertFromName,
+      ALERT_REPLY_TO: alertReplyTo,
       ALERT_EMAILS: alertEmails.join(','),
       HHA_USE_MOCK: hhaUseMock ? 'true' : 'false',
       HHA_PRODUCTION_BASE_URL: hhaProductionUrl,
@@ -786,7 +797,48 @@ export class WhiteGloveStack extends cdk.Stack {
 
     const pipelineConsoleUrl = `https://${this.region}.console.aws.amazon.com/states/home?region=${this.region}#/statemachines/view/${stateMachine.stateMachineArn}`;
 
-    const sandboxApiKey = String(this.node.tryGetContext('sandboxApiKey') ?? '');
+    /**
+     * Durable ops key for sandbox / live / dashboard Function URLs.
+     * Generated once in Secrets Manager so `deploy:aws:live` (which does not pass
+     * -c sandboxApiKey) cannot wipe Lambda env back to empty.
+     * Optional -c sandboxApiKey=… still overrides.
+     */
+    const opsTriggerKeySecret = new secretsmanager.Secret(this, 'OpsTriggerApiKey', {
+      description: 'Shared Function URL key for sandbox, live, and ops dashboard',
+      encryptionKey: dataKey,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      generateSecretString: {
+        passwordLength: 32,
+        excludePunctuation: true,
+      },
+    });
+    const contextSandboxKey = String(this.node.tryGetContext('sandboxApiKey') ?? '').trim();
+    const sandboxApiKey = contextSandboxKey || opsTriggerKeySecret.secretValue.unsafeUnwrap();
+    const resolveOpsKeyCall = {
+      service: 'SecretsManager',
+      action: 'getSecretValue',
+      parameters: { SecretId: opsTriggerKeySecret.secretArn },
+      physicalResourceId: cr.PhysicalResourceId.of('OpsTriggerApiKeyResolved'),
+    };
+    const resolveOpsKey = new cr.AwsCustomResource(this, 'ResolveOpsTriggerApiKey', {
+      onCreate: resolveOpsKeyCall,
+      onUpdate: resolveOpsKeyCall,
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['secretsmanager:GetSecretValue'],
+          resources: [opsTriggerKeySecret.secretArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ['kms:Decrypt'],
+          resources: [dataKey.keyArn],
+        }),
+      ]),
+      installLatestAwsSdk: false,
+    });
+    resolveOpsKey.node.addDependency(opsTriggerKeySecret);
+    const resolvedOpsKey = resolveOpsKey.getResponseField('SecretString');
+    /** Outputs must embed the same key each Lambda authenticates with (context override wins). */
+    const sandboxKeyForUrl = contextSandboxKey || resolvedOpsKey;
     const sandboxTriggerFn = new NodejsFunction(this, 'SandboxTriggerFn', {
       entry: path.join(repoRoot, 'packages/processors/src/handlers/sandbox-trigger.ts'),
       handler: 'handler',
@@ -812,18 +864,22 @@ export class WhiteGloveStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'CloudTrailName', { value: 'white-glove-audit' });
     new cdk.CfnOutput(this, 'StateMachineArn', { value: stateMachine.stateMachineArn });
     new cdk.CfnOutput(this, 'SandboxTriggerUrl', {
-      value: sandboxApiKey
-        ? `${sandboxFunctionUrl.url}?key=${sandboxApiKey}`
-        : sandboxFunctionUrl.url,
+      value: cdk.Fn.join('', [sandboxFunctionUrl.url, '?key=', sandboxKeyForUrl]),
       description:
-        'Bookmark to start sandbox run (real PS + prod HHA read-only, email summary). Set -c sandboxApiKey=… on deploy.',
+        'Bookmark to start sandbox (real PS + prod HHA read-only). Key is included so it opens without a prompt.',
     });
     new cdk.CfnOutput(this, 'SandboxApiKeyConfigured', {
-      value: sandboxApiKey ? 'true' : 'false',
+      value: 'true',
+    });
+    new cdk.CfnOutput(this, 'OpsTriggerApiKeyArn', {
+      value: opsTriggerKeySecret.secretArn,
+      description: 'Secrets Manager ARN for the sandbox/live/dashboard Function URL key',
     });
 
     // Manual LIVE start — same key as sandbox; requires confirm=LIVE. Does not enable EventBridge crons.
-    const liveApiKey = String(this.node.tryGetContext('liveApiKey') ?? sandboxApiKey);
+    const contextLiveKey = String(this.node.tryGetContext('liveApiKey') ?? '').trim();
+    const liveApiKey = contextLiveKey || sandboxApiKey;
+    const liveKeyForUrl = contextLiveKey || sandboxKeyForUrl;
     const liveTriggerFn = new NodejsFunction(this, 'LiveTriggerFn', {
       entry: path.join(repoRoot, 'packages/processors/src/handlers/live-trigger.ts'),
       handler: 'handler',
@@ -844,17 +900,17 @@ export class WhiteGloveStack extends cdk.Stack {
       authType: lambda.FunctionUrlAuthType.NONE,
     });
     new cdk.CfnOutput(this, 'LiveTriggerUrl', {
-      value: liveApiKey
-        ? `${liveFunctionUrl.url}?key=${liveApiKey}&confirm=LIVE`
-        : `${liveFunctionUrl.url}?confirm=LIVE`,
+      value: cdk.Fn.join('', [liveFunctionUrl.url, '?key=', liveKeyForUrl, '&confirm=LIVE']),
       description:
-        'MANUAL live sessions (verified_sessions + caregiver_codes only; dryRun=false, sandbox=false). Requires confirm=LIVE. Does not enable nightly schedules.',
+        'MANUAL live sessions (confirm=LIVE). Key is included so it opens without a prompt.',
     });
     new cdk.CfnOutput(this, 'LiveApiKeyConfigured', {
-      value: liveApiKey ? 'true' : 'false',
+      value: 'true',
     });
 
-    const dashboardApiKey = String(this.node.tryGetContext('dashboardApiKey') ?? sandboxApiKey);
+    const contextDashboardKey = String(this.node.tryGetContext('dashboardApiKey') ?? '').trim();
+    const dashboardApiKey = contextDashboardKey || sandboxApiKey;
+    const dashboardKeyForUrl = contextDashboardKey || sandboxKeyForUrl;
     const cookiesSecretArn = String(this.node.tryGetContext('hhaCookiesSecretArn') ?? '');
     const mfaDashboardFn = new NodejsFunction(this, 'MfaDashboardFn', {
       entry: path.join(repoRoot, 'packages/processors/src/handlers/mfa-dashboard-api.ts'),
@@ -902,21 +958,25 @@ export class WhiteGloveStack extends cdk.Stack {
       authType: lambda.FunctionUrlAuthType.NONE,
     });
     new cdk.CfnOutput(this, 'MfaDashboardApiUrl', {
-      value: dashboardApiKey
-        ? `${mfaDashboardUrl.url}?key=${dashboardApiKey}&action=status`
-        : mfaDashboardUrl.url,
-      description: 'White Glove dashboard API (MFA renew + status). Set -c dashboardApiKey=…',
+      value: cdk.Fn.join('', [mfaDashboardUrl.url, '?key=', dashboardKeyForUrl, '&action=status']),
+      description: 'White Glove dashboard API (MFA + status). Key is included.',
     });
     new cdk.CfnOutput(this, 'MfaDashboardUiUrl', {
-      value: dashboardApiKey
-        ? `${mfaDashboardUrl.url}?key=${dashboardApiKey}&action=ui`
-        : `${mfaDashboardUrl.url}?action=ui`,
+      value: cdk.Fn.join('', [mfaDashboardUrl.url, '?key=', dashboardKeyForUrl, '&action=ui']),
       description:
-        'Ops dashboard UI: MFA renew + Test live (report pickers + per-report dates). Does not enable nightly schedules.',
+        'Ops dashboard (MFA, Run sandbox, Test live). Bookmark this — the key is in the URL so it opens automatically.',
     });
 
     new cdk.CfnOutput(this, 'AlertEmails', {
       value: alertEmails.join(', ') || '(none — set -c alertEmails=)',
+    });
+    new cdk.CfnOutput(this, 'AlertFromEmail', {
+      value: alertFromEmail,
+      description: 'SES FROM address for HTML pipeline alerts',
+    });
+    new cdk.CfnOutput(this, 'AlertReplyTo', {
+      value: alertReplyTo,
+      description: 'Reply-To for pipeline alerts (human-monitored inbox)',
     });
     new cdk.CfnOutput(this, 'HhaProductionSoapUrl', {
       value: sharedEnv.HHA_PRODUCTION_BASE_URL!,
@@ -972,6 +1032,18 @@ export class WhiteGloveStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'HhaSessionsBotCodeBuildProjectName', {
       value: hhaSessionsBot.project.projectName,
     });
+
+    const enableTms = String(this.node.tryGetContext('enableTms') ?? 'true') !== 'false';
+    if (enableTms) {
+      addTherapyManagement(this, {
+        reportsBucket,
+        hhaSecret,
+        fromEmail: alertFromEmail,
+        bedrockModelId: String(this.node.tryGetContext('tmsBedrockModelId') ?? ''),
+        spaOrigin: String(this.node.tryGetContext('tmsSpaOrigin') ?? ''),
+        internalKey: String(this.node.tryGetContext('tmsInternalKey') ?? ''),
+      });
+    }
   }
 
   /**

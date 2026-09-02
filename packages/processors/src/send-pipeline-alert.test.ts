@@ -7,7 +7,6 @@ const { sesSend, snsSend } = vi.hoisted(() => ({
 
 vi.mock('@aws-sdk/client-ses', () => ({
   SESClient: vi.fn(() => ({ send: sesSend })),
-  SendEmailCommand: vi.fn((input: unknown) => input),
   SendRawEmailCommand: vi.fn((input: unknown) => input),
 }));
 
@@ -79,6 +78,26 @@ describe('sendPipelineAlert', () => {
     expect(result).toEqual({ channel: 'sns', sesCount: 0, snsFallback: true });
     expect(sesSend).toHaveBeenCalledTimes(2);
     expect(snsSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('always uses SendRawEmail with deliverability headers', async () => {
+    sesSend.mockResolvedValue({});
+
+    await sendPipelineAlert({
+      fromEmail: 'alerts@whiteglovecare.net',
+      replyTo: 'ops@whiteglovecare.net',
+      alertEmails: 'a@example.com',
+      subject: 'Test',
+      textBody: 'plain',
+      htmlBody: '<p>html</p>',
+    });
+
+    expect(sesSend).toHaveBeenCalledTimes(1);
+    const raw = sesSend.mock.calls[0]![0] as { RawMessage?: { Data?: Buffer } };
+    const mime = raw.RawMessage!.Data!.toString('utf8');
+    expect(mime).toContain('Reply-To: ops@whiteglovecare.net');
+    expect(mime).toContain('List-Id:');
+    expect(mime).toContain('Auto-Submitted: auto-generated');
   });
 
   it('uses SendRawEmail when CSV attachments are present', async () => {

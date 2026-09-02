@@ -49,3 +49,13 @@ export function parsePayCodesFromXml(xml: string): Array<{ id: string; name: str
   }
   return [...new Map(list.map((p) => [p.id, p])).values()];
 }
+
+export function parsePayRateCodesFromXml(xml: string): Array<{ id: string; name: string }> {
+  const list: Array<{ id: string; name: string }> = [];
+  for (const m of xml.matchAll(
+    /<PayRateCodeID>(\d+)<\/PayRateCodeID>\s*<PayRateCodeName>([^<]*)<\/PayRateCodeName>/gi,
+  )) {
+    list.push({ id: m[1]!, name: m[2]!.trim() });
+  }
+  return [...new Map(list.map((p) => [p.id, p])).values()];
+}

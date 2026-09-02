@@ -202,11 +202,19 @@ export async function validateAndNotify(options: {
   await putJson(options.bucket, validateSummaryKey(options.runId), result);
   await putJson(options.bucket, exceptionsKey(options.runId), exceptions);
 
-  const topicArn = options.topicArn ?? getEnv().EXCEPTION_TOPIC_ARN;
+  const topicArn =
+    options.topicArn ??
+    process.env.EXCEPTION_TOPIC_ARN ??
+    getEnv().EXCEPTION_TOPIC_ARN;
   const shouldEmail =
     !options.skipAlertEmail &&
     Boolean(topicArn) &&
     (options.sandbox || options.dryRun || !result.ok || exceptions.length > 0);
+  if (!shouldEmail) {
+    console.log(
+      `[validate] Skipping alert email run=${options.runId} topicArn=${topicArn ? 'set' : 'missing'} sandbox=${options.sandbox} dryRun=${options.dryRun} ok=${result.ok} exceptions=${exceptions.length}`,
+    );
+  }
   if (shouldEmail) {
     if (!options.forceAlertEmail && (await alertEmailAlreadySent(options.bucket, options.runId))) {
       console.log(`[validate] Alert email already sent for run ${options.runId}; skipping duplicate`);
@@ -261,7 +269,7 @@ export async function validateAndNotify(options: {
       const env = getEnv();
       const htmlBody = formatPipelineAlertHtml({
         ...alertOptions,
-        logoUrl: env.ALERT_LOGO_URL,
+        logoUrl: process.env.ALERT_LOGO_URL ?? env.ALERT_LOGO_URL,
         hasCsvAttachments: csvAttachments.length > 0,
       });
       const subject = buildAlertSubject({
@@ -273,23 +281,56 @@ export async function validateAndNotify(options: {
         sandbox: options.sandbox,
       });
 
-      await sendPipelineAlert({
+      // Read alert recipients/from from process.env directly — getEnv Zod schema
+      // historically omitted these keys and stripped them (silent no-send).
+      const alertEmails =
+        process.env.ALERT_EMAILS?.trim() || env.ALERT_EMAILS?.trim() || undefined;
+      const fromEmail =
+        process.env.ALERT_FROM_EMAIL?.trim() || env.ALERT_FROM_EMAIL?.trim() || undefined;
+      const fromEmailFallback =
+        process.env.ALERT_FROM_EMAIL_FALLBACK?.trim() ||
+        env.ALERT_FROM_EMAIL_FALLBACK?.trim() ||
+        undefined;
+      const fromName =
+        process.env.ALERT_FROM_NAME?.trim() || env.ALERT_FROM_NAME?.trim() || undefined;
+      const replyTo =
+        process.env.ALERT_REPLY_TO?.trim() || env.ALERT_REPLY_TO?.trim() || undefined;
+
+      console.log(
+        `[validate] Sending alert email run=${options.runId} recipients=${alertEmails ?? '(none)'} from=${fromEmail ?? '(none)'} replyTo=${replyTo ?? fromEmail ?? '(none)'}`,
+      );
+
+      const sent = await sendPipelineAlert({
         topicArn,
-        fromEmail: env.ALERT_FROM_EMAIL,
-        fromEmailFallback: env.ALERT_FROM_EMAIL_FALLBACK,
-        fromName: env.ALERT_FROM_NAME,
-        alertEmails: env.ALERT_EMAILS,
+        fromEmail,
+        fromEmailFallback,
+        fromName,
+        replyTo,
+        alertEmails,
         subject,
         textBody: alertBody,
         htmlBody,
         attachments: csvAttachments,
       });
 
-      await putJson(options.bucket, alertEmailSentKey(options.runId), {
-        sentAt: new Date().toISOString(),
-        subject,
-        attachments: csvAttachments.map((a) => a.filename),
-      });
+      console.log(
+        `[validate] Alert result run=${options.runId} channel=${sent.channel} sesCount=${sent.sesCount} snsFallback=${sent.snsFallback}`,
+      );
+
+      if (sent.channel === 'none') {
+        console.warn(
+          `[validate] Alert email not delivered for run ${options.runId} (channel=none); not marking as sent`,
+        );
+      } else {
+        await putJson(options.bucket, alertEmailSentKey(options.runId), {
+          sentAt: new Date().toISOString(),
+          subject,
+          channel: sent.channel,
+          sesCount: sent.sesCount,
+          snsFallback: sent.snsFallback,
+          attachments: csvAttachments.map((a) => a.filename),
+        });
+      }
     }
   }
 

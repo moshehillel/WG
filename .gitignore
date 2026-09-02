@@ -30,6 +30,12 @@ infra/cdk.context.json
 *.log
 .DS_Store
 
+# Local RS converter fixtures (child PHI — do not commit)
+rs-converter/_fixture.pdf
+rs-converter/_fixture.csv
+rs-converter/_fixture*.pdf
+rs-converter/_probe-*.mjs
+
 # docs/: keep markdown + CSV test samples; ignore probe/sandbox JSON and scratch files
 docs/*
 !docs/*.md

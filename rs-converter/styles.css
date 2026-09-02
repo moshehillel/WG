@@ -1,0 +1,138 @@
+:root {
+  --bg: #f4f7f6;
+  --card: #ffffff;
+  --ink: #134e4a;
+  --text: #1e293b;
+  --muted: #64748b;
+  --line: #d7e3df;
+  --accent: #0f766e;
+  --accent-2: #115e59;
+  --err: #b91c1c;
+  --ok: #047857;
+  --shadow: 0 10px 30px rgba(15, 118, 110, 0.08);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  font-family: "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  background:
+    radial-gradient(1200px 400px at 10% -10%, #ccfbf1 0%, transparent 50%),
+    var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+header, main, footer { width: min(1280px, calc(100% - 2rem)); margin-left: auto; margin-right: auto; }
+header { padding: 1.75rem 0 0.5rem; }
+h1 { margin: 0; font-size: 1.55rem; color: var(--ink); letter-spacing: -0.02em; }
+.lede { color: var(--muted); margin: 0.4rem 0 1.25rem; max-width: 48rem; line-height: 1.45; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 1.1rem 1.2rem 1.2rem;
+  margin-bottom: 1rem;
+}
+
+.drops {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+@media (max-width: 800px) {
+  .drops { grid-template-columns: 1fr; }
+}
+#drop, #mapDrop {
+  border: 2px dashed #99f6e4;
+  background: #f0fdfa;
+  border-radius: 14px;
+  padding: 1.6rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 600;
+}
+#drop.over, #mapDrop.over { background: #ccfbf1; border-color: var(--accent); }
+#drop span, #mapDrop span { display: block; font-weight: 400; color: var(--muted); margin-top: 0.35rem; font-size: 0.92rem; }
+#file, #mapFile { display: none; }
+#mapStatus { margin: 0.35rem 0 0; min-height: 1.1rem; color: var(--muted); font-size: 0.9rem; }
+#mapStatus[data-kind="ok"] { color: var(--ok); }
+#mapStatus[data-kind="err"] { color: var(--err); }
+.map-actions { margin-top: 0.55rem; }
+
+#status { margin: 0.85rem 0 0; min-height: 1.2rem; color: var(--muted); font-size: 0.95rem; }
+#status[data-kind="ok"] { color: var(--ok); }
+#status[data-kind="err"] { color: var(--err); }
+#meta { color: var(--muted); font-size: 0.9rem; margin: 0 0 0.75rem; }
+
+#warnings {
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  margin-bottom: 0.85rem;
+  font-size: 0.88rem;
+}
+#warnings[data-kind="error"] { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+#warnings[data-kind="warning"] { background: #fff7ed; border: 1px solid #fdba74; color: #9a3412; }
+#warnings ul { margin: 0.35rem 0 0.6rem; padding-left: 1.1rem; }
+#warnings ul:last-child { margin-bottom: 0; }
+td input.invalid, td select.invalid { border-color: #dc2626; background: #fef2f2; }
+td input.warn-field, td select.warn-field { border-color: #ea580c; background: #fff7ed; }
+tr.row-error td { background: #fff1f2; }
+
+.table-scroll { overflow: auto; max-width: 100%; }
+table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+th {
+  text-align: left;
+  background: #0f766e;
+  color: #fff;
+  padding: 0.5rem 0.45rem;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+}
+td { vertical-align: top; padding: 0.35rem 0.3rem; border-bottom: 1px solid var(--line); }
+td input, td select {
+  width: 100%;
+  min-width: 5.2rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.32rem 0.4rem;
+  font: inherit;
+  color: var(--text);
+  background: #fff;
+}
+td input + input, td select + input { margin-top: 0.28rem; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 0.65rem; margin-top: 0.9rem; }
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 10px;
+  padding: 0.6rem 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-primary:hover { background: var(--accent-2); }
+.btn-ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+.btn-tiny {
+  padding: 0.35rem 0.5rem;
+  font-size: 0.75rem;
+  background: #fff;
+  color: var(--err);
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+}
+
+.codes summary { cursor: pointer; font-weight: 700; color: var(--ink); }
+.hint { color: var(--muted); font-size: 0.9rem; }
+.codes-table { margin-top: 0.5rem; }
+.codes-table th { position: static; }
+.codes-table td { padding: 0.4rem; }
+
+footer { color: var(--muted); font-size: 0.82rem; padding: 0.5rem 0 2rem; line-height: 1.45; }
+code { font-size: 0.85em; background: #e2e8f0; padding: 0.05rem 0.3rem; border-radius: 4px; }

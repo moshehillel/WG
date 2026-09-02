@@ -8,8 +8,8 @@
     "infra"
   ],
   "scripts": {
-    "build": "npm run build -w @white-glove/shared && npm run build -w @white-glove/hha-client && npm run build -w @white-glove/processors && npm run build -w @white-glove/providersoft-bot && npm run build -w @white-glove/infra",
-    "test": "npm run test -w @white-glove/shared && npm run test -w @white-glove/hha-client && npm run test -w @white-glove/processors && npm run test -w @white-glove/providersoft-bot",
+    "build": "npm run build -w @white-glove/shared && npm run build -w @white-glove/hha-client && npm run build -w @white-glove/tms-db && npm run build -w @white-glove/tms-api && npm run build -w @white-glove/processors && npm run build -w @white-glove/providersoft-bot && npm run build -w @white-glove/infra",
+    "test": "npm run test -w @white-glove/shared && npm run test -w @white-glove/hha-client && npm run test -w @white-glove/tms-db && npm run test -w @white-glove/tms-api && npm run test -w @white-glove/processors && npm run test -w @white-glove/providersoft-bot",
     "lint": "eslint .",
     "format": "prettier --write .",
     "typecheck": "npm run typecheck --workspaces --if-present",
@@ -39,6 +39,10 @@
     "hha:push-secret": "node scripts/push-hha-secret-from-env.mjs",
     "hha:probe-unscheduled-create": "npm run build -w @white-glove/shared -w @white-glove/hha-client && npm run probe:unscheduled-create -w @white-glove/hha-client --",
     "test:sessions": "npx tsx scripts/test-api-report-sessions.mjs",
+    "rs-converter:test": "node rs-converter/test.mjs",
+    "tms:local": "npm run local -w @white-glove/tms-api",
+    "tms:netlify": "node scripts/build-tms-netlify.mjs",
+    "tms:sync-frontend": "node scripts/sync-tms-frontend-repo.mjs",
     "hha:sessions:deploy:aws": "node scripts/build-hha-sessions-image-aws.mjs"
   },
 

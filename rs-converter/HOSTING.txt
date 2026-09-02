@@ -1,0 +1,14 @@
+Host this folder on the White Glove website (IIS, Azure Static Web Apps, S3, or any static host).
+
+1. Copy the entire rs-converter folder to the site.
+2. Open index.html (example: https://your-site.example/rs-converter/).
+3. No Node, PHP, or database. The PDF and caseload CSV are parsed in the browser and are not uploaded to a server.
+
+Do not put this page on a site owned or operated by the developer if customers will open files there.
+The production copy belongs on White Glove hosting.
+
+Excel file matches ProviderSoft Activity Import (Sheet1).
+Timesheet PDF is fillable (provider and supervisor signature/date fields) and lists child, ratio, provider, date, attended/missed, time in/out, and service code.
+
+Optional caseload map CSV columns: Child’s Name, Program Id, Date of Birth, Service Type, mandate frequency, Program Type.
+Missed dates from Excel downloads are remembered in that browser (localStorage) so later makeup rows can fill DOS Made Up.

@@ -18,6 +18,13 @@
     "@aws-cdk/core:checkSecretUsage": true,
     "providerSoftLiveBot": false,
     "providerSoftUseStubs": true,
-    "alertEmails": "elefkowitz@whiteglovecare.net,moshe@advancedautomations.net"
+    "alertEmails": "elefkowitz@whiteglovecare.net,moshe@advancedautomations.net",
+    "alertFromDomain": "whiteglovecare.net",
+    "alertFromEmail": "moshe@advancedautomations.net",
+    "alertFromEmailFallback": "elefkowitz@whiteglovecare.net",
+    "alertReplyTo": "elefkowitz@whiteglovecare.net",
+    "hhaSecretArn": "arn:aws:secretsmanager:us-east-1:065194293782:secret:HhaSecret3062EA85-CsJnQwEGJqwN-7DaLQY",
+    "tmsSpaOrigin": "https://wgfront.netlify.app",
+    "tmsBedrockModelId": "us.anthropic.claude-3-5-haiku-20241022-v1:0"
   }
 }

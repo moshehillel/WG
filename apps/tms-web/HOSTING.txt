@@ -1,0 +1,17 @@
+Frontend lives in its own GitHub repo (Netlify auto-deploy):
+
+  https://github.com/moshehillel/white-glove-tms-web
+
+Sync UI changes from this monorepo:
+
+  npm run tms:sync-frontend
+
+Backend (API) stays here â€” deploy with CDK (TmsApiUrl output).
+
+No ProviderSoft on this product.
+
+Deployed API (WhiteGloveStack, us-east-1):
+  TmsApiUrl:     https://latakehjufxtl37yvnds5pfjga0bbgby.lambda-url.us-east-1.on.aws/
+  TmsUserPoolId: us-east-1_nDJo2pcjL
+
+  localStorage.setItem('tmsApi', 'https://latakehjufxtl37yvnds5pfjga0bbgby.lambda-url.us-east-1.on.aws/')
