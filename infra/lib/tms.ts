@@ -30,12 +30,20 @@ export function addTherapyManagement(
     selfSignUpEnabled: false,
     signInAliases: { email: true },
     accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+    // Match SPA copy: 8+ chars with upper, lower, number (no symbol required).
+    passwordPolicy: {
+      minLength: 8,
+      requireUppercase: true,
+      requireLowercase: true,
+      requireDigits: true,
+      requireSymbols: false,
+    },
     removalPolicy: cdk.RemovalPolicy.RETAIN,
   });
   const adminGroup = new cognito.CfnUserPoolGroup(scope, 'TmsAdminGroup', {
     userPoolId: userPool.userPoolId,
     groupName: 'Admin',
-    description: 'TMS administrators — create therapist logins',
+    description: 'TMS administrators — invite therapists and other admins',
   });
   const therapistGroup = new cognito.CfnUserPoolGroup(scope, 'TmsTherapistGroup', {
     userPoolId: userPool.userPoolId,
@@ -91,7 +99,13 @@ export function addTherapyManagement(
   });
   props.reportsBucket.grantReadWrite(fn, 'tms/*');
   props.hhaSecret.grantRead(fn);
-  userPool.grant(fn, 'cognito-idp:AdminCreateUser', 'cognito-idp:AdminAddUserToGroup');
+  userPool.grant(
+    fn,
+    'cognito-idp:AdminCreateUser',
+    'cognito-idp:AdminAddUserToGroup',
+    'cognito-idp:AdminRemoveUserFromGroup',
+    'cognito-idp:AdminDisableUser',
+  );
   fn.addToRolePolicy(
     new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel', 'ses:SendEmail', 'ses:SendRawEmail'],
