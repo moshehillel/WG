@@ -31,6 +31,9 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
 
   const provided =
     event.queryStringParameters?.key?.trim() ??
+    (event.rawQueryString
+      ? new URLSearchParams(event.rawQueryString).get('key')?.trim() || undefined
+      : undefined) ??
     event.headers?.['x-sandbox-key'] ??
     event.headers?.['X-Sandbox-Key'];
   if (!provided || provided !== expectedKey) return unauthorized();

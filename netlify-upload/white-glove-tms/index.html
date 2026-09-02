@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>White Glove Therapy</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>White Glove Therapy</h1>
+    <p class="lede">One week at a time. Big buttons. If something is wrong, the page will say so in red.</p>
+    <div class="who">
+      <label>I am
+        <select id="role">
+          <option value="therapist">Therapist</option>
+          <option value="admin">Admin</option>
+        </select>
+      </label>
+      <span id="whoami"></span>
+    </div>
+    <nav id="therapistNav">
+      <button type="button" data-screen="week" class="nav on">This week</button>
+      <button type="button" data-screen="fix" class="nav">Fix errors</button>
+      <button type="button" data-screen="send" class="nav">Send timesheet</button>
+      <button type="button" data-screen="done" class="nav">Done</button>
+    </nav>
+    <nav id="adminNav" hidden>
+      <button type="button" data-admin="dash" class="nav on">Dashboard</button>
+      <button type="button" data-admin="people" class="nav">People</button>
+      <button type="button" data-admin="mandates" class="nav">Mandates</button>
+      <button type="button" data-admin="reports" class="nav">Reports</button>
+    </nav>
+  </header>
+  <main>
+    <p id="status"></p>
+    <section id="view"></section>
+  </main>
+  <footer>
+    Frontend is separate. API runs on White Glove AWS. Files stay in their account.
+    Local API default: <code>http://127.0.0.1:8787</code>
+  </footer>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

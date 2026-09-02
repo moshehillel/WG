@@ -50,7 +50,7 @@ input[type=date]{background:#0f172a;border:1px solid var(--border);color:var(--t
 <body>
 <main>
   <h1>White Glove ops</h1>
-  <p class="sub">MFA renew · week stats · <strong>Test live</strong> (picker — does not enable nightly cron)</p>
+  <p class="sub">MFA renew · week stats · <strong>Run sandbox</strong> · <strong>Test live</strong> (picker — does not enable nightly cron)</p>
 
   <section class="card" id="statusCard">
     <h2>HHA MFA status</h2>
@@ -66,9 +66,11 @@ input[type=date]{background:#0f172a;border:1px solid var(--border);color:var(--t
   <section class="card">
     <h2>Pipeline</h2>
     <div class="row">
+      <button class="btn btn-primary" type="button" id="btnSandbox">Run sandbox</button>
       <button class="btn btn-warn" type="button" id="btnTestLive">Test live</button>
       <a class="btn btn-ghost" id="lnkConsole" href="#" target="_blank" rel="noopener">Step Functions</a>
     </div>
+    <p class="muted" style="margin:.65rem 0 0">Sandbox: real ProviderSoft download, read-only HHA, no production writes.</p>
     <div id="livePanel">
       <div class="warn-banner" style="margin-top:1rem">
         Live run: <code>dryRun=false</code>, <code>sandbox=false</code> — writes to production HHA.
@@ -104,6 +106,10 @@ input[type=date]{background:#0f172a;border:1px solid var(--border);color:var(--t
   const KEY = ${keyJson};
   const API = ${apiJson};
   const CONSOLE = ${consoleJson};
+  try { localStorage.setItem('wg-ops-key', KEY); } catch (e) {}
+  if (!new URLSearchParams(location.search).get('key')) {
+    history.replaceState(null, '', '?action=ui&key=' + encodeURIComponent(KEY));
+  }
   let sessionId = null;
 
   function qs(action){ return API + (API.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY) + '&action=' + action; }
@@ -145,6 +151,12 @@ input[type=date]{background:#0f172a;border:1px solid var(--border);color:var(--t
     }
   }
 
+  document.getElementById('btnSandbox').onclick = async () => {
+    try {
+      const body = await api('startSandbox', { method: 'POST', body: '{}' });
+      show(body, true);
+    } catch (e) { show(String(e.message||e), false); }
+  };
   document.getElementById('btnTestLive').onclick = () => {
     document.getElementById('livePanel').classList.toggle('open');
   };

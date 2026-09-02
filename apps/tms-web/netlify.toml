@@ -1,0 +1,7 @@
+# Netlify: connect this repo, set Base directory = apps/tms-web (or deploy only this folder).
+
+[build]
+  command = "node build-config.mjs"
+  publish = "."
+
+# SPA is static files only; API stays on White Glove AWS (Lambda Function URL).

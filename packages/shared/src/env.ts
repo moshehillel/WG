@@ -27,6 +27,14 @@ export const HhaAuthSchema = z.object({
     .optional()
     .transform((v) => v === 'true' || v === '1'),
   EXCEPTION_TOPIC_ARN: z.string().optional(),
+  /** Comma-separated SES/SNS alert recipients (ValidateFn result emails). */
+  ALERT_EMAILS: z.string().optional(),
+  ALERT_FROM_EMAIL: z.string().optional(),
+  ALERT_FROM_EMAIL_FALLBACK: z.string().optional(),
+  ALERT_FROM_NAME: z.string().optional(),
+  /** Human-monitored address for replies (defaults to FROM). */
+  ALERT_REPLY_TO: z.string().optional(),
+  ALERT_LOGO_URL: z.string().optional(),
 });
 
 export type Env = z.infer<typeof HhaAuthSchema>;

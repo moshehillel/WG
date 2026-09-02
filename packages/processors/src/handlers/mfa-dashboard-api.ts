@@ -14,6 +14,7 @@ import {
 } from '@white-glove/hha-client';
 import {
   PipelineReportKindSchema,
+  buildSandboxPipelineInput,
   type PipelineRunInput,
 } from '@white-glove/shared';
 import { getObjectText, listAllObjects } from '../s3.js';
@@ -81,6 +82,59 @@ function html(statusCode: number, body: string) {
 
 function unauthorized() {
   return json(401, { error: 'Unauthorized — provide x-dashboard-key or ?key=' });
+}
+
+function queryParam(
+  event: { queryStringParameters?: Record<string, string | undefined>; rawQueryString?: string },
+  name: string,
+): string | undefined {
+  const fromMap = event.queryStringParameters?.[name]?.trim();
+  if (fromMap) return fromMap;
+  if (!event.rawQueryString) return undefined;
+  return new URLSearchParams(event.rawQueryString).get(name)?.trim() || undefined;
+}
+
+function providedDashboardKey(event: {
+  queryStringParameters?: Record<string, string | undefined>;
+  rawQueryString?: string;
+  headers?: Record<string, string | undefined>;
+}): string | undefined {
+  return (
+    queryParam(event, 'key') ??
+    event.headers?.['x-dashboard-key']?.trim() ??
+    event.headers?.['X-Dashboard-Key']?.trim()
+  );
+}
+
+function keyPromptHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>White Glove — enter key</title>
+<style>
+body{margin:0;font-family:ui-sans-serif,system-ui,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:grid;place-items:center}
+form{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:1.5rem;max-width:22rem;width:calc(100% - 2rem)}
+h1{font-size:1.15rem;margin:0 0 .5rem}
+p{color:#94a3b8;font-size:.9rem;margin:0 0 1rem}
+input{width:100%;background:#0f172a;border:1px solid #334155;color:#e2e8f0;border-radius:8px;padding:.55rem .7rem;margin-bottom:.75rem}
+button{width:100%;border:0;border-radius:8px;padding:.55rem 1rem;font-weight:600;background:#0d9488;color:#042f2e;cursor:pointer}
+</style></head>
+<body>
+<script>
+(function(){
+  try {
+    var k = localStorage.getItem('wg-ops-key');
+    if (k) location.replace('?action=ui&key=' + encodeURIComponent(k));
+  } catch (e) {}
+})();
+</script>
+<form method="get">
+  <h1>White Glove ops</h1>
+  <p>Paste the ops API key from Secrets Manager (<code>OpsTriggerApiKey</code> / CloudFormation output <code>OpsTriggerApiKeyArn</code>).</p>
+  <input type="hidden" name="action" value="ui"/>
+  <input name="key" type="password" autocomplete="current-password" placeholder="API key" required autofocus/>
+  <button type="submit">Open dashboard</button>
+</form>
+</body></html>`;
 }
 
 function buildLiveRunId(now: Date = new Date()): string {
@@ -360,6 +414,43 @@ async function startLiveRun(body: ReturnType<typeof parseStartLiveBody>) {
   });
 }
 
+async function startSandboxRun() {
+  const stateMachineArn = process.env.STATE_MACHINE_ARN?.trim();
+  if (!stateMachineArn) {
+    return json(503, { error: 'STATE_MACHINE_ARN is not configured on the dashboard API' });
+  }
+
+  const input = buildSandboxPipelineInput();
+  const executionName = input.runId.replace(/[^a-zA-Z0-9-_]/g, '-').slice(0, 80);
+  console.info(JSON.stringify({ event: 'startSandboxRun', runId: input.runId }));
+  const started = await sfn.send(
+    new StartExecutionCommand({
+      stateMachineArn,
+      name: executionName,
+      input: JSON.stringify(input),
+    }),
+  );
+  console.info(
+    JSON.stringify({
+      event: 'startSandboxRun.started',
+      runId: input.runId,
+      executionArn: started.executionArn ?? null,
+    }),
+  );
+
+  return json(202, {
+    ok: true,
+    runId: input.runId,
+    executionArn: started.executionArn ?? null,
+    dryRun: true,
+    sandbox: true,
+    reportKinds: input.reportKinds,
+    message:
+      'Sandbox run started. Real ProviderSoft download, read-only HHA, no production writes. Email summary in 5–20 minutes.',
+    pipelineConsoleUrl: process.env.PIPELINE_CONSOLE_URL || null,
+  });
+}
+
 export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   if (event.requestContext.http.method === 'OPTIONS') {
     return { statusCode: 204, headers: cors, body: '' };
@@ -370,16 +461,19 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     return json(503, { error: 'Dashboard API not configured (missing DASHBOARD_API_KEY)' });
   }
 
-  const provided =
-    event.queryStringParameters?.key?.trim() ??
-    event.headers?.['x-dashboard-key'] ??
-    event.headers?.['X-Dashboard-Key'];
-  if (!provided || provided !== expectedKey) return unauthorized();
+  const action =
+    queryParam(event, 'action') ??
+    (event.requestContext.http.method === 'GET' ? 'status' : '');
+  const provided = providedDashboardKey(event);
+  if (!provided || provided !== expectedKey) {
+    const wantsHtml =
+      event.requestContext.http.method === 'GET' &&
+      (action === 'ui' || action === '' || action === 'status');
+    if (wantsHtml) return html(401, keyPromptHtml());
+    return unauthorized();
+  }
 
   try {
-    const action =
-      event.queryStringParameters?.action?.trim() ??
-      (event.requestContext.http.method === 'GET' ? 'status' : '');
 
     if (action === 'ui' && event.requestContext.http.method === 'GET') {
       const apiBase = `https://${event.requestContext.domainName}/`;
@@ -427,7 +521,18 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       return await startLiveRun(parseStartLiveBody(event.body));
     }
 
-    await applyHhaSecretFromArn();
+    if (action === 'startSandbox' && event.requestContext.http.method === 'POST') {
+      return await startSandboxRun();
+    }
+
+    try {
+      await applyHhaSecretFromArn();
+    } catch (err) {
+      console.warn(
+        '[mfa-dashboard] HHA secret load skipped',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
 
     if (action === 'status' || (event.requestContext.http.method === 'GET' && !action)) {
       const liveSchedules = await loadLiveScheduleStatus();
@@ -455,7 +560,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
 
     return json(400, {
       error:
-        'Unknown action — use ui, status, weekSummary, scheduleStatus, setLiveSchedules, start, complete, or startLiveRun',
+        'Unknown action — use ui, status, weekSummary, scheduleStatus, setLiveSchedules, start, complete, startSandbox, or startLiveRun',
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

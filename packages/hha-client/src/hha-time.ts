@@ -38,6 +38,20 @@ export function psTimeToHhmm(t: string | undefined): string | undefined {
   return `${String(h).padStart(2, '0')}${String(m).padStart(2, '0')}`;
 }
 
+/** ISO date + PS time → `2026-08-01T11:53:00`. */
+export function psDateTimeIso(dateIso: string, time12h?: string): string {
+  const mins = toMinutes12h(time12h);
+  if (mins == null) return `${dateIso}T00:00:00`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${dateIso}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+}
+
+/** ISO date + PS time → `2026-08-01 11:53` for ScheduleStartTime fields. */
+export function psDateTimeSpace(dateIso: string, time12h?: string): string {
+  return psDateTimeIso(dateIso, time12h).replace('T', ' ').slice(0, 16);
+}
+
 export function compareSessionClock(
   psBegin: string | undefined,
   psEnd: string | undefined,
@@ -76,4 +90,46 @@ export function splitProviderName(full: string | undefined): { firstName: string
   const parts = full.trim().split(/\s+/);
   if (parts.length === 1) return { firstName: parts[0]!, lastName: '' };
   return { lastName: parts[0]!, firstName: parts.slice(1).join(' ') };
+}
+
+/**
+ * SearchCaregivers name-order attempts for ProviderSoft "Provider Name".
+ * PS sheets mix LAST FIRST and FIRST LAST — try both (and last-token-as-surname).
+ */
+export function caregiverSearchNameOrders(
+  providerName: string | undefined,
+): Array<{ firstName: string; lastName: string }> {
+  const parts = (providerName ?? '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return [];
+  if (parts.length === 1) {
+    return [
+      { firstName: parts[0]!, lastName: '' },
+      { firstName: '', lastName: parts[0]! },
+    ];
+  }
+
+  const base: Array<{ firstName: string; lastName: string }> = [
+    { lastName: parts[0]!, firstName: parts.slice(1).join(' ') },
+    { firstName: parts[0]!, lastName: parts.slice(1).join(' ') },
+    { lastName: parts[parts.length - 1]!, firstName: parts.slice(0, -1).join(' ') },
+  ];
+
+  const attempts: Array<{ firstName: string; lastName: string }> = [];
+  for (const a of base) {
+    attempts.push(a);
+    const firstParts = a.firstName.split(/\s+/).filter(Boolean);
+    if (firstParts.length > 1) {
+      attempts.push({ firstName: firstParts[0]!, lastName: a.lastName });
+    }
+  }
+
+  const seen = new Set<string>();
+  const out: Array<{ firstName: string; lastName: string }> = [];
+  for (const a of attempts) {
+    const key = `${a.firstName.toUpperCase()}|${a.lastName.toUpperCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(a);
+  }
+  return out;
 }

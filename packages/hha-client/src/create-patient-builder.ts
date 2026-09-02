@@ -1,6 +1,8 @@
 import type { HhaPatient } from '@white-glove/shared';
 import { psDateToIso } from './hha-time.js';
 
+export { normalizeHhaGender } from '@white-glove/shared';
+
 export interface CreatePatientDefaults {
   officeId: number;
   coordinatorId: number;
@@ -61,6 +63,16 @@ export function formatAdmissionId(
   if (!caseId?.trim()) return undefined;
   const id = caseId.trim();
   return id.startsWith(prefix) ? id : `${prefix}${id}`;
+}
+
+/** Strip leading zeros from an all-digit id (MR / admission) for a second HHA lookup. */
+export function stripLeadingZerosFromNumericId(id: string | undefined): string | undefined {
+  const value = id?.trim();
+  if (!value) return undefined;
+  if (!/^\d+$/.test(value)) return undefined;
+  if (!value.startsWith('0')) return undefined;
+  const stripped = value.replace(/^0+/, '');
+  return stripped || undefined;
 }
 
 function formatPhone(digits: string | undefined): string {

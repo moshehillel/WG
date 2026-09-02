@@ -1,0 +1,60 @@
+:root {
+  --bg: #f4f7f6;
+  --ink: #134e4a;
+  --accent: #0f766e;
+  --err: #b91c1c;
+  --warn: #c2410c;
+  --ok: #047857;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: radial-gradient(900px 320px at 10% -10%, #ccfbf1, transparent 50%), var(--bg);
+  color: #1e293b;
+}
+header, main, footer { width: min(980px, calc(100% - 2rem)); margin: 0 auto; }
+header { padding: 1.4rem 0 0.5rem; }
+h1 { margin: 0; color: var(--ink); font-size: 1.6rem; }
+.lede { color: #64748b; }
+.who { margin: 0.6rem 0 0.8rem; display: flex; gap: 1rem; align-items: center; }
+nav { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.nav, button, select, input, textarea {
+  font: inherit;
+}
+.nav, .btn, .btn-primary {
+  border: 0;
+  border-radius: 10px;
+  padding: 0.7rem 1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.nav { background: #fff; border: 1px solid #d7e3df; color: var(--ink); }
+.nav.on { background: var(--accent); color: #fff; }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn { background: #fff; border: 1px solid #d7e3df; color: var(--ink); }
+#status { min-height: 1.2rem; }
+#status.err { color: var(--err); }
+#status.ok { color: var(--ok); }
+.card {
+  background: #fff;
+  border: 1px solid #d7e3df;
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
+  margin: 0.8rem 0;
+  box-shadow: 0 10px 24px rgba(15, 118, 110, 0.08);
+}
+.big { font-size: 1.15rem; padding: 1rem 1.2rem; }
+label { display: block; margin: 0.45rem 0; font-weight: 600; }
+input, select, textarea { width: 100%; padding: 0.5rem 0.55rem; border: 1px solid #d7e3df; border-radius: 8px; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+.err-box { background: #fef2f2; color: #991b1b; padding: 0.7rem; border-radius: 10px; }
+.warn-box { background: #fff7ed; color: #9a3412; padding: 0.7rem; border-radius: 10px; }
+.ok-box { background: #ecfdf5; color: #065f46; padding: 0.9rem; border-radius: 10px; font-size: 1.1rem; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th { text-align: left; background: var(--accent); color: #fff; padding: 0.4rem; }
+td { border-bottom: 1px solid #e2e8f0; padding: 0.4rem; }
+footer { color: #64748b; font-size: 0.82rem; padding: 1rem 0 2rem; }
+tr.warn { background: #fff7ed; }
+tr.hard { background: #fef2f2; }
+.pill-warn { background: #ffedd5; color: #9a3412; padding: 0.15rem 0.4rem; border-radius: 6px; display: inline-block; }

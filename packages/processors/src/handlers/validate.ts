@@ -7,6 +7,9 @@ export interface ValidateEvent {
   runId: string;
   bucket?: string;
   dryRun?: boolean;
+  sandbox?: boolean;
+  sandboxEmailFixtures?: boolean;
+  forceAlertEmail?: boolean;
   opened?: ProcessorResult;
   closed?: ProcessorResult;
   sessions?: ProcessorResult;
@@ -21,6 +24,9 @@ export const handler: Handler<ValidateEvent, ValidateResult> = async (event) => 
     runId: event.runId,
     bucket,
     dryRun: event.dryRun,
+    sandbox: event.sandbox,
+    sandboxEmailFixtures: event.sandboxEmailFixtures,
+    forceAlertEmail: event.forceAlertEmail,
     opened: event.opened,
     closed: event.closed,
     sessions: event.sessions,

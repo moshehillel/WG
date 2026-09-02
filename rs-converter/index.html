@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RS Report Converter</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>RS Report Converter</h1>
+    <p class="lede">
+      Open Related Service session-notes PDFs and an optional caseload map CSV.
+      Review the rows, then download a fillable timesheet and a ProviderSoft Activity Import Excel.
+      Files stay in this browser — nothing is sent to a server.
+    </p>
+  </header>
+  <main>
+    <section class="card">
+      <div class="drops">
+        <div id="drop" role="button" tabindex="0">
+          Choose or drop RS session-notes PDF(s)
+          <span>Summary of Related Service Session Notes — you can select more than one file</span>
+        </div>
+        <div id="mapDrop" role="button" tabindex="0">
+          Choose or drop caseload map CSV
+          <span>Child’s Name, Service Type, mandate — like the school MPA export. Saved in this browser.</span>
+        </div>
+      </div>
+      <input id="file" type="file" accept="application/pdf,.pdf" multiple />
+      <input id="mapFile" type="file" accept=".csv,text/csv" />
+      <p id="status"></p>
+      <p id="mapStatus"></p>
+      <div class="map-actions">
+        <button class="btn-ghost" type="button" id="btnClearMap">Clear caseload map</button>
+      </div>
+    </section>
+
+    <section class="card" id="tableWrap" hidden>
+      <p id="meta"></p>
+      <div id="warnings" hidden></div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Child name</th>
+              <th>Ratio</th>
+              <th>Provider name</th>
+              <th>Date of service</th>
+              <th>Attended or missed</th>
+              <th>Time in</th>
+              <th>Time out</th>
+              <th>Service code</th>
+              <th>Location</th>
+              <th>CPT / ICD / Auth</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <div class="actions" id="actions" hidden>
+        <button class="btn-primary" type="button" id="btnExcel">Download Excel import</button>
+        <button class="btn-ghost" type="button" id="btnTimesheet">Download fillable timesheet PDF</button>
+        <button class="btn-ghost" type="button" id="btnBoth">Download both</button>
+        <button class="btn-ghost" type="button" id="btnAdd">Add row</button>
+        <button class="btn-ghost" type="button" id="btnClear">Clear</button>
+      </div>
+    </section>
+
+    <section class="card codes">
+      <details>
+        <summary>School service codes (time + ratio + discipline)</summary>
+        <p class="hint">
+          30 minutes leaves the number out. Ratio 2:1 or more uses Group.
+          When a caseload map is loaded, Service Detail comes from the child’s mandate
+          (including group mandate on a 1:1 session). It must still match the Ongoing Care tab.
+          Makeup with no original date uses a Makeup mandate type when the map has one.
+        </p>
+        <div class="table-scroll">
+          <table class="codes-table">
+            <thead>
+              <tr>
+                <th>Discipline</th>
+                <th>Duration</th>
+                <th>Ratio</th>
+                <th>Service Detail</th>
+              </tr>
+            </thead>
+            <tbody id="codesBody"></tbody>
+          </table>
+        </div>
+      </details>
+    </section>
+  </main>
+  <footer>
+    Copy this whole <code>rs-converter</code> folder onto the White Glove website and open
+    <code>index.html</code>. No server code required. See <code>HOSTING.txt</code>.
+  </footer>
+
+  <script src="vendor/pdf.min.js"></script>
+  <script src="vendor/exceljs.min.js"></script>
+  <script src="vendor/jspdf.umd.min.js"></script>
+  <script src="vendor/jspdf.plugin.autotable.min.js"></script>
+  <script src="codes.js"></script>
+  <script src="mapping.js"></script>
+  <script src="history.js"></script>
+  <script src="parser.js"></script>
+  <script src="validate.js"></script>
+  <script src="excel.js"></script>
+  <script src="timesheet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

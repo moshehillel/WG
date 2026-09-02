@@ -1,5 +1,5 @@
 import { PublishCommand, SNSClient } from '@aws-sdk/client-sns';
-import { SendEmailCommand, SendRawEmailCommand, SESClient } from '@aws-sdk/client-ses';
+import { SendRawEmailCommand, SESClient } from '@aws-sdk/client-ses';
 
 const sns = new SNSClient({});
 const ses = new SESClient({});
@@ -50,6 +50,23 @@ function truncateAttachments(
   return kept;
 }
 
+/** Headers for automated operational mail (avoid bulk/list headers that trigger spam filters). */
+function deliverabilityHeaders(options: {
+  fromEmail: string;
+  replyTo: string;
+  listId: string;
+}): string[] {
+  const messageId = `<pipeline-${Date.now()}.${Math.random().toString(36).slice(2, 10)}@${options.fromEmail.split('@')[1] ?? 'amazonses.com'}>`;
+  const unsub = encodeURIComponent('unsubscribe pipeline alerts');
+  return [
+    `Message-ID: ${messageId}`,
+    `List-Id: ${options.listId}`,
+    `List-Unsubscribe: <mailto:${options.replyTo}?subject=${unsub}>`,
+    'Auto-Submitted: auto-generated',
+    'X-Auto-Response-Suppress: OOF, AutoReply',
+  ];
+}
+
 /** Build a multipart MIME message for SES SendRawEmail (HTML + optional CSV attachments). */
 export function buildRawMimeMessage(options: {
   fromHeader: string;
@@ -59,16 +76,23 @@ export function buildRawMimeMessage(options: {
   textBody: string;
   htmlBody: string;
   attachments?: PipelineAlertAttachment[];
+  fromEmail?: string;
 }): string {
   const mixed = `----=_Mixed_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const alt = `----=_Alt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const attachments = truncateAttachments(options.attachments ?? []);
+  const fromEmail = options.fromEmail ?? options.replyTo;
 
   const headers = [
     `From: ${options.fromHeader}`,
     `To: ${options.to}`,
     `Reply-To: ${options.replyTo}`,
     `Subject: ${encodeSubject(options.subject)}`,
+    ...deliverabilityHeaders({
+      fromEmail,
+      replyTo: options.replyTo,
+      listId: 'White Glove Pipeline Alerts <pipeline-alerts.whiteglovecare.net>',
+    }),
     'MIME-Version: 1.0',
     `Content-Type: multipart/mixed; boundary="${mixed}"`,
   ];
@@ -122,52 +146,37 @@ async function sendSesHtmlBatch(options: {
   recipients: string[];
   fromEmail: string;
   fromName?: string;
+  replyTo?: string;
   subject: string;
   textBody: string;
   htmlBody: string;
   attachments?: PipelineAlertAttachment[];
 }): Promise<SesBatchResult> {
   const source = alertFromHeader(options.fromEmail, options.fromName);
+  const replyTo = options.replyTo?.trim() || options.fromEmail;
   let sesCount = 0;
   const failures: string[] = [];
   const attachments = truncateAttachments(options.attachments ?? []);
-  const useRaw = attachments.length > 0;
 
   for (const to of options.recipients) {
     try {
-      if (useRaw) {
-        const raw = buildRawMimeMessage({
-          fromHeader: source,
-          to,
-          replyTo: options.fromEmail,
-          subject: options.subject,
-          textBody: options.textBody,
-          htmlBody: options.htmlBody,
-          attachments,
-        });
-        await ses.send(
-          new SendRawEmailCommand({
-            Source: options.fromEmail,
-            Destinations: [to],
-            RawMessage: { Data: Buffer.from(raw, 'utf8') },
-          }),
-        );
-      } else {
-        await ses.send(
-          new SendEmailCommand({
-            Source: source,
-            ReplyToAddresses: [options.fromEmail],
-            Destination: { ToAddresses: [to] },
-            Message: {
-              Subject: { Charset: 'UTF-8', Data: options.subject },
-              Body: {
-                Text: { Charset: 'UTF-8', Data: options.textBody },
-                Html: { Charset: 'UTF-8', Data: options.htmlBody },
-              },
-            },
-          }),
-        );
-      }
+      const raw = buildRawMimeMessage({
+        fromHeader: source,
+        to,
+        replyTo,
+        subject: options.subject,
+        textBody: options.textBody,
+        htmlBody: options.htmlBody,
+        attachments,
+        fromEmail: options.fromEmail,
+      });
+      await ses.send(
+        new SendRawEmailCommand({
+          Source: options.fromEmail,
+          Destinations: [to],
+          RawMessage: { Data: Buffer.from(raw, 'utf8') },
+        }),
+      );
       sesCount += 1;
     } catch (err) {
       failures.push(to);
@@ -185,6 +194,7 @@ export async function sendPipelineAlert(options: {
   fromEmail?: string;
   fromEmailFallback?: string;
   fromName?: string;
+  replyTo?: string;
   alertEmails?: string;
   subject: string;
   textBody: string;
@@ -194,6 +204,7 @@ export async function sendPipelineAlert(options: {
   const recipients = parseAlertEmails(options.alertEmails);
   const primaryFrom = options.fromEmail?.trim();
   const fallbackFrom = options.fromEmailFallback?.trim();
+  const replyTo = options.replyTo?.trim();
 
   if (recipients.length === 0) {
     console.warn('No alert recipients configured (ALERT_EMAILS empty)');
@@ -207,6 +218,7 @@ export async function sendPipelineAlert(options: {
   const batchOpts = {
     recipients,
     fromName: options.fromName,
+    replyTo,
     subject: options.subject,
     textBody: options.textBody,
     htmlBody: options.htmlBody,
