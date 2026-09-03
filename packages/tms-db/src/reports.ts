@@ -33,7 +33,11 @@ export function adminWeeksList(store: MemoryStore) {
       signerEmail: w.signerEmail,
       hhaStatus: w.hhaStatus,
       providerId: w.providerId,
-      providerName: provider ? `${provider.firstName} ${provider.lastName}` : w.providerId,
+      providerName: provider
+        ? `${provider.firstName} ${provider.lastName}`.trim() || '—'
+        : w.providerId?.trim()
+          ? w.providerId
+          : '—',
       sessionCount: store.sessionsForWeek(w.id).length,
     };
   });
@@ -58,11 +62,11 @@ export function lastServiceByStudent(store: MemoryStore) {
 
 export function dueDateReport(store: MemoryStore, today = new Date()) {
   return store.data.dueDates.map((row) => {
-    const student = store.data.students.find((st) => st.id === row.studentId);
+    const school = store.data.schools.find((s) => s.id === row.schoolId);
     return {
       ...row,
       status: dueDateStatus(row, today),
-      studentName: student ? `${student.firstName} ${student.lastName}` : row.studentId,
+      schoolName: school?.name || row.schoolId,
     };
   });
 }

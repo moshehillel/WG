@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import * as XLSX from 'xlsx';
 import {
   applyCaseloadImport,
   formatFreqDisplay,
+  mandateMatchKey,
   parseCaseloadCsv,
+  parseCaseloadUpload,
+  parseCaseloadWorkbook,
   splitCsvLine,
 } from './caseload-import.js';
 import { checkMandatesForWeek } from './mandate.js';
@@ -100,6 +104,45 @@ describe('caseload CSV parser', () => {
     expect(formatFreqDisplay('school_day_cycle', 2, 6)).toBe('2 / 6 school days');
   });
 
+  it('emits one structured error per field problem', () => {
+    const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
+Shaw Avenue,,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Push-In,Pat Lee
+Shaw Avenue,Diaz,Elmer,4,Approved,not-a-date,06/30/2026,OT,Individual,1,Weekly,Push-In,Pat Lee
+Shaw Avenue,Khan,Musa,2,Approved,09/01/2025,06/30/2026,PT,Individual,1,Biweekly,Push-In,Pat Lee
+Shaw Avenue,Ok,Good,1,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Push-In,Pat Lee
+`;
+    const parsed = parseCaseloadCsv(csv);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0].lastName).toBe('Ok');
+    expect(parsed.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          row: 2,
+          rowNumber: 2,
+          field: 'Last Name',
+          problem: 'Last Name is empty.',
+          fix: "Add the student's last name.",
+          message: expect.stringMatching(/Last Name is empty/i),
+        }),
+        expect.objectContaining({
+          row: 3,
+          field: 'RS Start',
+          student: 'Elmer Diaz',
+          problem: expect.stringMatching(/RS Start date "not-a-date"/i),
+          fix: expect.stringMatching(/MM\/DD\/YYYY/i),
+        }),
+        expect.objectContaining({
+          row: 4,
+          field: 'Period',
+          student: 'Musa Khan',
+          problem: 'Period "Biweekly" is not recognized.',
+          fix: expect.stringMatching(/Weekly|6 day cycle/i),
+        }),
+      ]),
+    );
+    expect(parsed.errors.every((e) => e.problem && e.fix && e.message)).toBe(true);
+  });
+
   it('dry-run does not persist; confirm creates dual mandates', () => {
     const store = new MemoryStore();
     store.upsertProvider({
@@ -108,7 +151,14 @@ describe('caseload CSV parser', () => {
       firstName: 'Pat',
       lastName: 'Lee',
       discipline: 'PT',
-      payRate: null,
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
       hhaCaregiverCode: 'WGC-1',
       active: true,
       createdAt: nowIso(),
@@ -122,7 +172,7 @@ describe('caseload CSV parser', () => {
     expect(preview.rows.filter((r) => r.lastName === 'Haris')).toHaveLength(2);
     expect(preview.rows.find((r) => r.providerName === 'Unknown Provider')?.providerMatched).toBe(false);
 
-    const committed = applyCaseloadImport(store, parsed, { dryRun: false });
+    const committed = applyCaseloadImport(store, parsed);
     expect(committed.dryRun).toBe(false);
     expect(store.data.students.length).toBeGreaterThanOrEqual(4);
     const ahmad = store.findStudentByName('Ahmad', 'Haris');
@@ -135,6 +185,76 @@ describe('caseload CSV parser', () => {
     expect(cycle.frequencyPerWeek).toBe(0);
     expect(cycle.sessionsPerPeriod).toBe(1);
     expect(cycle.periodSchoolDays).toBe(6);
+  });
+
+  it('re-import upserts: no duplicate students/mandates; fills provider on second pass', () => {
+    const store = new MemoryStore();
+    const csvUnmatched = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
+Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Pull-Out,"White, Glove"
+Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Individual,2,6 day cycle,Push-In,"White, Glove"
+`;
+    const first = applyCaseloadImport(store, parseCaseloadCsv(csvUnmatched));
+    expect(first.createdStudents).toBe(2);
+    expect(first.createdMandates).toBe(2);
+    expect(first.updatedMandates).toBe(0);
+    expect(store.data.students).toHaveLength(2);
+    expect(store.data.mandates).toHaveLength(2);
+    expect(store.data.mandates.every((m) => !m.providerId)).toBe(true);
+    expect(first.warnings.some((w) => /White,\s*Glove/i.test(w.problem))).toBe(true);
+
+    store.upsertProvider({
+      id: 'p-pat',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+
+    const csvFixed = csvUnmatched.replace(/"White, Glove"/g, 'Pat Lee');
+    const second = applyCaseloadImport(store, parseCaseloadCsv(csvFixed));
+    expect(second.createdStudents).toBe(0);
+    expect(second.createdMandates).toBe(0);
+    expect(second.updatedMandates).toBe(2);
+    expect(store.data.students).toHaveLength(2);
+    expect(store.data.mandates).toHaveLength(2);
+    expect(store.data.mandates.every((m) => m.providerId === 'p-pat')).toBe(true);
+    expect(second.rows.every((r) => r.providerMatched)).toBe(true);
+  });
+
+  it('mandateMatchKey normalizes discipline aliases and dates', () => {
+    expect(
+      mandateMatchKey({
+        discipline: 'PT',
+        serviceType: 'PT School',
+        ratioGroup: false,
+        frequencyKind: 'weekly',
+        sessionsPerPeriod: 1,
+        startOn: '2025-09-01',
+        endOn: '2026-06-30',
+      }),
+    ).toBe(
+      mandateMatchKey({
+        discipline: '',
+        serviceType: 'PT School Individual',
+        ratioGroup: false,
+        frequencyKind: 'weekly',
+        sessionsPerPeriod: 1,
+        frequencyPerWeek: 1,
+        startOn: '09/01/2025',
+        endOn: '6/30/2026',
+      }),
+    );
   });
 });
 
@@ -175,5 +295,74 @@ describe('multi-mandate weekly check', () => {
     ]);
     expect(r.errors).toEqual([]);
     expect(r.warnings.some((w) => /weekly over-check skipped/i.test(w))).toBe(true);
+  });
+});
+
+const KU_HEADERS = [
+  'Recommended School',
+  'Last Name',
+  'First Name',
+  'Grade',
+  'Decision',
+  'RS Start',
+  'RS End',
+  'Related Service',
+  'Ratio',
+  'Freq',
+  'Period',
+  'Location',
+  'RS Provider',
+];
+
+function kuAoa(extraTitle = false): (string | number)[][] {
+  const data: (string | number)[][] = [
+    KU_HEADERS,
+    ['Shaw Avenue', 'Haris', 'Ahmad', 3, 'Approved', 45901, 46203, 'PT', 'Small Group', 1, 'Weekly', 'Push-In', 'Pat Lee'],
+    ['Shaw Avenue', 'Diaz', 'Elmer', 4, 'Approved', '09/01/2025', '06/30/2026', 'OT', 'Individual', 2, '6 day cycle', 'Push-In', 'Pat Lee'],
+  ];
+  if (!extraTitle) return data;
+  return [['KU SCHOOL YEAR Related Service Details by School'], [], ...data];
+}
+
+function writeKuBook(bookType: 'xlsx' | 'xls', extraTitle = false): Buffer {
+  const ws = XLSX.utils.aoa_to_sheet(kuAoa(extraTitle));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, extraTitle ? 'Sheet1' : 'Details');
+  return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType }) as Buffer);
+}
+
+describe('caseload Excel parser', () => {
+  it('parses generated xlsx with KU headers and Excel date serials', () => {
+    const parsed = parseCaseloadWorkbook(writeKuBook('xlsx'));
+    expect(parsed.errors.filter((e) => e.rowNumber === 0)).toEqual([]);
+    expect(parsed.rows).toHaveLength(2);
+    const ahmad = parsed.rows.find((r) => r.lastName === 'Haris');
+    expect(ahmad?.firstName).toBe('Ahmad');
+    expect(ahmad?.startOn).toBe('2025-09-01');
+    expect(ahmad?.endOn).toBe('2026-06-30');
+    expect(ahmad?.frequencyKind).toBe('weekly');
+    expect(ahmad?.ratioGroup).toBe(true);
+    const elmer = parsed.rows.find((r) => r.lastName === 'Diaz');
+    expect(elmer?.frequencyKind).toBe('school_day_cycle');
+    expect(elmer?.sessionsPerPeriod).toBe(2);
+    expect(elmer?.periodSchoolDays).toBe(6);
+  });
+
+  it('parses generated BIFF8 xls and skips a title row', () => {
+    const parsed = parseCaseloadWorkbook(writeKuBook('xls', true));
+    expect(parsed.rows).toHaveLength(2);
+    expect(parsed.rows[0].rowNumber).toBeGreaterThan(2);
+    expect(parsed.rows.map((r) => r.lastName).sort()).toEqual(['Diaz', 'Haris']);
+  });
+
+  it('parseCaseloadUpload reads xlsx from base64', () => {
+    const buf = writeKuBook('xlsx');
+    const parsed = parseCaseloadUpload({
+      fileName: 'KU-Related-Service-Details.xlsx',
+      mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      fileBase64: buf.toString('base64'),
+    });
+    expect(parsed.rows).toHaveLength(2);
+    expect(parsed.rows[0].schoolName).toBe('Shaw Avenue');
   });
 });

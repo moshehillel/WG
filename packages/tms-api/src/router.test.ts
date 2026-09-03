@@ -663,15 +663,12 @@ describe('TMS API weekly loop', () => {
 
   it('tracks manual due dates', async () => {
     const { store } = storeWithTherapist();
-    const student = store.upsertStudent({
+    const school = store.upsertSchool({
       id: newId(),
-      schoolId: '',
-      firstName: 'Maya',
-      lastName: 'Levi',
-      dob: '',
-      programId: '',
-      programType: '',
-      hhaPatientId: '',
+      name: 'Forest Road',
+      district: '',
+      signerName: '',
+      signerEmail: '',
       createdAt: nowIso(),
     });
     const created = await handleTmsRequest(store, {
@@ -679,7 +676,7 @@ describe('TMS API weekly loop', () => {
       path: '/admin/due-dates',
       headers: adminH,
       query: {},
-      body: { studentId: student.id, kind: 'progress', dueOn: '2001-01-01' },
+      body: { schoolId: school.id, kind: 'progress', dueOn: '2001-01-01' },
     });
     expect(created.status).toBe(201);
     const report = await handleTmsRequest(store, {
@@ -689,7 +686,9 @@ describe('TMS API weekly loop', () => {
       query: {},
       body: {},
     });
-    expect((report.body as { rows: Array<{ status: string }> }).rows[0]?.status).toBe('overdue');
+    const row = (report.body as { rows: Array<{ status: string; schoolName: string }> }).rows[0];
+    expect(row?.status).toBe('overdue');
+    expect(row?.schoolName).toBe('Forest Road');
   });
 
   it('caseload CSV import is admin-only; dry-run vs confirm', async () => {
@@ -809,5 +808,77 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     });
     expect(listed.status).toBe(200);
     expect((listed.body as { notes: Array<{ body: string }> }).notes[0].body).toMatch(/makeup/);
+  });
+
+  it('blocks signing draft weeks; allows remove session and remove draft week', async () => {
+    const { store, provider } = storeWithTherapist();
+    const weekStart = '2026-09-01';
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { weekStart, providerId: provider.id },
+    });
+    expect(ensured.status).toBe(200);
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: store.data.schools[0].id,
+      firstName: 'Ada',
+      lastName: 'Lee',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+
+    const added = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId: student.id,
+        dateOfService: '09/02/2026',
+        attendance: 'attended',
+        notes: 'worked on gait',
+        serviceType: 'PT School',
+      },
+    });
+    expect(added.status).toBe(200);
+    const sessionId = (added.body as { session: { id: string } }).session.id;
+
+    const signDraft = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/weeks/${weekId}/sign`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(signDraft.status).toBe(409);
+
+    const removedSession = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/sessions/${sessionId}`,
+      headers: thH,
+      query: {},
+      body: undefined,
+    });
+    expect(removedSession.status).toBe(200);
+    expect(store.sessionsForWeek(weekId)).toHaveLength(0);
+
+    const removedWeek = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/weeks/${weekId}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(removedWeek.status).toBe(200);
+    expect(store.data.weeks.find((w) => w.id === weekId)).toBeUndefined();
   });
 });

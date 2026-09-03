@@ -7,6 +7,8 @@
   --ok: #047857;
 }
 * { box-sizing: border-box; }
+/* Author display:flex on nav/.who otherwise overrides HTML hidden */
+[hidden] { display: none !important; }
 body {
   margin: 0;
   font-family: "Segoe UI", system-ui, sans-serif;
@@ -17,7 +19,29 @@ header, main, footer { width: min(980px, calc(100% - 2rem)); margin: 0 auto; }
 header { padding: 1.4rem 0 0.5rem; }
 h1 { margin: 0; color: var(--ink); font-size: 1.6rem; }
 .lede { color: #64748b; }
-.who { margin: 0.6rem 0 0.8rem; display: flex; gap: 1rem; align-items: center; }
+.who {
+  margin: 0.6rem 0 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 0.8rem;
+  align-items: center;
+}
+.who #whoami { font-weight: 600; color: var(--ink); }
+.who #changePassword:not([hidden]),
+.who #signout:not([hidden]) {
+  display: inline-block;
+  visibility: visible;
+  opacity: 1;
+}
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0.4rem 0;
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
 nav { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 .nav, button, select, input, textarea {
   font: inherit;
@@ -33,6 +57,12 @@ nav { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 .nav.on { background: var(--accent); color: #fff; }
 .btn-primary { background: var(--accent); color: #fff; }
 .btn { background: #fff; border: 1px solid #d7e3df; color: var(--ink); }
+.btn-primary:disabled, .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.week-actions { white-space: normal; min-width: 12rem; }
+.week-actions .muted { display: inline-block; margin-top: 0.25rem; }
 #status { min-height: 1.2rem; }
 #status.err { color: var(--err); }
 #status.ok { color: var(--ok); }
@@ -51,10 +81,48 @@ input, select, textarea { width: 100%; padding: 0.5rem 0.55rem; border: 1px soli
 .err-box { background: #fef2f2; color: #991b1b; padding: 0.7rem; border-radius: 10px; }
 .warn-box { background: #fff7ed; color: #9a3412; padding: 0.7rem; border-radius: 10px; }
 .ok-box { background: #ecfdf5; color: #065f46; padding: 0.9rem; border-radius: 10px; font-size: 1.1rem; }
+.muted { color: #64748b; font-size: 0.9rem; }
+.muted-card { opacity: 0.92; border-style: dashed; }
+.muted-card h2 { font-size: 1.05rem; color: #475569; }
+.caseload-issues { margin: 0.75rem 0; }
+.caseload-issues .issue-table { margin-top: 0.35rem; background: #fff; color: #0f172a; table-layout: fixed; }
+.caseload-issues .issue-table th { background: #7f1d1d; font-size: 0.82rem; }
+.warn-box.caseload-issues .issue-table th { background: #9a3412; }
+.caseload-issues .issue-table td { border-bottom-color: #fecaca; vertical-align: top; word-wrap: break-word; }
+.warn-box.caseload-issues .issue-table td { border-bottom-color: #fed7aa; }
+.caseload-issues .issue-table th:nth-child(1),
+.caseload-issues .issue-table td:nth-child(1) { width: 4.5rem; }
+.caseload-issues .issue-table th:nth-child(2),
+.caseload-issues .issue-table td:nth-child(2) { width: 8.5rem; }
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th { text-align: left; background: var(--accent); color: #fff; padding: 0.4rem; }
 td { border-bottom: 1px solid #e2e8f0; padding: 0.4rem; }
-footer { color: #64748b; font-size: 0.82rem; padding: 1rem 0 2rem; }
+tr.row-warn { background: #fff7ed; }
+tr.row-err { background: #fef2f2; }
+.err-inline { color: #991b1b; font-weight: 600; }
+footer { color: #64748b; font-size: 0.82rem; padding: 1rem 0 2rem; min-height: 1rem; }
 tr.warn { background: #fff7ed; }
 tr.hard { background: #fef2f2; }
 .pill-warn { background: #ffedd5; color: #9a3412; padding: 0.15rem 0.4rem; border-radius: 6px; display: inline-block; }
+.pill-err { background: #fee2e2; color: #991b1b; padding: 0.15rem 0.4rem; border-radius: 6px; display: inline-block; }
+
+/* Hide Netlify "Powered by / Deploys by Netlify" badge / ribbon when injected */
+#netlify-badge,
+.netlify-badge,
+a[href*="netlify.com"]:is([id*="badge"], [class*="badge"]),
+a[href*="netlify.com"][title*="Netlify" i],
+a[href*="www.netlify.com"]:is([id*="badge"], [class*="badge"]),
+iframe[src*="netlify"],
+[data-netlify-deploy-id],
+[class*="netlify-badge" i],
+[id*="netlify-badge" i],
+[class*="nf-badge" i],
+div[style*="netlify"] a[href*="netlify.com"] {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  opacity: 0 !important;
+}
