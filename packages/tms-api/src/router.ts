@@ -893,9 +893,12 @@ export async function handleTmsRequest(
     if (!therapistCanEdit(week.status) && ctx.user.role !== 'admin') {
       return json(409, { error: 'This week is locked. Ask an admin to reopen it.' });
     }
+    // Replace prior draft rows so retries do not stack duplicates and trip Over mandate.
+    const prior = store.sessionsForWeek(week.id);
+    for (const s of prior) store.removeSession(s.id);
     const created: SessionRow[] = [];
     for (const row of parsed) {
-      const person = splitPersonName(row.studentName) ;
+      const person = splitPersonName(row.studentName);
       const mapped = mappingName(row.studentName);
       const student =
         store.findStudentByName(person.first, person.last) ||
@@ -932,7 +935,15 @@ export async function handleTmsRequest(
     const check = checkMandatesForWeek(store.data.mandates, store.sessionsForWeek(week.id));
     if (check.errors.length) {
       for (const s of created) store.removeSession(s.id);
-      return json(400, { error: 'Over mandate', errors: check.errors, warnings: check.warnings });
+      for (const s of prior) store.upsertSession(s);
+      const detail = check.errors.filter(Boolean).join(' ');
+      return json(400, {
+        error: detail
+          ? `Over mandate — ${detail}`
+          : 'Over mandate — this PDF has more sessions than allowed for the week.',
+        errors: check.errors,
+        warnings: check.warnings,
+      });
     }
     return json(200, { week, sessions: store.sessionsForWeek(week.id), warnings: check.warnings, parsed: parsed.length });
   }

@@ -64,7 +64,12 @@ async function api(method, path, body) {
     const errList = Array.isArray(data.errors)
       ? data.errors.map((e) => (typeof e === 'string' ? e : e.message || e.problem || JSON.stringify(e))).filter(Boolean)
       : [];
-    const msg = data.error || errList.join('; ') || res.statusText;
+    const base = String(data.error || data.message || '').trim();
+    const details = errList.filter((e) => e && !base.includes(e)).join('; ');
+    const msg =
+      [base, details].filter(Boolean).join(' — ') ||
+      res.statusText ||
+      `Request failed (${res.status})`;
     throw new Error(msg);
   }
   return data;
@@ -373,7 +378,12 @@ async function therapistHome() {
         setStatus(`Loaded ${out.parsed} session(s).`, out.warnings?.length ? '' : 'ok');
         await therapistHome();
       } catch (e) {
-        setStatus(e.message || 'Could not read this PDF.', 'err');
+        const msg = e.message || 'Could not read this PDF.';
+        setStatus(msg, 'err');
+        const hint = document.getElementById('uploadHint');
+        if (hint && /no readable text|Could not find any sessions|Over mandate/i.test(msg)) {
+          hint.textContent = msg;
+        }
         if (btn) {
           btn.disabled = false;
           btn.textContent = 'Read PDF';
