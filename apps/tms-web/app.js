@@ -536,7 +536,7 @@ async function adminPeople() {
       </table>
     </div>
     <div class="card">
-      <h2>School signer (entered, not always principal)</h2>
+      <h2>School signer</h2>
       <label>School <input id="sname" /></label>
       <label>Signer name <input id="signerName" /></label>
       <label>Signer email <input id="signerEmail" /></label>
@@ -592,6 +592,7 @@ async function adminPeople() {
         discipline: document.getElementById('tdisc').value,
         payRate: rateRaw === '' ? null : Number(rateRaw),
         hhaCaregiverCode: document.getElementById('thha').value,
+        role: 'therapist',
       });
       setStatus(out.message || `Provider ready: ${out.user?.email} ↔ ${out.provider?.id}`, 'ok');
       await adminPeople();
