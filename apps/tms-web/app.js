@@ -68,8 +68,8 @@ async function api(method, path, body) {
     const details = errList.filter((e) => e && !base.includes(e)).join('; ');
     const msg =
       [base, details].filter(Boolean).join(' — ') ||
-      res.statusText ||
-      `Request failed (${res.status})`;
+      (res.statusText && res.statusText !== 'Bad Request' ? res.statusText : '') ||
+      `Request failed (${res.status}). Check the red message under Read PDF.`;
     throw new Error(msg);
   }
   return data;
@@ -290,7 +290,7 @@ async function therapistHome() {
       ${warnings.length ? `<div class="warn-box"><strong>Warnings (you can still send).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}</div>` : ''}
       <p class="muted">Red = blocked (over-mandate or AI note issues). Yellow = under-mandate / soft warnings only.</p>
       <table>
-        <tr><th>Date</th><th>Child</th><th>Time</th><th>Attendance</th><th>Flags</th><th>Notes</th></tr>
+        <tr><th>Date</th><th>Child</th><th>Time</th><th>Attendance</th><th>Flags</th><th>Notes</th>${locked ? '' : '<th></th>'}</tr>
         ${sessions.map((s) => {
           const name = studentName(students, s.studentId);
           const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ');
@@ -298,8 +298,11 @@ async function therapistHome() {
           const hard = Boolean(s.aiBlock);
           const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
           const pill = hard ? 'pill-err' : 'pill-warn';
-          return `<tr class="${rowClass}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${flags.length ? `<span class="${pill}">${esc(flags.join('; '))}</span>` : ''}</td><td>${esc(s.notes || '')}</td></tr>`;
-        }).join('') || '<tr><td colspan="6">No sessions yet.</td></tr>'}
+          const removeCell = locked
+            ? ''
+            : `<td><button type="button" class="btn" data-remove-session="${esc(s.id)}">Remove</button></td>`;
+          return `<tr class="${rowClass}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${flags.length ? `<span class="${pill}">${esc(flags.join('; '))}</span>` : ''}</td><td>${esc(s.notes || '')}</td>${removeCell}</tr>`;
+        }).join('') || `<tr><td colspan="${locked ? 6 : 7}">No sessions yet.</td></tr>`}
       </table>
     </div>
 
@@ -313,6 +316,7 @@ async function therapistHome() {
       <p>Choose your Frontline Related Service Session Notes PDF (text PDF, not a scan). The system reads the sessions for you.</p>
       <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
       <button class="btn-primary big" id="upload">Read PDF</button>
+      <p class="err-box" id="uploadErr" hidden></p>
       <p class="muted" id="uploadHint">If upload fails with “no readable text”, re-export/save as a text PDF from Frontline — image-only scans cannot be read.</p>
     </div>
 
@@ -356,17 +360,40 @@ async function therapistHome() {
 
   document.getElementById('refreshHome').onclick = () => therapistHome();
 
+  const viewEl = document.getElementById('view');
+  if (locked) {
+    viewEl.onclick = null;
+  }
+
   if (!locked) {
     bindMakeupPickers();
 
+    viewEl.onclick = async (e) => {
+      const removeBtn = e.target.closest('[data-remove-session]');
+      if (!removeBtn) return;
+      if (!confirm('Remove this session?')) return;
+      try {
+        await api('DELETE', `/sessions/${removeBtn.getAttribute('data-remove-session')}`);
+        setStatus('Session removed.', 'ok');
+        await therapistHome();
+      } catch (err) {
+        setStatus(err.message, 'err');
+      }
+    };
+
     document.getElementById('upload').onclick = async () => {
       const btn = document.getElementById('upload');
+      const uploadErr = document.getElementById('uploadErr');
       try {
         const file = document.getElementById('pdfFile').files[0];
         if (!file) throw new Error('Choose your notes PDF first.');
         if (!providerId) throw new Error('Your provider profile is not linked yet. Ask the office for help.');
         btn.disabled = true;
         btn.textContent = 'Reading…';
+        if (uploadErr) {
+          uploadErr.hidden = true;
+          uploadErr.textContent = '';
+        }
         setStatus('Reading PDF…', '');
         const pdfBase64 = await fileToBase64(file);
         const out = await api('POST', '/week/upload-sessions', {
@@ -380,9 +407,9 @@ async function therapistHome() {
       } catch (e) {
         const msg = e.message || 'Could not read this PDF.';
         setStatus(msg, 'err');
-        const hint = document.getElementById('uploadHint');
-        if (hint && /no readable text|Could not find any sessions|Over mandate/i.test(msg)) {
-          hint.textContent = msg;
+        if (uploadErr) {
+          uploadErr.hidden = false;
+          uploadErr.textContent = msg;
         }
         if (btn) {
           btn.disabled = false;
@@ -448,6 +475,37 @@ async function adminDash() {
   const d = await api('GET', '/dashboard');
   const listed = await api('GET', '/admin/weeks');
   const weeks = listed.weeks || [];
+  const weekActions = (w) => {
+    const status = w.status || 'draft';
+    const sessions = Number(w.sessionCount) || 0;
+    const canSign = status === 'submitted' && sessions > 0;
+    const canReopen = status === 'signed' || status === 'locked';
+    const canHha = status === 'signed' || status === 'locked';
+    const canRemove = status === 'draft';
+    const parts = [];
+    if (status === 'submitted') {
+      parts.push(
+        canSign
+          ? `<button class="btn-primary" data-sign="${esc(w.id)}">Sign</button>`
+          : `<button class="btn-primary" disabled title="Week needs at least one session before it can be signed.">Sign</button>`,
+      );
+    }
+    if (canReopen) {
+      parts.push(`<button class="btn" data-reopen="${esc(w.id)}">Reopen</button>`);
+    }
+    if (canHha) {
+      parts.push(`<button class="btn" data-hha="${esc(w.id)}">Send to HHA</button>`);
+    }
+    if (canRemove) {
+      parts.push(`<button class="btn" data-remove-week="${esc(w.id)}">Remove</button>`);
+    }
+    if (status === 'draft') {
+      parts.push(`<span class="muted">Waiting for therapist to submit</span>`);
+    } else if (status === 'reopened') {
+      parts.push(`<span class="muted">Waiting for therapist to resubmit</span>`);
+    }
+    return parts.join(' ') || '<span class="muted">—</span>';
+  };
   view(`
     <div class="card">
       <h2>Dashboard</h2>
@@ -461,16 +519,12 @@ async function adminDash() {
         <tr><th>Week</th><th>Provider</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
         ${weeks.map((w) => `<tr>
           <td>${esc(w.weekStart)}</td>
-          <td>${esc(w.providerName)}</td>
+          <td>${esc(w.providerName || '—')}</td>
           <td>${esc(w.sessionCount)}</td>
           <td>${esc(w.status)}</td>
-          <td>${esc(w.signerName || w.signerEmail || '')}</td>
+          <td>${esc(w.signerName || w.signerEmail || '—')}</td>
           <td>${esc(w.hhaStatus)}</td>
-          <td>
-            <button class="btn-primary" data-sign="${esc(w.id)}">Sign</button>
-            <button class="btn" data-reopen="${esc(w.id)}">Reopen</button>
-            <button class="btn" data-hha="${esc(w.id)}">Send to HHA</button>
-          </td>
+          <td class="week-actions">${weekActions(w)}</td>
         </tr>`).join('') || '<tr><td colspan="7">No weeks yet.</td></tr>'}
       </table>
     </div>
@@ -479,6 +533,7 @@ async function adminDash() {
     const sign = e.target.closest('[data-sign]');
     const reopen = e.target.closest('[data-reopen]');
     const hha = e.target.closest('[data-hha]');
+    const removeWeek = e.target.closest('[data-remove-week]');
     try {
       if (sign) {
         const out = await api('POST', `/admin/weeks/${sign.getAttribute('data-sign')}/sign`, {});
@@ -495,6 +550,13 @@ async function adminDash() {
       if (hha) {
         const out = await api('POST', `/weeks/${hha.getAttribute('data-hha')}/hha`, {});
         setStatus(`HHA transferred ${out.transferred}. ${out.errors?.join(' ') || ''}`, out.ok ? 'ok' : 'err');
+        await adminDash();
+        return;
+      }
+      if (removeWeek) {
+        if (!confirm('Remove this week? This cannot be undone.')) return;
+        await api('DELETE', `/admin/weeks/${removeWeek.getAttribute('data-remove-week')}`);
+        setStatus('Week removed.', 'ok');
         await adminDash();
       }
     } catch (err) {
