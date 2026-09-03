@@ -17,11 +17,21 @@ import type {
 } from './types.js';
 import { emptySnapshot } from './types.js';
 
+function mergeSnapshot(snapshot: Partial<TmsSnapshot> | null | undefined): TmsSnapshot {
+  const base = emptySnapshot();
+  const src = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  for (const key of Object.keys(base) as (keyof TmsSnapshot)[]) {
+    const value = src[key];
+    if (Array.isArray(value)) (base as TmsSnapshot)[key] = structuredClone(value) as never;
+  }
+  return base;
+}
+
 export class MemoryStore {
   data: TmsSnapshot;
 
   constructor(snapshot?: TmsSnapshot) {
-    this.data = snapshot ? structuredClone(snapshot) : emptySnapshot();
+    this.data = snapshot ? mergeSnapshot(snapshot) : emptySnapshot();
   }
 
   snapshot(): TmsSnapshot {
@@ -29,7 +39,9 @@ export class MemoryStore {
   }
 
   load(snapshot: TmsSnapshot): void {
-    this.data = structuredClone(snapshot);
+    // Older S3 snapshots may omit newer arrays (e.g. adminNotes) — fill defaults
+    // so push/filter never crash on undefined.
+    this.data = mergeSnapshot(snapshot);
   }
 
   audit(actorId: string, action: string, entity: string, before: unknown, after: unknown): void {

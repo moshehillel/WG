@@ -497,14 +497,18 @@ export async function handleTmsRequest(
   if (req.method === 'POST' && /^\/admin\/providers\/[^/]+\/notes$/.test(path)) {
     return adminUser(() => {
       const providerId = path.split('/')[3];
+      const provider = store.data.providers.find((p) => p.id === providerId);
+      if (!provider) return json(404, { error: 'Provider not found.' });
+      const text = String(obj(req).body || obj(req).note || obj(req).text || '').trim();
+      if (!text) return json(400, { error: 'Note text is required.' });
       const note = store.addAdminNote({
         id: newId(),
         providerId,
         authorId: ctx.user.id,
-        body: String(obj(req).body || ''),
+        body: text,
         createdAt: nowIso(),
       });
-      return json(201, { note });
+      return json(201, { note, notes: store.notesForProvider(providerId) });
     });
   }
 
