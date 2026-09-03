@@ -4,6 +4,8 @@ export type WeekStatus = 'draft' | 'submitted' | 'signed' | 'locked' | 'reopened
 export type Attendance = 'attended' | 'missed' | 'makeup';
 export type HhaTransferStatus = 'none' | 'pending' | 'sent' | 'confirmed' | 'failed';
 export type DueKind = 'progress' | 'annual' | 'reeval';
+/** Weekly = Freq per calendar week. school_day_cycle = Freq per N school days (e.g. 6). */
+export type FrequencyKind = 'weekly' | 'school_day_cycle';
 
 export interface AppUser {
   id: string;
@@ -54,6 +56,8 @@ export interface Student {
   programId: string;
   programType: string;
   hhaPatientId: string;
+  /** Optional grade from caseload CSV (e.g. KU Related Service Details). */
+  grade?: string;
   createdAt: string;
 }
 
@@ -63,8 +67,23 @@ export interface Mandate {
   providerId: string;
   serviceType: string;
   discipline: Discipline | '';
+  /**
+   * Sessions allowed per calendar week when frequencyKind is weekly (or omitted).
+   * For school_day_cycle rows this stays 0 — do not coerce cycle Freq into weekly.
+   */
   frequencyPerWeek: number;
+  /**
+   * weekly (default) | school_day_cycle (e.g. Freq per 6 school days).
+   * Omitted on legacy rows → treated as weekly.
+   */
+  frequencyKind?: FrequencyKind;
+  /** Sessions allowed per period (Freq column). Same as frequencyPerWeek when weekly. */
+  sessionsPerPeriod?: number;
+  /** School-day cycle length when frequencyKind is school_day_cycle (typically 6). */
+  periodSchoolDays?: number;
   ratioGroup: boolean;
+  /** Session location from caseload (e.g. Push-In / Pull-Out). */
+  location?: string;
   sourcePdfKey: string;
   parsedAt: string;
   startOn: string;
@@ -99,6 +118,8 @@ export interface SessionRow {
   location: string;
   notes: string;
   aiFlags: string[];
+  /** True when AI/heuristic screening found hard blocks (blocks submit). */
+  aiBlock?: boolean;
 }
 
 export interface StoredFile {

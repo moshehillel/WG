@@ -226,7 +226,7 @@ describe('week start', () => {
 });
 
 describe('AI heuristic', () => {
-  it('warns on short notes without blocking', () => {
+  it('blocks short notes on attended sessions', () => {
     const r = screenServiceNote({
       notes: 'ok',
       attendance: 'attended',
@@ -235,7 +235,58 @@ describe('AI heuristic', () => {
       makeupOfSessionId: '',
       dateOfService: '09/01/2026',
     });
+    expect(r.block).toBe(true);
+    expect(r.blockFlags.some((f) => /incomplete/i.test(f))).toBe(true);
+  });
+
+  it('blocks short notes on makeup sessions', () => {
+    const r = screenServiceNote({
+      notes: 'brief',
+      attendance: 'makeup',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      makeupOfSessionId: 'missed-1',
+      dateOfService: '09/01/2026',
+    });
+    expect(r.block).toBe(true);
+  });
+
+  it('blocks attended sessions missing times', () => {
+    const r = screenServiceNote({
+      notes: 'Service Provided: balance work in gym today',
+      attendance: 'attended',
+      beginTime: '',
+      endTime: '',
+      makeupOfSessionId: '',
+      dateOfService: '09/01/2026',
+    });
+    expect(r.block).toBe(true);
+    expect(r.blockFlags.some((f) => /time/i.test(f))).toBe(true);
+  });
+
+  it('warns on missed notes without blocking', () => {
+    const r = screenServiceNote({
+      notes: 'No detail given',
+      attendance: 'missed',
+      beginTime: '',
+      endTime: '',
+      makeupOfSessionId: '',
+      dateOfService: '09/01/2026',
+    });
     expect(r.block).toBe(false);
-    expect(r.flags.length).toBeGreaterThan(0);
+    expect(r.warnFlags.length).toBeGreaterThan(0);
+  });
+
+  it('passes a complete attended note', () => {
+    const r = screenServiceNote({
+      notes: 'Service Provided: balance work in gym',
+      attendance: 'attended',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      makeupOfSessionId: '',
+      dateOfService: '09/01/2026',
+    });
+    expect(r.block).toBe(false);
+    expect(r.flags).toEqual([]);
   });
 });

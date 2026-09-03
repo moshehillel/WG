@@ -68,6 +68,8 @@ if (!store.data.users.length) {
     serviceType: 'PT School',
     discipline: 'PT',
     frequencyPerWeek: 2,
+    frequencyKind: 'weekly',
+    sessionsPerPeriod: 2,
     ratioGroup: false,
     sourcePdfKey: 'seed',
     parsedAt: nowIso(),
@@ -112,7 +114,7 @@ createServer(async (req, res) => {
   const cors = {
     'access-control-allow-origin': '*',
     'access-control-allow-headers': 'content-type,authorization,x-tms-role,x-tms-email',
-    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,OPTIONS,PUT,PATCH,DELETE',
   };
   if (Buffer.isBuffer(result.body)) {
     res.writeHead(result.status, { ...cors, ...(result.headers || {}) });

@@ -5,6 +5,7 @@ export * from './makeup.js';
 export * from './week-state.js';
 export * from './mandate-parse.js';
 export * from './session-parse.js';
+export * from './caseload-import.js';
 export * from './due-dates.js';
 export * from './ai-screen.js';
 export * from './memory-store.js';
