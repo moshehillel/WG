@@ -15,6 +15,8 @@ const state = {
   weekStart: mondayIso(),
   last: null,
   mandateDraft: null,
+  caseloadPreview: null,
+  caseloadCsvText: '',
 };
 
 function mondayIso() {
@@ -485,25 +487,23 @@ async function adminPeople() {
     <div class="card">
       <h2>Admins</h2>
       <table>
-        <tr><th>Name</th><th>Email</th><th>Status</th><th></th></tr>
+        <tr><th>Name</th><th>Email</th><th></th></tr>
         ${admins.map((u) => {
-          const inactive = u.active === false;
           const self = state.email && u.email && state.email.toLowerCase() === String(u.email).toLowerCase();
           return `<tr>
             <td>${esc(u.displayName || '—')}</td>
             <td>${esc(u.email)}</td>
-            <td>${inactive ? 'Deactivated' : 'Active'}</td>
             <td>${
-              inactive || self
+              self
                 ? '—'
-                : `<button type="button" class="btn" data-deactivate="${esc(u.id)}">Remove</button>`
+                : `<button type="button" class="btn" data-remove-admin="${esc(u.id)}">Remove</button>`
             }</td>
           </tr>`;
-        }).join('') || '<tr><td colspan="4">None yet</td></tr>'}
+        }).join('') || '<tr><td colspan="3">None yet</td></tr>'}
       </table>
     </div>
     <div class="card">
-      <h2>Add therapist (provider)</h2>
+      <h2>Add provider</h2>
       <p class="muted">One person = one login + provider profile, already linked.</p>
       <label>Email <input id="temail" type="email" autocomplete="off" /></label>
       <div class="row">
@@ -517,10 +517,10 @@ async function adminPeople() {
         <label>Pay rate (optional) <input id="trate" type="number" step="0.01" placeholder="72" /></label>
       </div>
       <label>HHA caregiver code (optional) <input id="thha" /></label>
-      <button class="btn-primary big" id="createTherapist">Create therapist</button>
+      <button class="btn-primary big" id="createTherapist">Create provider</button>
     </div>
     <div class="card">
-      <h2>Therapists</h2>
+      <h2>Providers</h2>
       <table>
         <tr><th>Name</th><th>Email</th><th>Provider id</th><th>Discipline</th></tr>
         ${therapists.map((u) => {
@@ -550,7 +550,7 @@ async function adminPeople() {
     <div class="card">
       <h2>Internal note</h2>
       <p class="muted">Hidden from the therapist.</p>
-      <label>Therapist
+      <label>Provider
         <select id="npid">${providerOptions(providers)}</select>
       </label>
       <label>Note <textarea id="nbody" rows="3"></textarea></label>
@@ -571,13 +571,13 @@ async function adminPeople() {
       await adminPeople();
     } catch (e) { setStatus(e.message, 'err'); }
   };
-  document.querySelectorAll('[data-deactivate]').forEach((btn) => {
+  document.querySelectorAll('[data-remove-admin]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        if (!confirm('Deactivate this admin? They will no longer be able to sign in.')) return;
-        const id = btn.getAttribute('data-deactivate');
-        const out = await api('POST', `/admin/users/${id}/deactivate`, {});
-        setStatus(out.message || 'Admin deactivated.', 'ok');
+        if (!confirm('Remove this admin? Their login will be deleted and they will disappear from this list.')) return;
+        const id = btn.getAttribute('data-remove-admin');
+        const out = await api('DELETE', `/admin/users/${id}`);
+        setStatus(out.message || 'Admin removed.', 'ok');
         await adminPeople();
       } catch (e) { setStatus(e.message, 'err'); }
     });
@@ -593,7 +593,7 @@ async function adminPeople() {
         payRate: rateRaw === '' ? null : Number(rateRaw),
         hhaCaregiverCode: document.getElementById('thha').value,
       });
-      setStatus(out.message || `Therapist ready: ${out.user?.email} ↔ ${out.provider?.id}`, 'ok');
+      setStatus(out.message || `Provider ready: ${out.user?.email} ↔ ${out.provider?.id}`, 'ok');
       await adminPeople();
     } catch (e) { setStatus(e.message, 'err'); }
   };
@@ -630,7 +630,38 @@ async function adminMandates() {
   const draft = state.mandateDraft;
   const student = draft?.student;
   const mandate = draft?.mandate;
+  const preview = state.caseloadPreview;
+  const previewRows = preview?.rows || [];
+  const previewErrors = preview?.errors || [];
+  const previewWarnings = preview?.warnings || [];
   view(`
+    <div class="card">
+      <h2>Import caseload (CSV)</h2>
+      <p>KU “Related Service Details by School” CSV. One row = one mandate (individual and group are separate). Preview first, then confirm. Excel .xls is not supported — Save As CSV.</p>
+      <input id="caseloadFile" type="file" accept=".csv,text/csv,text/plain" />
+      <div class="row" style="margin-top:0.6rem">
+        <button class="btn" id="caseloadPreviewBtn">Preview import</button>
+        <button class="btn-primary" id="caseloadConfirmBtn" ${previewRows.length ? '' : 'disabled'}>Confirm import</button>
+      </div>
+      ${preview ? `
+      <p style="margin-top:0.8rem">${previewRows.length} mandate row(s) · ${preview.createdStudents || 0} new students · ${preview.createdSchools || 0} new schools · ${preview.createdMandates || 0} new mandates</p>
+      ${previewErrors.length ? `<div class="err-box">${previewErrors.map((e) => `Row ${esc(String(e.rowNumber || '?'))}: ${esc(e.message)}`).join('<br/>')}</div>` : ''}
+      ${previewWarnings.length ? `<p class="muted">${previewWarnings.slice(0, 8).map((w) => `Row ${esc(String(w.rowNumber || '?'))}: ${esc(w.message)}`).join(' · ')}${previewWarnings.length > 8 ? ' …' : ''}</p>` : ''}
+      <table>
+        <tr><th>Student</th><th>School</th><th>Service</th><th>Ratio</th><th>Freq</th><th>Provider</th></tr>
+        ${previewRows.map((r) => {
+          const badProv = r.providerName && !r.providerMatched;
+          return `<tr${badProv ? ' class="row-warn"' : ''}>
+            <td>${esc(r.firstName)} ${esc(r.lastName)}${r.grade ? ` <span class="muted">(gr ${esc(r.grade)})</span>` : ''}</td>
+            <td>${esc(r.schoolName || '')}</td>
+            <td>${esc(r.serviceType || r.discipline || '')}</td>
+            <td>${r.ratioGroup ? 'Group' : 'Individual'}</td>
+            <td>${esc(r.freqDisplay || '')}</td>
+            <td>${esc(r.providerName || '')}${badProv ? ' <span class="err-inline">(unmatched)</span>' : ''}</td>
+          </tr>`;
+        }).join('') || '<tr><td colspan="6">No rows</td></tr>'}
+      </table>` : ''}
+    </div>
     <div class="card">
       <h2>Mandate PDF (parsed the first time, then saved)</h2>
       <textarea id="mtext" rows="10" placeholder="Child's Name: De Oliveira Jack&#10;Service Type: PT School Group&#10;Mandate frequency: 2x/week"></textarea>
@@ -698,6 +729,54 @@ async function adminMandates() {
       <button class="btn" id="filebtn">Attach to locker</button>
     </div>
   `);
+
+  async function readCaseloadFile() {
+    const file = document.getElementById('caseloadFile').files[0];
+    if (!file) throw new Error('Choose a CSV file first.');
+    const name = file.name || '';
+    if (/\.xlsx?$/i.test(name)) {
+      throw new Error('Excel .xls/.xlsx is not supported. Save As CSV and try again.');
+    }
+    const csvText = await file.text();
+    state.caseloadCsvText = csvText;
+    return csvText;
+  }
+
+  document.getElementById('caseloadPreviewBtn').onclick = async () => {
+    try {
+      const csvText = await readCaseloadFile();
+      const out = await api('POST', '/admin/caseloads/import', {
+        csvText,
+        dryRun: true,
+        fileName: document.getElementById('caseloadFile').files[0]?.name || '',
+      });
+      state.caseloadPreview = out;
+      const errN = (out.errors || []).length;
+      setStatus(
+        errN
+          ? `Preview: ${out.rows?.length || 0} rows, ${errN} row error(s) shown in red.`
+          : `Preview: ${out.rows?.length || 0} mandate row(s). Confirm to save.`,
+        errN ? 'err' : 'ok',
+      );
+      await adminMandates();
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+  document.getElementById('caseloadConfirmBtn').onclick = async () => {
+    try {
+      if (!state.caseloadCsvText) throw new Error('Preview a CSV first.');
+      const out = await api('POST', '/admin/caseloads/import', {
+        csvText: state.caseloadCsvText,
+        confirm: true,
+      });
+      state.caseloadPreview = out;
+      setStatus(
+        `Imported ${out.createdMandates || 0} mandate(s), ${out.createdStudents || 0} student(s).`,
+        'ok',
+      );
+      await adminMandates();
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+
   document.getElementById('parse').onclick = async () => {
     try {
       const file = document.getElementById('mfile').files[0];

@@ -1,5 +1,6 @@
 import {
   adminWeeksList,
+  applyCaseloadImport,
   checkMandatesForWeek,
   collectHeuristicAiIssues,
   dashboard,
@@ -9,6 +10,7 @@ import {
   missingNotes,
   newId,
   nowIso,
+  parseCaseloadCsv,
   parseMandatePdfText,
   parseWeeklySessionText,
   screenServiceNote,
@@ -19,6 +21,7 @@ import {
   weekStartFromDos,
   type AppUser,
   type Discipline,
+  type FrequencyKind,
   type MemoryStore,
   type SessionRow,
   type Student,
@@ -28,7 +31,7 @@ import { screenNoteWithOptionalBedrock } from './bedrock.js';
 import { transferLockedWeek } from './hha-transfer.js';
 import { buildTimesheetPdf } from './timesheet.js';
 import { createSignEnvelope, envelopeCompleted } from './esign.js';
-import { deactivateCognitoLogin, inviteTherapist } from './invite.js';
+import { deactivateCognitoLogin, deleteCognitoLogin, inviteTherapist } from './invite.js';
 import { pdfTextFromBody } from './pdf-text.js';
 import { runDueNags } from './due-nags.js';
 import { putLockerPdf } from './s3-state.js';
@@ -365,6 +368,36 @@ export async function handleTmsRequest(
     return adminUser(() => json(200, { users: store.data.users }));
   }
 
+  if (req.method === 'DELETE' && /^\/admin\/users\/[^/]+$/.test(path)) {
+    return adminUser(async () => {
+      const id = path.split('/')[3];
+      const target = store.userById(id);
+      if (!target) return json(404, { error: 'User not found.' });
+      if (target.role !== 'admin') {
+        return json(400, { error: 'Only admin accounts can be deleted. Deactivate therapists instead.' });
+      }
+      if (target.id === ctx.user.id) {
+        return json(400, { error: 'You cannot delete your own admin account.' });
+      }
+      const otherActiveAdmins = store.data.users.filter(
+        (u) => u.role === 'admin' && u.active !== false && u.id !== target.id,
+      );
+      if (otherActiveAdmins.length === 0) {
+        return json(400, { error: 'Cannot delete the last active admin.' });
+      }
+      const before = { ...target };
+      try {
+        await deleteCognitoLogin(target.cognitoSub, target.email);
+      } catch (err) {
+        // App user is still removed so the admin list stays clean.
+        void err;
+      }
+      store.deleteUser(target.id);
+      store.audit(ctx.user.id, 'delete_user', `user:${target.id}`, before, null);
+      return json(200, { deleted: true, id: target.id, message: 'Admin removed.' });
+    });
+  }
+
   if (req.method === 'POST' && /^\/admin\/users\/[^/]+\/deactivate$/.test(path)) {
     return adminUser(async () => {
       const id = path.split('/')[3];
@@ -374,12 +407,7 @@ export async function handleTmsRequest(
         return json(400, { error: 'You cannot deactivate your own admin account.' });
       }
       if (target.role === 'admin') {
-        const otherActiveAdmins = store.data.users.filter(
-          (u) => u.role === 'admin' && u.active !== false && u.id !== target.id,
-        );
-        if (otherActiveAdmins.length === 0) {
-          return json(400, { error: 'Cannot deactivate the last active admin.' });
-        }
+        return json(400, { error: 'Admins must be deleted, not deactivated.' });
       }
       if (target.active === false) {
         return json(200, { user: target, message: 'Already deactivated.' });
@@ -395,7 +423,7 @@ export async function handleTmsRequest(
       store.audit(ctx.user.id, 'deactivate_user', `user:${updated.id}`, before, updated);
       return json(200, {
         user: updated,
-        message: `${target.role === 'admin' ? 'Admin' : 'User'} deactivated.`,
+        message: 'User deactivated.',
       });
     });
   }
@@ -512,6 +540,8 @@ export async function handleTmsRequest(
           serviceType: parsed.serviceType,
           discipline: parsed.discipline,
           frequencyPerWeek: parsed.frequencyPerWeek,
+          frequencyKind: 'weekly',
+          sessionsPerPeriod: parsed.frequencyPerWeek,
           ratioGroup: parsed.ratioGroup,
           sourcePdfKey: String(obj(req).sourcePdfKey || 'upload'),
           parsedAt: nowIso(),
@@ -522,6 +552,45 @@ export async function handleTmsRequest(
       }
       store.audit(ctx.user.id, 'parse_mandate_pdf', student ? `student:${student.id}` : 'student:new', null, parsed);
       return json(200, { parsed, student, mandate });
+    });
+  }
+
+  if (req.method === 'POST' && path === '/admin/caseloads/import') {
+    return adminUser(() => {
+      const b = obj(req);
+      const csvText = String(b.csvText || b.csv || textBody(req) || '');
+      if (!csvText.trim()) return json(400, { error: 'csvText is required.' });
+      if (/\.xlsx?$/i.test(String(b.fileName || ''))) {
+        return json(400, {
+          error: 'Excel .xls/.xlsx is not supported. Save As CSV and upload that file.',
+        });
+      }
+      const parsed = parseCaseloadCsv(csvText);
+      const confirm = b.confirm === true || b.dryRun === false;
+      const dryRun = !confirm;
+      // Persist only when confirming. Valid rows still commit even if some rows had parse errors.
+      const result = applyCaseloadImport(store, parsed, { dryRun });
+      if (!dryRun) {
+        store.audit(
+          ctx.user.id,
+          'caseload_csv_import',
+          'caseload',
+          null,
+          {
+            createdStudents: result.createdStudents,
+            createdMandates: result.createdMandates,
+            updatedMandates: result.updatedMandates,
+            createdSchools: result.createdSchools,
+            rowCount: result.rows.length,
+            errorCount: result.errors.length,
+          },
+        );
+      }
+      return json(200, {
+        ...result,
+        dryRun,
+        parsedRowCount: parsed.rows.length,
+      });
     });
   }
 
@@ -536,14 +605,33 @@ export async function handleTmsRequest(
       const freq = b.frequencyPerWeek == null || b.frequencyPerWeek === ''
         ? existing.frequencyPerWeek
         : Number(b.frequencyPerWeek);
+      const kindRaw = b.frequencyKind != null ? String(b.frequencyKind) : existing.frequencyKind || 'weekly';
+      const frequencyKind = (kindRaw === 'school_day_cycle' ? 'school_day_cycle' : 'weekly') as FrequencyKind;
+      const sessionsPerPeriod =
+        b.sessionsPerPeriod == null || b.sessionsPerPeriod === ''
+          ? existing.sessionsPerPeriod ?? (frequencyKind === 'weekly' ? (Number.isFinite(freq) ? freq : existing.frequencyPerWeek) : existing.sessionsPerPeriod)
+          : Number(b.sessionsPerPeriod);
+      const periodSchoolDays =
+        b.periodSchoolDays == null || b.periodSchoolDays === ''
+          ? existing.periodSchoolDays
+          : Number(b.periodSchoolDays);
       const mandate = store.upsertMandate({
         ...existing,
-        frequencyPerWeek: Number.isFinite(freq) ? freq : existing.frequencyPerWeek,
+        frequencyPerWeek: frequencyKind === 'school_day_cycle'
+          ? 0
+          : Number.isFinite(freq) ? freq : existing.frequencyPerWeek,
+        frequencyKind,
+        sessionsPerPeriod: Number.isFinite(Number(sessionsPerPeriod)) ? Number(sessionsPerPeriod) : existing.sessionsPerPeriod,
+        periodSchoolDays: frequencyKind === 'school_day_cycle'
+          ? (Number.isFinite(Number(periodSchoolDays)) ? Number(periodSchoolDays) : existing.periodSchoolDays || 6)
+          : undefined,
         serviceType: pickStr(b.serviceType, existing.serviceType),
         discipline,
         providerId: pickStr(b.providerId, existing.providerId),
         startOn: pickStr(b.startOn, existing.startOn),
         endOn: pickStr(b.endOn, existing.endOn),
+        location: b.location != null ? String(b.location) : existing.location,
+        ratioGroup: b.ratioGroup == null ? existing.ratioGroup : Boolean(b.ratioGroup),
       });
       store.audit(ctx.user.id, 'update_mandate', `mandate:${id}`, existing, mandate);
       return json(200, { mandate });
@@ -565,6 +653,7 @@ export async function handleTmsRequest(
         hhaPatientId: pickStr(b.hhaPatientId, existing.hhaPatientId),
         programId: pickStr(b.programId, existing.programId),
         programType: pickStr(b.programType, existing.programType),
+        grade: b.grade != null ? String(b.grade) : existing.grade,
       });
       store.audit(ctx.user.id, 'update_student', `student:${id}`, existing, student);
       return json(200, { student });

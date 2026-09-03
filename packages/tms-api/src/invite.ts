@@ -70,3 +70,43 @@ export async function deactivateCognitoLogin(usernameOrEmail: string, role: TmsR
     }),
   );
 }
+
+function isLocalInviteUsername(value: string): boolean {
+  return value.startsWith('invite-') || value.startsWith('local-invite:');
+}
+
+function isUserNotFound(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const name = 'name' in err ? String(err.name) : '';
+  const text = err instanceof Error ? err.message : String(err);
+  return name === 'UserNotFoundException' || text.includes('UserNotFound');
+}
+
+/** Permanently remove the Cognito user (best-effort across sub vs email username). */
+export async function deleteCognitoLogin(cognitoSub: string, email: string): Promise<void> {
+  const pool = poolId();
+  if (!pool) return;
+  const { AdminDeleteUserCommand } = await import('@aws-sdk/client-cognito-identity-provider');
+  const cognito = await cognitoClient();
+  const tried = new Set<string>();
+  const candidates = [cognitoSub, email].map((v) => v.trim()).filter(Boolean);
+  let lastErr: unknown;
+  for (const username of candidates) {
+    if (isLocalInviteUsername(username) || tried.has(username.toLowerCase())) continue;
+    tried.add(username.toLowerCase());
+    try {
+      await cognito.send(
+        new AdminDeleteUserCommand({
+          UserPoolId: pool,
+          Username: username,
+        }),
+      );
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (isUserNotFound(err)) continue;
+    }
+  }
+  if (tried.size === 0) return;
+  if (lastErr && !isUserNotFound(lastErr)) throw lastErr;
+}

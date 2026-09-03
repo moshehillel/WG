@@ -339,24 +339,78 @@ describe('TMS API weekly loop', () => {
     expect((adminInvite.body as { message: string }).message).toMatch(/Admin invite/i);
 
     const secondId = (adminInvite.body as { user: { id: string } }).user.id;
-    const deactivated = await handleTmsRequest(store, {
-      method: 'POST',
-      path: `/admin/users/${secondId}/deactivate`,
+    const removed = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/users/${secondId}`,
       headers: adminH,
       query: {},
       body: {},
     });
-    expect(deactivated.status).toBe(200);
-    expect((deactivated.body as { user: { active: boolean } }).user.active).toBe(false);
+    expect(removed.status).toBe(200);
+    expect((removed.body as { deleted: boolean }).deleted).toBe(true);
+    expect(store.userById(secondId)).toBeUndefined();
 
-    const lastAdminBlocked = await handleTmsRequest(store, {
+    const selfBlocked = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/users/${store.userByEmail('admin@whiteglove.local')!.id}`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(selfBlocked.status).toBe(400);
+    expect((selfBlocked.body as { error: string }).error).toMatch(/own admin/i);
+  });
+
+  it('hard-deletes leftover deactivated admins and keeps therapist deactivate', async () => {
+    const { store } = storeWithTherapist();
+    const leftover = store.upsertUser({
+      id: newId(),
+      cognitoSub: 'dead-admin',
+      email: 'old-admin@whiteglove.local',
+      role: 'admin',
+      displayName: 'Old Admin',
+      providerId: '',
+      active: false,
+      createdAt: nowIso(),
+    });
+    const purged = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/users/${leftover.id}`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(purged.status).toBe(200);
+    expect(store.userById(leftover.id)).toBeUndefined();
+
+    const therapist = store.userByEmail('therapist@whiteglove.local')!;
+    const deleteTherapist = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/users/${therapist.id}`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(deleteTherapist.status).toBe(400);
+
+    const deactivateAdmin = await handleTmsRequest(store, {
       method: 'POST',
       path: `/admin/users/${store.userByEmail('admin@whiteglove.local')!.id}/deactivate`,
       headers: adminH,
       query: {},
       body: {},
     });
-    expect(lastAdminBlocked.status).toBe(400);
+    expect(deactivateAdmin.status).toBe(400);
+
+    const deactivated = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/users/${therapist.id}/deactivate`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(deactivated.status).toBe(200);
+    expect((deactivated.body as { user: { active: boolean } }).user.active).toBe(false);
   });
 
   it('lets admin correct mandate and student after parse', async () => {
@@ -636,5 +690,70 @@ describe('TMS API weekly loop', () => {
       body: {},
     });
     expect((report.body as { rows: Array<{ status: string }> }).rows[0]?.status).toBe('overdue');
+  });
+
+  it('caseload CSV import is admin-only; dry-run vs confirm', async () => {
+    const { store } = storeWithTherapist();
+    const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
+Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Small Group,1,Weekly,Push-In,Pat Lee
+Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Pull-Out,Pat Lee
+Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day cycle,Push-In,Pat Lee
+`;
+
+    const denied = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/caseloads/import',
+      headers: thH,
+      query: {},
+      body: { csvText: csv, dryRun: true },
+    });
+    expect(denied.status).toBe(403);
+
+    const preview = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/caseloads/import',
+      headers: adminH,
+      query: {},
+      body: { csvText: csv },
+    });
+    expect(preview.status).toBe(200);
+    const previewBody = preview.body as {
+      dryRun: boolean;
+      rows: unknown[];
+      createdMandates: number;
+    };
+    expect(previewBody.dryRun).toBe(true);
+    expect(previewBody.rows).toHaveLength(3);
+    expect(store.data.students).toHaveLength(0);
+    expect(store.data.mandates).toHaveLength(0);
+
+    const commit = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/caseloads/import',
+      headers: adminH,
+      query: {},
+      body: { csvText: csv, confirm: true },
+    });
+    expect(commit.status).toBe(200);
+    const commitBody = commit.body as { dryRun: boolean; createdMandates: number };
+    expect(commitBody.dryRun).toBe(false);
+    expect(store.data.students.length).toBe(2);
+    const ahmad = store.findStudentByName('Ahmad', 'Haris');
+    expect(store.mandatesForStudent(ahmad!.id)).toHaveLength(2);
+    const elmer = store.findStudentByName('Elmer', 'Diaz');
+    const cycle = store.mandatesForStudent(elmer!.id)[0];
+    expect(cycle.frequencyKind).toBe('school_day_cycle');
+    expect(cycle.frequencyPerWeek).toBe(0);
+    expect(cycle.sessionsPerPeriod).toBe(2);
+    expect(cycle.periodSchoolDays).toBe(6);
+
+    const xls = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/caseloads/import',
+      headers: adminH,
+      query: {},
+      body: { csvText: 'a,b', fileName: 'caseload.xlsx' },
+    });
+    expect(xls.status).toBe(400);
   });
 });

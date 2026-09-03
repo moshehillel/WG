@@ -105,6 +105,7 @@ export function addTherapyManagement(
     'cognito-idp:AdminAddUserToGroup',
     'cognito-idp:AdminRemoveUserFromGroup',
     'cognito-idp:AdminDisableUser',
+    'cognito-idp:AdminDeleteUser',
   );
   fn.addToRolePolicy(
     new iam.PolicyStatement({

@@ -64,6 +64,13 @@ export class MemoryStore {
     return row;
   }
 
+  deleteUser(id: string): AppUser | undefined {
+    const i = this.data.users.findIndex((u) => u.id === id);
+    if (i < 0) return undefined;
+    const [removed] = this.data.users.splice(i, 1);
+    return removed;
+  }
+
   upsertSchool(row: School): School {
     const i = this.data.schools.findIndex((s) => s.id === row.id);
     if (i >= 0) this.data.schools[i] = row;
@@ -109,8 +116,14 @@ export class MemoryStore {
     return row;
   }
 
+  /** First mandate for the student (legacy helpers / due-nags). Prefer mandatesForStudent. */
   mandateForStudent(studentId: string): Mandate | undefined {
     return this.data.mandates.find((m) => m.studentId === studentId);
+  }
+
+  /** All mandates for a student (individual + group, dual services, etc.). */
+  mandatesForStudent(studentId: string): Mandate[] {
+    return this.data.mandates.filter((m) => m.studentId === studentId);
   }
 
   weekByProviderStart(providerId: string, weekStart: string): WeeklyPeriod | undefined {
