@@ -42,7 +42,23 @@ export function cancellationFromNotes(
   return 'Student Absent';
 }
 
-/** Weekly Frontline-style notes as extracted text (pdf.js on the SPA, or pasted). */
+function dateIndexForSession(blob: string, date: string): number {
+  let from = 0;
+  while (from < blob.length) {
+    const idx = blob.indexOf(date, from);
+    if (idx < 0) return -1;
+    const before = blob.slice(Math.max(0, idx - 24), idx);
+    // Skip report range header "From: … To: …" and DOB lines.
+    if (/\bFrom:\s*$/i.test(before) || /\bTo:\s*$/i.test(before) || /D\.?O\.?B\.?\s*$/i.test(before)) {
+      from = idx + date.length;
+      continue;
+    }
+    return idx;
+  }
+  return -1;
+}
+
+/** Weekly Frontline-style notes as extracted text (server PDF extract, or pasted). */
 export function parseWeeklySessionText(text: string): ParsedSessionNote[] {
   const blob = String(text || '');
   const studentName = (
@@ -56,9 +72,10 @@ export function parseWeeklySessionText(text: string): ParsedSessionNote[] {
   const rows: ParsedSessionNote[] = [];
   const dateRe = /(\d{1,2}\/\d{1,2}\/\d{2,4})/g;
   const dates = [...blob.matchAll(dateRe)].map((m) => m[1]);
-  const uniqueDates = [...new Set(dates)].filter((d) => !/D\.?O\.?B/i.test(blob.split(d)[0]?.slice(-20) ?? ''));
+  const uniqueDates = [...new Set(dates)].filter((d) => dateIndexForSession(blob, d) >= 0);
   for (const dateOfService of uniqueDates.slice(0, 40)) {
-    const idx = blob.indexOf(dateOfService);
+    const idx = dateIndexForSession(blob, dateOfService);
+    if (idx < 0) continue;
     const slice = blob.slice(idx, idx + 400);
     const times = [...slice.matchAll(/(\d{1,2}:\d{2}\s*[ap]\.?m\.?)/gi)].map((m) => m[1]);
     const notesMatch = slice.match(

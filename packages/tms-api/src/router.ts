@@ -32,7 +32,7 @@ import { transferLockedWeek } from './hha-transfer.js';
 import { buildTimesheetPdf } from './timesheet.js';
 import { createSignEnvelope, envelopeCompleted } from './esign.js';
 import { deactivateCognitoLogin, deleteCognitoLogin, inviteTherapist } from './invite.js';
-import { pdfTextFromBody } from './pdf-text.js';
+import { PDF_NO_TEXT_ERROR, bodyHasPdfBytes, pdfTextFromBody } from './pdf-text.js';
 import { runDueNags } from './due-nags.js';
 import { putLockerPdf } from './s3-state.js';
 import type { Mailer } from './mail.js';
@@ -79,6 +79,21 @@ function providerFor(store: MemoryStore, user: AppUser) {
     return store.data.providers.find((p) => p.id === user.providerId);
   }
   return store.data.providers.find((p) => p.userId === user.id);
+}
+
+/** School-scoped due dates visible to the signed-in user (admins see all). */
+function dueDatesForUser(store: MemoryStore, user: AppUser) {
+  const open = dueDateReport(store).filter((d) => d.status !== 'done');
+  if (user.role === 'admin') return open;
+  const provider = providerFor(store, user);
+  if (!provider) return [];
+  const myStudentIds = new Set(
+    store.data.mandates.filter((m) => m.providerId === provider.id).map((m) => m.studentId),
+  );
+  const mySchoolIds = new Set(
+    store.data.students.filter((s) => myStudentIds.has(s.id)).map((s) => s.schoolId),
+  );
+  return open.filter((d) => mySchoolIds.has(d.schoolId));
 }
 
 function linkUserToProvider(store: MemoryStore, userId: string, providerId: string): void {
@@ -260,7 +275,7 @@ export async function handleTmsRequest(
       user: ctx.user,
       provider: providerFor(store, ctx.user),
       alerts: store.openAlerts().slice(0, 20),
-      dueDates: dueDateReport(store).filter((d) => d.status !== 'done'),
+      dueDates: dueDatesForUser(store, ctx.user),
     });
   }
 
@@ -432,15 +447,17 @@ export async function handleTmsRequest(
   if (req.method === 'POST' && path === '/admin/schools') {
     return adminUser(() => {
       const b = obj(req);
+      const id = String(b.id || newId());
+      const existing = store.data.schools.find((s) => s.id === id);
       const school = store.upsertSchool({
-        id: String(b.id || newId()),
-        name: String(b.name || '').trim(),
-        district: String(b.district || ''),
-        signerName: String(b.signerName || ''),
-        signerEmail: String(b.signerEmail || ''),
-        createdAt: nowIso(),
+        id,
+        name: String(b.name || existing?.name || '').trim(),
+        district: String(b.district ?? existing?.district ?? ''),
+        signerName: String(b.signerName ?? existing?.signerName ?? ''),
+        signerEmail: String(b.signerEmail ?? existing?.signerEmail ?? ''),
+        createdAt: existing?.createdAt || nowIso(),
       });
-      return json(201, { school });
+      return json(existing ? 200 : 201, { school });
     });
   }
 
@@ -521,7 +538,16 @@ export async function handleTmsRequest(
 
   if (req.method === 'POST' && path === '/admin/mandates/parse') {
     return adminUser(() => {
-      const parsed = parseMandatePdfText(pdfTextFromBody(obj(req)) || textBody(req));
+      const b = obj(req);
+      const text = pdfTextFromBody(b) || textBody(req);
+      if (!text.trim()) {
+        return json(400, {
+          error: bodyHasPdfBytes(b)
+            ? PDF_NO_TEXT_ERROR
+            : 'Upload a mandate PDF or paste the mandate text.',
+        });
+      }
+      const parsed = parseMandatePdfText(text);
       let student = store.findStudentByName(parsed.firstName, parsed.lastName);
       if (!student && parsed.firstName) {
         student = store.upsertStudent({
@@ -548,7 +574,7 @@ export async function handleTmsRequest(
           frequencyKind: 'weekly',
           sessionsPerPeriod: parsed.frequencyPerWeek,
           ratioGroup: parsed.ratioGroup,
-          sourcePdfKey: String(obj(req).sourcePdfKey || 'upload'),
+          sourcePdfKey: String(b.sourcePdfKey || 'upload'),
           parsedAt: nowIso(),
           startOn: '',
           endOn: '',
@@ -567,7 +593,19 @@ export async function handleTmsRequest(
       if (!csvText.trim()) return json(400, { error: 'csvText is required.' });
       if (/\.xlsx?$/i.test(String(b.fileName || ''))) {
         return json(400, {
-          error: 'Excel .xls/.xlsx is not supported. Save As CSV and upload that file.',
+          error:
+            'This looks like an Excel workbook (.xls/.xlsx), which is not supported. In Excel choose File → Save As → CSV (Comma delimited), then upload the .csv file.',
+          errors: [
+            {
+              row: 0,
+              rowNumber: 0,
+              field: 'File',
+              problem: 'Excel .xls/.xlsx files cannot be imported.',
+              fix: 'Save As CSV (Comma delimited) and upload the .csv file instead.',
+              message:
+                'Excel .xls/.xlsx files cannot be imported. Save As CSV (Comma delimited) and upload the .csv file instead.',
+            },
+          ],
         });
       }
       const parsed = parseCaseloadCsv(csvText);
@@ -668,16 +706,25 @@ export async function handleTmsRequest(
   if (req.method === 'POST' && path === '/admin/due-dates') {
     return adminUser(() => {
       const b = obj(req);
+      const schoolId = String(b.schoolId || '').trim();
+      if (!schoolId) return json(400, { error: 'schoolId is required.' });
+      const school = store.data.schools.find((s) => s.id === schoolId);
+      if (!school) return json(404, { error: 'School not found.' });
+      const kind = b.kind === 'annual' || b.kind === 'reeval' ? b.kind : 'progress';
+      const dueOn = String(b.dueOn || '').trim();
+      if (!dueOn) return json(400, { error: 'dueOn is required.' });
+      const existing = store.data.dueDates.find(
+        (d) => d.schoolId === schoolId && d.kind === kind && !d.completedAt,
+      );
       const row = store.upsertDueDate({
-        id: String(b.id || newId()),
-        studentId: String(b.studentId || ''),
-        kind: b.kind === 'annual' || b.kind === 'reeval' ? b.kind : 'progress',
-        dueOn: String(b.dueOn || ''),
+        id: String(b.id || existing?.id || newId()),
+        schoolId,
+        kind,
+        dueOn,
         completedAt: String(b.completedAt || ''),
-        lastNagOn: '',
+        lastNagOn: existing && existing.dueOn === dueOn ? existing.lastNagOn : '',
       });
-      const student = store.data.students.find((s) => s.id === row.studentId);
-      const label = student ? `${student.firstName} ${student.lastName}` : row.studentId;
+      const label = school.name || schoolId;
       store.addAlert({
         id: newId(),
         userId: '',
@@ -812,7 +859,20 @@ export async function handleTmsRequest(
     const b = obj(req);
     const providerId = String(b.providerId || provider?.id || '');
     const text = pdfTextFromBody(b) || textBody(req) || String(b.pdfText || '');
+    if (!String(text).trim()) {
+      return json(400, {
+        error: bodyHasPdfBytes(b)
+          ? PDF_NO_TEXT_ERROR
+          : 'Choose a weekly notes PDF (or paste the report text).',
+      });
+    }
     const parsed = parseWeeklySessionText(text);
+    if (!parsed.length) {
+      return json(400, {
+        error:
+          'Could not find any sessions in this PDF. Use a Frontline Related Service Session Notes report with a text layer (not a scan).',
+      });
+    }
     const weekStart = String(b.weekStart || (parsed[0] ? weekStartFromDos(parsed[0].dateOfService) : ''));
     let week = store.weekByProviderStart(providerId, weekStart);
     if (!week) {
@@ -1104,7 +1164,7 @@ export async function handleTmsRequest(
 
   if (req.method === 'GET' && path === '/alerts') {
     const rows = store.openAlerts();
-    return json(200, { alerts: rows, dueDates: dueDateReport(store) });
+    return json(200, { alerts: rows, dueDates: dueDatesForUser(store, ctx.user) });
   }
 
   return json(404, { error: `No route ${req.method} ${path}` });

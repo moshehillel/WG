@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { screenServiceNote } from './ai-screen.js';
-import { dueDateStatus, shouldNagDue } from './due-dates.js';
+import { dueDateStatus, migrateDueDatesToSchools, shouldNagDue } from './due-dates.js';
 import { weekStartFromDos } from './ids.js';
 import { checkMandate, parseFrequencyPerWeek } from './mandate.js';
 import { parseMandatePdfText } from './mandate-parse.js';
@@ -134,17 +134,90 @@ Service: Physical Therapy
     expect(rows.length).toBeGreaterThan(0);
     expect(rows[0]?.attendance).toBe('attended');
   });
+
+  it('skips From/To header dates on Frontline-style reports', () => {
+    const rows = parseWeeklySessionText(`
+Service: Physical Therapy
+From: 08/10/2026 To: 08/14/2026
+Student Name: Aiden Odne, D.O.B. 07/12/2019
+08/11/2026
+1:1
+8:50 am
+9:20 am
+Forest Road School
+Service Provided: balance work
+`);
+    expect(rows.map((r) => r.dateOfService)).toEqual(['08/11/2026']);
+    expect(rows[0]?.studentName).toBe('Aiden Odne');
+  });
 });
 
 describe('due dates and dashboard', () => {
   it('flags overdue', () => {
-    expect(dueDateStatus({ id: 'd', studentId: 's', kind: 'progress', dueOn: '2000-01-01', completedAt: '', lastNagOn: '' })).toBe(
+    expect(dueDateStatus({ id: 'd', schoolId: 'sch', kind: 'progress', dueOn: '2000-01-01', completedAt: '', lastNagOn: '' })).toBe(
       'overdue',
     );
   });
   it('nags until complete', () => {
     expect(shouldNagDue({ completedAt: '', dueOn: '2001-01-01' })).toBe(true);
     expect(shouldNagDue({ completedAt: '2026-01-01T00:00:00.000Z', dueOn: '2001-01-01' })).toBe(false);
+  });
+
+  it('lifts unambiguous student due dates onto schools and drops ambiguous', () => {
+    const students = [
+      {
+        id: 's1',
+        schoolId: 'sch1',
+        firstName: 'A',
+        lastName: 'B',
+        dob: '',
+        programId: '',
+        programType: '',
+        hhaPatientId: '',
+        createdAt: '',
+      },
+      {
+        id: 's2',
+        schoolId: 'sch1',
+        firstName: 'C',
+        lastName: 'D',
+        dob: '',
+        programId: '',
+        programType: '',
+        hhaPatientId: '',
+        createdAt: '',
+      },
+      {
+        id: 's3',
+        schoolId: 'sch2',
+        firstName: 'E',
+        lastName: 'F',
+        dob: '',
+        programId: '',
+        programType: '',
+        hhaPatientId: '',
+        createdAt: '',
+      },
+    ];
+    const lifted = migrateDueDatesToSchools(
+      [
+        { id: 'd1', studentId: 's1', kind: 'progress', dueOn: '2026-10-01', completedAt: '', lastNagOn: '' },
+        { id: 'd2', studentId: 's2', kind: 'progress', dueOn: '2026-10-01', completedAt: '', lastNagOn: '' },
+        { id: 'd3', studentId: 's3', kind: 'annual', dueOn: '2026-11-01', completedAt: '', lastNagOn: '' },
+        { id: 'd4', studentId: 's1', kind: 'reeval', dueOn: '2026-12-01', completedAt: '', lastNagOn: '' },
+        { id: 'd5', studentId: 's2', kind: 'reeval', dueOn: '2026-12-15', completedAt: '', lastNagOn: '' },
+        { id: 'orphan', studentId: 'missing', kind: 'progress', dueOn: '2026-01-01', completedAt: '', lastNagOn: '' },
+      ],
+      students,
+    );
+    expect(lifted).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ schoolId: 'sch1', kind: 'progress', dueOn: '2026-10-01' }),
+        expect.objectContaining({ schoolId: 'sch2', kind: 'annual', dueOn: '2026-11-01' }),
+      ]),
+    );
+    expect(lifted.find((d) => d.kind === 'reeval')).toBeUndefined();
+    expect(lifted.find((d) => d.id === 'orphan')).toBeUndefined();
   });
 
   it('builds dashboard counts', () => {
