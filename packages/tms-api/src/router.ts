@@ -144,7 +144,7 @@ async function upsertTherapistAsProvider(
     user = store.upsertUser({
       ...user,
       displayName: displayName || user.displayName,
-      role: user.role === 'admin' ? 'admin' : 'therapist',
+      role: 'therapist',
       active: true,
     });
   }
@@ -281,8 +281,9 @@ export async function handleTmsRequest(
   if (req.method === 'POST' && path === '/admin/therapists') {
     return adminUser(async () => {
       const b = obj(req);
+      // Always therapist — ignore any role from the client body.
       try {
-        const out = await upsertTherapistAsProvider(store, b);
+        const out = await upsertTherapistAsProvider(store, { ...b, role: 'therapist' });
         store.audit(ctx.user.id, 'upsert_therapist', `user:${out.user.id}`, null, {
           user: out.user,
           provider: out.provider,
