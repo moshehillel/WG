@@ -256,6 +256,29 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Individual,2,6 day cy
       }),
     );
   });
+  it('parses final WG CSV header aliases (weekly + 6 day cycle)', () => {
+    const csv = `Student Gen Ed ID#,CR Recommended School,Student Last Name,Student First Name,CR Expected Grade,CR Decision/Status,Related Service,RS Start,RS End,RS Ratio,RS Frequency,RS Period,RS Duration,RS Location,RS Provider
+1,Shaw Avenue,Haris,Ahmad,03,Classified,Physical Therapy,09/01/2025,06/30/2026,Individual,1,Weekly,30,School,"White, Glove"
+2,Shaw Avenue,Diaz,Elmer,04,Classified,Occupational Therapy,09/01/2025,06/30/2026,Small Group,2,6 day cycle,30,School,White Glove
+`;
+    const parsed = parseCaseloadCsv(csv);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows).toHaveLength(2);
+    expect(parsed.rows[0]).toMatchObject({
+      schoolName: 'Shaw Avenue',
+      frequencyKind: 'weekly',
+      frequencyPerWeek: 1,
+      providerName: 'White, Glove',
+    });
+    expect(parsed.rows[1]).toMatchObject({
+      frequencyKind: 'school_day_cycle',
+      sessionsPerPeriod: 2,
+      periodSchoolDays: 6,
+      frequencyPerWeek: 0,
+      ratioGroup: true,
+      providerName: 'White Glove',
+    });
+  });
 });
 
 describe('multi-mandate weekly check', () => {
@@ -314,6 +337,25 @@ const KU_HEADERS = [
   'RS Provider',
 ];
 
+/** Final KU “Related Service by serviceschool (WG)” Listing Results headers. */
+const WG_HEADERS = [
+  'Student Gen Ed ID#',
+  'CR Recommended School',
+  'Student Last Name',
+  'Student First Name',
+  'CR Expected Grade',
+  'CR Decision/Status',
+  'Related Service',
+  'RS Start',
+  'RS End',
+  'RS Ratio',
+  'RS Frequency',
+  'RS Period',
+  'RS Duration',
+  'RS Location',
+  'RS Provider',
+];
+
 function kuAoa(extraTitle = false): (string | number)[][] {
   const data: (string | number)[][] = [
     KU_HEADERS,
@@ -324,10 +366,75 @@ function kuAoa(extraTitle = false): (string | number)[][] {
   return [['KU SCHOOL YEAR Related Service Details by School'], [], ...data];
 }
 
+function wgAoa(): (string | number)[][] {
+  return [
+    WG_HEADERS,
+    [
+      '922522794',
+      'Alden Terrace School',
+      'Abedin',
+      'Omar',
+      '04',
+      'Classified',
+      'Physical Therapy',
+      '9/2/2026',
+      '6/25/2027',
+      'Individual',
+      '2',
+      'Weekly',
+      '30',
+      'School',
+      'Vasaturo, James',
+    ],
+    [
+      '111055897',
+      'Alden Terrace School',
+      'Fox',
+      'Sincere',
+      '06',
+      'Classified',
+      'Physical Therapy',
+      '9/2/2026',
+      '6/25/2027',
+      'Individual',
+      '2',
+      'Weekly',
+      '30',
+      'Therapy Room',
+      'White, Glove',
+    ],
+    [
+      '909062464',
+      'Shaw Avenue',
+      'Diaz',
+      'Elmer',
+      '04',
+      'Classified',
+      'Occupational Therapy',
+      '9/2/2026',
+      '6/25/2027',
+      'Small Group',
+      '2',
+      '6 day cycle',
+      '30',
+      'School',
+      'White Glove',
+    ],
+  ];
+}
+
 function writeKuBook(bookType: 'xlsx' | 'xls', extraTitle = false): Buffer {
   const ws = XLSX.utils.aoa_to_sheet(kuAoa(extraTitle));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, extraTitle ? 'Sheet1' : 'Details');
+  return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType }) as Buffer);
+}
+
+function writeWgBook(bookType: 'xlsx' | 'xls' = 'xls'): Buffer {
+  const ws = XLSX.utils.aoa_to_sheet(wgAoa());
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Listing Results');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([]), 'Sheet2');
   return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType }) as Buffer);
 }
 
@@ -355,6 +462,75 @@ describe('caseload Excel parser', () => {
     expect(parsed.rows.map((r) => r.lastName).sort()).toEqual(['Diaz', 'Haris']);
   });
 
+  it('parses final Related Service by serviceschool (WG) layout', () => {
+    const parsed = parseCaseloadWorkbook(writeWgBook('xls'));
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows).toHaveLength(3);
+
+    const omar = parsed.rows.find((r) => r.lastName === 'Abedin');
+    expect(omar).toMatchObject({
+      schoolName: 'Alden Terrace School',
+      firstName: 'Omar',
+      grade: '04',
+      decision: 'Classified',
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      ratioGroup: false,
+      frequencyKind: 'weekly',
+      frequencyPerWeek: 2,
+      sessionsPerPeriod: 2,
+      location: 'School',
+      providerName: 'Vasaturo, James',
+      startOn: '2026-09-02',
+      endOn: '2027-06-25',
+      freqDisplay: '2 / week',
+    });
+
+    const sincere = parsed.rows.find((r) => r.lastName === 'Fox');
+    expect(sincere?.location).toBe('Therapy Room');
+    expect(sincere?.providerName).toBe('White, Glove');
+
+    const elmer = parsed.rows.find((r) => r.lastName === 'Diaz');
+    expect(elmer?.frequencyKind).toBe('school_day_cycle');
+    expect(elmer?.frequencyPerWeek).toBe(0);
+    expect(elmer?.sessionsPerPeriod).toBe(2);
+    expect(elmer?.periodSchoolDays).toBe(6);
+    expect(elmer?.freqDisplay).toBe('2 / 6 school days');
+    expect(elmer?.ratioGroup).toBe(true);
+    expect(elmer?.discipline).toBe('OT');
+    expect(elmer?.providerName).toBe('White Glove');
+  });
+
+  it('matches White Glove / White, Glove provider names on WG import', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-wg',
+      userId: '',
+      firstName: 'White',
+      lastName: 'Glove',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WG-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const applied = applyCaseloadImport(store, parseCaseloadWorkbook(writeWgBook('xlsx')));
+    const fox = applied.rows.find((r) => r.lastName === 'Fox');
+    const elmer = applied.rows.find((r) => r.lastName === 'Diaz');
+    expect(fox?.providerMatched).toBe(true);
+    expect(fox?.providerId).toBe('p-wg');
+    expect(elmer?.providerMatched).toBe(true);
+    expect(elmer?.providerId).toBe('p-wg');
+    expect(applied.rows.find((r) => r.lastName === 'Abedin')?.providerMatched).toBe(false);
+  });
+
   it('parseCaseloadUpload reads xlsx from base64', () => {
     const buf = writeKuBook('xlsx');
     const parsed = parseCaseloadUpload({
@@ -364,5 +540,15 @@ describe('caseload Excel parser', () => {
     });
     expect(parsed.rows).toHaveLength(2);
     expect(parsed.rows[0].schoolName).toBe('Shaw Avenue');
+  });
+
+  it('parseCaseloadUpload reads WG xls by filename', () => {
+    const parsed = parseCaseloadUpload({
+      fileName: 'Related Service by serviceschool (WG).xls',
+      mime: 'application/vnd.ms-excel',
+      fileBase64: writeWgBook('xls').toString('base64'),
+    });
+    expect(parsed.rows).toHaveLength(3);
+    expect(parsed.rows[0].schoolName).toBe('Alden Terrace School');
   });
 });
