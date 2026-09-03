@@ -18,7 +18,7 @@ function cors(): Record<string, string> {
   return {
     'access-control-allow-origin': process.env.TMS_CORS_ORIGIN || '*',
     'access-control-allow-headers': 'content-type,authorization,x-tms-role,x-tms-email',
-    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-methods': 'GET,POST,OPTIONS,PUT,PATCH,DELETE',
   };
 }
 
@@ -39,13 +39,17 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   }
   const method = event.requestContext.http.method.toUpperCase();
   const rawPath = event.rawPath || event.requestContext.http.path || '/';
-  const path = rawPath.replace(/^\/tms/, '') || '/';
+  // Collapse accidental //path from API base URLs that end with /
+  const path = (rawPath.replace(/^\/tms/, '') || '/').replace(/\/{2,}/g, '/') || '/';
   let body: unknown = event.body;
   if (typeof event.body === 'string' && event.body) {
+    const raw = event.isBase64Encoded
+      ? Buffer.from(event.body, 'base64').toString('utf8')
+      : event.body;
     try {
-      body = JSON.parse(event.body);
+      body = JSON.parse(raw);
     } catch {
-      body = event.body;
+      body = raw;
     }
   }
   const req: HttpRequest = {

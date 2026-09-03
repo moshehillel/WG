@@ -61,7 +61,10 @@ async function api(method, path, body) {
   const ct = res.headers.get('content-type') || '';
   const data = ct.includes('pdf') ? await res.blob() : await res.json().catch(() => ({}));
   if (!res.ok && !(res.status === 207)) {
-    const msg = data.error || data.errors?.join('; ') || res.statusText;
+    const errList = Array.isArray(data.errors)
+      ? data.errors.map((e) => (typeof e === 'string' ? e : e.message || e.problem || JSON.stringify(e))).filter(Boolean)
+      : [];
+    const msg = data.error || errList.join('; ') || res.statusText;
     throw new Error(msg);
   }
   return data;
@@ -231,7 +234,7 @@ async function therapistHome() {
     const dues = (me.dueDates || []).filter((d) => d.status !== 'done');
     const alerts = me.alerts || [];
     if (dues.length || alerts.length) {
-      banner = `<div class="warn-box">${[...alerts.map((a) => a.body), ...dues.map((d) => `${d.kind} due ${d.dueOn}`)].map((t) => `<div>${esc(t)}</div>`).join('')}</div>`;
+      banner = `<div class="warn-box">${[...alerts.map((a) => a.body), ...dues.map((d) => `${d.schoolName || d.schoolId || 'School'}: ${d.kind} due ${d.dueOn}`)].map((t) => `<div>${esc(t)}</div>`).join('')}</div>`;
     }
     if (providerId) {
       const ensured = await api('POST', '/week/ensure', { weekStart: state.weekStart, providerId });
@@ -302,9 +305,10 @@ async function therapistHome() {
     ` : `
     <div class="card">
       <h2>1. Upload weekly report</h2>
-      <p>Choose your service notes PDF. The system reads the sessions for you.</p>
+      <p>Choose your Frontline Related Service Session Notes PDF (text PDF, not a scan). The system reads the sessions for you.</p>
       <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
       <button class="btn-primary big" id="upload">Read PDF</button>
+      <p class="muted" id="uploadHint">If upload fails with “no readable text”, re-export/save as a text PDF from Frontline — image-only scans cannot be read.</p>
     </div>
 
     <div class="card">
@@ -351,9 +355,14 @@ async function therapistHome() {
     bindMakeupPickers();
 
     document.getElementById('upload').onclick = async () => {
+      const btn = document.getElementById('upload');
       try {
         const file = document.getElementById('pdfFile').files[0];
         if (!file) throw new Error('Choose your notes PDF first.');
+        if (!providerId) throw new Error('Your provider profile is not linked yet. Ask the office for help.');
+        btn.disabled = true;
+        btn.textContent = 'Reading…';
+        setStatus('Reading PDF…', '');
         const pdfBase64 = await fileToBase64(file);
         const out = await api('POST', '/week/upload-sessions', {
           weekStart: state.weekStart,
@@ -364,7 +373,11 @@ async function therapistHome() {
         setStatus(`Loaded ${out.parsed} session(s).`, out.warnings?.length ? '' : 'ok');
         await therapistHome();
       } catch (e) {
-        setStatus(e.message, 'err');
+        setStatus(e.message || 'Could not read this PDF.', 'err');
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Read PDF';
+        }
       }
     };
 
@@ -561,6 +574,16 @@ async function adminPeople() {
         <tr><th>School</th><th>Signer</th></tr>
         ${schools.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.signerName || s.signerEmail || '')}</td></tr>`).join('') || '<tr><td colspan="2">None</td></tr>'}
       </table>
+      <h2>School due dates</h2>
+      <p class="muted">One due date per school (progress / annual / reeval) applies to that school’s whole caseload — not per child.</p>
+      <label>School
+        <select id="dueSchool">${schoolOptions(schools)}</select>
+      </label>
+      <label>Kind
+        <select id="dueKind"><option value="progress">progress</option><option value="annual">annual</option><option value="reeval">reeval</option></select>
+      </label>
+      <label>Due on (YYYY-MM-DD) <input id="dueOn" placeholder="2026-10-15" /></label>
+      <button class="btn" id="duebtn">Save school due date</button>
     </div>
     <div class="card">
       <h2>Internal note</h2>
@@ -654,6 +677,19 @@ async function adminPeople() {
       await adminPeople();
     } catch (e) { setStatus(e.message, 'err'); }
   };
+  document.getElementById('duebtn').onclick = async () => {
+    try {
+      const schoolId = document.getElementById('dueSchool').value;
+      if (!schoolId) throw new Error('Pick a school.');
+      await api('POST', '/admin/due-dates', {
+        schoolId,
+        kind: document.getElementById('dueKind').value,
+        dueOn: document.getElementById('dueOn').value,
+      });
+      setStatus('School due date saved. Alerts stay until marked complete.', 'ok');
+      document.getElementById('dueOn').value = '';
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
   document.getElementById('nadd').onclick = async () => {
     const btn = document.getElementById('nadd');
     try {
@@ -704,45 +740,93 @@ async function adminMandates() {
   const previewWarnings = preview?.warnings || [];
   view(`
     <div class="card">
-      <h2>Import caseload (CSV)</h2>
-      <p>KU “Related Service Details by School” CSV. One row = one mandate (individual and group are separate). Preview first, then confirm. Excel .xls is not supported — Save As CSV.</p>
-      <input id="caseloadFile" type="file" accept=".csv,text/csv,text/plain" />
+      <h2>Import caseload</h2>
+      <p><strong>This is how mandates are created.</strong> Each CSV row already has the mandate (service, ratio, Freq, Period, RS dates, school, student). Dual-service kids = multiple rows = multiple mandates. Weekly and school-day cycle are both supported. Upload the KU “Related Service Details by School” <strong>.csv</strong> (not PDF, not Excel). Preview first, then confirm.</p>
+      <input id="caseloadFile" type="file" accept=".csv,text/csv" />
       <div class="row" style="margin-top:0.6rem">
         <button class="btn" id="caseloadPreviewBtn">Preview import</button>
         <button class="btn-primary" id="caseloadConfirmBtn" ${previewRows.length ? '' : 'disabled'}>Confirm import</button>
       </div>
       ${preview ? `
       <p style="margin-top:0.8rem">${previewRows.length} mandate row(s) · ${preview.createdStudents || 0} new students · ${preview.createdSchools || 0} new schools · ${preview.createdMandates || 0} new mandates</p>
-      ${previewErrors.length ? `<div class="err-box">${previewErrors.map((e) => `Row ${esc(String(e.rowNumber || '?'))}: ${esc(e.message)}`).join('<br/>')}</div>` : ''}
-      ${previewWarnings.length ? `<p class="muted">${previewWarnings.slice(0, 8).map((w) => `Row ${esc(String(w.rowNumber || '?'))}: ${esc(w.message)}`).join(' · ')}${previewWarnings.length > 8 ? ' …' : ''}</p>` : ''}
+      ${previewErrors.length ? `
+      <div class="err-box caseload-issues">
+        <strong>Errors (${previewErrors.length})</strong>
+        <p class="muted" style="margin:0.35rem 0 0.5rem">One problem per row. Fix these in the CSV, then preview again. Valid rows in the table below can still be imported.</p>
+        <table class="issue-table">
+          <tr><th>Row #</th><th>Field</th><th>What went wrong</th><th>How to fix</th></tr>
+          ${previewErrors.map((e) => {
+            const rowNum = e.row ?? e.rowNumber ?? 0;
+            const rowLabel = Number(rowNum) > 0 ? String(rowNum) : 'File';
+            const field = e.field || (e.student ? String(e.student) : '—');
+            const problem = e.problem || e.message || '';
+            const fix = e.fix || '';
+            return `<tr class="row-err">
+              <td>${esc(rowLabel)}</td>
+              <td>${esc(field)}${e.student ? `<div class="muted">${esc(String(e.student))}</div>` : ''}</td>
+              <td>${esc(problem)}</td>
+              <td>${esc(fix || '—')}</td>
+            </tr>`;
+          }).join('')}
+        </table>
+      </div>` : ''}
+      ${previewWarnings.length ? `
+      <div class="warn-box caseload-issues">
+        <strong>Warnings (${previewWarnings.length})</strong>
+        <table class="issue-table">
+          <tr><th>Row #</th><th>Field</th><th>What went wrong</th><th>How to fix</th></tr>
+          ${previewWarnings.map((w) => {
+            const rowNum = w.row ?? w.rowNumber ?? 0;
+            const rowLabel = Number(rowNum) > 0 ? String(rowNum) : 'File';
+            const field = w.field || '—';
+            const problem = w.problem || w.message || '';
+            const fix = w.fix || '';
+            return `<tr>
+              <td>${esc(rowLabel)}</td>
+              <td>${esc(field)}${w.student ? `<div class="muted">${esc(String(w.student))}</div>` : ''}</td>
+              <td>${esc(problem)}</td>
+              <td>${esc(fix || '—')}</td>
+            </tr>`;
+          }).join('')}
+        </table>
+      </div>` : ''}
       <table>
-        <tr><th>Student</th><th>School</th><th>Service</th><th>Ratio</th><th>Freq</th><th>Provider</th></tr>
-        ${previewRows.map((r) => {
-          const badProv = r.providerName && !r.providerMatched;
-          return `<tr${badProv ? ' class="row-warn"' : ''}>
-            <td>${esc(r.firstName)} ${esc(r.lastName)}${r.grade ? ` <span class="muted">(gr ${esc(r.grade)})</span>` : ''}</td>
-            <td>${esc(r.schoolName || '')}</td>
-            <td>${esc(r.serviceType || r.discipline || '')}</td>
-            <td>${r.ratioGroup ? 'Group' : 'Individual'}</td>
-            <td>${esc(r.freqDisplay || '')}</td>
-            <td>${esc(r.providerName || '')}${badProv ? ' <span class="err-inline">(unmatched)</span>' : ''}</td>
-          </tr>`;
-        }).join('') || '<tr><td colspan="6">No rows</td></tr>'}
+        <tr><th>CSV row</th><th>Student</th><th>School</th><th>Service</th><th>Ratio</th><th>Freq</th><th>Provider</th></tr>
+        ${(() => {
+          const errRows = new Set(
+            previewErrors.map((e) => Number(e.row ?? e.rowNumber)).filter((n) => Number.isFinite(n) && n > 0),
+          );
+          return previewRows.map((r) => {
+            const badProv = r.providerName && !r.providerMatched;
+            const badRow = errRows.has(Number(r.rowNumber));
+            const cls = badRow ? 'row-err' : badProv ? 'row-warn' : '';
+            return `<tr${cls ? ` class="${cls}"` : ''}>
+              <td>${esc(String(r.rowNumber || ''))}</td>
+              <td>${esc(r.firstName)} ${esc(r.lastName)}${r.grade ? ` <span class="muted">(gr ${esc(r.grade)})</span>` : ''}</td>
+              <td>${esc(r.schoolName || '')}</td>
+              <td>${esc(r.serviceType || r.discipline || '')}</td>
+              <td>${r.ratioGroup ? 'Group' : 'Individual'}</td>
+              <td>${esc(r.freqDisplay || '')}</td>
+              <td>${esc(r.providerName || '')}${badProv ? ' <span class="err-inline">(unmatched)</span>' : ''}${badRow ? ' <span class="err-inline">(see Errors)</span>' : ''}</td>
+            </tr>`;
+          }).join('') || '<tr><td colspan="7">No valid rows to import</td></tr>';
+        })()}
       </table>` : ''}
     </div>
-    <div class="card">
-      <h2>Mandate PDF (parsed the first time, then saved)</h2>
-      <textarea id="mtext" rows="10" placeholder="Child's Name: De Oliveira Jack&#10;Service Type: PT School Group&#10;Mandate frequency: 2x/week"></textarea>
+    <div class="card muted-card">
+      <h2>Optional: one-off mandate PDF</h2>
+      <p class="muted">Not how you load the caseload. Prefer <strong>Import caseload</strong> above — frequency and services come from the CSV. Use this only for a rare single-child exception.</p>
+      <textarea id="mtext" rows="6" placeholder="Child's Name: De Oliveira Jack&#10;Service Type: PT School Group&#10;Mandate frequency: 2x/week"></textarea>
       <input id="mfile" type="file" accept="application/pdf,.pdf,text/plain" />
       <label>Assign provider
         <select id="parseProvider">${providerOptions(providers, mandate?.providerId)}</select>
       </label>
-      <button class="btn-primary big" id="parse">Read mandate PDF</button>
+      <button class="btn" id="parse">Read mandate PDF (exception)</button>
     </div>
     ${student && mandate ? `
-    <div class="card">
-      <h2>Saved student + mandate</h2>
-      <p>Fix fields here. Re-upload the PDF if the mandate itself changed.</p>
+    <div class="card muted-card">
+      <h2>Saved student + mandate (exception)</h2>
+      <p class="muted">Fix fields here if needed. If the mandate changed on the caseload, re-import the CSV instead.</p>
       <div class="row">
         <label>First name <input id="sf" value="${esc(student.firstName || '')}" /></label>
         <label>Last name <input id="sl" value="${esc(student.lastName || '')}" /></label>
@@ -776,26 +860,6 @@ async function adminMandates() {
       </div>
       <button class="btn-primary" id="saveMandate">Save corrections</button>
     </div>` : ''}
-    <div class="card">
-      <h2>Due date (typed in)</h2>
-      <label>Student
-        <select id="sid">${studentOptions(students)}</select>
-      </label>
-      <label>Kind
-        <select id="kind"><option>progress</option><option>annual</option><option>reeval</option></select>
-      </label>
-      <label>Due on (YYYY-MM-DD) <input id="due" /></label>
-      <button class="btn" id="duebtn">Save due date</button>
-    </div>
-    <div class="card">
-      <h2>Student locker file</h2>
-      <label>Student
-        <select id="fsid">${studentOptions(students)}</select>
-      </label>
-      <label>Label <input id="flabel" value="IEP / mandate PDF" /></label>
-      <input id="ffile" type="file" accept="application/pdf,.pdf" />
-      <button class="btn" id="filebtn">Attach to locker</button>
-    </div>
   `);
 
   async function readCaseloadFile() {
@@ -803,7 +867,9 @@ async function adminMandates() {
     if (!file) throw new Error('Choose a CSV file first.');
     const name = file.name || '';
     if (/\.xlsx?$/i.test(name)) {
-      throw new Error('Excel .xls/.xlsx is not supported. Save As CSV and try again.');
+      throw new Error(
+        'Excel .xls/.xlsx cannot be imported. In Excel: File → Save As → CSV (Comma delimited), then upload the .csv.',
+      );
     }
     const csvText = await file.text();
     state.caseloadCsvText = csvText;
@@ -886,29 +952,6 @@ async function adminMandates() {
       } catch (e) { setStatus(e.message, 'err'); }
     };
   }
-  document.getElementById('duebtn').onclick = async () => {
-    try {
-      await api('POST', '/admin/due-dates', {
-        studentId: document.getElementById('sid').value,
-        kind: document.getElementById('kind').value,
-        dueOn: document.getElementById('due').value,
-      });
-      setStatus('Due date saved. Alerts stay until marked complete.', 'ok');
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
-  document.getElementById('filebtn').onclick = async () => {
-    try {
-      const file = document.getElementById('ffile').files[0];
-      const pdfBase64 = await fileToBase64(file);
-      await api('POST', '/files', {
-        studentId: document.getElementById('fsid').value,
-        label: document.getElementById('flabel').value,
-        kind: 'locker',
-        pdfBase64,
-      });
-      setStatus('File recorded on the student locker.', 'ok');
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
 }
 
 async function adminReports() {
@@ -926,9 +969,9 @@ async function adminReports() {
       <table><tr><th>Child</th><th>Last DOS</th></tr>
       ${(last.rows || []).map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.lastDos)}</td></tr>`).join('') || '<tr><td colspan="2">None</td></tr>'}
       </table>
-      <h2>Progress / annual / reeval</h2>
-      <table><tr><th>Child</th><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
-      ${(dues.rows || []).map((r) => `<tr><td>${esc(r.studentName)}</td><td>${esc(r.kind)}</td><td>${esc(r.dueOn)}</td><td>${esc(r.status)}</td><td>${r.completedAt ? '' : `<button class="btn" data-complete="${esc(r.id)}">Mark complete</button>`}</td></tr>`).join('') || '<tr><td colspan="5">None</td></tr>'}
+      <h2>Progress / annual / reeval (by school)</h2>
+      <table><tr><th>School</th><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
+      ${(dues.rows || []).map((r) => `<tr><td>${esc(r.schoolName || r.schoolId)}</td><td>${esc(r.kind)}</td><td>${esc(r.dueOn)}</td><td>${esc(r.status)}</td><td>${r.completedAt ? '' : `<button class="btn" data-complete="${esc(r.id)}">Mark complete</button>`}</td></tr>`).join('') || '<tr><td colspan="5">None</td></tr>'}
       </table>
     </div>
   `);
