@@ -251,6 +251,106 @@ function esc(s) {
   }[c]));
 }
 
+/** Checkbox column header (select all) for bulk delete tables. */
+function bulkTh(group) {
+  return `<th class="bulk-col"><input type="checkbox" data-bulk-all="${esc(group)}" aria-label="Select all" /></th>`;
+}
+
+/** Row checkbox. Pass extraAttrs e.g. ` data-bulk-kind="user"`. */
+function bulkTd(group, id, extraAttrs = '') {
+  return `<td class="bulk-col"><input type="checkbox" data-bulk-group="${esc(group)}" data-bulk-id="${esc(id)}"${extraAttrs} /></td>`;
+}
+
+function bulkTdEmpty() {
+  return `<td class="bulk-col"></td>`;
+}
+
+/** Hidden until ≥1 row checked. */
+function bulkBar(group) {
+  return `<div class="bulk-bar" data-bulk-bar="${esc(group)}" hidden>
+    <button type="button" class="btn" data-bulk-delete="${esc(group)}">Delete selected</button>
+    <span class="muted" data-bulk-count="${esc(group)}"></span>
+  </div>`;
+}
+
+function selectedBulkEls(group) {
+  return [...document.querySelectorAll(`input[data-bulk-group="${group}"]:checked`)];
+}
+
+function syncBulkBar(group) {
+  const bar = document.querySelector(`[data-bulk-bar="${group}"]`);
+  const els = selectedBulkEls(group);
+  const n = els.length;
+  if (bar) bar.hidden = n < 1;
+  const count = document.querySelector(`[data-bulk-count="${group}"]`);
+  if (count) count.textContent = n ? `${n} selected` : '';
+  const all = document.querySelector(`input[data-bulk-all="${group}"]`);
+  if (all) {
+    const boxes = [...document.querySelectorAll(`input[data-bulk-group="${group}"]`)];
+    const checked = boxes.filter((b) => b.checked).length;
+    all.checked = boxes.length > 0 && checked === boxes.length;
+    all.indeterminate = checked > 0 && checked < boxes.length;
+  }
+}
+
+function confirmBulkDelete(n, noun) {
+  if (!confirm(`Delete ${n} selected ${noun}? This cannot be undone.`)) return false;
+  if (!confirm(`Really delete ${n} items permanently?`)) return false;
+  return true;
+}
+
+/**
+ * Wire select-all + Delete selected for a bulk group.
+ * deleteOne(id, checkboxEl) should call the existing per-id DELETE API.
+ */
+function bindBulkDelete(group, { noun, deleteOne, refresh }) {
+  const all = document.querySelector(`input[data-bulk-all="${group}"]`);
+  if (all) {
+    all.addEventListener('change', () => {
+      document.querySelectorAll(`input[data-bulk-group="${group}"]`).forEach((cb) => {
+        cb.checked = all.checked;
+      });
+      syncBulkBar(group);
+    });
+  }
+  document.querySelectorAll(`input[data-bulk-group="${group}"]`).forEach((cb) => {
+    cb.addEventListener('change', () => syncBulkBar(group));
+  });
+  const btn = document.querySelector(`[data-bulk-delete="${group}"]`);
+  if (btn) {
+    btn.addEventListener('click', async () => {
+      const els = selectedBulkEls(group);
+      if (!els.length) return;
+      if (!confirmBulkDelete(els.length, noun)) return;
+      try {
+        const errors = [];
+        let ok = 0;
+        for (const el of els) {
+          const id = el.getAttribute('data-bulk-id');
+          try {
+            await deleteOne(id, el);
+            ok += 1;
+          } catch (e) {
+            errors.push(e.message || String(e));
+          }
+        }
+        if (errors.length) {
+          setStatus(
+            `Deleted ${ok}. ${errors.length} failed: ${errors[0]}`,
+            ok === 0 ? 'err' : 'warn',
+          );
+        } else {
+          setStatus(`Deleted ${ok} ${noun}.`, 'ok');
+        }
+        await refresh();
+      } catch (e) {
+        setStatus(e.message, 'err');
+      }
+    });
+  }
+  syncBulkBar(group);
+}
+
 function readPayRatesFromIds(ids) {
   const num = (id) => {
     const raw = document.getElementById(id)?.value?.trim?.() ?? '';
@@ -942,9 +1042,11 @@ async function adminDash() {
     </div>
     <div class="card">
       <h2>Weeks</h2>
+      ${bulkBar('weeks')}
       <table>
-        <tr><th>Week</th><th>Provider</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
+        <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
         ${weeks.map((w) => `<tr>
+          ${bulkTd('weeks', w.id)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.providerName || '—')}</td>
           <td>${esc(w.sessionCount)}</td>
@@ -952,10 +1054,15 @@ async function adminDash() {
           <td>${esc(w.signerName || w.signerEmail || '—')}</td>
           <td>${esc(w.hhaStatus)}</td>
           <td class="week-actions">${weekActions(w)}</td>
-        </tr>`).join('') || '<tr><td colspan="7">No weeks yet.</td></tr>'}
+        </tr>`).join('') || `<tr><td colspan="8">No weeks yet.</td></tr>`}
       </table>
     </div>
   `);
+  bindBulkDelete('weeks', {
+    noun: 'weeks',
+    deleteOne: (id) => api('DELETE', `/admin/weeks/${id}`),
+    refresh: () => adminDash(),
+  });
   document.getElementById('view').onclick = async (e) => {
     const viewTs = e.target.closest('[data-view-timesheet]');
     const sign = e.target.closest('[data-sign]');
@@ -1014,9 +1121,11 @@ async function adminChildren() {
     <div class="card">
       <h2>Children</h2>
       <p class="muted">All students on the caseload. Open one to edit, review mandates/sessions, or remove.</p>
+      ${bulkBar('children')}
       <table>
-        <tr><th>Name</th><th>School</th><th>Grade</th><th>Mandates</th><th>Sessions</th><th></th></tr>
+        <tr>${bulkTh('children')}<th>Name</th><th>School</th><th>Grade</th><th>Mandates</th><th>Sessions</th><th></th></tr>
         ${students.map((s) => `<tr>
+          ${bulkTd('children', s.id)}
           <td>${childNameLink(s.id, s.name)}</td>
           <td>${esc(s.schoolName)}</td>
           <td>${esc(s.grade || '—')}</td>
@@ -1026,11 +1135,16 @@ async function adminChildren() {
             <button type="button" class="btn" data-open-child="${esc(s.id)}">Open</button>
             <button type="button" class="btn" data-del-child="${esc(s.id)}">Remove</button>
           </td>
-        </tr>`).join('') || '<tr><td colspan="6">No children yet. Import a caseload on Mandates.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="7">No children yet. Import a caseload on Mandates.</td></tr>'}
       </table>
     </div>
   `);
   bindOpenChildLinks();
+  bindBulkDelete('children', {
+    noun: 'children',
+    deleteOne: (id) => api('DELETE', `/admin/students/${id}`),
+    refresh: () => adminChildren(),
+  });
   document.querySelectorAll('[data-del-child]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
@@ -1101,12 +1215,14 @@ async function adminChildDetail(studentId, opts = {}) {
     </div>
     <div class="card">
       <h3>Mandates</h3>
+      ${bulkBar('child-mandates')}
       <table>
-        <tr><th>Discipline / service</th><th>Ratio</th><th>Frequency</th><th>Dates</th><th>Provider</th><th></th></tr>
+        <tr>${bulkTh('child-mandates')}<th>Discipline / service</th><th>Ratio</th><th>Frequency</th><th>Dates</th><th>Provider</th><th></th></tr>
         ${mandates.map((m) => {
           const service = [m.discipline, m.serviceType].filter(Boolean).join(' · ') || '—';
           const dates = [m.startOn, m.endOn].filter(Boolean).join(' → ') || '—';
           return `<tr>
+          ${bulkTd('child-mandates', m.id)}
           <td>${esc(service)}</td>
           <td>${esc(m.ratioLabel || (m.ratioGroup ? 'Group' : 'Individual'))}</td>
           <td>${esc(mandateFreqLabel(m))}</td>
@@ -1114,60 +1230,94 @@ async function adminChildDetail(studentId, opts = {}) {
           <td>${esc(m.providerName || '—')}</td>
           <td><button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete</button></td>
         </tr>`;
-        }).join('') || '<tr><td colspan="6">No mandates.</td></tr>'}
+        }).join('') || '<tr><td colspan="7">No mandates.</td></tr>'}
       </table>
     </div>
     <div class="card">
       <h3>Sessions</h3>
+      ${bulkBar('child-sessions')}
       <table>
-        <tr><th>Date</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
+        <tr>${bulkTh('child-sessions')}<th>Date</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
         ${sessions.map((x) => `<tr>
+          ${bulkTd('child-sessions', x.id)}
           <td>${esc(x.dateOfService)}</td>
           <td>${esc(x.weekStart || '—')}</td>
           <td>${esc(x.weekStatus || '—')}</td>
           <td>${esc(x.attendance)}</td>
           <td>${esc(x.notes || '')}</td>
           <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="6">No sessions.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="7">No sessions.</td></tr>'}
       </table>
     </div>
     <div class="card">
       <h3>Related weeks</h3>
+      ${bulkBar('child-weeks')}
       <table>
-        <tr><th>Week</th><th>Status</th><th>HHA</th><th></th></tr>
+        <tr>${bulkTh('child-weeks')}<th>Week</th><th>Status</th><th>HHA</th><th></th></tr>
         ${weeks.map((w) => `<tr>
+          ${bulkTd('child-weeks', w.id)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.status)}</td>
           <td>${esc(w.hhaStatus)}</td>
           <td><button type="button" class="btn" data-del-week="${esc(w.id)}" data-week-status="${esc(w.status || '')}">Remove</button></td>
-        </tr>`).join('') || '<tr><td colspan="4">None.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="5">None.</td></tr>'}
       </table>
     </div>
     <div class="card">
       <h3>School due dates</h3>
+      ${bulkBar('child-dues')}
       <table>
-        <tr><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
+        <tr>${bulkTh('child-dues')}<th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
         ${dueDates.map((d) => `<tr>
+          ${bulkTd('child-dues', d.id)}
           <td>${esc(d.kind)}</td>
           <td>${esc(d.dueOn)}</td>
           <td>${esc(d.status)}</td>
           <td><button type="button" class="btn" data-del-due="${esc(d.id)}">Remove</button></td>
-        </tr>`).join('') || '<tr><td colspan="4">None for this school.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="5">None for this school.</td></tr>'}
       </table>
     </div>
     <div class="card">
       <h3>Locker files</h3>
+      ${bulkBar('child-files')}
       <table>
-        <tr><th>Label</th><th>Kind</th><th>When</th><th></th></tr>
+        <tr>${bulkTh('child-files')}<th>Label</th><th>Kind</th><th>When</th><th></th></tr>
         ${files.map((f) => `<tr>
+          ${bulkTd('child-files', f.id)}
           <td>${esc(f.label || f.s3Key || '—')}</td>
           <td>${esc(f.kind || '—')}</td>
           <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
           <td><button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="4">No files.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="5">No files.</td></tr>'}
       </table>
     </div>
   `);
+  const refreshChild = () => adminChildDetail(studentId, { backTo: state.childDetailBack });
+  bindBulkDelete('child-mandates', {
+    noun: 'mandates',
+    deleteOne: (id) => api('DELETE', `/admin/mandates/${id}`),
+    refresh: refreshChild,
+  });
+  bindBulkDelete('child-sessions', {
+    noun: 'sessions',
+    deleteOne: (id) => api('DELETE', `/sessions/${id}`),
+    refresh: refreshChild,
+  });
+  bindBulkDelete('child-weeks', {
+    noun: 'weeks',
+    deleteOne: (id) => api('DELETE', `/admin/weeks/${id}`),
+    refresh: refreshChild,
+  });
+  bindBulkDelete('child-dues', {
+    noun: 'due dates',
+    deleteOne: (id) => api('DELETE', `/admin/due-dates/${id}`),
+    refresh: refreshChild,
+  });
+  bindBulkDelete('child-files', {
+    noun: 'files',
+    deleteOne: (id) => api('DELETE', `/admin/files/${id}`),
+    refresh: refreshChild,
+  });
   document.getElementById('backChildren').onclick = () => {
     if (state.childDetailBack === 'reports') adminReports();
     else adminChildren();
@@ -1288,26 +1438,30 @@ async function adminProviderDetail(providerId) {
     </div>
     <div class="card">
       <h3>Caseload (${esc(detail.caseloadCount || 0)} children)</h3>
+      ${bulkBar('prov-mandates')}
       <table>
-        <tr><th>Child</th><th>Service</th><th>Freq</th><th></th></tr>
+        <tr>${bulkTh('prov-mandates')}<th>Child</th><th>Service</th><th>Freq</th><th></th></tr>
         ${mandates.map((m) => `<tr>
+          ${bulkTd('prov-mandates', m.id)}
           <td>${esc(m.studentName || '—')}</td>
           <td>${esc(m.serviceType || '—')}</td>
           <td>${esc(m.sessionsPerPeriod ?? m.frequencyPerWeek ?? '—')}</td>
           <td><button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete mandate</button></td>
-        </tr>`).join('') || '<tr><td colspan="4">No mandates assigned.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="5">No mandates assigned.</td></tr>'}
       </table>
     </div>
     <div class="card">
       <h3>Weeks</h3>
+      ${bulkBar('prov-weeks')}
       <table>
-        <tr><th>Week</th><th>Status</th><th>HHA</th><th></th></tr>
+        <tr>${bulkTh('prov-weeks')}<th>Week</th><th>Status</th><th>HHA</th><th></th></tr>
         ${weeks.map((w) => `<tr>
+          ${bulkTd('prov-weeks', w.id)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.status)}</td>
           <td>${esc(w.hhaStatus)}</td>
           <td><button type="button" class="btn" data-del-week="${esc(w.id)}" data-week-status="${esc(w.status || '')}">Remove</button></td>
-        </tr>`).join('') || '<tr><td colspan="4">No weeks yet.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="5">No weeks yet.</td></tr>'}
       </table>
     </div>
     <div class="card">
@@ -1349,13 +1503,15 @@ async function adminProviderDetail(providerId) {
       <input id="pReportFile" type="file" />
       <label>Label <input id="pReportLabel" placeholder="IEP / progress / other" /></label>
       <button type="button" class="btn" id="pUploadReport">Upload</button>
+      ${bulkBar('prov-files')}
       <table>
-        <tr><th>Label</th><th>When</th><th></th></tr>
+        <tr>${bulkTh('prov-files')}<th>Label</th><th>When</th><th></th></tr>
         ${(detail.files || []).map((f) => `<tr>
+          ${bulkTd('prov-files', f.id)}
           <td>${esc(f.label || f.s3Key)}</td>
           <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
           <td><button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="3">No files.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="4">No files.</td></tr>'}
       </table>
     </div>
     <div class="card">
@@ -1389,6 +1545,22 @@ async function adminProviderDetail(providerId) {
       </table>
     </div>
   `);
+  const refreshProvider = () => adminProviderDetail(providerId);
+  bindBulkDelete('prov-mandates', {
+    noun: 'mandates',
+    deleteOne: (id) => api('DELETE', `/admin/mandates/${id}`),
+    refresh: refreshProvider,
+  });
+  bindBulkDelete('prov-weeks', {
+    noun: 'weeks',
+    deleteOne: (id) => api('DELETE', `/admin/weeks/${id}`),
+    refresh: refreshProvider,
+  });
+  bindBulkDelete('prov-files', {
+    noun: 'files',
+    deleteOne: (id) => api('DELETE', `/admin/files/${id}`),
+    refresh: refreshProvider,
+  });
   document.getElementById('backProviders').onclick = () => adminPeople();
   document.getElementById('saveProvider').onclick = async () => {
     try {
@@ -1589,11 +1761,13 @@ async function adminPeople(opts = {}) {
     </div>
     <div class="card">
       <h2>Admins</h2>
+      ${bulkBar('admins')}
       <table>
-        <tr><th>Name</th><th>Email</th><th></th></tr>
+        <tr>${bulkTh('admins')}<th>Name</th><th>Email</th><th></th></tr>
         ${admins.map((u) => {
           const self = state.email && u.email && state.email.toLowerCase() === String(u.email).toLowerCase();
           return `<tr>
+            ${self ? bulkTdEmpty() : bulkTd('admins', u.id)}
             <td>${esc(u.displayName || '—')}</td>
             <td>${esc(u.email)}</td>
             <td>${
@@ -1602,7 +1776,7 @@ async function adminPeople(opts = {}) {
                 : `<button type="button" class="btn" data-remove-admin="${esc(u.id)}">Remove</button>`
             }</td>
           </tr>`;
-        }).join('') || '<tr><td colspan="3">None yet</td></tr>'}
+        }).join('') || '<tr><td colspan="4">None yet</td></tr>'}
       </table>
     </div>
     <div class="card entry-card">
@@ -1633,13 +1807,17 @@ async function adminPeople(opts = {}) {
     </div>
     <div class="card">
       <h2>Providers</h2>
+      ${bulkBar('providers')}
       <table>
-        <tr><th>Name</th><th>Email</th><th>Provider id</th><th>Discipline</th><th></th></tr>
+        <tr>${bulkTh('providers')}<th>Name</th><th>Email</th><th>Provider id</th><th>Discipline</th><th></th></tr>
         ${therapists.map((u) => {
           const p = providers.find((x) => x.id === u.providerId) || providers.find((x) => x.userId === u.id);
           const name = p ? `${p.firstName} ${p.lastName}`.trim() : u.displayName;
           const pid = p?.id || u.providerId || '';
           return `<tr>
+            ${pid
+              ? bulkTd('providers', pid, ' data-bulk-kind="provider"')
+              : bulkTd('providers', u.id, ' data-bulk-kind="user"')}
             <td>${esc(name || '—')}</td>
             <td>${esc(u.email)}</td>
             <td>${esc(pid || '—')}</td>
@@ -1649,7 +1827,7 @@ async function adminPeople(opts = {}) {
               <button type="button" class="btn" data-del-provider="${esc(pid)}">Remove</button>
             ` : `<button type="button" class="btn" data-remove-therapist="${esc(u.id)}">Remove</button>`}</td>
           </tr>`;
-        }).join('') || '<tr><td colspan="5">None yet</td></tr>'}
+        }).join('') || '<tr><td colspan="6">None yet</td></tr>'}
       </table>
     </div>
     <div class="card">
@@ -1659,12 +1837,14 @@ async function adminPeople(opts = {}) {
       <label>Signer email <input id="signerEmail" /></label>
       <button class="btn" id="school">Save school</button>
       <h3>Schools</h3>
+      ${bulkBar('schools')}
       <table>
-        <tr><th>School</th><th>Signer</th><th>Calendar</th><th></th></tr>
+        <tr>${bulkTh('schools')}<th>School</th><th>Signer</th><th>Calendar</th><th></th></tr>
         ${schools.map((s) => {
           const cal = calendarsBySchoolId[s.id];
           const summary = formatCalendarSummary(cal);
           return `<tr>
+          ${bulkTd('schools', s.id)}
           <td>${esc(s.name)}</td>
           <td>${esc(s.signerName || s.signerEmail || '')}</td>
           <td>${summary ? esc(summary) : '<span class="muted">Not set</span>'}</td>
@@ -1673,7 +1853,7 @@ async function adminPeople(opts = {}) {
             <button type="button" class="btn" data-del-school="${esc(s.id)}">Remove</button>
           </td>
         </tr>`;
-        }).join('') || '<tr><td colspan="4">None</td></tr>'}
+        }).join('') || '<tr><td colspan="5">None</td></tr>'}
       </table>
       <div id="schoolCalendarSection">
       <h2>School calendar</h2>
@@ -1707,18 +1887,48 @@ async function adminPeople(opts = {}) {
       <label>Due on (YYYY-MM-DD) <input id="dueOn" placeholder="2026-10-15" /></label>
       <button class="btn" id="duebtn">Save school due date</button>
       <h3>Saved due dates</h3>
+      ${bulkBar('dues')}
       <table>
-        <tr><th>School</th><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
+        <tr>${bulkTh('dues')}<th>School</th><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
         ${dueRows.map((r) => `<tr>
+          ${bulkTd('dues', r.id)}
           <td>${esc(r.schoolName || r.schoolId)}</td>
           <td>${esc(r.kind)}</td>
           <td>${esc(r.dueOn)}</td>
           <td>${esc(r.status)}</td>
           <td><button type="button" class="btn" data-del-due="${esc(r.id)}">Remove</button></td>
-        </tr>`).join('') || '<tr><td colspan="5">None yet</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="6">None yet</td></tr>'}
       </table>
     </div>
   `);
+
+  bindBulkDelete('admins', {
+    noun: 'admins',
+    deleteOne: (id) => api('DELETE', `/admin/users/${id}`),
+    refresh: () => adminPeople(),
+  });
+  bindBulkDelete('providers', {
+    noun: 'providers',
+    deleteOne: (id, el) => {
+      const kind = el.getAttribute('data-bulk-kind') || 'provider';
+      if (kind === 'user') return api('DELETE', `/admin/users/${id}`);
+      return api('DELETE', `/admin/providers/${id}`);
+    },
+    refresh: () => adminPeople(),
+  });
+  bindBulkDelete('schools', {
+    noun: 'schools',
+    deleteOne: async (id) => {
+      if (state.focusSchoolId === id) state.focusSchoolId = '';
+      await api('DELETE', `/admin/schools/${id}`);
+    },
+    refresh: () => adminPeople(),
+  });
+  bindBulkDelete('dues', {
+    noun: 'due dates',
+    deleteOne: (id) => api('DELETE', `/admin/due-dates/${id}`),
+    refresh: () => adminPeople(),
+  });
 
   const setAddAdminOpen = (open) => {
     document.getElementById('addAdminCollapsed').hidden = open;
@@ -1984,7 +2194,9 @@ async function adminMandates() {
   view(`
     <div class="card">
       <h2>Import caseload</h2>
-      <p class="muted">KU Related Service Details by School — CSV or Excel (.xls / .xlsx). Import saves immediately (no preview step).</p>
+      <p class="muted">Use the KU export <strong>Related Service by serviceschool (WG)</strong> (Listing Results sheet) as CSV or Excel (.xls / .xlsx). Import saves immediately.</p>
+      <p class="muted" style="margin-top:0.35rem">Columns: CR Recommended School, Student Last/First Name, CR Expected Grade, CR Decision/Status, Related Service, RS Start/End, RS Ratio, RS Frequency, RS Period, RS Location, RS Provider. (RS Duration is ignored. Older short headers like Recommended School / Freq / Period still work.)</p>
+      <p class="muted" style="margin-top:0.35rem">Freq: <em>Weekly</em> = sessions per week; <em>6 day cycle</em> = N sessions per 6 school days. Providers match “Last, First” or “White Glove” / “White, Glove”.</p>
       <input id="caseloadFile" type="file" accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
       <div class="row" style="margin-top:0.6rem">
         <button class="btn-primary" id="caseloadImportBtn">Import caseload</button>
@@ -2411,8 +2623,9 @@ async function adminReports() {
         <label>To <input id="dueTo" type="date" value="${esc(to)}" /></label>
         <button type="button" class="btn" id="duesXlsx">Export Excel</button>
       </div>
-      <table><tr><th>School</th><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
-      <tbody id="duesBody"><tr><td colspan="5">Loading…</td></tr></tbody>
+      ${bulkBar('report-dues')}
+      <table><tr>${bulkTh('report-dues')}<th>School</th><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
+      <tbody id="duesBody"><tr><td colspan="6">Loading…</td></tr></tbody>
       </table>
     </div>
   `);
@@ -2468,10 +2681,15 @@ async function adminReports() {
       (dues.rows || [])
         .map(
           (r) =>
-            `<tr><td>${esc(r.schoolName || r.schoolId)}</td><td>${esc(r.kind)}</td><td>${esc(r.dueOn)}</td><td>${esc(r.status)}</td><td>${r.completedAt ? `<button class="btn" data-del-due="${esc(r.id)}">Remove</button>` : `<button class="btn" data-complete="${esc(r.id)}">Mark complete</button> <button class="btn" data-del-due="${esc(r.id)}">Remove</button>`}</td></tr>`,
+            `<tr>${bulkTd('report-dues', r.id)}<td>${esc(r.schoolName || r.schoolId)}</td><td>${esc(r.kind)}</td><td>${esc(r.dueOn)}</td><td>${esc(r.status)}</td><td>${r.completedAt ? `<button class="btn" data-del-due="${esc(r.id)}">Remove</button>` : `<button class="btn" data-complete="${esc(r.id)}">Mark complete</button> <button class="btn" data-del-due="${esc(r.id)}">Remove</button>`}</td></tr>`,
         )
-        .join('') || '<tr><td colspan="5">None</td></tr>';
+        .join('') || '<tr><td colspan="6">None</td></tr>';
   }
+  bindBulkDelete('report-dues', {
+    noun: 'due dates',
+    deleteOne: (id) => api('DELETE', `/admin/due-dates/${id}`),
+    refresh: () => adminReports(),
+  });
   if (loadBtn) {
     loadBtn.disabled = false;
     loadBtn.textContent = 'Load';

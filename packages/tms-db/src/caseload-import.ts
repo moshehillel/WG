@@ -130,20 +130,31 @@ export interface CaseloadApplyResult {
   mandates: Mandate[];
 }
 
+/**
+ * Final KU export: “Related Service by serviceschool (WG)” (Listing Results).
+ * Older “Related Service Details by School” short headers stay as aliases.
+ */
 const HEADER_ALIASES: Record<string, string[]> = {
-  school: ['recommended school', 'school', 'school name'],
-  lastName: ['last name', 'lastname', 'student last name'],
-  firstName: ['first name', 'firstname', 'student first name'],
-  grade: ['grade'],
-  decision: ['decision'],
+  school: [
+    'cr recommended school',
+    'recommended school',
+    'school',
+    'school name',
+  ],
+  lastName: ['student last name', 'last name', 'lastname'],
+  firstName: ['student first name', 'first name', 'firstname'],
+  grade: ['cr expected grade', 'expected grade', 'grade'],
+  decision: ['cr decision/status', 'cr decision', 'decision/status', 'decision'],
   startOn: ['rs start', 'start', 'start date', 'mandate start'],
   endOn: ['rs end', 'end', 'end date', 'mandate end'],
-  service: ['related service', 'service', 'service type'],
-  ratio: ['ratio', 'group ratio'],
-  freq: ['freq', 'frequency'],
-  period: ['period', 'freq period'],
-  location: ['location'],
-  provider: ['rs provider', 'provider', 'therapist', 'related service provider'],
+  service: ['related service', 'service type', 'service'],
+  ratio: ['rs ratio', 'ratio', 'group ratio'],
+  freq: ['rs frequency', 'frequency', 'freq'],
+  period: ['rs period', 'freq period', 'period'],
+  location: ['rs location', 'location'],
+  provider: ['rs provider', 'related service provider', 'provider', 'therapist'],
+  /** Present on final export; ignored by import (minutes live on the mandate elsewhere). */
+  duration: ['rs duration', 'duration'],
 };
 
 function normHeader(h: string): string {
@@ -257,7 +268,7 @@ function emptyCaseloadFile(): CaseloadParseResult {
       caseloadErr(0, {
         field: 'File',
         problem: 'This file is empty — there are no rows to import.',
-        fix: 'Upload a KU “Related Service Details by School” export as CSV or Excel (.xls / .xlsx).',
+        fix: 'Upload a KU “Related Service by serviceschool (WG)” export as CSV or Excel (.xls / .xlsx).',
       }),
     ],
   };
@@ -293,7 +304,7 @@ export function parseCaseloadGrid(
       caseloadErr(0, {
         field: 'Header',
         problem: 'The header row is missing First Name and/or Last Name columns.',
-        fix: 'Use a KU “Related Service Details by School” CSV or Excel file that includes both “First Name” and “Last Name”.',
+        fix: 'Use a KU “Related Service by serviceschool (WG)” CSV or Excel file that includes student first and last name columns.',
       }),
     );
     return { rows, errors, warnings };
@@ -303,18 +314,23 @@ export function parseCaseloadGrid(
       caseloadErr(0, {
         field: 'Header',
         problem: 'The header row is missing a Related Service column.',
-        fix: 'Add a “Related Service” (or “Service Type”) column, then preview again.',
+        fix: 'Add a “Related Service” (or “Service Type”) column, then import again.',
       }),
     );
     return { rows, errors, warnings };
   }
   if (idx.freq < 0 || idx.period < 0) {
-    const missing = [idx.freq < 0 ? 'Freq' : '', idx.period < 0 ? 'Period' : ''].filter(Boolean).join(' and ');
+    const missing = [
+      idx.freq < 0 ? 'RS Frequency (or Freq)' : '',
+      idx.period < 0 ? 'RS Period (or Period)' : '',
+    ]
+      .filter(Boolean)
+      .join(' and ');
     errors.push(
       caseloadErr(0, {
         field: 'Header',
         problem: `The header row is missing required column(s): ${missing}.`,
-        fix: 'Include both “Freq” and “Period” columns from the KU export, then preview again.',
+        fix: 'Include both frequency and period columns from the KU “Related Service by serviceschool (WG)” export, then import again.',
       }),
     );
     return { rows, errors, warnings };
@@ -597,7 +613,7 @@ export function parseCaseloadWorkbook(input: Buffer | Uint8Array | ArrayBuffer):
         caseloadErr(0, {
           field: 'File',
           problem: 'This Excel file could not be read.',
-          fix: 'Re-export the KU report as .xls, .xlsx, or CSV and try again.',
+          fix: 'Re-export “Related Service by serviceschool (WG)” as .xls, .xlsx, or CSV and try again.',
         }),
       ],
     };
