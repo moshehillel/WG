@@ -333,7 +333,7 @@ async function therapistHome() {
         </label>
       </div>
       <label>Notes <textarea id="notes" rows="3"></textarea></label>
-      <button class="btn big" id="add">Save session</button>
+      <button type="button" class="btn big" id="add">Save session</button>
     </div>
 
     <div class="card">
@@ -369,22 +369,37 @@ async function therapistHome() {
     };
 
     document.getElementById('add').onclick = async () => {
+      const btn = document.getElementById('add');
       try {
+        if (!state.weekId) {
+          if (!providerId) throw new Error('Your week is not open yet. Ask the office to finish your provider profile.');
+          const ensured = await api('POST', '/week/ensure', { weekStart: state.weekStart, providerId });
+          state.weekId = ensured.week?.id || '';
+        }
         if (!state.weekId) throw new Error('Your week is not open yet. Ask the office for help.');
+        const studentId = document.getElementById('studentId').value;
+        const dateOfService = document.getElementById('dos').value.trim();
+        const notes = document.getElementById('notes').value.trim();
+        if (!studentId) throw new Error('Pick a student.');
+        if (!dateOfService) throw new Error('Enter the date of service.');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
         await api('POST', '/week/sessions', {
           weekId: state.weekId,
-          studentId: document.getElementById('studentId').value,
-          dateOfService: document.getElementById('dos').value,
+          studentId,
+          dateOfService,
           beginTime: document.getElementById('beginTime').value,
           endTime: document.getElementById('endTime').value,
           attendance: document.getElementById('att').value,
           makeupOfSessionId: document.getElementById('makeupOf').value,
-          notes: document.getElementById('notes').value,
+          notes,
         });
         setStatus('Session saved.', 'ok');
         await therapistHome();
       } catch (e) {
         setStatus(e.message, 'err');
+        btn.disabled = false;
+        btn.textContent = 'Save session';
       }
     };
 
@@ -554,9 +569,39 @@ async function adminPeople() {
         <select id="npid">${providerOptions(providers)}</select>
       </label>
       <label>Note <textarea id="nbody" rows="3"></textarea></label>
-      <button class="btn" id="nadd">Add note</button>
+      <button type="button" class="btn" id="nadd">Add note</button>
+      <h3>Saved notes</h3>
+      <table>
+        <tr><th>When</th><th>Note</th></tr>
+        <tbody id="notesList"><tr><td colspan="2">Pick a provider to see notes.</td></tr></tbody>
+      </table>
     </div>
   `);
+  const notesList = document.getElementById('notesList');
+  const loadProviderNotes = async (providerId) => {
+    if (!notesList) return;
+    if (!providerId) {
+      notesList.innerHTML = '<tr><td colspan="2">Pick a provider to see notes.</td></tr>';
+      return;
+    }
+    notesList.innerHTML = '<tr><td colspan="2">Loading…</td></tr>';
+    try {
+      const out = await api('GET', `/admin/providers/${providerId}/notes`);
+      const rows = out.notes || [];
+      notesList.innerHTML = rows.length
+        ? rows
+            .slice()
+            .reverse()
+            .map((n) => `<tr><td>${esc((n.createdAt || '').slice(0, 16).replace('T', ' '))}</td><td>${esc(n.body || '')}</td></tr>`)
+            .join('')
+        : '<tr><td colspan="2">No notes yet for this provider.</td></tr>';
+    } catch (e) {
+      notesList.innerHTML = `<tr><td colspan="2">${esc(e.message || 'Could not load notes.')}</td></tr>`;
+    }
+  };
+  document.getElementById('npid').onchange = () => loadProviderNotes(document.getElementById('npid').value);
+  loadProviderNotes(document.getElementById('npid').value);
+
   document.getElementById('createAdmin').onclick = async () => {
     try {
       const email = document.getElementById('aemail').value.trim();
@@ -610,12 +655,34 @@ async function adminPeople() {
     } catch (e) { setStatus(e.message, 'err'); }
   };
   document.getElementById('nadd').onclick = async () => {
+    const btn = document.getElementById('nadd');
     try {
       const id = document.getElementById('npid').value;
-      if (!id) throw new Error('Pick a therapist.');
-      await api('POST', `/admin/providers/${id}/notes`, { body: document.getElementById('nbody').value });
+      const text = document.getElementById('nbody').value.trim();
+      if (!id) throw new Error('Pick a provider.');
+      if (!text) throw new Error('Type a note first.');
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      const out = await api('POST', `/admin/providers/${id}/notes`, { body: text });
+      document.getElementById('nbody').value = '';
       setStatus('Note saved (hidden from therapist).', 'ok');
+      const rows = out.notes || [];
+      if (notesList) {
+        notesList.innerHTML = rows.length
+          ? rows
+              .slice()
+              .reverse()
+              .map((n) => `<tr><td>${esc((n.createdAt || '').slice(0, 16).replace('T', ' '))}</td><td>${esc(n.body || '')}</td></tr>`)
+              .join('')
+          : '<tr><td colspan="2">No notes yet for this provider.</td></tr>';
+      } else {
+        await loadProviderNotes(id);
+      }
     } catch (e) { setStatus(e.message, 'err'); }
+    finally {
+      btn.disabled = false;
+      btn.textContent = 'Add note';
+    }
   };
 }
 

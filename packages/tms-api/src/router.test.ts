@@ -756,4 +756,58 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     });
     expect(xls.status).toBe(400);
   });
+
+  it('saves and lists internal provider notes', async () => {
+    const { store, provider } = storeWithTherapist();
+    const adminH = {
+      'x-tms-role': 'admin',
+      'x-tms-email': 'admin@whiteglove.local',
+    };
+
+    // Simulate an older S3 snapshot that omitted adminNotes.
+    const partial = store.snapshot() as unknown as Record<string, unknown>;
+    delete partial.adminNotes;
+    store.load(partial as never);
+
+    const empty = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/providers/${provider.id}/notes`,
+      headers: adminH,
+      query: {},
+      body: { body: '   ' },
+    });
+    expect(empty.status).toBe(400);
+
+    const missing = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/providers/no-such/notes',
+      headers: adminH,
+      query: {},
+      body: { body: 'hello' },
+    });
+    expect(missing.status).toBe(404);
+
+    const created = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/providers/${provider.id}/notes`,
+      headers: adminH,
+      query: {},
+      body: { body: 'Call school about makeup window' },
+    });
+    expect(created.status).toBe(201);
+    const createdBody = created.body as { note: { body: string; providerId: string }; notes: Array<{ body: string }> };
+    expect(createdBody.note.body).toBe('Call school about makeup window');
+    expect(createdBody.note.providerId).toBe(provider.id);
+    expect(createdBody.notes).toHaveLength(1);
+
+    const listed = await handleTmsRequest(store, {
+      method: 'GET',
+      path: `/admin/providers/${provider.id}/notes`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(listed.status).toBe(200);
+    expect((listed.body as { notes: Array<{ body: string }> }).notes[0].body).toMatch(/makeup/);
+  });
 });
