@@ -860,18 +860,21 @@ export async function handleTmsRequest(
     const providerId = String(b.providerId || provider?.id || '');
     const text = pdfTextFromBody(b) || textBody(req) || String(b.pdfText || '');
     if (!String(text).trim()) {
-      return json(400, {
-        error: bodyHasPdfBytes(b)
-          ? PDF_NO_TEXT_ERROR
-          : 'Choose a weekly notes PDF (or paste the report text).',
+      const error = bodyHasPdfBytes(b)
+        ? PDF_NO_TEXT_ERROR
+        : 'Choose a weekly notes PDF (or paste the report text).';
+      console.warn('upload-sessions 400', error, {
+        hasPdf: bodyHasPdfBytes(b),
+        pdfBase64Len: typeof b.pdfBase64 === 'string' ? b.pdfBase64.length : 0,
       });
+      return json(400, { error });
     }
     const parsed = parseWeeklySessionText(text);
     if (!parsed.length) {
-      return json(400, {
-        error:
-          'Could not find any sessions in this PDF. Use a Frontline Related Service Session Notes report with a text layer (not a scan).',
-      });
+      const error =
+        'Could not find any sessions in this PDF. Use a Frontline Related Service Session Notes report with a text layer (not a scan).';
+      console.warn('upload-sessions 400', error, { textLen: String(text).length });
+      return json(400, { error });
     }
     const weekStart = String(b.weekStart || (parsed[0] ? weekStartFromDos(parsed[0].dateOfService) : ''));
     let week = store.weekByProviderStart(providerId, weekStart);
@@ -1112,11 +1115,44 @@ export async function handleTmsRequest(
     };
   }
 
+  if (req.method === 'DELETE' && /^\/sessions\/[^/]+$/.test(path)) {
+    const id = path.split('/')[2];
+    const session = store.data.sessions.find((s) => s.id === id);
+    if (!session) return json(404, { error: 'Session not found.' });
+    const week = store.data.weeks.find((w) => w.id === session.weekId);
+    if (!week) return json(404, { error: 'Week not found.' });
+    if (!therapistCanEdit(week.status) && ctx.user.role !== 'admin') {
+      return json(409, { error: 'This week is locked. Ask an admin to reopen it.' });
+    }
+    if (ctx.user.role !== 'admin') {
+      const provider = providerFor(store, ctx.user);
+      if (!provider || week.providerId !== provider.id) {
+        return json(403, { error: 'You can only remove sessions from your own week.' });
+      }
+    }
+    store.removeSession(id);
+    store.audit(ctx.user.id, 'remove_session', `session:${id}`, session, null);
+    return json(200, { ok: true, sessions: store.sessionsForWeek(week.id) });
+  }
+
+  if (req.method === 'DELETE' && /^\/admin\/weeks\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const week = store.data.weeks.find((w) => w.id === path.split('/')[3]);
+      if (!week) return json(404, { error: 'Week not found.' });
+      if (week.status !== 'draft') {
+        return json(409, { error: 'Only draft weeks can be removed. Reopen a signed week first if you need to cancel it.' });
+      }
+      store.removeWeek(week.id);
+      store.audit(ctx.user.id, 'remove_week', `week:${week.id}`, week, null);
+      return json(200, { ok: true });
+    });
+  }
+
   if (req.method === 'POST' && /^\/admin\/weeks\/[^/]+\/sign$/.test(path)) {
     return adminUser(async () => {
       const week = store.data.weeks.find((w) => w.id === path.split('/')[3]);
       if (!week) return json(404, { error: 'Week not found.' });
-      if (week.status !== 'submitted' && week.status !== 'reopened') {
+      if (week.status !== 'submitted') {
         return json(409, { error: 'Week must be submitted before it can be marked signed.' });
       }
       const signed = store.upsertWeek({
