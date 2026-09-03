@@ -1,3 +1,4 @@
+import { migrateDueDatesToSchools } from './due-dates.js';
 import { newId, nowIso } from './ids.js';
 import type {
   AdminNote,
@@ -24,6 +25,7 @@ function mergeSnapshot(snapshot: Partial<TmsSnapshot> | null | undefined): TmsSn
     const value = src[key];
     if (Array.isArray(value)) (base as TmsSnapshot)[key] = structuredClone(value) as never;
   }
+  base.dueDates = migrateDueDatesToSchools(base.dueDates as never, base.students);
   return base;
 }
 
@@ -162,6 +164,18 @@ export class MemoryStore {
 
   removeSession(id: string): void {
     this.data.sessions = this.data.sessions.filter((s) => s.id !== id);
+    this.data.hhaTransfers = this.data.hhaTransfers.filter((t) => t.sessionId !== id);
+  }
+
+  /** Remove a week and its sessions (and related HHA transfer rows). */
+  removeWeek(id: string): boolean {
+    const exists = this.data.weeks.some((w) => w.id === id);
+    if (!exists) return false;
+    const sessionIds = new Set(this.sessionsForWeek(id).map((s) => s.id));
+    this.data.sessions = this.data.sessions.filter((s) => s.weekId !== id);
+    this.data.hhaTransfers = this.data.hhaTransfers.filter((t) => !sessionIds.has(t.sessionId));
+    this.data.weeks = this.data.weeks.filter((w) => w.id !== id);
+    return true;
   }
 
   addFile(row: StoredFile): StoredFile {
@@ -178,6 +192,20 @@ export class MemoryStore {
     if (i >= 0) this.data.dueDates[i] = row;
     else this.data.dueDates.push(row);
     return row;
+  }
+
+  /** Providers with at least one mandate for a student at this school. */
+  providerIdsForSchool(schoolId: string): string[] {
+    const studentIds = new Set(
+      this.data.students.filter((s) => s.schoolId === schoolId).map((s) => s.id),
+    );
+    return [
+      ...new Set(
+        this.data.mandates
+          .filter((m) => studentIds.has(m.studentId) && m.providerId)
+          .map((m) => m.providerId),
+      ),
+    ];
   }
 
   addAlert(row: AlertRow): AlertRow {

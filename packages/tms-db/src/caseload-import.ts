@@ -1,3 +1,4 @@
+import * as XLSX from 'xlsx';
 import { disciplineFromServiceType } from './mandate.js';
 import type { MemoryStore } from './memory-store.js';
 import { newId, nowIso } from './ids.js';
@@ -11,8 +12,54 @@ import type {
 } from './types.js';
 
 export interface CaseloadRowError {
+  /** 1-based CSV line number; 0 = file/header-level. */
+  row: number;
+  /** Alias of `row` (older clients). */
   rowNumber: number;
+  /** Column / field name when known (e.g. "Last Name", "Freq"). */
+  field?: string;
+  /** Student label when known (e.g. "Ahmad Haris"). */
+  student?: string;
+  /** What went wrong (plain English). */
+  problem: string;
+  /** How to fix it (plain English). */
+  fix: string;
+  /** Combined sentence for older clients: problem + fix. */
   message: string;
+}
+
+function caseloadErr(
+  row: number,
+  parts: {
+    field?: string;
+    student?: string;
+    problem: string;
+    fix: string;
+  },
+): CaseloadRowError {
+  const problem = String(parts.problem || '').trim();
+  const fix = String(parts.fix || '').trim();
+  const message = [problem, fix].filter(Boolean).join(' ');
+  return {
+    row,
+    rowNumber: row,
+    field: parts.field,
+    student: parts.student,
+    problem,
+    fix,
+    message,
+  };
+}
+
+function studentLabel(firstName: string, lastName: string): string {
+  return [firstName, lastName].filter(Boolean).join(' ').trim();
+}
+
+/** True when empty or successfully normalized to YYYY-MM-DD. */
+function isOkCaseloadDate(raw: string): boolean {
+  const s = String(raw || '').trim();
+  if (!s) return true;
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalizeCaseloadDate(s));
 }
 
 export interface CaseloadImportRow {
@@ -198,19 +245,33 @@ export function formatFreqDisplay(
   return `${sessionsPerPeriod} / week`;
 }
 
-export function parseCaseloadCsv(csvText: string): CaseloadParseResult {
-  const raw = String(csvText || '').replace(/^\uFEFF/, '');
-  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+function looksLikeCaseloadHeaders(headers: string[]): boolean {
+  return colIndex(headers, HEADER_ALIASES.firstName) >= 0 && colIndex(headers, HEADER_ALIASES.lastName) >= 0;
+}
+
+function emptyCaseloadFile(): CaseloadParseResult {
+  return {
+    rows: [],
+    warnings: [],
+    errors: [
+      caseloadErr(0, {
+        field: 'File',
+        problem: 'This file is empty — there are no rows to import.',
+        fix: 'Upload a KU “Related Service Details by School” export as CSV or Excel (.xls / .xlsx).',
+      }),
+    ],
+  };
+}
+
+/** Shared row parser for CSV and Excel (headers already mapped to cells). */
+export function parseCaseloadGrid(
+  headerCells: string[],
+  dataRows: Array<{ rowNumber: number; cells: string[] }>,
+): CaseloadParseResult {
   const errors: CaseloadRowError[] = [];
   const warnings: CaseloadRowError[] = [];
   const rows: CaseloadImportRow[] = [];
-
-  if (!lines.length) {
-    errors.push({ rowNumber: 0, message: 'CSV is empty.' });
-    return { rows, errors, warnings };
-  }
-
-  const headers = splitCsvLine(lines[0]).map(normHeader);
+  const headers = headerCells.map(normHeader);
   const idx = {
     school: colIndex(headers, HEADER_ALIASES.school),
     lastName: colIndex(headers, HEADER_ALIASES.lastName),
@@ -228,24 +289,40 @@ export function parseCaseloadCsv(csvText: string): CaseloadParseResult {
   };
 
   if (idx.firstName < 0 || idx.lastName < 0) {
-    errors.push({
-      rowNumber: 0,
-      message: 'Missing required columns: First Name and Last Name.',
-    });
+    errors.push(
+      caseloadErr(0, {
+        field: 'Header',
+        problem: 'The header row is missing First Name and/or Last Name columns.',
+        fix: 'Use a KU “Related Service Details by School” CSV or Excel file that includes both “First Name” and “Last Name”.',
+      }),
+    );
     return { rows, errors, warnings };
   }
   if (idx.service < 0) {
-    errors.push({ rowNumber: 0, message: 'Missing required column: Related Service.' });
+    errors.push(
+      caseloadErr(0, {
+        field: 'Header',
+        problem: 'The header row is missing a Related Service column.',
+        fix: 'Add a “Related Service” (or “Service Type”) column, then preview again.',
+      }),
+    );
     return { rows, errors, warnings };
   }
   if (idx.freq < 0 || idx.period < 0) {
-    errors.push({ rowNumber: 0, message: 'Missing required columns: Freq and Period.' });
+    const missing = [idx.freq < 0 ? 'Freq' : '', idx.period < 0 ? 'Period' : ''].filter(Boolean).join(' and ');
+    errors.push(
+      caseloadErr(0, {
+        field: 'Header',
+        problem: `The header row is missing required column(s): ${missing}.`,
+        fix: 'Include both “Freq” and “Period” columns from the KU export, then preview again.',
+      }),
+    );
     return { rows, errors, warnings };
   }
 
-  for (let i = 1; i < lines.length; i += 1) {
-    const rowNumber = i + 1;
-    const cells = splitCsvLine(lines[i]);
+  for (const data of dataRows) {
+    const row = data.rowNumber;
+    const cells = data.cells;
     if (cells.every((c) => !String(c || '').trim())) continue;
 
     const firstName = cell(cells, idx.firstName);
@@ -259,56 +336,146 @@ export function parseCaseloadCsv(csvText: string): CaseloadParseResult {
     const periodRaw = cell(cells, idx.period);
     const location = cell(cells, idx.location);
     const providerName = cell(cells, idx.provider);
-    const startOn = normalizeCaseloadDate(cell(cells, idx.startOn));
-    const endOn = normalizeCaseloadDate(cell(cells, idx.endOn));
+    const startRaw = cell(cells, idx.startOn);
+    const endRaw = cell(cells, idx.endOn);
+    const who = studentLabel(firstName, lastName);
 
-    if (!firstName || !lastName) {
-      errors.push({ rowNumber, message: 'Missing student first or last name.' });
-      continue;
+    let rowFailed = false;
+    if (!lastName) {
+      errors.push(
+        caseloadErr(row, {
+          field: 'Last Name',
+          student: who || undefined,
+          problem: 'Last Name is empty.',
+          fix: "Add the student's last name.",
+        }),
+      );
+      rowFailed = true;
+    }
+    if (!firstName) {
+      errors.push(
+        caseloadErr(row, {
+          field: 'First Name',
+          student: who || undefined,
+          problem: 'First Name is empty.',
+          fix: "Add the student's first name.",
+        }),
+      );
+      rowFailed = true;
     }
     if (!serviceType) {
-      errors.push({ rowNumber, message: 'Missing Related Service.' });
-      continue;
+      errors.push(
+        caseloadErr(row, {
+          field: 'Related Service',
+          student: who || undefined,
+          problem: 'Related Service is empty.',
+          fix: 'Enter the service type (e.g. PT, OT, or SLP).',
+        }),
+      );
+      rowFailed = true;
     }
 
     const freqNum = parseFreqNumber(freqRaw);
     if (freqNum == null || freqNum <= 0) {
-      errors.push({ rowNumber, message: `Invalid Freq "${freqRaw || ''}".` });
-      continue;
+      errors.push(
+        caseloadErr(row, {
+          field: 'Freq',
+          student: who || undefined,
+          problem: freqRaw.trim()
+            ? `Freq "${freqRaw}" is not a valid session count.`
+            : 'Freq is empty.',
+          fix: 'Enter a positive number such as 1 or 2.',
+        }),
+      );
+      rowFailed = true;
+    }
+
+    if (!isOkCaseloadDate(startRaw)) {
+      errors.push(
+        caseloadErr(row, {
+          field: 'RS Start',
+          student: who || undefined,
+          problem: `RS Start date "${startRaw}" is not recognized.`,
+          fix: 'Use MM/DD/YYYY or YYYY-MM-DD (e.g. 09/01/2025).',
+        }),
+      );
+      rowFailed = true;
+    }
+    if (!isOkCaseloadDate(endRaw)) {
+      errors.push(
+        caseloadErr(row, {
+          field: 'RS End',
+          student: who || undefined,
+          problem: `RS End date "${endRaw}" is not recognized.`,
+          fix: 'Use MM/DD/YYYY or YYYY-MM-DD (e.g. 06/30/2026).',
+        }),
+      );
+      rowFailed = true;
     }
 
     const { kind, periodSchoolDays } = parsePeriod(periodRaw);
+    const periodLooksWeekly =
+      /\bweekly\b/i.test(periodRaw) ||
+      /^weeks?$/i.test(periodRaw.trim()) ||
+      /\bper\s+week\b/i.test(periodRaw);
+    const periodLooksCycle =
+      /\bcycle\b/i.test(periodRaw) || /\d+\s*school\s*days?/i.test(periodRaw);
     if (!periodRaw) {
-      warnings.push({ rowNumber, message: 'Empty Period — defaulting to Weekly.' });
-    } else if (kind === 'weekly' && !/week/i.test(periodRaw) && !/\bcycle\b/i.test(periodRaw)) {
-      warnings.push({
-        rowNumber,
-        message: `Unrecognized Period "${periodRaw}" — treating as Weekly.`,
-      });
+      warnings.push(
+        caseloadErr(row, {
+          field: 'Period',
+          student: who || undefined,
+          problem: 'Period is empty.',
+          fix: 'Defaulting to Weekly for this row. Prefer filling Period with Weekly or a school-day cycle.',
+        }),
+      );
+    } else if (kind === 'weekly' && !periodLooksWeekly && !periodLooksCycle) {
+      errors.push(
+        caseloadErr(row, {
+          field: 'Period',
+          student: who || undefined,
+          problem: `Period "${periodRaw}" is not recognized.`,
+          fix: 'Use Weekly or a school-day cycle (e.g. "6 day cycle").',
+        }),
+      );
+      rowFailed = true;
     }
 
+    if (rowFailed) continue;
+
+    const startOn = normalizeCaseloadDate(startRaw);
+    const endOn = normalizeCaseloadDate(endRaw);
+
     if (decision && /reject|den(y|ied)|declin/i.test(decision)) {
-      warnings.push({
-        rowNumber,
-        message: `Decision "${decision}" — row still imported; review if needed.`,
-      });
+      warnings.push(
+        caseloadErr(row, {
+          field: 'Decision',
+          student: who || undefined,
+          problem: `Decision is "${decision}".`,
+          fix: 'Row will still import — review whether this mandate should be skipped.',
+        }),
+      );
     }
 
     const discipline = disciplineFromServiceType(serviceType);
     if (!discipline) {
-      warnings.push({
-        rowNumber,
-        message: `Could not map Related Service "${serviceType}" to OT/PT/SLP.`,
-      });
+      warnings.push(
+        caseloadErr(row, {
+          field: 'Related Service',
+          student: who || undefined,
+          problem: `Related Service "${serviceType}" could not be mapped to OT, PT, or SLP.`,
+          fix: 'Use a service label that includes OT, PT, or SLP when possible.',
+        }),
+      );
     }
 
     const ratioGroup = parseRatioGroup(ratioRaw);
-    const frequencyPerWeek = kind === 'weekly' ? freqNum : 0;
-    const sessionsPerPeriod = freqNum;
+    const frequencyPerWeek = kind === 'weekly' ? freqNum! : 0;
+    const sessionsPerPeriod = freqNum!;
     const days = kind === 'school_day_cycle' ? periodSchoolDays || 6 : 0;
 
     rows.push({
-      rowNumber,
+      rowNumber: row,
       schoolName,
       firstName,
       lastName,
@@ -330,6 +497,199 @@ export function parseCaseloadCsv(csvText: string): CaseloadParseResult {
   }
 
   return { rows, errors, warnings };
+}
+
+export function parseCaseloadCsv(csvText: string): CaseloadParseResult {
+  const raw = String(csvText || '').replace(/^\uFEFF/, '');
+  const lines = raw.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return emptyCaseloadFile();
+  const headerCells = splitCsvLine(lines[0]);
+  const dataRows = lines.slice(1).map((line, i) => ({
+    rowNumber: i + 2,
+    cells: splitCsvLine(line),
+  }));
+  return parseCaseloadGrid(headerCells, dataRows);
+}
+
+const OLE_MAGIC = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+
+export function isExcelCaseloadName(fileName: string, mime = ''): boolean {
+  if (/\.xlsx?$/i.test(String(fileName || ''))) return true;
+  const m = String(mime || '').toLowerCase();
+  return (
+    m.includes('spreadsheetml') ||
+    m === 'application/vnd.ms-excel' ||
+    m === 'application/vnd.ms-excel.sheet.binary.spreadsheetml.sheet'
+  );
+}
+
+export function isExcelCaseloadBytes(buf: Buffer): boolean {
+  if (buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b) return true;
+  if (buf.length >= 8 && buf.subarray(0, 8).equals(OLE_MAGIC)) return true;
+  return false;
+}
+
+function cellToString(value: unknown): string {
+  if (value == null || value === '') return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
+  return String(value).replace(/^"|"$/g, '').trim();
+}
+
+function formatExcelDateSerial(n: number): string | null {
+  if (!Number.isFinite(n) || n < 200 || n > 80000) return null;
+  const parsed = XLSX.SSF.parse_date_code(n) as { y?: number; m?: number; d?: number } | null;
+  if (!parsed?.y) return null;
+  return `${parsed.y}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`;
+}
+
+function cellToDateString(value: unknown): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return formatExcelDateSerial(value) || cellToString(value);
+  }
+  return cellToString(value);
+}
+
+function sheetToRawGrid(sheet: XLSX.WorkSheet): unknown[][] {
+  return XLSX.utils.sheet_to_json(sheet, {
+    header: 1,
+    defval: '',
+    raw: true,
+    blankrows: false,
+  }) as unknown[][];
+}
+
+function findHeaderRowIndex(grid: unknown[][]): number {
+  const limit = Math.min(grid.length, 40);
+  for (let i = 0; i < limit; i += 1) {
+    const headers = (grid[i] || []).map((c) => normHeader(cellToString(c)));
+    if (
+      looksLikeCaseloadHeaders(headers) &&
+      (colIndex(headers, HEADER_ALIASES.service) >= 0 || colIndex(headers, HEADER_ALIASES.freq) >= 0)
+    ) {
+      return i;
+    }
+  }
+  for (let i = 0; i < limit; i += 1) {
+    const headers = (grid[i] || []).map((c) => normHeader(cellToString(c)));
+    if (looksLikeCaseloadHeaders(headers)) return i;
+  }
+  return 0;
+}
+
+export function parseCaseloadWorkbook(input: Buffer | Uint8Array | ArrayBuffer): CaseloadParseResult {
+  const buf = Buffer.isBuffer(input)
+    ? input
+    : Buffer.from(input instanceof ArrayBuffer ? new Uint8Array(input) : input);
+  let wb: XLSX.WorkBook;
+  try {
+    wb = XLSX.read(buf, { type: 'buffer', cellDates: false });
+  } catch {
+    return {
+      rows: [],
+      warnings: [],
+      errors: [
+        caseloadErr(0, {
+          field: 'File',
+          problem: 'This Excel file could not be read.',
+          fix: 'Re-export the KU report as .xls, .xlsx, or CSV and try again.',
+        }),
+      ],
+    };
+  }
+
+  let chosen: { grid: unknown[][]; headerIdx: number } | undefined;
+  for (const name of wb.SheetNames) {
+    const sheet = wb.Sheets[name];
+    if (!sheet) continue;
+    const grid = sheetToRawGrid(sheet);
+    if (!grid.length) continue;
+    const headerIdx = findHeaderRowIndex(grid);
+    const headers = (grid[headerIdx] || []).map((c) => normHeader(cellToString(c)));
+    if (looksLikeCaseloadHeaders(headers)) {
+      chosen = { grid, headerIdx };
+      break;
+    }
+    if (!chosen) chosen = { grid, headerIdx };
+  }
+  if (!chosen) return emptyCaseloadFile();
+
+  const headerCells = (chosen.grid[chosen.headerIdx] || []).map((c) => cellToString(c));
+  const headersNorm = headerCells.map(normHeader);
+  const dateCols = new Set<number>();
+  const startIdx = colIndex(headersNorm, HEADER_ALIASES.startOn);
+  const endIdx = colIndex(headersNorm, HEADER_ALIASES.endOn);
+  if (startIdx >= 0) dateCols.add(startIdx);
+  if (endIdx >= 0) dateCols.add(endIdx);
+
+  const dataRows: Array<{ rowNumber: number; cells: string[] }> = [];
+  for (let i = chosen.headerIdx + 1; i < chosen.grid.length; i += 1) {
+    const raw = chosen.grid[i] || [];
+    const cells = raw.map((v, col) => (dateCols.has(col) ? cellToDateString(v) : cellToString(v)));
+    if (cells.every((c) => !c)) continue;
+    dataRows.push({ rowNumber: i + 1, cells });
+  }
+  return parseCaseloadGrid(headerCells, dataRows);
+}
+
+function stripDataUrl(b64: string): string {
+  return String(b64 || '').replace(/^data:[^;]+;base64,/i, '').replace(/\s+/g, '');
+}
+
+export function parseCaseloadUpload(opts: {
+  fileName?: string;
+  mime?: string;
+  csvText?: string;
+  fileBase64?: string;
+}): CaseloadParseResult {
+  const fileName = String(opts.fileName || '');
+  const mime = String(opts.mime || '');
+  const csvText = String(opts.csvText || '');
+  const b64 = stripDataUrl(String(opts.fileBase64 || ''));
+  let buf: Buffer | null = null;
+  if (b64) {
+    buf = Buffer.from(b64, 'base64');
+    if (!buf.length) buf = null;
+  }
+
+  const excelNamed = isExcelCaseloadName(fileName, mime);
+  if (buf && (excelNamed || isExcelCaseloadBytes(buf))) {
+    return parseCaseloadWorkbook(buf);
+  }
+  if (excelNamed && !buf) {
+    return {
+      rows: [],
+      warnings: [],
+      errors: [
+        caseloadErr(0, {
+          field: 'File',
+          problem: 'This looks like an Excel workbook, but the file bytes were not sent.',
+          fix: 'Upload the .xls / .xlsx file again from Mandates → Import caseload.',
+        }),
+      ],
+    };
+  }
+  if (buf && !csvText.trim()) {
+    if (isExcelCaseloadBytes(buf)) return parseCaseloadWorkbook(buf);
+    return parseCaseloadCsv(buf.toString('utf8'));
+  }
+  if (csvText.trim()) return parseCaseloadCsv(csvText);
+  return {
+    rows: [],
+    warnings: [],
+    errors: [
+      caseloadErr(0, {
+        field: 'File',
+        problem: 'No caseload file was provided.',
+        fix: 'Choose a CSV or Excel (.xls / .xlsx) file and preview again.',
+      }),
+    ],
+  };
 }
 
 function normName(s: string): string {
@@ -361,38 +721,76 @@ function studentKey(first: string, last: string, school: string): string {
   return `${normName(last)}|${normName(first)}|${normName(school)}`;
 }
 
-function mandateMatchKey(row: {
-  discipline: string;
-  ratioGroup: boolean;
-  frequencyKind: FrequencyKind;
-  sessionsPerPeriod: number;
-  periodSchoolDays: number;
-  startOn: string;
-  endOn: string;
-  serviceType: string;
+/** Stable identity for caseload upsert (student is matched separately). */
+export function mandateMatchKey(row: {
+  discipline?: string;
+  ratioGroup?: boolean;
+  frequencyKind?: FrequencyKind | string;
+  sessionsPerPeriod?: number;
+  frequencyPerWeek?: number;
+  periodSchoolDays?: number;
+  startOn?: string;
+  endOn?: string;
+  serviceType?: string;
 }): string {
+  const disc =
+    String(row.discipline || '').toUpperCase() ||
+    disciplineFromServiceType(String(row.serviceType || '')) ||
+    normName(String(row.serviceType || ''));
+  const kind: FrequencyKind =
+    row.frequencyKind === 'school_day_cycle' ? 'school_day_cycle' : 'weekly';
+  const sessions = Number(
+    row.sessionsPerPeriod ?? row.frequencyPerWeek ?? 0,
+  );
+  const periodDays =
+    kind === 'school_day_cycle'
+      ? Number(row.periodSchoolDays) > 0
+        ? Number(row.periodSchoolDays)
+        : 6
+      : 0;
   return [
-    row.discipline || row.serviceType,
+    disc,
     row.ratioGroup ? 'group' : 'indiv',
-    row.frequencyKind,
-    row.sessionsPerPeriod,
-    row.periodSchoolDays || 0,
-    row.startOn,
-    row.endOn,
+    kind,
+    Number.isFinite(sessions) ? sessions : 0,
+    periodDays,
+    normalizeCaseloadDate(String(row.startOn || '')),
+    normalizeCaseloadDate(String(row.endOn || '')),
   ].join('|');
 }
 
+function findStudentForCaseloadRow(
+  studentByKey: Map<string, Student>,
+  store: MemoryStore,
+  firstName: string,
+  lastName: string,
+  schoolName: string,
+): Student | undefined {
+  const key = studentKey(firstName, lastName, schoolName);
+  const hit =
+    studentByKey.get(key) ||
+    studentByKey.get(studentKey(firstName, lastName, '')) ||
+    store.findStudentByName(firstName, lastName);
+  if (hit) return hit;
+  const nf = normName(firstName);
+  const nl = normName(lastName);
+  if (!nf && !nl) return undefined;
+  return store.data.students.find(
+    (s) => normName(s.firstName) === nf && normName(s.lastName) === nl,
+  );
+}
+
 /**
- * Preview or commit a parsed caseload into the store.
- * Never persists when `dryRun` is true. Skips rows already in `errors` from parse;
- * commit still proceeds for valid rows when some rows had parse errors.
+ * Persist parsed caseload into the store unless `dryRun` is true.
+ * `dryRun` is unused by the live import path (upload commits immediately).
+ * Skips rows already in `errors` from parse; commit still proceeds for valid rows.
  */
 export function applyCaseloadImport(
   store: MemoryStore,
   parsed: CaseloadParseResult,
   opts: { dryRun?: boolean } = {},
 ): CaseloadApplyResult {
-  const dryRun = opts.dryRun !== false;
+  const dryRun = opts.dryRun === true;
   const warnings = [...parsed.warnings];
   const errors = [...parsed.errors];
   const preview: CaseloadPreviewMandate[] = [];
@@ -443,16 +841,23 @@ export function applyCaseloadImport(
         createdSchools += 1;
       }
     } else if (!school) {
-      warnings.push({
-        rowNumber: row.rowNumber,
-        message: 'No Recommended School — student will have empty schoolId until set.',
-      });
+      warnings.push(
+        caseloadErr(row.rowNumber, {
+          field: 'Recommended School',
+          student: studentLabel(row.firstName, row.lastName) || undefined,
+          problem: 'Recommended School is empty.',
+          fix: 'Student will import with no school until you set one. Prefer filling Recommended School.',
+        }),
+      );
     }
 
-    let student =
-      studentByKey.get(key) ||
-      studentByKey.get(studentKey(row.firstName, row.lastName, '')) ||
-      store.findStudentByName(row.firstName, row.lastName);
+    let student = findStudentForCaseloadRow(
+      studentByKey,
+      store,
+      row.firstName,
+      row.lastName,
+      row.schoolName,
+    );
     const studentExists = Boolean(student);
 
     if (!student) {
@@ -486,6 +891,7 @@ export function applyCaseloadImport(
       };
       student = next;
       studentByKey.set(key, student);
+      studentByKey.set(studentKey(row.firstName, row.lastName, ''), student);
       const changed = next.schoolId !== beforeSchool || next.grade !== beforeGrade;
       if (changed) updatedStudents += 1;
       if (!dryRun && changed) store.upsertStudent(student);
@@ -493,26 +899,19 @@ export function applyCaseloadImport(
 
     const provider = findProviderByName(store.data.providers, row.providerName);
     if (row.providerName && !provider) {
-      warnings.push({
-        rowNumber: row.rowNumber,
-        message: `Provider "${row.providerName}" not found — mandate saved without provider (no HHA id invented).`,
-      });
+      warnings.push(
+        caseloadErr(row.rowNumber, {
+          field: 'RS Provider',
+          student: studentLabel(row.firstName, row.lastName) || undefined,
+          problem: `Provider "${row.providerName}" was not found in TMS.`,
+          fix: 'Mandate will save without a provider (no HHA id is invented). Add or rename the provider, then re-import if needed.',
+        }),
+      );
     }
 
     const existingList = mandatesByStudent.get(student.id) ?? [];
     const matchKey = mandateMatchKey(row);
-    let existing = existingList.find((m) =>
-      mandateMatchKey({
-        discipline: m.discipline || m.serviceType,
-        ratioGroup: m.ratioGroup,
-        frequencyKind: m.frequencyKind || 'weekly',
-        sessionsPerPeriod: m.sessionsPerPeriod ?? m.frequencyPerWeek,
-        periodSchoolDays: m.periodSchoolDays || 0,
-        startOn: m.startOn,
-        endOn: m.endOn,
-        serviceType: m.serviceType,
-      }) === matchKey,
-    );
+    const existing = existingList.find((m) => mandateMatchKey(m) === matchKey);
 
     const mandate: Mandate = {
       id: existing?.id || newId(),
@@ -523,9 +922,12 @@ export function applyCaseloadImport(
       frequencyPerWeek: row.frequencyPerWeek,
       frequencyKind: row.frequencyKind,
       sessionsPerPeriod: row.sessionsPerPeriod,
-      periodSchoolDays: row.periodSchoolDays || undefined,
+      periodSchoolDays:
+        row.frequencyKind === 'school_day_cycle'
+          ? row.periodSchoolDays || 6
+          : row.periodSchoolDays || undefined,
       ratioGroup: row.ratioGroup,
-      location: row.location || undefined,
+      location: row.location || existing?.location || undefined,
       sourcePdfKey: existing?.sourcePdfKey || 'caseload-csv',
       parsedAt: nowIso(),
       startOn: row.startOn,
