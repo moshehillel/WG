@@ -2,11 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { screenServiceNote } from './ai-screen.js';
 import { dueDateStatus, migrateDueDatesToSchools, shouldNagDue } from './due-dates.js';
 import { weekStartFromDos } from './ids.js';
-import { checkMandate, parseFrequencyPerWeek } from './mandate.js';
+import { checkMandate, isMakeupAuthMandate, parseFrequencyPerWeek } from './mandate.js';
 import { parseMandatePdfText } from './mandate-parse.js';
 import { unusedMissedForStudent, validateMakeup } from './makeup.js';
 import { MemoryStore } from './memory-store.js';
-import { adminWeeksList, dashboard, lastServiceByStudent, missingNotes } from './reports.js';
+import {
+  adminWeeksList,
+  dashboard,
+  lastServiceByStudent,
+  missingNotes,
+  weekProgressReport,
+} from './reports.js';
 import { attendanceFromNotes, parseWeeklySessionText } from './session-parse.js';
 import type { Mandate, SessionRow } from './types.js';
 import { afterLock, afterReopen, therapistCanEdit } from './week-state.js';
@@ -61,6 +67,17 @@ describe('mandate math', () => {
     expect(r.used).toBe(3);
   });
 
+  it('ignores additional services in mandate count', () => {
+    const rows = [
+      sess({ id: 'a' }),
+      sess({ id: 'b' }),
+      sess({ id: 'eval', additionalServiceType: 'eval', serviceType: 'Eval' }),
+    ];
+    const r = checkMandate(mandate({ frequencyPerWeek: 2 }), rows);
+    expect(r.over).toBe(false);
+    expect(r.used).toBe(2);
+  });
+
   it('alerts under mandate', () => {
     const r = checkMandate(mandate(), [sess()]);
     expect(r.under).toBe(true);
@@ -83,11 +100,82 @@ describe('makeup', () => {
     expect(err).toMatch(/documented missed/i);
   });
 
+  it('requires makeup word and missed date in notes', () => {
+    const missed = sess({ id: 'miss', attendance: 'missed', dateOfService: '08/31/2026' });
+    const noWord = sess({
+      id: 'mu',
+      attendance: 'makeup',
+      makeupOfSessionId: 'miss',
+      notes: 'for 08/31/2026',
+    });
+    expect(validateMakeup(noWord, [missed, noWord])).toMatch(/word makeup/i);
+    const noDate = sess({
+      id: 'mu2',
+      attendance: 'makeup',
+      makeupOfSessionId: 'miss',
+      notes: 'Makeup session',
+    });
+    expect(validateMakeup(noDate, [missed, noDate])).toMatch(/date of the missed/i);
+    const ok = sess({
+      id: 'mu3',
+      attendance: 'makeup',
+      makeupOfSessionId: 'miss',
+      notes: 'Makeup for missed session on 08/31/2026',
+    });
+    expect(validateMakeup(ok, [missed, ok])).toBeNull();
+  });
+
   it('allows one makeup per missed', () => {
     const missed = sess({ id: 'miss', attendance: 'missed' });
-    const makeup = sess({ id: 'mu', attendance: 'makeup', makeupOfSessionId: 'miss' });
+    const makeup = sess({
+      id: 'mu',
+      attendance: 'makeup',
+      makeupOfSessionId: 'miss',
+      notes: 'Makeup for 09/01/2026',
+      dateOfService: '09/03/2026',
+    });
     expect(validateMakeup(makeup, [missed, makeup])).toBeNull();
     expect(unusedMissedForStudent([missed, makeup], 'st1')).toEqual([]);
+  });
+
+  it('does not count linked makeup against weekly mandate', () => {
+    const missed = sess({ id: 'miss', attendance: 'missed' });
+    const attended = sess({ id: 'a' });
+    const makeup = sess({
+      id: 'mu',
+      attendance: 'makeup',
+      makeupOfSessionId: 'miss',
+      notes: 'Makeup for 09/01/2026',
+    });
+    const r = checkMandate(mandate({ frequencyPerWeek: 1 }), [missed, attended, makeup]);
+    expect(r.over).toBe(false);
+    expect(r.used).toBe(1);
+  });
+
+  it('links makeups to makeup-auth mandate instead of weekly', () => {
+    const auth = mandate({
+      id: 'm-auth',
+      mandateKind: 'makeup_auth',
+      serviceType: 'PT Makeup authorization',
+      frequencyPerWeek: 0,
+      sessionsPerPeriod: 12,
+    });
+    expect(isMakeupAuthMandate(auth)).toBe(true);
+    const makeups = [
+      sess({ id: 'mu1', attendance: 'makeup', makeupOfSessionId: 'm1' }),
+      sess({ id: 'mu2', attendance: 'makeup', makeupOfSessionId: 'm2' }),
+    ];
+    const r = checkMandate(auth, makeups, makeups);
+    expect(r.over).toBe(false);
+    expect(r.used).toBe(2);
+    expect(r.allowed).toBe(12);
+    const over = checkMandate(auth, makeups, [
+      ...makeups,
+      ...Array.from({ length: 11 }, (_, i) =>
+        sess({ id: `x${i}`, attendance: 'makeup', makeupOfSessionId: `mx${i}` }),
+      ),
+    ]);
+    expect(over.over).toBe(true);
   });
 });
 
@@ -138,6 +226,7 @@ Service: Physical Therapy
   it('skips From/To header dates on Frontline-style reports', () => {
     const rows = parseWeeklySessionText(`
 Service: Physical Therapy
+Service Provider: Pat Lee
 From: 08/10/2026 To: 08/14/2026
 Student Name: Aiden Odne, D.O.B. 07/12/2019
 08/11/2026
@@ -149,6 +238,8 @@ Service Provided: balance work
 `);
     expect(rows.map((r) => r.dateOfService)).toEqual(['08/11/2026']);
     expect(rows[0]?.studentName).toBe('Aiden Odne');
+    expect(rows[0]?.providerName).toBe('Pat Lee');
+    expect(rows[0]?.schoolName).toMatch(/Forest Road School/i);
   });
 });
 
@@ -238,6 +329,71 @@ describe('due dates and dashboard', () => {
     expect(lastServiceByStudent(store)).toEqual([]);
   });
 
+  it('last service filters by provider and returns school', () => {
+    const store = new MemoryStore();
+    store.upsertSchool({
+      id: 'sch',
+      name: 'Forest',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: '',
+    });
+    store.upsertProvider({
+      id: 'p1',
+      userId: '',
+      firstName: 'Fatimah',
+      lastName: 'Dawan',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    });
+    store.upsertStudent({
+      id: 'st',
+      schoolId: 'sch',
+      firstName: 'Aiden',
+      lastName: 'Odne',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p1',
+      weekStart: '2026-08-31',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession(sess({ weekId: 'w', studentId: 'st', dateOfService: '09/02/2026' }));
+    const rows = lastServiceByStudent(store, { providerId: 'p1' });
+    expect(rows).toEqual([
+      expect.objectContaining({
+        studentId: 'st',
+        name: 'Aiden Odne',
+        providerName: 'Fatimah Dawan',
+        schoolName: 'Forest',
+        lastDos: '09/02/2026',
+      }),
+    ]);
+    expect(lastServiceByStudent(store, { providerId: 'other' })).toEqual([]);
+  });
+
   it('enriches missing notes with name, date, weekId', () => {
     const store = new MemoryStore();
     store.upsertStudent({
@@ -267,7 +423,14 @@ describe('due dates and dashboard', () => {
       firstName: 'Pat',
       lastName: 'Lee',
       discipline: 'PT',
-      payRate: 72,
+      payRatePerHour: 72,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
       createdAt: '',
@@ -289,6 +452,101 @@ describe('due dates and dashboard', () => {
     expect(rows[0]?.providerName).toBe('Pat Lee');
     expect(rows[0]?.sessionCount).toBe(1);
     expect(rows[0]?.signerName).toBe('Principal');
+  });
+
+  it('week progress: provided = 50%, notes = 100%', () => {
+    const store = new MemoryStore();
+    store.upsertSchool({
+      id: 'sch',
+      name: 'Forest',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: '',
+    });
+    store.upsertProvider({
+      id: 'p1',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 72,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    });
+    store.upsertStudent({
+      id: 'st',
+      schoolId: 'sch',
+      firstName: 'Aiden',
+      lastName: 'Odne',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertMandate(
+      mandate({ id: 'm1', studentId: 'st', providerId: 'p1', serviceType: 'PT School' }),
+    );
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p1',
+      weekStart: '2026-08-31',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession(
+      sess({
+        id: 'a',
+        weekId: 'w',
+        studentId: 'st',
+        attendance: 'attended',
+        notes: 'ok',
+      }),
+    );
+    store.upsertSession(
+      sess({
+        id: 'b',
+        weekId: 'w',
+        studentId: 'st',
+        attendance: 'missed',
+        notes: '',
+      }),
+    );
+    const half = weekProgressReport(store, { from: '2026-08-31', to: '2026-08-31' });
+    expect(half).toHaveLength(1);
+    expect(half[0]?.sessionsProvided).toBe(1);
+    expect(half[0]?.notesPosted).toBe(0);
+    expect(half[0]?.progressPct).toBe(50);
+    expect(half[0]?.childName).toMatch(/Aiden/);
+    expect(half[0]?.mandateLabel).toMatch(/PT/);
+
+    store.upsertSession(
+      sess({
+        id: 'a',
+        weekId: 'w',
+        studentId: 'st',
+        attendance: 'attended',
+        notes: 'Service Provided: gait work in gym',
+      }),
+    );
+    const full = weekProgressReport(store, { from: '2026-08-31', to: '2026-08-31' });
+    expect(full[0]?.notesPosted).toBe(1);
+    expect(full[0]?.progressPct).toBe(100);
+    expect(weekProgressReport(store, { from: '2026-09-07', to: '2026-09-07' })).toHaveLength(0);
   });
 });
 

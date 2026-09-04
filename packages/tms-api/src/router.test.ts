@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as XLSX from 'xlsx';
 import { MockHhaClient } from '@white-glove/hha-client';
 import { MemoryStore, newId, nowIso } from '@white-glove/tms-db';
 import { handleTmsRequest } from './router.js';
@@ -41,7 +42,14 @@ function storeWithTherapist() {
     firstName: 'Pat',
     lastName: 'Lee',
     discipline: 'PT',
-    payRate: 72,
+    payRatePerHour: 72,
+    payRate30Min: null,
+    payRate42Min: null,
+    payRate45Min: null,
+    payRateGroup30Min: null,
+    payRateGroup42Min: null,
+    payRateGroup45Min: null,
+    payRateAdditionalHourly: null,
     hhaCaregiverCode: 'WGC-1',
     active: true,
     createdAt: nowIso(),
@@ -200,6 +208,68 @@ describe('TMS API weekly loop', () => {
     expect((hhaOut.body as { transferred: number }).transferred).toBeGreaterThan(0);
     expect(hha.calls.includes('locateOrScheduleVisit')).toBe(true);
     expect(hha.calls.includes('approveVisit')).toBe(true);
+  });
+
+  it('persists additionalServiceType and skips mandate for eval/consult', async () => {
+    const { store, provider } = storeWithTherapist();
+    const parsed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 1x/week\nDOB: 07/12/2019`,
+      },
+    });
+    const studentId = (parsed.body as { student: { id: string } }).student.id;
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { weekStart: '2026-08-31', providerId: provider.id },
+    });
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+
+    const caseload = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '08/31/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: balance work in gym',
+        serviceType: 'PT School',
+      },
+    });
+    expect(caseload.status).toBe(200);
+
+    const evalSession = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/01/2026',
+        attendance: 'attended',
+        beginTime: '10:00 am',
+        endTime: '10:30 am',
+        notes: 'Initial evaluation completed with caregiver present.',
+        additionalServiceType: 'eval',
+      },
+    });
+    expect(evalSession.status).toBe(200);
+    const saved = (evalSession.body as { session: { additionalServiceType: string; serviceType: string } })
+      .session;
+    expect(saved.additionalServiceType).toBe('eval');
+    expect(saved.serviceType).toBe('Eval');
   });
 
   it('lets admin create a therapist login', async () => {
@@ -384,15 +454,6 @@ describe('TMS API weekly loop', () => {
     expect(store.userById(leftover.id)).toBeUndefined();
 
     const therapist = store.userByEmail('therapist@whiteglove.local')!;
-    const deleteTherapist = await handleTmsRequest(store, {
-      method: 'DELETE',
-      path: `/admin/users/${therapist.id}`,
-      headers: adminH,
-      query: {},
-      body: {},
-    });
-    expect(deleteTherapist.status).toBe(400);
-
     const deactivateAdmin = await handleTmsRequest(store, {
       method: 'POST',
       path: `/admin/users/${store.userByEmail('admin@whiteglove.local')!.id}/deactivate`,
@@ -411,6 +472,16 @@ describe('TMS API weekly loop', () => {
     });
     expect(deactivated.status).toBe(200);
     expect((deactivated.body as { user: { active: boolean } }).user.active).toBe(false);
+
+    const deleteTherapist = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/users/${therapist.id}`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(deleteTherapist.status).toBe(200);
+    expect(store.userByEmail('therapist@whiteglove.local')).toBeUndefined();
   });
 
   it('lets admin correct mandate and student after parse', async () => {
@@ -455,7 +526,14 @@ describe('TMS API weekly loop', () => {
       firstName: 'Other',
       lastName: 'PT',
       discipline: 'PT',
-      payRate: null,
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
       createdAt: nowIso(),
@@ -691,7 +769,84 @@ describe('TMS API weekly loop', () => {
     expect(row?.schoolName).toBe('Forest Road');
   });
 
-  it('caseload CSV import is admin-only; dry-run vs confirm', async () => {
+  it('week progress report filters by week range', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.upsertSchool({
+      id: newId(),
+      name: 'Forest Road',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Aiden',
+      lastName: 'Odne',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: '',
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '08/31/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: '',
+      notes: 'Service Provided: gait work',
+      aiFlags: [],
+    });
+    const report = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/week-progress',
+      headers: adminH,
+      query: { from: '2026-08-31', to: '2026-08-31' },
+      body: {},
+    });
+    expect(report.status).toBe(200);
+    const rows = (report.body as { rows: Array<{ childName: string; progressPct: number; sessionsProvided: number }> }).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.childName).toMatch(/Aiden/);
+    expect(rows[0]?.sessionsProvided).toBe(1);
+    expect(rows[0]?.progressPct).toBe(100);
+  });
+
+  it('caseload CSV/Excel import commits immediately; dryRun stays unused unless set', async () => {
     const { store } = storeWithTherapist();
     const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
 Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Small Group,1,Weekly,Push-In,Pat Lee
@@ -704,34 +859,27 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
       path: '/admin/caseloads/import',
       headers: thH,
       query: {},
-      body: { csvText: csv, dryRun: true },
+      body: { csvText: csv },
     });
     expect(denied.status).toBe(403);
 
-    const preview = await handleTmsRequest(store, {
+    const unusedPreview = await handleTmsRequest(store, {
       method: 'POST',
       path: '/admin/caseloads/import',
       headers: adminH,
       query: {},
-      body: { csvText: csv },
+      body: { csvText: csv, dryRun: true },
     });
-    expect(preview.status).toBe(200);
-    const previewBody = preview.body as {
-      dryRun: boolean;
-      rows: unknown[];
-      createdMandates: number;
-    };
-    expect(previewBody.dryRun).toBe(true);
-    expect(previewBody.rows).toHaveLength(3);
+    expect(unusedPreview.status).toBe(200);
+    expect((unusedPreview.body as { dryRun: boolean }).dryRun).toBe(true);
     expect(store.data.students).toHaveLength(0);
-    expect(store.data.mandates).toHaveLength(0);
 
     const commit = await handleTmsRequest(store, {
       method: 'POST',
       path: '/admin/caseloads/import',
       headers: adminH,
       query: {},
-      body: { csvText: csv, confirm: true },
+      body: { csvText: csv },
     });
     expect(commit.status).toBe(200);
     const commitBody = commit.body as { dryRun: boolean; createdMandates: number };
@@ -746,14 +894,41 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     expect(cycle.sessionsPerPeriod).toBe(2);
     expect(cycle.periodSchoolDays).toBe(6);
 
-    const xls = await handleTmsRequest(store, {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Recommended School', 'Last Name', 'First Name', 'Grade', 'Decision', 'RS Start', 'RS End', 'Related Service', 'Ratio', 'Freq', 'Period', 'Location', 'RS Provider'],
+      ['Shaw Avenue', 'Newkid', 'Sam', 3, 'Approved', '09/01/2025', '06/30/2026', 'PT', 'Individual', 1, 'Weekly', 'Push-In', 'Pat Lee'],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Details');
+    const xlsxBuf = Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer);
+
+    const xlsxOk = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/caseloads/import',
+      headers: adminH,
+      query: {},
+      body: {
+        fileName: 'caseload.xlsx',
+        mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        fileBase64: xlsxBuf.toString('base64'),
+      },
+    });
+    expect(xlsxOk.status).toBe(200);
+    const xlsxOkBody = xlsxOk.body as { dryRun: boolean; rows: unknown[] };
+    expect(xlsxOkBody.dryRun).toBe(false);
+    expect(xlsxOkBody.rows).toHaveLength(1);
+    expect(store.findStudentByName('Sam', 'Newkid')).toBeTruthy();
+
+    const xlsxBad = await handleTmsRequest(store, {
       method: 'POST',
       path: '/admin/caseloads/import',
       headers: adminH,
       query: {},
       body: { csvText: 'a,b', fileName: 'caseload.xlsx' },
     });
-    expect(xls.status).toBe(400);
+    expect(xlsxBad.status).toBe(200);
+    const xlsxBadBody = xlsxBad.body as { errors?: Array<{ problem?: string }> };
+    expect(xlsxBadBody.errors?.some((e) => /bytes were not sent/i.test(e.problem || ''))).toBe(true);
   });
 
   it('saves and lists internal provider notes', async () => {
@@ -880,5 +1055,513 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     });
     expect(removedWeek.status).toBe(200);
     expect(store.data.weeks.find((w) => w.id === weekId)).toBeUndefined();
+  });
+
+  it('returns child/provider detail and supports delete/edit of notes, mandates, children, providers', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.data.schools[0];
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Sam',
+      lastName: 'Kid',
+      dob: '2018-01-01',
+      programId: 'P1',
+      programType: 'RS',
+      hhaPatientId: '',
+      grade: '1',
+      createdAt: nowIso(),
+    });
+    const mandate = store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      frequencyPerWeek: 1,
+      frequencyKind: 'weekly',
+      sessionsPerPeriod: 1,
+      ratioGroup: false,
+      sourcePdfKey: 'csv',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    const note = store.addAdminNote({
+      id: newId(),
+      providerId: provider.id,
+      authorId: store.data.users[0].id,
+      body: 'Call school',
+      tags: [],
+      createdAt: nowIso(),
+    });
+
+    const children = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/students',
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(children.status).toBe(200);
+    expect((children.body as { students: Array<{ id: string }> }).students.some((s) => s.id === student.id)).toBe(true);
+
+    const child = await handleTmsRequest(store, {
+      method: 'GET',
+      path: `/admin/students/${student.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(child.status).toBe(200);
+    const childBody = child.body as {
+      schoolName: string;
+      assignedProviders: Array<{ id: string; name: string }>;
+      mandates: Array<{ providerName: string; freqDisplay: string; ratioLabel: string }>;
+    };
+    expect(childBody.mandates).toHaveLength(1);
+    expect(childBody.mandates[0].providerName).toBe('Pat Lee');
+    expect(childBody.mandates[0].freqDisplay).toBe('1 / week');
+    expect(childBody.mandates[0].ratioLabel).toBe('Individual');
+    expect(childBody.schoolName).toBeTruthy();
+    expect(childBody.assignedProviders).toEqual([{ id: provider.id, name: 'Pat Lee' }]);
+
+    const prov = await handleTmsRequest(store, {
+      method: 'GET',
+      path: `/admin/providers/${provider.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(prov.status).toBe(200);
+    expect((prov.body as { caseloadCount: number }).caseloadCount).toBe(1);
+
+    const patched = await handleTmsRequest(store, {
+      method: 'PATCH',
+      path: `/admin/providers/${provider.id}`,
+      headers: adminH,
+      query: {},
+      body: {
+        payRatePerHour: 88,
+        payRate30Min: 45,
+        payRate42Min: 60,
+        payRate45Min: 66,
+        payRateGroup30Min: 30,
+        payRateGroup42Min: 40,
+        payRateGroup45Min: 44,
+        payRateAdditionalHourly: 55,
+        firstName: 'Pat',
+        lastName: 'Updated',
+      },
+    });
+    expect(patched.status).toBe(200);
+    const patchedProvider = (patched.body as {
+      provider: {
+        payRatePerHour: number;
+        payRate30Min: number;
+        payRateAdditionalHourly: number;
+      };
+    }).provider;
+    expect(patchedProvider.payRatePerHour).toBe(88);
+    expect(patchedProvider.payRate30Min).toBe(45);
+    expect(patchedProvider.payRateAdditionalHourly).toBe(55);
+
+    const noteEdit = await handleTmsRequest(store, {
+      method: 'PATCH',
+      path: `/admin/providers/${provider.id}/notes/${note.id}`,
+      headers: adminH,
+      query: {},
+      body: { body: 'Updated note' },
+    });
+    expect(noteEdit.status).toBe(200);
+    expect((noteEdit.body as { note: { body: string } }).note.body).toBe('Updated note');
+
+    const noteDel = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/providers/${provider.id}/notes/${note.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(noteDel.status).toBe(200);
+    expect(store.notesForProvider(provider.id)).toHaveLength(0);
+
+    const mandDel = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/mandates/${mandate.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(mandDel.status).toBe(200);
+    expect(store.data.mandates.find((m) => m.id === mandate.id)).toBeUndefined();
+
+    const childDel = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/students/${student.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(childDel.status).toBe(200);
+    expect(store.data.students.find((s) => s.id === student.id)).toBeUndefined();
+
+    const provDel = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/providers/${provider.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(provDel.status).toBe(200);
+    expect(store.data.providers.find((p) => p.id === provider.id)).toBeUndefined();
+  });
+
+  it('deletes schools and due dates', async () => {
+    const { store } = storeWithTherapist();
+    const school = store.upsertSchool({
+      id: newId(),
+      name: 'Delete Me School',
+      district: '',
+      signerName: 'Signer',
+      signerEmail: 'signer@example.com',
+      createdAt: nowIso(),
+    });
+    const due = store.upsertDueDate({
+      id: newId(),
+      schoolId: school.id,
+      kind: 'progress',
+      dueOn: '2026-11-01',
+      completedAt: '',
+      lastNagOn: '',
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'A',
+      lastName: 'B',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      grade: '',
+      createdAt: nowIso(),
+    });
+
+    const dueDel = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/due-dates/${due.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(dueDel.status).toBe(200);
+    expect(store.data.dueDates.find((d) => d.id === due.id)).toBeUndefined();
+
+    const due2 = store.upsertDueDate({
+      id: newId(),
+      schoolId: school.id,
+      kind: 'annual',
+      dueOn: '2026-12-01',
+      completedAt: '',
+      lastNagOn: '',
+    });
+    const schoolDel = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/schools/${school.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(schoolDel.status).toBe(200);
+    expect(store.data.schools.find((s) => s.id === school.id)).toBeUndefined();
+    expect(store.data.dueDates.find((d) => d.id === due2.id)).toBeUndefined();
+    expect(store.data.students.find((s) => s.id === student.id)?.schoolId).toBe('');
+  });
+
+  it('gets and saves school calendar', async () => {
+    const { store } = storeWithTherapist();
+    const school = store.data.schools[0]!;
+
+    const detail = await handleTmsRequest(store, {
+      method: 'GET',
+      path: `/admin/schools/${school.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(detail.status).toBe(200);
+    expect((detail.body as { school: { id: string } }).school.id).toBe(school.id);
+
+    const empty = await handleTmsRequest(store, {
+      method: 'GET',
+      path: `/admin/schools/${school.id}/calendar`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(empty.status).toBe(200);
+    expect((empty.body as { calendar: { yearStart: string } }).calendar.yearStart).toBe('');
+
+    const saved = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/schools/${school.id}/calendar`,
+      headers: adminH,
+      query: {},
+      body: {
+        yearStart: '2025-09-02',
+        yearEnd: '2026-06-25',
+        offDays: ['2025-11-27', '2025-12-25'],
+      },
+    });
+    expect(saved.status).toBe(200);
+    const calendar = (saved.body as { calendar: { offDays: string[] } }).calendar;
+    expect(calendar.offDays).toEqual(['2025-11-27', '2025-12-25']);
+
+    const list = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/schools',
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(list.status).toBe(200);
+    const byId = (list.body as { calendarsBySchoolId: Record<string, { yearStart: string }> })
+      .calendarsBySchoolId;
+    expect(byId[school.id]?.yearStart).toBe('2025-09-02');
+  });
+});
+
+describe('TMS upload-sessions errors', () => {
+  it('returns all over-mandate errors and does not keep blocked PDF rows', async () => {
+    const { store, provider } = storeWithTherapist();
+    const parsed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 1x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    expect(parsed.status).toBe(200);
+
+    const pdfText = [
+      'Student Name: Odne, Aiden',
+      'Service Provider: Pat Lee',
+      'Service: PT School',
+      '09/01/2026 9:00 am 9:30 am',
+      'Service Provided: balance work in gym',
+      '09/02/2026 10:00 am 10:30 am',
+      'Service Provided: second visit gait training',
+    ].join('\n');
+    const blocked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-08-31', pdfText },
+    });
+    expect(blocked.status).toBe(400);
+    const body = blocked.body as { error: string; errors: string[]; warnings?: string[] };
+    expect(body.error).toMatch(/over mandate/i);
+    expect(Array.isArray(body.errors)).toBe(true);
+    expect(body.errors.length).toBeGreaterThanOrEqual(1);
+    expect(body.errors.some((e) => /over mandate/i.test(e))).toBe(true);
+    expect(store.data.sessions).toHaveLength(0);
+  });
+
+  it('rejects unknown child from weekly PDF without auto-creating', async () => {
+    const { store, provider } = storeWithTherapist();
+    const beforeStudents = store.data.students.length;
+    const pdfText = [
+      'Student Name: Missing, Kid',
+      'Service Provider: Pat Lee',
+      'Service: PT School',
+      'Westbury School',
+      '09/01/2026 9:00 am 9:30 am',
+      'Service Provided: balance work',
+    ].join('\n');
+    const res = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-08-31', pdfText },
+    });
+    expect(res.status).toBe(400);
+    const body = res.body as { error: string; errors: string[] };
+    expect(body.errors.some((e) => /Child 'Missing, Kid' not found/i.test(e))).toBe(true);
+    expect(store.data.students).toHaveLength(beforeStudents);
+    expect(store.data.sessions).toHaveLength(0);
+  });
+
+  it('rejects PDF when Service Provider does not match logged-in therapist', async () => {
+    const { store, provider } = storeWithTherapist();
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 1x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    const pdfText = [
+      'Student Name: Odne, Aiden',
+      'Service Provider: Other Person',
+      'Service: PT School',
+      '09/01/2026 9:00 am 9:30 am',
+      'Service Provided: balance work',
+    ].join('\n');
+    const res = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-08-31', pdfText },
+    });
+    expect(res.status).toBe(400);
+    const body = res.body as { errors: string[] };
+    expect(body.errors.some((e) => /Provider in PDF does not match your account/i.test(e))).toBe(
+      true,
+    );
+    expect(store.data.sessions).toHaveLength(0);
+  });
+
+  it('allows paid absence and makeup over weekly mandate when linked to a missed session', async () => {
+    const { store, provider } = storeWithTherapist();
+    const parsed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 1x/week\nDOB: 07/12/2019`,
+      },
+    });
+    const studentId = (parsed.body as { student: { id: string } }).student.id;
+    const weekStart = '2026-08-31';
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart },
+    });
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+
+    const missed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '08/31/2026',
+        attendance: 'missed',
+        notes: 'Student Absence',
+        serviceType: 'PT School',
+      },
+    });
+    expect(missed.status).toBe(200);
+    const missedId = (missed.body as { session: { id: string } }).session.id;
+
+    const full = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/01/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: weekly visit',
+        serviceType: 'PT School',
+      },
+    });
+    expect(full.status).toBe(200);
+
+    const overAttended = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/02/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: extra visit',
+        serviceType: 'PT School',
+      },
+    });
+    expect(overAttended.status).toBe(400);
+
+    const makeup = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/03/2026',
+        attendance: 'makeup',
+        makeupOfSessionId: missedId,
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Makeup for missed session on 08/31/2026',
+        serviceType: 'PT School',
+      },
+    });
+    expect(makeup.status).toBe(200);
+
+    const paid = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/04/2026',
+        attendance: 'attended',
+        additionalServiceType: 'paid_absence',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Paid absence — school closed',
+      },
+    });
+    expect(paid.status).toBe(200);
+    expect((paid.body as { session: { additionalServiceType: string } }).session.additionalServiceType).toBe(
+      'paid_absence',
+    );
+
+    const auth = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates',
+      headers: adminH,
+      query: {},
+      body: {
+        studentId,
+        providerId: provider.id,
+        mandateKind: 'makeup_auth',
+        serviceType: 'PT Makeup authorization',
+        discipline: 'PT',
+        sessionsPerPeriod: 12,
+      },
+    });
+    expect(auth.status).toBe(201);
+    expect((auth.body as { mandate: { mandateKind: string } }).mandate.mandateKind).toBe('makeup_auth');
   });
 });

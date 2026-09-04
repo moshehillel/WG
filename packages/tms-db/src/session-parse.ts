@@ -1,5 +1,9 @@
 export interface ParsedSessionNote {
   studentName: string;
+  /** Service Provider line from Frontline (when present). */
+  providerName: string;
+  /** School / setting from the report when recognizable. */
+  schoolName: string;
   dateOfService: string;
   beginTime: string;
   endTime: string;
@@ -58,17 +62,67 @@ function dateIndexForSession(blob: string, date: string): number {
   return -1;
 }
 
+function cleanStudentName(raw: string): string {
+  return String(raw || '')
+    .replace(/,?\s*D\.?O\.?B\..*$/i, '')
+    .replace(/,\s*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isServiceTypeSchoolLabel(name: string): boolean {
+  const n = normEntityName(name);
+  return /^(ot|pt|slp|speech|physical therapy|occupational therapy|related service)\s+school$/.test(
+    n,
+  );
+}
+
+function extractSchoolName(blob: string): string {
+  const labeled =
+    (blob.match(/\bSchool(?:\s*Name)?\s*:\s*([^\n]+)/i) || [])[1]?.trim() ||
+    (blob.match(/\bRecommended School\s*:\s*([^\n]+)/i) || [])[1]?.trim() ||
+    '';
+  if (labeled && !isServiceTypeSchoolLabel(labeled)) {
+    return labeled.replace(/\s+/g, ' ').trim();
+  }
+  const re =
+    /\b([A-Z][A-Za-z0-9'.-]+(?:\s+[A-Z][A-Za-z0-9'.-]+){0,5}\s+School)\b/g;
+  for (const m of blob.matchAll(re)) {
+    const name = String(m[1] || '').replace(/\s+/g, ' ').trim();
+    if (!name || isServiceTypeSchoolLabel(name)) continue;
+    const before = blob.slice(Math.max(0, (m.index ?? 0) - 24), m.index ?? 0);
+    if (/Service:\s*$/i.test(before)) continue;
+    return name;
+  }
+  return '';
+}
+
+function schoolFromSlice(slice: string): string {
+  const re =
+    /\b([A-Z][A-Za-z0-9'.-]+(?:\s+[A-Z][A-Za-z0-9'.-]+){0,5}\s+School)\b/g;
+  for (const m of slice.matchAll(re)) {
+    const name = String(m[1] || '').replace(/\s+/g, ' ').trim();
+    if (!name || isServiceTypeSchoolLabel(name)) continue;
+    return name;
+  }
+  return '';
+}
+
 /** Weekly Frontline-style notes as extracted text (server PDF extract, or pasted). */
 export function parseWeeklySessionText(text: string): ParsedSessionNote[] {
   const blob = String(text || '');
-  const studentName = (
-    blob.match(/Student Name:\s*([^\n,]+)/i) ||
-    blob.match(/Student:\s*([^\n]+)/i) ||
-    []
-  )[1]
-    ?.replace(/D\.?O\.?B\..*$/i, '')
-    .trim() ?? '';
+  const studentName = cleanStudentName(
+    (blob.match(/Student Name:\s*([^\n]+)/i) || blob.match(/Student:\s*([^\n]+)/i) || [])[1] || '',
+  );
+  const providerName = (
+    (blob.match(/Service Provider\s*:\s*([^\n]+)/i) ||
+      blob.match(/Provider(?:\s*Name)?\s*:\s*([^\n]+)/i) ||
+      [])[1] || ''
+  )
+    .replace(/\s+/g, ' ')
+    .trim();
   const serviceType = (blob.match(/Service:\s*([^\n]+)/i) || [])[1]?.trim() ?? '';
+  const reportSchool = extractSchoolName(blob);
   const rows: ParsedSessionNote[] = [];
   const dateRe = /(\d{1,2}\/\d{1,2}\/\d{2,4})/g;
   const dates = [...blob.matchAll(dateRe)].map((m) => m[1]);
@@ -86,9 +140,12 @@ export function parseWeeklySessionText(text: string): ParsedSessionNote[] {
     const endTime = times[1] || '';
     const attendance = attendanceFromNotes(notes, beginTime, endTime);
     const ratio = (slice.match(/\b(\d+\s*:\s*\d+)\b/) || [])[1] || '';
-    const location = (slice.match(/\b([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)*\s+School)\b/) || [])[1] || '';
+    const location = schoolFromSlice(slice);
+    const schoolName = location || reportSchool;
     rows.push({
       studentName,
+      providerName,
+      schoolName,
       dateOfService,
       beginTime,
       endTime,
@@ -96,7 +153,7 @@ export function parseWeeklySessionText(text: string): ParsedSessionNote[] {
       cancelReason: cancellationFromNotes(notes, attendance),
       notes,
       serviceType,
-      location,
+      location: location || schoolName,
       ratio,
     });
   }
@@ -131,4 +188,22 @@ export function nameKey(first: string, last: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()}`;
+}
+
+/** Normalize school / person labels for loose equality. */
+export function normEntityName(s: string): string {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+/** True when PDF school clearly differs from the child's known school. */
+export function schoolNamesConflict(pdfSchool: string, knownSchool: string): boolean {
+  const a = normEntityName(pdfSchool);
+  const b = normEntityName(knownSchool);
+  if (!a || !b) return false;
+  if (a === b) return false;
+  if (a.includes(b) || b.includes(a)) return false;
+  return true;
 }

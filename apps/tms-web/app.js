@@ -21,6 +21,10 @@ const state = {
   reportTo: '',
   childDetailBack: 'children',
   focusSchoolId: '',
+  peopleTab: 'providers',
+  lastServiceProviderId: '',
+  childSessionFrom: '',
+  childSessionTo: '',
 };
 
 function mondayIso() {
@@ -796,10 +800,10 @@ async function therapistHome(statusFlash) {
     ` : `
     <div class="card">
       <h2>1. Upload weekly report</h2>
-      <p>Choose your Frontline Related Service Session Notes PDF (text PDF, not a scan). The system reads the sessions for you.</p>
+      <p>Choose your Frontline Related Service Session Notes PDF (text PDF, not a scan). Children and schools must already exist from caseload import — this upload will not create them.</p>
       <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
       <button class="btn-primary big" id="upload">Read PDF</button>
-      <p class="muted" id="uploadHint">If upload fails with “no readable text”, re-export/save as a text PDF from Frontline — image-only scans cannot be read.</p>
+      <p class="muted" id="uploadHint">This upload is for weekly session notes PDFs only (Frontline text). Caseloads go to Mandates → Import. Scanned PDFs won’t work.</p>
     </div>
 
     <div id="uploadIssues" class="upload-issues" hidden></div>
@@ -1121,24 +1125,46 @@ async function adminChildren() {
     <div class="card">
       <h2>Children</h2>
       <p class="muted">All students on the caseload. Open one to edit, review mandates/sessions, or remove.</p>
+      <label>Search
+        <input id="childSearch" type="search" placeholder="First, last, school, program type, ID, grade…" autocomplete="off" />
+      </label>
       ${bulkBar('children')}
       <table>
-        <tr>${bulkTh('children')}<th>Name</th><th>School</th><th>Grade</th><th>Mandates</th><th>Sessions</th><th></th></tr>
-        ${students.map((s) => `<tr>
+        <tr>${bulkTh('children')}<th>Name</th><th>School</th><th>Grade</th><th>Program</th><th>Mandates</th><th>Sessions</th><th></th></tr>
+        <tbody id="childrenBody">
+        ${students.map((s) => `<tr data-child-row
+          data-search="${esc([s.firstName, s.lastName, s.name, s.schoolName, s.grade, s.programId, s.programType, s.id].filter(Boolean).join(' ').toLowerCase())}">
           ${bulkTd('children', s.id)}
           <td>${childNameLink(s.id, s.name)}</td>
           <td>${esc(s.schoolName)}</td>
           <td>${esc(s.grade || '—')}</td>
+          <td>${esc([s.programType, s.programId].filter(Boolean).join(' · ') || '—')}</td>
           <td>${esc(s.mandateCount)}</td>
           <td>${esc(s.sessionCount)}</td>
           <td>
             <button type="button" class="btn" data-open-child="${esc(s.id)}">Open</button>
             <button type="button" class="btn" data-del-child="${esc(s.id)}">Remove</button>
           </td>
-        </tr>`).join('') || '<tr><td colspan="7">No children yet. Import a caseload on Mandates.</td></tr>'}
+        </tr>`).join('') || '<tr id="childrenEmpty"><td colspan="8">No children yet. Import a caseload on Mandates.</td></tr>'}
+        </tbody>
       </table>
+      <p class="muted" id="childrenFilterEmpty" hidden>No children match this search.</p>
     </div>
   `);
+  const searchEl = document.getElementById('childSearch');
+  const filterEmpty = document.getElementById('childrenFilterEmpty');
+  const applyChildFilter = () => {
+    const q = String(searchEl?.value || '').trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('[data-child-row]').forEach((row) => {
+      const hay = row.getAttribute('data-search') || '';
+      const ok = !q || hay.includes(q) || q.split(/\s+/).every((t) => hay.includes(t));
+      row.hidden = !ok;
+      if (ok) shown += 1;
+    });
+    if (filterEmpty) filterEmpty.hidden = shown > 0 || !q;
+  };
+  if (searchEl) searchEl.addEventListener('input', applyChildFilter);
   bindOpenChildLinks();
   bindBulkDelete('children', {
     noun: 'children',
@@ -1148,7 +1174,7 @@ async function adminChildren() {
   document.querySelectorAll('[data-del-child]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        if (!confirm('Remove this child? Mandates, sessions, and locker files for this child will also be removed. This cannot be undone.')) return;
+        if (!confirm('Remove this child? Mandates, sessions, and student files for this child will also be removed. This cannot be undone.')) return;
         await api('DELETE', `/admin/students/${btn.getAttribute('data-del-child')}`);
         setStatus('Child removed.', 'ok');
         await adminChildren();
@@ -1176,7 +1202,7 @@ async function adminChildDetail(studentId, opts = {}) {
   const calSummary = detail.schoolCalendarSummary || formatCalendarSummary(cal);
   const calendarLine = calSummary
     ? `<p class="muted"><strong>Calendar:</strong> ${esc(calSummary)}${(cal?.offDays || []).length ? ` — off: ${esc((cal.offDays || []).slice().sort().join(', '))}` : ''}</p>`
-    : '<p class="muted"><strong>Calendar:</strong> Not set (Providers → school → Calendar)</p>';
+    : '<p class="muted"><strong>Calendar:</strong> Not set (Providers → Schools → open school)</p>';
   const assignedProviders = detail.assignedProviders?.length
     ? detail.assignedProviders
     : [...new Map(mandates.filter((m) => m.providerId || m.providerName).map((m) => [
@@ -1185,13 +1211,21 @@ async function adminChildDetail(studentId, opts = {}) {
     ])).values()];
   const providerNames = assignedProviders.map((p) => p.name).filter(Boolean);
   const backLabel = state.childDetailBack === 'reports' ? '← Reports' : '← Children';
+  const sessFrom = state.childSessionFrom || '';
+  const sessTo = state.childSessionTo || '';
+  const filteredSessions = sessions.filter((x) => {
+    const d = String(x.dateOfService || '');
+    if (sessFrom && d < sessFrom) return false;
+    if (sessTo && d > sessTo) return false;
+    return true;
+  });
   view(`
     <div class="card">
       <button type="button" class="btn" id="backChildren">${backLabel}</button>
       <h2>${esc(`${s.firstName || ''} ${s.lastName || ''}`.trim() || 'Child')}</h2>
       <p class="muted"><strong>School:</strong> ${esc(schoolName)}</p>
       ${calendarLine}
-      <p class="muted"><strong>Assigned provider(s):</strong> ${esc(providerNames.length ? providerNames.join(', ') : '—')}</p>
+      <p class="muted"><strong>Provider(s) on mandates:</strong> ${esc(providerNames.length ? providerNames.join(', ') : '—')}</p>
       <div class="row">
         <label>First name <input id="cFirst" value="${esc(s.firstName || '')}" /></label>
         <label>Last name <input id="cLast" value="${esc(s.lastName || '')}" /></label>
@@ -1203,7 +1237,9 @@ async function adminChildDetail(studentId, opts = {}) {
         <label>Grade <input id="cGrade" value="${esc(s.grade || '')}" /></label>
       </div>
       <div class="row">
-        <label>DOB <input id="cDob" value="${esc(s.dob || '')}" /></label>
+        <label>DOB <input id="cDob" value="${esc(s.dob || '')}" placeholder="YYYY-MM-DD" />
+          <span class="muted" style="display:block;font-size:0.85rem">Optional now; recommended for HHA transfer later.</span>
+        </label>
         <label>HHA patient id <input id="cHha" value="${esc(s.hhaPatientId || '')}" /></label>
       </div>
       <div class="row">
@@ -1235,10 +1271,16 @@ async function adminChildDetail(studentId, opts = {}) {
     </div>
     <div class="card">
       <h3>Sessions</h3>
+      <div class="row">
+        <label>From <input id="sessFrom" type="date" value="${esc(sessFrom)}" /></label>
+        <label>To <input id="sessTo" type="date" value="${esc(sessTo)}" /></label>
+        <button type="button" class="btn" id="sessFilter">Filter</button>
+        <button type="button" class="btn" id="sessClear">Clear</button>
+      </div>
       ${bulkBar('child-sessions')}
       <table>
         <tr>${bulkTh('child-sessions')}<th>Date</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
-        ${sessions.map((x) => `<tr>
+        ${filteredSessions.map((x) => `<tr>
           ${bulkTd('child-sessions', x.id)}
           <td>${esc(x.dateOfService)}</td>
           <td>${esc(x.weekStart || '—')}</td>
@@ -1246,11 +1288,12 @@ async function adminChildDetail(studentId, opts = {}) {
           <td>${esc(x.attendance)}</td>
           <td>${esc(x.notes || '')}</td>
           <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="7">No sessions.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="7">No sessions in this range.</td></tr>'}
       </table>
     </div>
     <div class="card">
-      <h3>Related weeks</h3>
+      <h3 title="Weekly timesheet periods that include sessions for this child">Timesheet weeks</h3>
+      <p class="muted">Weekly timesheet periods linked to this child’s sessions.</p>
       ${bulkBar('child-weeks')}
       <table>
         <tr>${bulkTh('child-weeks')}<th>Week</th><th>Status</th><th>HHA</th><th></th></tr>
@@ -1264,7 +1307,8 @@ async function adminChildDetail(studentId, opts = {}) {
       </table>
     </div>
     <div class="card">
-      <h3>School due dates</h3>
+      <h3>Progress report due dates</h3>
+      <p class="muted">School-level progress / annual / reeval due dates for this child’s school.</p>
       ${bulkBar('child-dues')}
       <table>
         <tr>${bulkTh('child-dues')}<th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
@@ -1278,7 +1322,8 @@ async function adminChildDetail(studentId, opts = {}) {
       </table>
     </div>
     <div class="card">
-      <h3>Locker files</h3>
+      <h3 title="Uploaded PDFs and documents kept with this child">Student files</h3>
+      <p class="muted">Uploaded documents kept with this child (timesheets, notes PDFs, etc.).</p>
       ${bulkBar('child-files')}
       <table>
         <tr>${bulkTh('child-files')}<th>Label</th><th>Kind</th><th>When</th><th></th></tr>
@@ -1322,6 +1367,16 @@ async function adminChildDetail(studentId, opts = {}) {
     if (state.childDetailBack === 'reports') adminReports();
     else adminChildren();
   };
+  document.getElementById('sessFilter').onclick = () => {
+    state.childSessionFrom = document.getElementById('sessFrom').value || '';
+    state.childSessionTo = document.getElementById('sessTo').value || '';
+    adminChildDetail(studentId, { backTo: state.childDetailBack });
+  };
+  document.getElementById('sessClear').onclick = () => {
+    state.childSessionFrom = '';
+    state.childSessionTo = '';
+    adminChildDetail(studentId, { backTo: state.childDetailBack });
+  };
   document.getElementById('saveChild').onclick = async () => {
     try {
       await api('POST', `/admin/students/${studentId}`, {
@@ -1340,7 +1395,7 @@ async function adminChildDetail(studentId, opts = {}) {
   };
   document.getElementById('deleteChild').onclick = async () => {
     try {
-      if (!confirm('Remove this child? Mandates, sessions, and locker files for this child will also be removed. This cannot be undone.')) return;
+      if (!confirm('Remove this child? Mandates, sessions, and student files for this child will also be removed. This cannot be undone.')) return;
       await api('DELETE', `/admin/students/${studentId}`);
       setStatus('Child removed.', 'ok');
       await adminChildren();
@@ -1369,7 +1424,7 @@ async function adminChildDetail(studentId, opts = {}) {
   document.querySelectorAll('[data-del-file]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        if (!confirm('Remove this locker file record? This cannot be undone.')) return;
+        if (!confirm('Remove this student file record? This cannot be undone.')) return;
         await api('DELETE', `/admin/files/${btn.getAttribute('data-del-file')}`);
         setStatus('File removed.', 'ok');
         await adminChildDetail(studentId, { backTo: state.childDetailBack });
@@ -1390,7 +1445,7 @@ async function adminChildDetail(studentId, opts = {}) {
   document.querySelectorAll('[data-del-due]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        if (!confirm('Remove this school due date? Alerts for it will stop. This cannot be undone.')) return;
+        if (!confirm('Remove this progress report due date? Alerts for it will stop. This cannot be undone.')) return;
         await api('DELETE', `/admin/due-dates/${btn.getAttribute('data-del-due')}`);
         setStatus('Due date removed.', 'ok');
         await adminChildDetail(studentId, { backTo: state.childDetailBack });
@@ -1438,6 +1493,7 @@ async function adminProviderDetail(providerId) {
     </div>
     <div class="card">
       <h3>Caseload (${esc(detail.caseloadCount || 0)} children)</h3>
+      <p class="muted">From this provider’s mandates (a child can appear under more than one provider).</p>
       ${bulkBar('prov-mandates')}
       <table>
         <tr>${bulkTh('prov-mandates')}<th>Child</th><th>Service</th><th>Freq</th><th></th></tr>
@@ -1724,26 +1780,191 @@ async function adminProviderDetail(providerId) {
   });
 }
 
+async function adminSchoolDetail(schoolId) {
+  const [detail, duesOut] = await Promise.all([
+    api('GET', `/admin/schools/${schoolId}`),
+    api('GET', '/admin/reports/due-dates'),
+  ]);
+  const school = detail.school;
+  const cal = detail.calendar;
+  const dueDates = (duesOut.rows || []).filter((d) => d.schoolId === schoolId);
+  const calSummary = detail.schoolCalendarSummary || formatCalendarSummary(cal);
+  view(`
+    <div class="card">
+      <button type="button" class="btn" id="backSchools">← Schools</button>
+      <h2>${esc(school.name || 'School')}</h2>
+      <p class="muted">${esc(detail.studentCount || 0)} children on caseload</p>
+      <div class="row">
+        <label>School name <input id="sname" value="${esc(school.name || '')}" /></label>
+        <label>District <input id="sdistrict" value="${esc(school.district || '')}" /></label>
+      </div>
+      <div class="row">
+        <label>Signer name <input id="signerName" value="${esc(school.signerName || '')}" /></label>
+        <label>Signer email <input id="signerEmail" value="${esc(school.signerEmail || '')}" /></label>
+      </div>
+      <button type="button" class="btn-primary" id="saveSchool">Save school</button>
+      <button type="button" class="btn" id="deleteSchool">Remove school</button>
+    </div>
+    <div class="card" id="schoolCalendarSection">
+      <h3>School calendar</h3>
+      <p class="muted">School year and closed days (holidays, breaks). Used for school-day mandate tracking.</p>
+      <div id="calSavedView" class="cal-saved-view">${renderCalendarSavedHtml(cal, school.name)}</div>
+      <div class="row">
+        <label>First day (YYYY-MM-DD) <input id="calYearStart" type="date" value="${esc(cal?.yearStart || '')}" /></label>
+        <label>Last day (YYYY-MM-DD) <input id="calYearEnd" type="date" value="${esc(cal?.yearEnd || '')}" /></label>
+      </div>
+      <div class="row">
+        <label>Add off day <input id="calOffDayPick" type="date" /></label>
+        <button type="button" class="btn" id="calAddOffDay">Add off day</button>
+      </div>
+      <ul id="calOffDaysList" class="off-days-list"></ul>
+      <label>Paste off days (one YYYY-MM-DD per line)
+        <textarea id="calOffDaysPaste" rows="3" placeholder="2026-11-27&#10;2026-12-25"></textarea>
+      </label>
+      <button type="button" class="btn-primary" id="calSave">Save calendar</button>
+      ${calSummary ? `<p class="muted" style="margin-top:0.5rem">Saved: ${esc(calSummary)}</p>` : ''}
+    </div>
+    <div class="card">
+      <h3>Progress report due dates</h3>
+      <p class="muted">One due date per kind (progress / annual / reeval) applies to this school’s whole caseload.</p>
+      <div class="row">
+        <label>Kind
+          <select id="dueKind"><option value="progress">progress</option><option value="annual">annual</option><option value="reeval">reeval</option></select>
+        </label>
+        <label>Due on (YYYY-MM-DD) <input id="dueOn" placeholder="2026-10-15" /></label>
+      </div>
+      <button type="button" class="btn" id="duebtn">Save due date</button>
+      ${bulkBar('school-dues')}
+      <table>
+        <tr>${bulkTh('school-dues')}<th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
+        ${dueDates.map((r) => `<tr>
+          ${bulkTd('school-dues', r.id)}
+          <td>${esc(r.kind)}</td>
+          <td>${esc(r.dueOn)}</td>
+          <td>${esc(r.status)}</td>
+          <td><button type="button" class="btn" data-del-due="${esc(r.id)}">Remove</button></td>
+        </tr>`).join('') || '<tr><td colspan="5">None yet</td></tr>'}
+      </table>
+    </div>
+  `);
+
+  let calOffDays = [...(cal?.offDays || [])].sort();
+  const calOffDaysList = document.getElementById('calOffDaysList');
+  const renderCalOffDays = () => {
+    if (!calOffDaysList) return;
+    calOffDaysList.innerHTML = calOffDays.length
+      ? calOffDays.map((d) => `<li>${esc(d)} <button type="button" class="btn" data-rm-off="${esc(d)}">Remove</button></li>`).join('')
+      : '<li class="muted">No off days yet.</li>';
+    calOffDaysList.querySelectorAll('[data-rm-off]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const date = btn.getAttribute('data-rm-off');
+        if (!confirm(`Remove off day ${date}?`)) return;
+        calOffDays = calOffDays.filter((x) => x !== date);
+        renderCalOffDays();
+      });
+    });
+  };
+  renderCalOffDays();
+  document.getElementById('calAddOffDay').onclick = () => {
+    const d = document.getElementById('calOffDayPick').value;
+    if (!d) return;
+    if (!calOffDays.includes(d)) calOffDays = [...calOffDays, d].sort();
+    document.getElementById('calOffDayPick').value = '';
+    renderCalOffDays();
+  };
+  document.getElementById('calSave').onclick = async () => {
+    try {
+      const paste = document.getElementById('calOffDaysPaste').value || '';
+      const pasted = paste.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+      const offDays = [...new Set([...calOffDays, ...pasted])].sort();
+      await api('POST', `/admin/schools/${schoolId}/calendar`, {
+        yearStart: document.getElementById('calYearStart').value,
+        yearEnd: document.getElementById('calYearEnd').value,
+        offDays,
+      });
+      setStatus('School calendar saved.', 'ok');
+      await adminSchoolDetail(schoolId);
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+  document.getElementById('backSchools').onclick = () => adminPeople({ tab: 'schools' });
+  document.getElementById('saveSchool').onclick = async () => {
+    try {
+      await api('POST', '/admin/schools', {
+        id: schoolId,
+        name: document.getElementById('sname').value,
+        district: document.getElementById('sdistrict').value,
+        signerName: document.getElementById('signerName').value,
+        signerEmail: document.getElementById('signerEmail').value,
+      });
+      setStatus('School saved.', 'ok');
+      await adminSchoolDetail(schoolId);
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+  document.getElementById('deleteSchool').onclick = async () => {
+    try {
+      if (!confirm('Remove this school? Its due dates will be deleted and children will be unlinked from it. This cannot be undone.')) return;
+      await api('DELETE', `/admin/schools/${schoolId}`);
+      setStatus('School removed.', 'ok');
+      await adminPeople({ tab: 'schools' });
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+  document.getElementById('duebtn').onclick = async () => {
+    try {
+      await api('POST', '/admin/due-dates', {
+        schoolId,
+        kind: document.getElementById('dueKind').value,
+        dueOn: document.getElementById('dueOn').value,
+      });
+      setStatus('Progress report due date saved. Alerts stay until marked complete.', 'ok');
+      document.getElementById('dueOn').value = '';
+      await adminSchoolDetail(schoolId);
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+  bindBulkDelete('school-dues', {
+    noun: 'due dates',
+    deleteOne: (id) => api('DELETE', `/admin/due-dates/${id}`),
+    refresh: () => adminSchoolDetail(schoolId),
+  });
+  document.querySelectorAll('[data-del-due]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        if (!confirm('Remove this progress report due date? Alerts for it will stop. This cannot be undone.')) return;
+        await api('DELETE', `/admin/due-dates/${btn.getAttribute('data-del-due')}`);
+        setStatus('Due date removed.', 'ok');
+        await adminSchoolDetail(schoolId);
+      } catch (e) { setStatus(e.message, 'err'); }
+    });
+  });
+}
+
 async function adminPeople(opts = {}) {
-  if (opts.focusSchoolId) state.focusSchoolId = opts.focusSchoolId;
-  const focusSchoolId = state.focusSchoolId || '';
-  const shouldScrollToCalendar = Boolean(opts.focusSchoolId);
-  const [usersOut, providersOut, schoolsOut, duesOut] = await Promise.all([
+  if (opts.tab) state.peopleTab = opts.tab;
+  if (opts.focusSchoolId) {
+    state.focusSchoolId = opts.focusSchoolId;
+    state.peopleTab = 'schools';
+  }
+  const tab = state.peopleTab || 'providers';
+  state.peopleTab = tab;
+  const [usersOut, providersOut, schoolsOut] = await Promise.all([
     api('GET', '/admin/users'),
     api('GET', '/admin/providers'),
     api('GET', '/admin/schools'),
-    api('GET', '/admin/reports/due-dates'),
   ]);
   const users = usersOut.users || [];
   const providers = providersOut.providers || [];
   const schools = schoolsOut.schools || [];
   const calendarsBySchoolId = schoolsOut.calendarsBySchoolId || {};
-  const dueRows = duesOut.rows || [];
   const therapists = users.filter((u) => u.role === 'therapist');
   const admins = users.filter((u) => u.role === 'admin');
-  const focusSchool = schools.find((s) => s.id === focusSchoolId);
-  const selectedCalSchoolId = focusSchool ? focusSchool.id : '';
   view(`
+    <div class="card">
+      <div class="people-tabs" role="tablist">
+        <button type="button" class="tab-btn${tab === 'providers' ? ' on' : ''}" data-people-tab="providers">Providers</button>
+        <button type="button" class="tab-btn${tab === 'schools' ? ' on' : ''}" data-people-tab="schools">Schools</button>
+        <button type="button" class="tab-btn${tab === 'admins' ? ' on' : ''}" data-people-tab="admins">Admins</button>
+      </div>
+    </div>
+    <div ${tab !== 'admins' ? 'hidden' : ''}>
     <div class="card entry-card">
       <div class="entry-collapsed" id="addAdminCollapsed">
         <button type="button" class="btn-primary" id="openAddAdmin">Add admin</button>
@@ -1779,6 +2000,8 @@ async function adminPeople(opts = {}) {
         }).join('') || '<tr><td colspan="4">None yet</td></tr>'}
       </table>
     </div>
+    </div>
+    <div ${tab !== 'providers' ? 'hidden' : ''}>
     <div class="card entry-card">
       <div class="entry-collapsed" id="addProviderCollapsed">
         <button type="button" class="btn-primary" id="openAddProvider">Add provider</button>
@@ -1830,13 +2053,26 @@ async function adminPeople(opts = {}) {
         }).join('') || '<tr><td colspan="6">None yet</td></tr>'}
       </table>
     </div>
+    </div>
+    <div ${tab !== 'schools' ? 'hidden' : ''}>
+    <div class="card entry-card">
+      <div class="entry-collapsed" id="addSchoolCollapsed">
+        <button type="button" class="btn-primary" id="openAddSchool">Add school</button>
+      </div>
+      <div id="addSchoolForm" hidden>
+        <h2>Add school</h2>
+        <label>School <input id="sname" /></label>
+        <label>Signer name <input id="signerName" /></label>
+        <label>Signer email <input id="signerEmail" /></label>
+        <div class="entry-form-actions">
+          <button class="btn-primary big" id="school">Save school</button>
+          <button type="button" class="btn" id="cancelAddSchool">Cancel</button>
+        </div>
+      </div>
+    </div>
     <div class="card">
-      <h2>School signer</h2>
-      <label>School <input id="sname" /></label>
-      <label>Signer name <input id="signerName" /></label>
-      <label>Signer email <input id="signerEmail" /></label>
-      <button class="btn" id="school">Save school</button>
-      <h3>Schools</h3>
+      <h2>Schools</h2>
+      <p class="muted">Open a school for signer, progress report due dates, and calendar.</p>
       ${bulkBar('schools')}
       <table>
         <tr>${bulkTh('schools')}<th>School</th><th>Signer</th><th>Calendar</th><th></th></tr>
@@ -1845,67 +2081,28 @@ async function adminPeople(opts = {}) {
           const summary = formatCalendarSummary(cal);
           return `<tr>
           ${bulkTd('schools', s.id)}
-          <td>${esc(s.name)}</td>
+          <td><button type="button" class="linkish" data-open-school="${esc(s.id)}">${esc(s.name)}</button></td>
           <td>${esc(s.signerName || s.signerEmail || '')}</td>
           <td>${summary ? esc(summary) : '<span class="muted">Not set</span>'}</td>
           <td>
-            <button type="button" class="btn" data-open-calendar="${esc(s.id)}">Calendar</button>
+            <button type="button" class="btn" data-open-school="${esc(s.id)}">Open</button>
             <button type="button" class="btn" data-del-school="${esc(s.id)}">Remove</button>
           </td>
         </tr>`;
         }).join('') || '<tr><td colspan="5">None</td></tr>'}
       </table>
-      <div id="schoolCalendarSection">
-      <h2>School calendar</h2>
-      <p class="muted">Set the school year and closed days (holidays, breaks). Used for school-day mandate tracking. Open a school from the list above, or pick one here.</p>
-      <label>School
-        <select id="calSchool">${schoolOptions(schools, selectedCalSchoolId)}</select>
-      </label>
-      <div id="calSavedView" class="cal-saved-view"></div>
-      <div class="row">
-        <label>First day (YYYY-MM-DD) <input id="calYearStart" type="date" /></label>
-        <label>Last day (YYYY-MM-DD) <input id="calYearEnd" type="date" /></label>
-      </div>
-      <div class="row">
-        <label>Add off day <input id="calOffDayPick" type="date" /></label>
-        <button type="button" class="btn" id="calAddOffDay">Add off day</button>
-      </div>
-      <ul id="calOffDaysList" class="off-days-list"></ul>
-      <label>Paste off days (one YYYY-MM-DD per line)
-        <textarea id="calOffDaysPaste" rows="3" placeholder="2026-11-27&#10;2026-12-25"></textarea>
-      </label>
-      <button type="button" class="btn-primary" id="calSave">Save calendar</button>
-      </div>
-      <h2>School due dates</h2>
-      <p class="muted">One due date per school (progress / annual / reeval) applies to that school’s whole caseload — not per child.</p>
-      <label>School
-        <select id="dueSchool">${schoolOptions(schools)}</select>
-      </label>
-      <label>Kind
-        <select id="dueKind"><option value="progress">progress</option><option value="annual">annual</option><option value="reeval">reeval</option></select>
-      </label>
-      <label>Due on (YYYY-MM-DD) <input id="dueOn" placeholder="2026-10-15" /></label>
-      <button class="btn" id="duebtn">Save school due date</button>
-      <h3>Saved due dates</h3>
-      ${bulkBar('dues')}
-      <table>
-        <tr>${bulkTh('dues')}<th>School</th><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
-        ${dueRows.map((r) => `<tr>
-          ${bulkTd('dues', r.id)}
-          <td>${esc(r.schoolName || r.schoolId)}</td>
-          <td>${esc(r.kind)}</td>
-          <td>${esc(r.dueOn)}</td>
-          <td>${esc(r.status)}</td>
-          <td><button type="button" class="btn" data-del-due="${esc(r.id)}">Remove</button></td>
-        </tr>`).join('') || '<tr><td colspan="6">None yet</td></tr>'}
-      </table>
+    </div>
     </div>
   `);
+
+  document.querySelectorAll('[data-people-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => adminPeople({ tab: btn.getAttribute('data-people-tab') }));
+  });
 
   bindBulkDelete('admins', {
     noun: 'admins',
     deleteOne: (id) => api('DELETE', `/admin/users/${id}`),
-    refresh: () => adminPeople(),
+    refresh: () => adminPeople({ tab: 'admins' }),
   });
   bindBulkDelete('providers', {
     noun: 'providers',
@@ -1914,7 +2111,7 @@ async function adminPeople(opts = {}) {
       if (kind === 'user') return api('DELETE', `/admin/users/${id}`);
       return api('DELETE', `/admin/providers/${id}`);
     },
-    refresh: () => adminPeople(),
+    refresh: () => adminPeople({ tab: 'providers' }),
   });
   bindBulkDelete('schools', {
     noun: 'schools',
@@ -1922,41 +2119,57 @@ async function adminPeople(opts = {}) {
       if (state.focusSchoolId === id) state.focusSchoolId = '';
       await api('DELETE', `/admin/schools/${id}`);
     },
-    refresh: () => adminPeople(),
-  });
-  bindBulkDelete('dues', {
-    noun: 'due dates',
-    deleteOne: (id) => api('DELETE', `/admin/due-dates/${id}`),
-    refresh: () => adminPeople(),
+    refresh: () => adminPeople({ tab: 'schools' }),
   });
 
   const setAddAdminOpen = (open) => {
-    document.getElementById('addAdminCollapsed').hidden = open;
-    document.getElementById('addAdminForm').hidden = !open;
+    const c = document.getElementById('addAdminCollapsed');
+    const f = document.getElementById('addAdminForm');
+    if (c) c.hidden = open;
+    if (f) f.hidden = !open;
   };
   const setAddProviderOpen = (open) => {
-    document.getElementById('addProviderCollapsed').hidden = open;
-    document.getElementById('addProviderForm').hidden = !open;
+    const c = document.getElementById('addProviderCollapsed');
+    const f = document.getElementById('addProviderForm');
+    if (c) c.hidden = open;
+    if (f) f.hidden = !open;
   };
-  document.getElementById('openAddAdmin').onclick = () => setAddAdminOpen(true);
-  document.getElementById('cancelAddAdmin').onclick = () => setAddAdminOpen(false);
-  document.getElementById('openAddProvider').onclick = () => setAddProviderOpen(true);
-  document.getElementById('cancelAddProvider').onclick = () => setAddProviderOpen(false);
+  const setAddSchoolOpen = (open) => {
+    const c = document.getElementById('addSchoolCollapsed');
+    const f = document.getElementById('addSchoolForm');
+    if (c) c.hidden = open;
+    if (f) f.hidden = !open;
+  };
+  const openAddAdmin = document.getElementById('openAddAdmin');
+  if (openAddAdmin) openAddAdmin.onclick = () => setAddAdminOpen(true);
+  const cancelAddAdmin = document.getElementById('cancelAddAdmin');
+  if (cancelAddAdmin) cancelAddAdmin.onclick = () => setAddAdminOpen(false);
+  const openAddProvider = document.getElementById('openAddProvider');
+  if (openAddProvider) openAddProvider.onclick = () => setAddProviderOpen(true);
+  const cancelAddProvider = document.getElementById('cancelAddProvider');
+  if (cancelAddProvider) cancelAddProvider.onclick = () => setAddProviderOpen(false);
+  const openAddSchool = document.getElementById('openAddSchool');
+  if (openAddSchool) openAddSchool.onclick = () => setAddSchoolOpen(true);
+  const cancelAddSchool = document.getElementById('cancelAddSchool');
+  if (cancelAddSchool) cancelAddSchool.onclick = () => setAddSchoolOpen(false);
 
-  document.getElementById('createAdmin').onclick = async () => {
-    try {
-      const email = document.getElementById('aemail').value.trim();
-      const displayName = document.getElementById('aname').value.trim();
-      if (!email) throw new Error('Email is required.');
-      const out = await api('POST', '/admin/users', {
-        email,
-        displayName: displayName || email,
-        role: 'admin',
-      });
-      setStatus(out.message || `Admin invited: ${out.user?.email}`, 'ok');
-      await adminPeople();
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
+  const createAdmin = document.getElementById('createAdmin');
+  if (createAdmin) {
+    createAdmin.onclick = async () => {
+      try {
+        const email = document.getElementById('aemail').value.trim();
+        const displayName = document.getElementById('aname').value.trim();
+        if (!email) throw new Error('Email is required.');
+        const out = await api('POST', '/admin/users', {
+          email,
+          displayName: displayName || email,
+          role: 'admin',
+        });
+        setStatus(out.message || `Admin invited: ${out.user?.email}`, 'ok');
+        await adminPeople({ tab: 'admins' });
+      } catch (e) { setStatus(e.message, 'err'); }
+    };
+  }
   document.querySelectorAll('[data-remove-admin]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
@@ -1964,7 +2177,7 @@ async function adminPeople(opts = {}) {
         const id = btn.getAttribute('data-remove-admin');
         const out = await api('DELETE', `/admin/users/${id}`);
         setStatus(out.message || 'Admin removed.', 'ok');
-        await adminPeople();
+        await adminPeople({ tab: 'admins' });
       } catch (e) { setStatus(e.message, 'err'); }
     });
   });
@@ -1975,41 +2188,47 @@ async function adminPeople(opts = {}) {
         const id = btn.getAttribute('data-remove-therapist');
         const out = await api('DELETE', `/admin/users/${id}`);
         setStatus(out.message || 'Therapist removed.', 'ok');
-        await adminPeople();
+        await adminPeople({ tab: 'providers' });
       } catch (e) { setStatus(e.message, 'err'); }
     });
   });
-  document.getElementById('createTherapist').onclick = async () => {
-    try {
-      const note = document.getElementById('tnote').value.trim();
-      const out = await api('POST', '/admin/therapists', {
-        email: document.getElementById('temail').value,
-        firstName: document.getElementById('tfirst').value,
-        lastName: document.getElementById('tlast').value,
-        discipline: document.getElementById('tdisc').value,
-        ...readPayRatesFromIds({
-          min30: 't30',
-          min42: 't42',
-          min45: 't45',
-          hour: 'tHour',
-          g30: 'tG30',
-          g42: 'tG42',
-          g45: 'tG45',
-          extra: 'tExtra',
-        }),
-        hhaCaregiverCode: document.getElementById('thha').value,
-        role: 'therapist',
-      });
-      const providerId = out.provider?.id;
-      if (note && providerId) {
-        await api('POST', `/admin/providers/${providerId}/notes`, { body: note });
-      }
-      setStatus(out.message || `Provider ready: ${out.user?.email} ↔ ${providerId}`, 'ok');
-      await adminPeople();
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
+  const createTherapist = document.getElementById('createTherapist');
+  if (createTherapist) {
+    createTherapist.onclick = async () => {
+      try {
+        const note = document.getElementById('tnote').value.trim();
+        const out = await api('POST', '/admin/therapists', {
+          email: document.getElementById('temail').value,
+          firstName: document.getElementById('tfirst').value,
+          lastName: document.getElementById('tlast').value,
+          discipline: document.getElementById('tdisc').value,
+          ...readPayRatesFromIds({
+            min30: 't30',
+            min42: 't42',
+            min45: 't45',
+            hour: 'tHour',
+            g30: 'tG30',
+            g42: 'tG42',
+            g45: 'tG45',
+            extra: 'tExtra',
+          }),
+          hhaCaregiverCode: document.getElementById('thha').value,
+          role: 'therapist',
+        });
+        const providerId = out.provider?.id;
+        if (note && providerId) {
+          await api('POST', `/admin/providers/${providerId}/notes`, { body: note });
+        }
+        setStatus(out.message || `Provider ready: ${out.user?.email} ↔ ${providerId}`, 'ok');
+        await adminPeople({ tab: 'providers' });
+      } catch (e) { setStatus(e.message, 'err'); }
+    };
+  }
   document.querySelectorAll('[data-open-provider]').forEach((btn) => {
     btn.addEventListener('click', () => adminProviderDetail(btn.getAttribute('data-open-provider')));
+  });
+  document.querySelectorAll('[data-open-school]').forEach((btn) => {
+    btn.addEventListener('click', () => adminSchoolDetail(btn.getAttribute('data-open-school')));
   });
   document.querySelectorAll('[data-del-provider]').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -2017,7 +2236,7 @@ async function adminPeople(opts = {}) {
         if (!confirm('Remove this provider? Their profile and internal notes will be deleted, and the linked therapist login will be deactivated. Mandates stay but become unassigned. This cannot be undone.')) return;
         await api('DELETE', `/admin/providers/${btn.getAttribute('data-del-provider')}`);
         setStatus('Provider removed.', 'ok');
-        await adminPeople();
+        await adminPeople({ tab: 'providers' });
       } catch (e) { setStatus(e.message, 'err'); }
     });
   });
@@ -2029,164 +2248,39 @@ async function adminPeople(opts = {}) {
         if (state.focusSchoolId === id) state.focusSchoolId = '';
         const out = await api('DELETE', `/admin/schools/${id}`);
         setStatus(out.message || 'School removed.', 'ok');
-        await adminPeople();
+        await adminPeople({ tab: 'schools' });
       } catch (e) { setStatus(e.message, 'err'); }
     });
   });
-  document.querySelectorAll('[data-del-due]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
+  const schoolBtn = document.getElementById('school');
+  if (schoolBtn) {
+    schoolBtn.onclick = async () => {
       try {
-        if (!confirm('Remove this school due date? Alerts for it will stop. This cannot be undone.')) return;
-        await api('DELETE', `/admin/due-dates/${btn.getAttribute('data-del-due')}`);
-        setStatus('Due date removed.', 'ok');
-        await adminPeople();
+        const out = await api('POST', '/admin/schools', {
+          name: document.getElementById('sname').value,
+          signerName: document.getElementById('signerName').value,
+          signerEmail: document.getElementById('signerEmail').value,
+        });
+        const schoolId = out.school?.id || '';
+        setStatus('School saved.', 'ok');
+        if (schoolId) await adminSchoolDetail(schoolId);
+        else await adminPeople({ tab: 'schools' });
       } catch (e) { setStatus(e.message, 'err'); }
-    });
-  });
-  document.getElementById('school').onclick = async () => {
-    try {
-      const out = await api('POST', '/admin/schools', {
-        name: document.getElementById('sname').value,
-        signerName: document.getElementById('signerName').value,
-        signerEmail: document.getElementById('signerEmail').value,
-      });
-      const schoolId = out.school?.id || '';
-      setStatus('School saved. Open Calendar below to view or set the school year.', 'ok');
-      document.getElementById('sname').value = '';
-      document.getElementById('signerName').value = '';
-      document.getElementById('signerEmail').value = '';
-      await adminPeople({ focusSchoolId: schoolId });
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
-  document.getElementById('duebtn').onclick = async () => {
-    try {
-      const schoolId = document.getElementById('dueSchool').value;
-      if (!schoolId) throw new Error('Pick a school.');
-      await api('POST', '/admin/due-dates', {
-        schoolId,
-        kind: document.getElementById('dueKind').value,
-        dueOn: document.getElementById('dueOn').value,
-      });
-      setStatus('School due date saved. Alerts stay until marked complete.', 'ok');
-      document.getElementById('dueOn').value = '';
-      await adminPeople();
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
+    };
+  }
 
-  let calOffDays = [];
-  const calOffDaysList = document.getElementById('calOffDaysList');
-  const calSavedView = document.getElementById('calSavedView');
-  const schoolNameForId = (id) => schools.find((s) => s.id === id)?.name || '';
-  const renderCalOffDays = () => {
-    if (!calOffDaysList) return;
-    calOffDaysList.innerHTML = calOffDays.length
-      ? calOffDays.map((d) => `<li>${esc(d)} <button type="button" class="btn" data-rm-off="${esc(d)}">Remove</button></li>`).join('')
-      : '<li class="muted">No off days yet.</li>';
-    calOffDaysList.querySelectorAll('[data-rm-off]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const date = btn.getAttribute('data-rm-off');
-        if (!confirm(`Remove off day ${date}?`)) return;
-        calOffDays = calOffDays.filter((x) => x !== date);
-        renderCalOffDays();
-      });
-    });
-  };
-  const applyCalendarToForm = (cal, schoolId) => {
-    document.getElementById('calYearStart').value = cal?.yearStart || '';
-    document.getElementById('calYearEnd').value = cal?.yearEnd || '';
-    calOffDays = [...(cal?.offDays || [])].sort();
-    document.getElementById('calOffDaysPaste').value = '';
-    renderCalOffDays();
-    if (calSavedView) {
-      if (!schoolId) {
-        calSavedView.innerHTML = '<div class="cal-saved muted"><p>Pick a school above (or click Calendar in the schools list) to see its saved first day, last day, and off days.</p></div>';
-      } else {
-        calSavedView.innerHTML = renderCalendarSavedHtml(cal, schoolNameForId(schoolId));
-      }
-    }
-  };
-  const scrollToCalendar = () => {
-    document.getElementById('schoolCalendarSection')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-  const focusSchoolCalendar = async (schoolId) => {
-    state.focusSchoolId = schoolId || '';
-    const sel = document.getElementById('calSchool');
-    if (sel) sel.value = schoolId || '';
-    await loadCalendarForm(schoolId);
-    scrollToCalendar();
-  };
-  const loadCalendarForm = async (schoolId) => {
-    if (!schoolId) {
-      applyCalendarToForm(null, '');
-      return;
-    }
-    try {
-      const cached = calendarsBySchoolId[schoolId];
-      if (cached && (cached.yearStart || cached.yearEnd || cached.offDays?.length)) {
-        applyCalendarToForm(cached, schoolId);
-        return;
-      }
-      // Empty cache still paints the "not set" summary; also refresh from API when present.
-      if (cached) applyCalendarToForm(cached, schoolId);
-      const out = await api('GET', `/admin/schools/${schoolId}/calendar`);
-      calendarsBySchoolId[schoolId] = out.calendar;
-      applyCalendarToForm(out.calendar, schoolId);
-    } catch (e) {
-      setStatus(e.message, 'err');
-    }
-  };
-  document.getElementById('calSchool').onchange = () => {
-    const schoolId = document.getElementById('calSchool').value;
-    state.focusSchoolId = schoolId || '';
-    loadCalendarForm(schoolId);
-  };
-  document.querySelectorAll('[data-open-calendar]').forEach((btn) => {
-    btn.addEventListener('click', () => focusSchoolCalendar(btn.getAttribute('data-open-calendar')));
-  });
-  document.getElementById('calAddOffDay').onclick = () => {
-    const date = document.getElementById('calOffDayPick').value;
-    if (!date) {
-      setStatus('Pick a date for the off day.', 'err');
-      return;
-    }
-    if (!calOffDays.includes(date)) {
-      calOffDays = [...calOffDays, date].sort();
-      renderCalOffDays();
-    }
-    document.getElementById('calOffDayPick').value = '';
-  };
-  document.getElementById('calSave').onclick = async () => {
-    try {
-      const schoolId = document.getElementById('calSchool').value;
-      if (!schoolId) throw new Error('Pick a school.');
-      const paste = document.getElementById('calOffDaysPaste').value.trim();
-      const out = await api('POST', `/admin/schools/${schoolId}/calendar`, {
-        yearStart: document.getElementById('calYearStart').value,
-        yearEnd: document.getElementById('calYearEnd').value,
-        offDays: calOffDays,
-        ...(paste ? { offDaysCsv: paste } : {}),
-      });
-      calendarsBySchoolId[schoolId] = out.calendar;
-      setStatus('School calendar saved.', 'ok');
-      await adminPeople({ focusSchoolId: schoolId });
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
-  await loadCalendarForm(document.getElementById('calSchool').value);
-  if (shouldScrollToCalendar) scrollToCalendar();
+  if (opts.focusSchoolId) {
+    await adminSchoolDetail(opts.focusSchoolId);
+  }
 }
 
 async function adminMandates() {
-  const [studentsOut, providersOut, schoolsOut] = await Promise.all([
+  const [studentsOut, providersOut] = await Promise.all([
     api('GET', '/students'),
     api('GET', '/admin/providers'),
-    api('GET', '/admin/schools'),
   ]);
   const students = studentsOut.students || [];
   const providers = providersOut.providers || [];
-  const schools = schoolsOut.schools || [];
-  const draft = state.mandateDraft;
-  const student = draft?.student;
-  const mandate = draft?.mandate;
   const preview = state.caseloadPreview;
   const previewRows = preview?.rows || [];
   const previewErrors = preview?.errors || [];
@@ -2195,8 +2289,8 @@ async function adminMandates() {
     <div class="card">
       <h2>Import caseload</h2>
       <p class="muted">Use the KU export <strong>Related Service by serviceschool (WG)</strong> (Listing Results sheet) as CSV or Excel (.xls / .xlsx). Import saves immediately.</p>
-      <p class="muted" style="margin-top:0.35rem">Columns: CR Recommended School, Student Last/First Name, CR Expected Grade, CR Decision/Status, Related Service, RS Start/End, RS Ratio, RS Frequency, RS Period, RS Location, RS Provider. (RS Duration is ignored. Older short headers like Recommended School / Freq / Period still work.)</p>
-      <p class="muted" style="margin-top:0.35rem">Freq: <em>Weekly</em> = sessions per week; <em>6 day cycle</em> = N sessions per 6 school days. Providers match “Last, First” or “White Glove” / “White, Glove”.</p>
+      <p class="muted" style="margin-top:0.35rem">Columns: CR Recommended School, Student Last/First Name, CR Expected Grade, CR Decision/Status, Related Service, RS Start/End, RS Ratio, RS Frequency, RS Period, RS Location, RS Provider. Optional when present: Program ID, Program Type, Date of Birth. (RS Duration is ignored. Older short headers still work.)</p>
+      <p class="muted" style="margin-top:0.35rem">Freq: <em>Weekly</em> = sessions per week; <em>6 day cycle</em> = N sessions per 6 school days. Providers must already exist in TMS and match “Last, First” / “First Last”. Agency labels like “White Glove” / “White, Glove” are errors — replace with the therapist name. Unmatched RS Provider rows are skipped (no empty-provider mandates).</p>
       <input id="caseloadFile" type="file" accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
       <div class="row" style="margin-top:0.6rem">
         <button class="btn-primary" id="caseloadImportBtn">Import caseload</button>
@@ -2246,15 +2340,23 @@ async function adminMandates() {
         </table>
       </div>` : ''}
       <table>
-        <tr><th>Row</th><th>Student</th><th>School</th><th>Service</th><th>Ratio</th><th>Freq</th><th>Provider</th></tr>
+        <tr><th>Row</th><th>Student</th><th>School</th><th>Service</th><th>Ratio</th><th>Freq</th><th>RS Provider</th><th>Assigned to</th></tr>
         ${(() => {
           const errRows = new Set(
             previewErrors.map((e) => Number(e.row ?? e.rowNumber)).filter((n) => Number.isFinite(n) && n > 0),
           );
+          const providerLabel = (id) => {
+            if (!id) return '';
+            const p = providers.find((x) => x.id === id);
+            return p ? `${p.firstName || ''} ${p.lastName || ''}`.trim() || id : id;
+          };
           return previewRows.map((r) => {
-            const badProv = r.providerName && !r.providerMatched;
             const badRow = errRows.has(Number(r.rowNumber));
-            const cls = badRow ? 'row-err' : badProv ? 'row-warn' : '';
+            const cls = badRow ? 'row-err' : '';
+            const assigned = providerLabel(r.providerId);
+            const assignedNote = r.providerMatched
+              ? ' <span class="muted">(matched)</span>'
+              : '';
             return `<tr${cls ? ` class="${cls}"` : ''}>
               <td>${esc(String(r.rowNumber || ''))}</td>
               <td>${esc(r.firstName)} ${esc(r.lastName)}${r.grade ? ` <span class="muted">(gr ${esc(r.grade)})</span>` : ''}</td>
@@ -2262,9 +2364,10 @@ async function adminMandates() {
               <td>${esc(r.serviceType || r.discipline || '')}</td>
               <td>${r.ratioGroup ? 'Group' : 'Individual'}</td>
               <td>${esc(r.freqDisplay || '')}</td>
-              <td>${esc(r.providerName || '')}${badProv ? ' <span class="err-inline">(unmatched)</span>' : ''}${badRow ? ' <span class="err-inline">(see Errors)</span>' : ''}</td>
+              <td>${esc(r.providerName || '—')}${badRow ? ' <span class="err-inline">(see Errors)</span>' : ''}</td>
+              <td>${esc(assigned || '—')}${assignedNote}</td>
             </tr>`;
-          }).join('') || '<tr><td colspan="7">No valid rows to import</td></tr>';
+          }).join('') || '<tr><td colspan="8">No valid rows to import</td></tr>';
         })()}
       </table>` : ''}
     </div>
@@ -2313,53 +2416,6 @@ async function adminMandates() {
       </div>
       <button type="button" class="btn-primary" id="manSave">Save mandate</button>
     </div>
-    <div class="card muted-card">
-      <h2>Optional: one-off mandate PDF</h2>
-      <p class="muted">Not how you load the caseload. Prefer <strong>Import caseload</strong> above — frequency and services come from the spreadsheet. Use this only for a rare single-child exception.</p>
-      <textarea id="mtext" rows="6" placeholder="Child's Name: De Oliveira Jack&#10;Service Type: PT School Group&#10;Mandate frequency: 2x/week"></textarea>
-      <input id="mfile" type="file" accept="application/pdf,.pdf,text/plain" />
-      <label>Assign provider
-        <select id="parseProvider">${providerOptions(providers, mandate?.providerId)}</select>
-      </label>
-      <button class="btn" id="parse">Read mandate PDF (exception)</button>
-    </div>
-    ${student && mandate ? `
-    <div class="card muted-card">
-      <h2>Saved student + mandate (exception)</h2>
-      <p class="muted">Fix fields here if needed. If the mandate changed on the caseload, re-import the spreadsheet instead.</p>
-      <div class="row">
-        <label>First name <input id="sf" value="${esc(student.firstName || '')}" /></label>
-        <label>Last name <input id="sl" value="${esc(student.lastName || '')}" /></label>
-      </div>
-      <div class="row">
-        <label>Date of birth <input id="sdob" value="${esc(student.dob || '')}" /></label>
-        <label>School
-          <select id="sschool">${schoolOptions(schools, student.schoolId)}</select>
-        </label>
-      </div>
-      <label>HHA patient id <input id="shha" value="${esc(student.hhaPatientId || '')}" /></label>
-      <div class="row">
-        <label>Frequency per week <input id="mfreq" value="${esc(mandate.frequencyPerWeek ?? '')}" /></label>
-        <label>Service type <input id="msvc" value="${esc(mandate.serviceType || '')}" /></label>
-      </div>
-      <div class="row">
-        <label>Discipline
-          <select id="mdisc">
-            <option value="PT"${mandate.discipline === 'PT' ? ' selected' : ''}>PT</option>
-            <option value="OT"${mandate.discipline === 'OT' ? ' selected' : ''}>OT</option>
-            <option value="SLP"${mandate.discipline === 'SLP' ? ' selected' : ''}>SLP</option>
-          </select>
-        </label>
-        <label>Provider
-          <select id="mprov">${providerOptions(providers, mandate.providerId)}</select>
-        </label>
-      </div>
-      <div class="row">
-        <label>Start on <input id="mstart" value="${esc(mandate.startOn || '')}" /></label>
-        <label>End on <input id="mend" value="${esc(mandate.endOn || '')}" /></label>
-      </div>
-      <button class="btn-primary" id="saveMandate">Save corrections</button>
-    </div>` : ''}
   `);
 
   async function readCaseloadFile() {
@@ -2437,48 +2493,6 @@ async function adminMandates() {
       await adminMandates();
     } catch (e) { setStatus(e.message, 'err'); }
   };
-
-  document.getElementById('parse').onclick = async () => {
-    try {
-      const file = document.getElementById('mfile').files[0];
-      const pdfText = document.getElementById('mtext').value;
-      const pdfBase64 = await fileToBase64(file);
-      const out = await api('POST', '/admin/mandates/parse', {
-        pdfText,
-        pdfBase64,
-        providerId: document.getElementById('parseProvider').value,
-      });
-      state.mandateDraft = { student: out.student, mandate: out.mandate };
-      setStatus(`Saved ${out.student?.firstName || ''} ${out.student?.lastName || ''} · ${out.mandate?.frequencyPerWeek || '?'}x/week`, 'ok');
-      await adminMandates();
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
-  const saveBtn = document.getElementById('saveMandate');
-  if (saveBtn) {
-    saveBtn.onclick = async () => {
-      try {
-        if (!student?.id || !mandate?.id) throw new Error('Parse a mandate first.');
-        const stu = await api('POST', `/admin/students/${student.id}`, {
-          firstName: document.getElementById('sf').value,
-          lastName: document.getElementById('sl').value,
-          dob: document.getElementById('sdob').value,
-          schoolId: document.getElementById('sschool').value,
-          hhaPatientId: document.getElementById('shha').value,
-        });
-        const man = await api('POST', `/admin/mandates/${mandate.id}`, {
-          frequencyPerWeek: Number(document.getElementById('mfreq').value),
-          serviceType: document.getElementById('msvc').value,
-          discipline: document.getElementById('mdisc').value,
-          providerId: document.getElementById('mprov').value,
-          startOn: document.getElementById('mstart').value,
-          endOn: document.getElementById('mend').value,
-        });
-        state.mandateDraft = { student: stu.student, mandate: man.mandate };
-        setStatus('Corrections saved.', 'ok');
-        await adminMandates();
-      } catch (e) { setStatus(e.message, 'err'); }
-    };
-  }
 }
 
 function weekProgressRowsHtml(progressRows) {
@@ -2496,10 +2510,21 @@ function weekProgressRowsHtml(progressRows) {
             <td>${esc(r.weekLabel || r.weekStart || '—')}</td>
             <td>${esc(String(r.sessionsProvided ?? 0))}</td>
             <td>${esc(String(r.notesPosted ?? 0))}</td>
+            <td>${esc(String(r.sessionsMissed ?? 0))}</td>
+            <td>${esc(String(r.notesFollowUp ?? 0))}</td>
             <td>${badge}</td>
           </tr>`;
     })
-    .join('') || '<tr><td colspan="6">No sessions in this week range.</td></tr>';
+    .join('') || '<tr><td colspan="8">No sessions in this week range.</td></tr>';
+}
+
+function noteFollowUpRowsHtml(rows) {
+  return (rows || [])
+    .map(
+      (r) =>
+        `<tr><td>${childNameLink(r.studentId, r.studentName || r.studentId)}</td><td>${esc(r.date || r.dateOfService || '')}</td><td>${esc(r.weekStart || r.weekId || '')}</td><td>${esc(r.attendance || '')}</td><td>${esc(r.reason || '')}</td><td>${esc(r.notes || '')}</td></tr>`,
+    )
+    .join('') || '<tr><td colspan="6">None</td></tr>';
 }
 
 function bindAdminReportsShell({ from, to }) {
@@ -2513,22 +2538,35 @@ function bindAdminReportsShell({ from, to }) {
       const nextTo = state.reportTo;
       const q = `from=${encodeURIComponent(nextFrom)}&to=${encodeURIComponent(nextTo)}`;
       const tbody = document.getElementById('progBody');
+      const followBody = document.getElementById('followBody');
       loadBtn.disabled = true;
       loadBtn.textContent = 'Loading…';
-      if (tbody) tbody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
+      if (tbody) tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
+      if (followBody) followBody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
       try {
-        const progress = await api('GET', `/admin/reports/week-progress?${q}`);
+        const [progress, missing] = await Promise.all([
+          api('GET', `/admin/reports/week-progress?${q}`),
+          api('GET', `/admin/reports/missing-notes?${q}`),
+        ]);
         if (tbody) tbody.innerHTML = weekProgressRowsHtml(progress.rows || []);
+        if (followBody) followBody.innerHTML = noteFollowUpRowsHtml(missing.rows || []);
         setStatus('', '');
       } catch (e) {
         if (tbody) {
-          tbody.innerHTML = `<tr><td colspan="6">${esc(e.message || 'Could not load week progress.')}</td></tr>`;
+          tbody.innerHTML = `<tr><td colspan="8">${esc(e.message || 'Could not load progress.')}</td></tr>`;
         }
-        setStatus(e.message || 'Could not load week progress.', 'err');
+        setStatus(e.message || 'Could not load progress.', 'err');
       } finally {
         loadBtn.disabled = false;
         loadBtn.textContent = 'Load';
       }
+    };
+  }
+  const lastLoad = document.getElementById('lastLoad');
+  if (lastLoad) {
+    lastLoad.onclick = async () => {
+      state.lastServiceProviderId = document.getElementById('lastProvider')?.value || '';
+      await adminReports();
     };
   }
   document.getElementById('view').onclick = async (e) => {
@@ -2540,7 +2578,7 @@ function bindAdminReportsShell({ from, to }) {
     const delDue = e.target.closest('[data-del-due]');
     if (delDue) {
       try {
-        if (!confirm('Remove this school due date? Alerts for it will stop. This cannot be undone.')) return;
+        if (!confirm('Remove this progress report due date? Alerts for it will stop. This cannot be undone.')) return;
         await api('DELETE', `/admin/due-dates/${delDue.getAttribute('data-del-due')}`);
         setStatus('Due date removed.', 'ok');
         adminReports();
@@ -2573,12 +2611,15 @@ async function adminReports() {
   state.reportFrom = from;
   state.reportTo = to;
   const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  const lastProviderId = state.lastServiceProviderId || '';
 
-  // Paint immediately so Reports never looks frozen while APIs run.
+  const providersOut = await api('GET', '/admin/providers').catch(() => ({ providers: [] }));
+  const providers = providersOut.providers || [];
+
   view(`
     <div class="card">
-      <h2>Week pay progress</h2>
-      <p class="muted">Filter by week-of (Monday) range. <strong>Sessions provided → 50%</strong> (attended/makeup). <strong>Session notes posted → 100%</strong> (real notes on those sessions). Click a child name for school, providers, and mandates.</p>
+      <h2>Sessions &amp; notes progress</h2>
+      <p class="muted">Sessions provided vs mandate (e.g. 50%). Session notes posted (e.g. 100%). Includes missed sessions so you can follow up on absent notes.</p>
       <div class="row">
         <label>Week from <input id="progFrom" type="date" value="${esc(from)}" /></label>
         <label>Week to <input id="progTo" type="date" value="${esc(to)}" /></label>
@@ -2592,32 +2633,40 @@ async function adminReports() {
           <th>Week</th>
           <th>Sessions provided</th>
           <th>Session notes posted</th>
+          <th>Missed</th>
+          <th>Notes follow-up</th>
           <th>Progress</th>
         </tr>
-        <tbody id="progBody"><tr><td colspan="6">Loading…</td></tr></tbody>
+        <tbody id="progBody"><tr><td colspan="8">Loading…</td></tr></tbody>
+      </table>
+      <h3 style="margin-top:1.2rem">Note follow-ups</h3>
+      <p class="muted">Missing or short notes, plus missed sessions to follow up.</p>
+      <table>
+        <tr><th>Child</th><th>Date</th><th>Week</th><th>Attendance</th><th>Reason</th><th>Notes</th></tr>
+        <tbody id="followBody"><tr><td colspan="6">Loading…</td></tr></tbody>
       </table>
     </div>
     <div class="card">
-      <h2>Missing notes</h2>
-      <div class="row">
-        <label>From <input id="missFrom" type="date" value="${esc(from)}" /></label>
-        <label>To <input id="missTo" type="date" value="${esc(to)}" /></label>
-        <button type="button" class="btn" id="missXlsx">Export Excel</button>
-      </div>
-      <table>
-        <tr><th>Child</th><th>Date</th><th>Week</th><th>Notes</th></tr>
-        <tbody id="missingBody"><tr><td colspan="4">Loading…</td></tr></tbody>
-      </table>
       <h2>Last service date</h2>
+      <p class="muted">Latest attended/makeup DOS per child and provider. Filter by provider.</p>
       <div class="row">
-        <label>From <input id="lastFrom" type="date" value="${esc(from)}" /></label>
-        <label>To <input id="lastTo" type="date" value="${esc(to)}" /></label>
+        <label>Provider
+          <select id="lastProvider">
+            <option value="">All providers</option>
+            ${providers.map((p) => {
+              const label = `${p.firstName || ''} ${p.lastName || ''}`.trim() || p.id;
+              const sel = lastProviderId === p.id ? ' selected' : '';
+              return `<option value="${esc(p.id)}"${sel}>${esc(label)}</option>`;
+            }).join('')}
+          </select>
+        </label>
+        <button type="button" class="btn-primary" id="lastLoad">Load</button>
         <button type="button" class="btn" id="lastXlsx">Export Excel</button>
       </div>
-      <table><tr><th>Child</th><th>Last DOS</th></tr>
-      <tbody id="lastBody"><tr><td colspan="2">Loading…</td></tr></tbody>
+      <table><tr><th>Child</th><th>Provider</th><th>School</th><th>Last DOS</th></tr>
+      <tbody id="lastBody"><tr><td colspan="4">Loading…</td></tr></tbody>
       </table>
-      <h2>Progress / annual / reeval (by school)</h2>
+      <h2>Progress report due dates</h2>
       <div class="row">
         <label>From <input id="dueFrom" type="date" value="${esc(from)}" /></label>
         <label>To <input id="dueTo" type="date" value="${esc(to)}" /></label>
@@ -2636,18 +2685,21 @@ async function adminReports() {
   let missing = { rows: [] };
   let last = { rows: [] };
   let dues = { rows: [] };
+  const lastQ = lastProviderId
+    ? `providerId=${encodeURIComponent(lastProviderId)}`
+    : '';
   try {
     [progress, missing, last, dues] = await Promise.all([
       api('GET', `/admin/reports/week-progress?${q}`),
       api('GET', `/admin/reports/missing-notes?${q}`),
-      api('GET', `/admin/reports/last-service?${q}`),
+      api('GET', `/admin/reports/last-service${lastQ ? `?${lastQ}` : ''}`),
       api('GET', `/admin/reports/due-dates?${q}`),
     ]);
   } catch (e) {
     setStatus(e.message || 'Could not load reports.', 'err');
     const progBody = document.getElementById('progBody');
     if (progBody) {
-      progBody.innerHTML = `<tr><td colspan="6">${esc(e.message || 'Could not load reports.')}</td></tr>`;
+      progBody.innerHTML = `<tr><td colspan="8">${esc(e.message || 'Could not load reports.')}</td></tr>`;
     }
     if (loadBtn) {
       loadBtn.disabled = false;
@@ -2657,24 +2709,19 @@ async function adminReports() {
   }
 
   const progBody = document.getElementById('progBody');
-  const missingBody = document.getElementById('missingBody');
+  const followBody = document.getElementById('followBody');
   const lastBody = document.getElementById('lastBody');
   const duesBody = document.getElementById('duesBody');
   if (progBody) progBody.innerHTML = weekProgressRowsHtml(progress.rows || []);
-  if (missingBody) {
-    missingBody.innerHTML =
-      (missing.rows || [])
-        .map(
-          (r) =>
-            `<tr><td>${childNameLink(r.studentId, r.studentName || r.studentId)}</td><td>${esc(r.date || r.dateOfService || '')}</td><td>${esc(r.weekId || '')}</td><td>${esc(r.notes || '')}</td></tr>`,
-        )
-        .join('') || '<tr><td colspan="4">None</td></tr>';
-  }
+  if (followBody) followBody.innerHTML = noteFollowUpRowsHtml(missing.rows || []);
   if (lastBody) {
     lastBody.innerHTML =
       (last.rows || [])
-        .map((r) => `<tr><td>${childNameLink(r.studentId, r.name)}</td><td>${esc(r.lastDos)}</td></tr>`)
-        .join('') || '<tr><td colspan="2">None</td></tr>';
+        .map(
+          (r) =>
+            `<tr><td>${childNameLink(r.studentId, r.name)}</td><td>${esc(r.providerName || '—')}</td><td>${esc(r.schoolName || '—')}</td><td>${esc(r.lastDos)}</td></tr>`,
+        )
+        .join('') || '<tr><td colspan="4">None</td></tr>';
   }
   if (duesBody) {
     duesBody.innerHTML =
@@ -2709,10 +2756,21 @@ async function adminReports() {
       }
     };
   };
-  bindXlsx('progXlsx', '/admin/reports/week-progress.xlsx', 'week-progress.xlsx', 'progFrom', 'progTo');
-  bindXlsx('missXlsx', '/admin/reports/missing-notes.xlsx', 'missing-notes.xlsx', 'missFrom', 'missTo');
-  bindXlsx('lastXlsx', '/admin/reports/last-service.xlsx', 'last-service.xlsx', 'lastFrom', 'lastTo');
+  bindXlsx('progXlsx', '/admin/reports/week-progress.xlsx', 'sessions-notes-progress.xlsx', 'progFrom', 'progTo');
   bindXlsx('duesXlsx', '/admin/reports/due-dates.xlsx', 'due-dates.xlsx', 'dueFrom', 'dueTo');
+  const lastXlsx = document.getElementById('lastXlsx');
+  if (lastXlsx) {
+    lastXlsx.onclick = async () => {
+      try {
+        const pid = document.getElementById('lastProvider')?.value || '';
+        const qq = pid ? `providerId=${encodeURIComponent(pid)}` : '';
+        await downloadReportXlsx(`/admin/reports/last-service.xlsx${qq ? `?${qq}` : ''}`, 'last-service.xlsx');
+        setStatus('Downloaded last-service.xlsx.', 'ok');
+      } catch (e) {
+        setStatus(e.message, 'err');
+      }
+    };
+  }
 }
 
 // ---- Cognito sign-in (only when the build set a clientId) ----
@@ -2845,7 +2903,7 @@ function showLogin(message) {
   hideAppChrome();
   setStatus('', '');
   view(`
-    <div class="card">
+    <div class="card login-card">
       <h2>Sign in</h2>
       <p>Use the email and password from your White Glove invite email.</p>
       <div id="loginErr" class="err-box" ${message ? '' : 'hidden'}>${esc(message || '')}</div>
@@ -2903,7 +2961,7 @@ function showForgotPassword(prefillEmail) {
   hideAppChrome();
   setStatus('', '');
   view(`
-    <div class="card">
+    <div class="card login-card">
       <h2>Forgot password</h2>
       <p>We will email you a confirmation code. Then you pick a new password.</p>
       <div id="loginErr" class="err-box" hidden></div>
@@ -2942,7 +3000,7 @@ function showConfirmForgotPassword(email) {
   hideAppChrome();
   setStatus('', '');
   view(`
-    <div class="card">
+    <div class="card login-card">
       <h2>Enter the code</h2>
       <p>Check <strong>${esc(email)}</strong> for a confirmation code, then choose a new password (at least 8 characters with a capital letter, a small letter, and a number).</p>
       <div id="loginErr" class="err-box" hidden></div>
@@ -2997,7 +3055,7 @@ function showConfirmForgotPassword(email) {
 function showNewPassword(email, session) {
   hideAppChrome();
   view(`
-    <div class="card">
+    <div class="card login-card">
       <h2>Choose a new password</h2>
       <p>First sign in: pick your own password. At least 8 characters with a capital letter, a small letter, and a number.</p>
       <div id="loginErr" class="err-box" hidden></div>
@@ -3061,7 +3119,7 @@ function showChangePassword() {
   }
   if (!state.accessToken) {
     view(`
-      <div class="card">
+      <div class="card login-card">
         <h2>Change password</h2>
         <div class="err-box">Sign out and Sign in again, then you can change your password.</div>
         <button type="button" class="btn" id="changePwCancel">Back</button>
@@ -3071,7 +3129,7 @@ function showChangePassword() {
     return;
   }
   view(`
-    <div class="card">
+    <div class="card login-card">
       <h2>Change password</h2>
       <p>At least 8 characters with a capital letter, a small letter, and a number.</p>
       <div id="changePwErr" class="err-box" hidden></div>
