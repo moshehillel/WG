@@ -21,7 +21,6 @@ const state = {
   reportTo: '',
   childDetailBack: 'children',
   focusSchoolId: '',
-  peopleTab: 'providers',
   lastServiceProviderId: '',
   childSessionFrom: '',
   childSessionTo: '',
@@ -614,17 +613,17 @@ async function loadMissedOptions(studentId, selected) {
   const sel = document.getElementById('makeupOf');
   if (!sel) return;
   if (!studentId) {
-    sel.innerHTML = '<option value="">Select missed session</option>';
+    sel.innerHTML = '<option value="">None — use makeup auth if needed</option>';
     return;
   }
   try {
     const out = await api('GET', `/students/${studentId}/missed`);
     const missed = out.missed || [];
-    sel.innerHTML = `<option value="">Select missed session</option>${missed.map((m) =>
+    sel.innerHTML = `<option value="">None — use makeup auth if needed</option>${missed.map((m) =>
       `<option value="${esc(m.id)}"${m.id === selected ? ' selected' : ''}>${esc(m.dateOfService || m.id)}</option>`,
     ).join('')}`;
   } catch {
-    sel.innerHTML = '<option value="">Select missed session</option>';
+    sel.innerHTML = '<option value="">None — use makeup auth if needed</option>';
   }
 }
 
@@ -636,20 +635,24 @@ function bindMakeupPickers() {
   const notes = document.getElementById('notes');
   if (!att || !student || !wrap) return;
   const fillMakeupNote = () => {
-    if (!notes || att.value !== 'makeup' || !makeupOf?.value) return;
-    const date = makeupOf.selectedOptions[0]?.textContent?.trim() || '';
-    if (!date) return;
+    if (!notes || att.value !== 'makeup') return;
     let cur = notes.value || '';
     if (!/\bmakeup\b|\bmake[\s-]?up\b/i.test(cur)) {
-      cur = `${cur ? `${cur.trim()} ` : ''}Makeup for missed session on ${date}`;
-    } else if (!cur.includes(date)) {
-      cur = `${cur.trim()} ${date}`;
+      cur = `${cur ? `${cur.trim()} ` : ''}Makeup session`;
+    }
+    if (makeupOf?.value) {
+      const date = makeupOf.selectedOptions[0]?.textContent?.trim() || '';
+      if (date && !cur.includes(date)) {
+        cur = `${cur.trim()} for missed session on ${date}`;
+      }
     }
     notes.value = cur;
   };
   const sync = () => {
     wrap.hidden = att.value !== 'makeup';
-    if (att.value === 'makeup') loadMissedOptions(student.value);
+    if (att.value === 'makeup') {
+      loadMissedOptions(student.value).then(fillMakeupNote);
+    }
   };
   att.onchange = sync;
   student.onchange = sync;
@@ -774,6 +777,7 @@ async function therapistHome(statusFlash) {
       ${errors.length ? `<div class="err-box"><strong>Fix these before sending.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}</div>` : ''}
       ${warnings.length ? `<div class="warn-box"><strong>Warnings (you can still send).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}</div>` : ''}
       <p class="muted">Red = blocked (over-mandate or AI note issues). Yellow = under-mandate / soft warnings only.</p>
+      <div class="table-wrap">
       <table>
         <tr><th>Date</th><th>Child</th><th>Service</th><th>Time</th><th>Attendance</th><th>Flags</th><th>Notes</th>${locked ? '' : '<th></th>'}</tr>
         ${sessions.map((s) => {
@@ -791,6 +795,7 @@ async function therapistHome(statusFlash) {
         }).join('') || `<tr><td colspan="${locked ? 7 : 8}">No sessions yet.</td></tr>`}
       </table>
     </div>
+    </div>
 
     ${locked ? `
     <div class="card">
@@ -798,8 +803,8 @@ async function therapistHome(statusFlash) {
       <button type="button" class="btn" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
     </div>
     ` : `
-    <div class="card">
-      <h2>1. Upload weekly report</h2>
+    <div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">1</span> Upload weekly report</h2>
       <p>Choose your Frontline Related Service Session Notes PDF (text PDF, not a scan). Children and schools must already exist from caseload import — this upload will not create them.</p>
       <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
       <button class="btn-primary big" id="upload">Read PDF</button>
@@ -808,8 +813,8 @@ async function therapistHome(statusFlash) {
 
     <div id="uploadIssues" class="upload-issues" hidden></div>
 
-    <div class="card">
-      <h2>2. Additional Services</h2>
+    <div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">2</span> Additional Services</h2>
       <div class="row">
         <label>Service type
           <select id="additionalServiceType">
@@ -840,16 +845,16 @@ async function therapistHome(statusFlash) {
         <label>End time <input id="endTime" placeholder="9:30 am" /></label>
       </div>
       <div class="row">
-        <label id="makeupWrap" hidden>Makeup of missed
-          <select id="makeupOf"><option value="">Select missed session</option></select>
+        <label id="makeupWrap" hidden>Makeup of missed (optional)
+          <select id="makeupOf"><option value="">None — use makeup auth if needed</option></select>
         </label>
       </div>
       <label>Notes <textarea id="notes" rows="3"></textarea></label>
       <button type="button" class="btn big" id="add">Save session</button>
     </div>
 
-    <div class="card">
-      <h2>3. Send timesheet</h2>
+    <div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">3</span> Send timesheet</h2>
       <p>We send it to the school signer on file${signerEmail ? `: ${esc(signerName || signerEmail)} &lt;${esc(signerEmail)}&gt;` : ''}.</p>
       <div class="row timesheet-actions">
         <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
@@ -1047,6 +1052,7 @@ async function adminDash() {
     <div class="card">
       <h2>Weeks</h2>
       ${bulkBar('weeks')}
+      <div class="table-wrap">
       <table>
         <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
         ${weeks.map((w) => `<tr>
@@ -1060,6 +1066,7 @@ async function adminDash() {
           <td class="week-actions">${weekActions(w)}</td>
         </tr>`).join('') || `<tr><td colspan="8">No weeks yet.</td></tr>`}
       </table>
+      </div>
     </div>
   `);
   bindBulkDelete('weeks', {
@@ -1202,7 +1209,7 @@ async function adminChildDetail(studentId, opts = {}) {
   const calSummary = detail.schoolCalendarSummary || formatCalendarSummary(cal);
   const calendarLine = calSummary
     ? `<p class="muted"><strong>Calendar:</strong> ${esc(calSummary)}${(cal?.offDays || []).length ? ` — off: ${esc((cal.offDays || []).slice().sort().join(', '))}` : ''}</p>`
-    : '<p class="muted"><strong>Calendar:</strong> Not set (Providers → Schools → open school)</p>';
+    : '<p class="muted"><strong>Calendar:</strong> Not set (Schools → open school)</p>';
   const assignedProviders = detail.assignedProviders?.length
     ? detail.assignedProviders
     : [...new Map(mandates.filter((m) => m.providerId || m.providerName).map((m) => [
@@ -1617,7 +1624,7 @@ async function adminProviderDetail(providerId) {
     deleteOne: (id) => api('DELETE', `/admin/files/${id}`),
     refresh: refreshProvider,
   });
-  document.getElementById('backProviders').onclick = () => adminPeople();
+  document.getElementById('backProviders').onclick = () => adminProviders();
   document.getElementById('saveProvider').onclick = async () => {
     try {
       await api('PATCH', `/admin/providers/${providerId}`, {
@@ -1639,7 +1646,7 @@ async function adminProviderDetail(providerId) {
         active: document.getElementById('pActive')?.value !== 'false',
       });
       setStatus('Provider saved.', 'ok');
-      await adminPeople();
+      await adminProviders();
     } catch (e) { setStatus(e.message, 'err'); }
   };
   document.getElementById('deleteProvider').onclick = async () => {
@@ -1647,7 +1654,7 @@ async function adminProviderDetail(providerId) {
       if (!confirm('Remove this provider? Their profile and internal notes will be deleted, and the linked therapist login will be deactivated. Mandates stay but become unassigned. This cannot be undone.')) return;
       await api('DELETE', `/admin/providers/${providerId}`);
       setStatus('Provider removed.', 'ok');
-      await adminPeople();
+      await adminProviders();
     } catch (e) { setStatus(e.message, 'err'); }
   };
   document.getElementById('pAddNote').onclick = async () => {
@@ -1886,7 +1893,7 @@ async function adminSchoolDetail(schoolId) {
       await adminSchoolDetail(schoolId);
     } catch (e) { setStatus(e.message, 'err'); }
   };
-  document.getElementById('backSchools').onclick = () => adminPeople({ tab: 'schools' });
+  document.getElementById('backSchools').onclick = () => adminSchools();
   document.getElementById('saveSchool').onclick = async () => {
     try {
       await api('POST', '/admin/schools', {
@@ -1905,7 +1912,7 @@ async function adminSchoolDetail(schoolId) {
       if (!confirm('Remove this school? Its due dates will be deleted and children will be unlinked from it. This cannot be undone.')) return;
       await api('DELETE', `/admin/schools/${schoolId}`);
       setStatus('School removed.', 'ok');
-      await adminPeople({ tab: 'schools' });
+      await adminSchools();
     } catch (e) { setStatus(e.message, 'err'); }
   };
   document.getElementById('duebtn').onclick = async () => {
@@ -1937,71 +1944,15 @@ async function adminSchoolDetail(schoolId) {
   });
 }
 
-async function adminPeople(opts = {}) {
-  if (opts.tab) state.peopleTab = opts.tab;
-  if (opts.focusSchoolId) {
-    state.focusSchoolId = opts.focusSchoolId;
-    state.peopleTab = 'schools';
-  }
-  const tab = state.peopleTab || 'providers';
-  state.peopleTab = tab;
-  const [usersOut, providersOut, schoolsOut] = await Promise.all([
+async function adminProviders() {
+  const [usersOut, providersOut] = await Promise.all([
     api('GET', '/admin/users'),
     api('GET', '/admin/providers'),
-    api('GET', '/admin/schools'),
   ]);
   const users = usersOut.users || [];
   const providers = providersOut.providers || [];
-  const schools = schoolsOut.schools || [];
-  const calendarsBySchoolId = schoolsOut.calendarsBySchoolId || {};
   const therapists = users.filter((u) => u.role === 'therapist');
-  const admins = users.filter((u) => u.role === 'admin');
   view(`
-    <div class="card">
-      <div class="people-tabs" role="tablist">
-        <button type="button" class="tab-btn${tab === 'providers' ? ' on' : ''}" data-people-tab="providers">Providers</button>
-        <button type="button" class="tab-btn${tab === 'schools' ? ' on' : ''}" data-people-tab="schools">Schools</button>
-        <button type="button" class="tab-btn${tab === 'admins' ? ' on' : ''}" data-people-tab="admins">Admins</button>
-      </div>
-    </div>
-    <div ${tab !== 'admins' ? 'hidden' : ''}>
-    <div class="card entry-card">
-      <div class="entry-collapsed" id="addAdminCollapsed">
-        <button type="button" class="btn-primary" id="openAddAdmin">Add admin</button>
-      </div>
-      <div id="addAdminForm" hidden>
-        <h2>Add admin</h2>
-        <p class="muted">Invites another office login (Cognito Admin group). Only existing admins can do this.</p>
-        <label>Email <input id="aemail" type="email" autocomplete="off" /></label>
-        <label>Display name <input id="aname" placeholder="Optional" /></label>
-        <div class="entry-form-actions">
-          <button class="btn-primary big" id="createAdmin">Invite admin</button>
-          <button type="button" class="btn" id="cancelAddAdmin">Cancel</button>
-        </div>
-      </div>
-    </div>
-    <div class="card">
-      <h2>Admins</h2>
-      ${bulkBar('admins')}
-      <table>
-        <tr>${bulkTh('admins')}<th>Name</th><th>Email</th><th></th></tr>
-        ${admins.map((u) => {
-          const self = state.email && u.email && state.email.toLowerCase() === String(u.email).toLowerCase();
-          return `<tr>
-            ${self ? bulkTdEmpty() : bulkTd('admins', u.id)}
-            <td>${esc(u.displayName || '—')}</td>
-            <td>${esc(u.email)}</td>
-            <td>${
-              self
-                ? '—'
-                : `<button type="button" class="btn" data-remove-admin="${esc(u.id)}">Remove</button>`
-            }</td>
-          </tr>`;
-        }).join('') || '<tr><td colspan="4">None yet</td></tr>'}
-      </table>
-    </div>
-    </div>
-    <div ${tab !== 'providers' ? 'hidden' : ''}>
     <div class="card entry-card">
       <div class="entry-collapsed" id="addProviderCollapsed">
         <button type="button" class="btn-primary" id="openAddProvider">Add provider</button>
@@ -2053,8 +2004,88 @@ async function adminPeople(opts = {}) {
         }).join('') || '<tr><td colspan="6">None yet</td></tr>'}
       </table>
     </div>
-    </div>
-    <div ${tab !== 'schools' ? 'hidden' : ''}>
+  `);
+
+  bindBulkDelete('providers', {
+    noun: 'providers',
+    deleteOne: (id, el) => {
+      const kind = el.getAttribute('data-bulk-kind') || 'provider';
+      if (kind === 'user') return api('DELETE', `/admin/users/${id}`);
+      return api('DELETE', `/admin/providers/${id}`);
+    },
+    refresh: () => adminProviders(),
+  });
+
+  const setAddProviderOpen = (open) => {
+    const c = document.getElementById('addProviderCollapsed');
+    const f = document.getElementById('addProviderForm');
+    if (c) c.hidden = open;
+    if (f) f.hidden = !open;
+  };
+  document.getElementById('openAddProvider').onclick = () => setAddProviderOpen(true);
+  document.getElementById('cancelAddProvider').onclick = () => setAddProviderOpen(false);
+
+  document.querySelectorAll('[data-remove-therapist]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        if (!confirm('Remove this therapist login? They have no provider profile. Their login will be deleted and they will disappear from this list.')) return;
+        const id = btn.getAttribute('data-remove-therapist');
+        const out = await api('DELETE', `/admin/users/${id}`);
+        setStatus(out.message || 'Therapist removed.', 'ok');
+        await adminProviders();
+      } catch (e) { setStatus(e.message, 'err'); }
+    });
+  });
+  document.getElementById('createTherapist').onclick = async () => {
+    try {
+      const note = document.getElementById('tnote').value.trim();
+      const out = await api('POST', '/admin/therapists', {
+        email: document.getElementById('temail').value,
+        firstName: document.getElementById('tfirst').value,
+        lastName: document.getElementById('tlast').value,
+        discipline: document.getElementById('tdisc').value,
+        ...readPayRatesFromIds({
+          min30: 't30',
+          min42: 't42',
+          min45: 't45',
+          hour: 'tHour',
+          g30: 'tG30',
+          g42: 'tG42',
+          g45: 'tG45',
+          extra: 'tExtra',
+        }),
+        hhaCaregiverCode: document.getElementById('thha').value,
+        role: 'therapist',
+      });
+      const providerId = out.provider?.id;
+      if (note && providerId) {
+        await api('POST', `/admin/providers/${providerId}/notes`, { body: note });
+      }
+      setStatus(out.message || `Provider ready: ${out.user?.email} ↔ ${providerId}`, 'ok');
+      await adminProviders();
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+  document.querySelectorAll('[data-open-provider]').forEach((btn) => {
+    btn.addEventListener('click', () => adminProviderDetail(btn.getAttribute('data-open-provider')));
+  });
+  document.querySelectorAll('[data-del-provider]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        if (!confirm('Remove this provider? Their profile and internal notes will be deleted, and the linked therapist login will be deactivated. Mandates stay but become unassigned. This cannot be undone.')) return;
+        await api('DELETE', `/admin/providers/${btn.getAttribute('data-del-provider')}`);
+        setStatus('Provider removed.', 'ok');
+        await adminProviders();
+      } catch (e) { setStatus(e.message, 'err'); }
+    });
+  });
+}
+
+async function adminSchools(opts = {}) {
+  if (opts.focusSchoolId) state.focusSchoolId = opts.focusSchoolId;
+  const schoolsOut = await api('GET', '/admin/schools');
+  const schools = schoolsOut.schools || [];
+  const calendarsBySchoolId = schoolsOut.calendarsBySchoolId || {};
+  view(`
     <div class="card entry-card">
       <div class="entry-collapsed" id="addSchoolCollapsed">
         <button type="button" class="btn-primary" id="openAddSchool">Add school</button>
@@ -2092,153 +2123,28 @@ async function adminPeople(opts = {}) {
         }).join('') || '<tr><td colspan="5">None</td></tr>'}
       </table>
     </div>
-    </div>
   `);
 
-  document.querySelectorAll('[data-people-tab]').forEach((btn) => {
-    btn.addEventListener('click', () => adminPeople({ tab: btn.getAttribute('data-people-tab') }));
-  });
-
-  bindBulkDelete('admins', {
-    noun: 'admins',
-    deleteOne: (id) => api('DELETE', `/admin/users/${id}`),
-    refresh: () => adminPeople({ tab: 'admins' }),
-  });
-  bindBulkDelete('providers', {
-    noun: 'providers',
-    deleteOne: (id, el) => {
-      const kind = el.getAttribute('data-bulk-kind') || 'provider';
-      if (kind === 'user') return api('DELETE', `/admin/users/${id}`);
-      return api('DELETE', `/admin/providers/${id}`);
-    },
-    refresh: () => adminPeople({ tab: 'providers' }),
-  });
   bindBulkDelete('schools', {
     noun: 'schools',
     deleteOne: async (id) => {
       if (state.focusSchoolId === id) state.focusSchoolId = '';
       await api('DELETE', `/admin/schools/${id}`);
     },
-    refresh: () => adminPeople({ tab: 'schools' }),
+    refresh: () => adminSchools(),
   });
 
-  const setAddAdminOpen = (open) => {
-    const c = document.getElementById('addAdminCollapsed');
-    const f = document.getElementById('addAdminForm');
-    if (c) c.hidden = open;
-    if (f) f.hidden = !open;
-  };
-  const setAddProviderOpen = (open) => {
-    const c = document.getElementById('addProviderCollapsed');
-    const f = document.getElementById('addProviderForm');
-    if (c) c.hidden = open;
-    if (f) f.hidden = !open;
-  };
   const setAddSchoolOpen = (open) => {
     const c = document.getElementById('addSchoolCollapsed');
     const f = document.getElementById('addSchoolForm');
     if (c) c.hidden = open;
     if (f) f.hidden = !open;
   };
-  const openAddAdmin = document.getElementById('openAddAdmin');
-  if (openAddAdmin) openAddAdmin.onclick = () => setAddAdminOpen(true);
-  const cancelAddAdmin = document.getElementById('cancelAddAdmin');
-  if (cancelAddAdmin) cancelAddAdmin.onclick = () => setAddAdminOpen(false);
-  const openAddProvider = document.getElementById('openAddProvider');
-  if (openAddProvider) openAddProvider.onclick = () => setAddProviderOpen(true);
-  const cancelAddProvider = document.getElementById('cancelAddProvider');
-  if (cancelAddProvider) cancelAddProvider.onclick = () => setAddProviderOpen(false);
-  const openAddSchool = document.getElementById('openAddSchool');
-  if (openAddSchool) openAddSchool.onclick = () => setAddSchoolOpen(true);
-  const cancelAddSchool = document.getElementById('cancelAddSchool');
-  if (cancelAddSchool) cancelAddSchool.onclick = () => setAddSchoolOpen(false);
+  document.getElementById('openAddSchool').onclick = () => setAddSchoolOpen(true);
+  document.getElementById('cancelAddSchool').onclick = () => setAddSchoolOpen(false);
 
-  const createAdmin = document.getElementById('createAdmin');
-  if (createAdmin) {
-    createAdmin.onclick = async () => {
-      try {
-        const email = document.getElementById('aemail').value.trim();
-        const displayName = document.getElementById('aname').value.trim();
-        if (!email) throw new Error('Email is required.');
-        const out = await api('POST', '/admin/users', {
-          email,
-          displayName: displayName || email,
-          role: 'admin',
-        });
-        setStatus(out.message || `Admin invited: ${out.user?.email}`, 'ok');
-        await adminPeople({ tab: 'admins' });
-      } catch (e) { setStatus(e.message, 'err'); }
-    };
-  }
-  document.querySelectorAll('[data-remove-admin]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      try {
-        if (!confirm('Remove this admin? Their login will be deleted and they will disappear from this list.')) return;
-        const id = btn.getAttribute('data-remove-admin');
-        const out = await api('DELETE', `/admin/users/${id}`);
-        setStatus(out.message || 'Admin removed.', 'ok');
-        await adminPeople({ tab: 'admins' });
-      } catch (e) { setStatus(e.message, 'err'); }
-    });
-  });
-  document.querySelectorAll('[data-remove-therapist]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      try {
-        if (!confirm('Remove this therapist login? They have no provider profile. Their login will be deleted and they will disappear from this list.')) return;
-        const id = btn.getAttribute('data-remove-therapist');
-        const out = await api('DELETE', `/admin/users/${id}`);
-        setStatus(out.message || 'Therapist removed.', 'ok');
-        await adminPeople({ tab: 'providers' });
-      } catch (e) { setStatus(e.message, 'err'); }
-    });
-  });
-  const createTherapist = document.getElementById('createTherapist');
-  if (createTherapist) {
-    createTherapist.onclick = async () => {
-      try {
-        const note = document.getElementById('tnote').value.trim();
-        const out = await api('POST', '/admin/therapists', {
-          email: document.getElementById('temail').value,
-          firstName: document.getElementById('tfirst').value,
-          lastName: document.getElementById('tlast').value,
-          discipline: document.getElementById('tdisc').value,
-          ...readPayRatesFromIds({
-            min30: 't30',
-            min42: 't42',
-            min45: 't45',
-            hour: 'tHour',
-            g30: 'tG30',
-            g42: 'tG42',
-            g45: 'tG45',
-            extra: 'tExtra',
-          }),
-          hhaCaregiverCode: document.getElementById('thha').value,
-          role: 'therapist',
-        });
-        const providerId = out.provider?.id;
-        if (note && providerId) {
-          await api('POST', `/admin/providers/${providerId}/notes`, { body: note });
-        }
-        setStatus(out.message || `Provider ready: ${out.user?.email} ↔ ${providerId}`, 'ok');
-        await adminPeople({ tab: 'providers' });
-      } catch (e) { setStatus(e.message, 'err'); }
-    };
-  }
-  document.querySelectorAll('[data-open-provider]').forEach((btn) => {
-    btn.addEventListener('click', () => adminProviderDetail(btn.getAttribute('data-open-provider')));
-  });
   document.querySelectorAll('[data-open-school]').forEach((btn) => {
     btn.addEventListener('click', () => adminSchoolDetail(btn.getAttribute('data-open-school')));
-  });
-  document.querySelectorAll('[data-del-provider]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      try {
-        if (!confirm('Remove this provider? Their profile and internal notes will be deleted, and the linked therapist login will be deactivated. Mandates stay but become unassigned. This cannot be undone.')) return;
-        await api('DELETE', `/admin/providers/${btn.getAttribute('data-del-provider')}`);
-        setStatus('Provider removed.', 'ok');
-        await adminPeople({ tab: 'providers' });
-      } catch (e) { setStatus(e.message, 'err'); }
-    });
   });
   document.querySelectorAll('[data-del-school]').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -2248,30 +2154,110 @@ async function adminPeople(opts = {}) {
         if (state.focusSchoolId === id) state.focusSchoolId = '';
         const out = await api('DELETE', `/admin/schools/${id}`);
         setStatus(out.message || 'School removed.', 'ok');
-        await adminPeople({ tab: 'schools' });
+        await adminSchools();
       } catch (e) { setStatus(e.message, 'err'); }
     });
   });
-  const schoolBtn = document.getElementById('school');
-  if (schoolBtn) {
-    schoolBtn.onclick = async () => {
-      try {
-        const out = await api('POST', '/admin/schools', {
-          name: document.getElementById('sname').value,
-          signerName: document.getElementById('signerName').value,
-          signerEmail: document.getElementById('signerEmail').value,
-        });
-        const schoolId = out.school?.id || '';
-        setStatus('School saved.', 'ok');
-        if (schoolId) await adminSchoolDetail(schoolId);
-        else await adminPeople({ tab: 'schools' });
-      } catch (e) { setStatus(e.message, 'err'); }
-    };
-  }
+  document.getElementById('school').onclick = async () => {
+    try {
+      const out = await api('POST', '/admin/schools', {
+        name: document.getElementById('sname').value,
+        signerName: document.getElementById('signerName').value,
+        signerEmail: document.getElementById('signerEmail').value,
+      });
+      const schoolId = out.school?.id || '';
+      setStatus('School saved.', 'ok');
+      if (schoolId) await adminSchoolDetail(schoolId);
+      else await adminSchools();
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
 
   if (opts.focusSchoolId) {
     await adminSchoolDetail(opts.focusSchoolId);
   }
+}
+
+async function adminAdmins() {
+  const usersOut = await api('GET', '/admin/users');
+  const admins = (usersOut.users || []).filter((u) => u.role === 'admin');
+  view(`
+    <div class="card entry-card">
+      <div class="entry-collapsed" id="addAdminCollapsed">
+        <button type="button" class="btn-primary" id="openAddAdmin">Add admin</button>
+      </div>
+      <div id="addAdminForm" hidden>
+        <h2>Add admin</h2>
+        <p class="muted">Invites another office login (Cognito Admin group). Only existing admins can do this.</p>
+        <label>Email <input id="aemail" type="email" autocomplete="off" /></label>
+        <label>Display name <input id="aname" placeholder="Optional" /></label>
+        <div class="entry-form-actions">
+          <button class="btn-primary big" id="createAdmin">Invite admin</button>
+          <button type="button" class="btn" id="cancelAddAdmin">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Admins</h2>
+      ${bulkBar('admins')}
+      <table>
+        <tr>${bulkTh('admins')}<th>Name</th><th>Email</th><th></th></tr>
+        ${admins.map((u) => {
+          const self = state.email && u.email && state.email.toLowerCase() === String(u.email).toLowerCase();
+          return `<tr>
+            ${self ? bulkTdEmpty() : bulkTd('admins', u.id)}
+            <td>${esc(u.displayName || '—')}</td>
+            <td>${esc(u.email)}</td>
+            <td>${
+              self
+                ? '—'
+                : `<button type="button" class="btn" data-remove-admin="${esc(u.id)}">Remove</button>`
+            }</td>
+          </tr>`;
+        }).join('') || '<tr><td colspan="4">None yet</td></tr>'}
+      </table>
+    </div>
+  `);
+
+  bindBulkDelete('admins', {
+    noun: 'admins',
+    deleteOne: (id) => api('DELETE', `/admin/users/${id}`),
+    refresh: () => adminAdmins(),
+  });
+
+  const setAddAdminOpen = (open) => {
+    const c = document.getElementById('addAdminCollapsed');
+    const f = document.getElementById('addAdminForm');
+    if (c) c.hidden = open;
+    if (f) f.hidden = !open;
+  };
+  document.getElementById('openAddAdmin').onclick = () => setAddAdminOpen(true);
+  document.getElementById('cancelAddAdmin').onclick = () => setAddAdminOpen(false);
+
+  document.getElementById('createAdmin').onclick = async () => {
+    try {
+      const email = document.getElementById('aemail').value.trim();
+      const displayName = document.getElementById('aname').value.trim();
+      if (!email) throw new Error('Email is required.');
+      const out = await api('POST', '/admin/users', {
+        email,
+        displayName: displayName || email,
+        role: 'admin',
+      });
+      setStatus(out.message || `Admin invited: ${out.user?.email}`, 'ok');
+      await adminAdmins();
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+  document.querySelectorAll('[data-remove-admin]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        if (!confirm('Remove this admin? Their login will be deleted and they will disappear from this list.')) return;
+        const id = btn.getAttribute('data-remove-admin');
+        const out = await api('DELETE', `/admin/users/${id}`);
+        setStatus(out.message || 'Admin removed.', 'ok');
+        await adminAdmins();
+      } catch (e) { setStatus(e.message, 'err'); }
+    });
+  });
 }
 
 async function adminMandates() {
@@ -2373,7 +2359,7 @@ async function adminMandates() {
     </div>
     <div class="card">
       <h2>Add mandate manually</h2>
-      <p class="muted">Use <strong>Makeup authorization</strong> for leftover makeup sessions (e.g. 12 from last year). Makeups then count against that pool, not the weekly mandate.</p>
+      <p class="muted">Kind: <strong>Weekly</strong> (normal frequency) or <strong>Makeup auth</strong> (leftover pool, e.g. 12). Unlinked makeups use Makeup auth; miss-linked makeups do not.</p>
       <div class="row">
         <label>Student
           <select id="manStudent">${studentOptions(students)}</select>
@@ -2386,8 +2372,8 @@ async function adminMandates() {
         <label>Service type <input id="manService" placeholder="PT School" /></label>
         <label>Kind
           <select id="manKind">
-            <option value="regular">Regular weekly</option>
-            <option value="makeup_auth">Makeup authorization</option>
+            <option value="regular">Weekly</option>
+            <option value="makeup_auth">Makeup auth</option>
           </select>
         </label>
       </div>
@@ -2518,15 +2504,6 @@ function weekProgressRowsHtml(progressRows) {
     .join('') || '<tr><td colspan="8">No sessions in this week range.</td></tr>';
 }
 
-function noteFollowUpRowsHtml(rows) {
-  return (rows || [])
-    .map(
-      (r) =>
-        `<tr><td>${childNameLink(r.studentId, r.studentName || r.studentId)}</td><td>${esc(r.date || r.dateOfService || '')}</td><td>${esc(r.weekStart || r.weekId || '')}</td><td>${esc(r.attendance || '')}</td><td>${esc(r.reason || '')}</td><td>${esc(r.notes || '')}</td></tr>`,
-    )
-    .join('') || '<tr><td colspan="6">None</td></tr>';
-}
-
 function bindAdminReportsShell({ from, to }) {
   const loadBtn = document.getElementById('progLoad');
   if (loadBtn) {
@@ -2538,18 +2515,12 @@ function bindAdminReportsShell({ from, to }) {
       const nextTo = state.reportTo;
       const q = `from=${encodeURIComponent(nextFrom)}&to=${encodeURIComponent(nextTo)}`;
       const tbody = document.getElementById('progBody');
-      const followBody = document.getElementById('followBody');
       loadBtn.disabled = true;
       loadBtn.textContent = 'Loading…';
       if (tbody) tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
-      if (followBody) followBody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
       try {
-        const [progress, missing] = await Promise.all([
-          api('GET', `/admin/reports/week-progress?${q}`),
-          api('GET', `/admin/reports/missing-notes?${q}`),
-        ]);
+        const progress = await api('GET', `/admin/reports/week-progress?${q}`);
         if (tbody) tbody.innerHTML = weekProgressRowsHtml(progress.rows || []);
-        if (followBody) followBody.innerHTML = noteFollowUpRowsHtml(missing.rows || []);
         setStatus('', '');
       } catch (e) {
         if (tbody) {
@@ -2619,7 +2590,7 @@ async function adminReports() {
   view(`
     <div class="card">
       <h2>Sessions &amp; notes progress</h2>
-      <p class="muted">Sessions provided vs mandate (e.g. 50%). Session notes posted (e.g. 100%). Includes missed sessions so you can follow up on absent notes.</p>
+      <p class="muted">Sessions provided vs mandate (e.g. 50%). Session notes posted (e.g. 100%). Note follow-up counts missing or short notes plus missed sessions that still need attention.</p>
       <div class="row">
         <label>Week from <input id="progFrom" type="date" value="${esc(from)}" /></label>
         <label>Week to <input id="progTo" type="date" value="${esc(to)}" /></label>
@@ -2634,16 +2605,10 @@ async function adminReports() {
           <th>Sessions provided</th>
           <th>Session notes posted</th>
           <th>Missed</th>
-          <th>Notes follow-up</th>
+          <th>Note follow-up</th>
           <th>Progress</th>
         </tr>
         <tbody id="progBody"><tr><td colspan="8">Loading…</td></tr></tbody>
-      </table>
-      <h3 style="margin-top:1.2rem">Note follow-ups</h3>
-      <p class="muted">Missing or short notes, plus missed sessions to follow up.</p>
-      <table>
-        <tr><th>Child</th><th>Date</th><th>Week</th><th>Attendance</th><th>Reason</th><th>Notes</th></tr>
-        <tbody id="followBody"><tr><td colspan="6">Loading…</td></tr></tbody>
       </table>
     </div>
     <div class="card">
@@ -2682,16 +2647,14 @@ async function adminReports() {
 
   const loadBtn = document.getElementById('progLoad');
   let progress = { rows: [] };
-  let missing = { rows: [] };
   let last = { rows: [] };
   let dues = { rows: [] };
   const lastQ = lastProviderId
     ? `providerId=${encodeURIComponent(lastProviderId)}`
     : '';
   try {
-    [progress, missing, last, dues] = await Promise.all([
+    [progress, last, dues] = await Promise.all([
       api('GET', `/admin/reports/week-progress?${q}`),
-      api('GET', `/admin/reports/missing-notes?${q}`),
       api('GET', `/admin/reports/last-service${lastQ ? `?${lastQ}` : ''}`),
       api('GET', `/admin/reports/due-dates?${q}`),
     ]);
@@ -2709,11 +2672,9 @@ async function adminReports() {
   }
 
   const progBody = document.getElementById('progBody');
-  const followBody = document.getElementById('followBody');
   const lastBody = document.getElementById('lastBody');
   const duesBody = document.getElementById('duesBody');
   if (progBody) progBody.innerHTML = weekProgressRowsHtml(progress.rows || []);
-  if (followBody) followBody.innerHTML = noteFollowUpRowsHtml(missing.rows || []);
   if (lastBody) {
     lastBody.innerHTML =
       (last.rows || [])
@@ -2910,7 +2871,7 @@ function showLogin(message) {
       <label>Email <input id="loginEmail" type="email" autocomplete="username" placeholder="you@example.com" /></label>
       <label>Password <input id="loginPassword" type="password" autocomplete="current-password" /></label>
       <button class="btn-primary big" id="loginBtn">Sign in</button>
-      <p><button type="button" class="linkish" id="forgotPasswordBtn">Forgot password?</button></p>
+      <p class="login-footer-link"><button type="button" class="linkish" id="forgotPasswordBtn">Forgot password?</button></p>
     </div>
   `);
   const submit = async () => {
@@ -3189,6 +3150,8 @@ function showChangePassword() {
 // ---- Navigation ----
 
 function hideAppChrome() {
+  document.body.classList.add('is-auth');
+  document.body.classList.remove('is-app');
   document.getElementById('whoBar').hidden = true;
   document.getElementById('rolePick').hidden = true;
   document.getElementById('adminNav').hidden = true;
@@ -3204,6 +3167,8 @@ async function showRole() {
     return;
   }
   const admin = state.role === 'admin';
+  document.body.classList.remove('is-auth');
+  document.body.classList.add('is-app');
   // Always show whoBar after login for both therapist and admin
   const whoBar = document.getElementById('whoBar');
   whoBar.hidden = false;
@@ -3276,8 +3241,10 @@ document.getElementById('adminNav').onclick = (e) => {
   const screen = btn.getAttribute('data-admin');
   if (screen === 'dash') adminDash();
   if (screen === 'children') adminChildren();
-  if (screen === 'people') adminPeople();
+  if (screen === 'providers') adminProviders();
   if (screen === 'mandates') adminMandates();
+  if (screen === 'schools') adminSchools();
+  if (screen === 'admins') adminAdmins();
   if (screen === 'reports') adminReports();
 };
 
