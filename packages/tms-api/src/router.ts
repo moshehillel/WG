@@ -7,10 +7,11 @@ import {
   applyCaseloadImport,
   checkMandatesForWeek,
   collectHeuristicAiIssues,
-  consolidateDuplicateProviderMandates,
   dashboard,
   dueDateReport,
   findProviderByName,
+  isOrphanProvider,
+  purgeOrphanProviders,
   lastServiceByStudent,
   mappingName,
   missingNotes,
@@ -186,17 +187,36 @@ async function upsertTherapistAsProvider(
 
   let provider = providerFor(store, user);
   if (!provider) {
-    provider = store.upsertProvider({
-      id: newId(),
-      userId: user.id,
-      firstName,
-      lastName,
-      discipline,
-      ...providerPayFields(b),
-      hhaCaregiverCode,
-      active: true,
-      createdAt: nowIso(),
-    });
+    // Prefer adopting a same-name orphan instead of creating a linked twin.
+    const byName = findProviderByName(
+      store.data.providers,
+      `${firstName} ${lastName}`.trim() || displayName,
+    );
+    if (byName && isOrphanProvider(store, byName)) {
+      provider = store.upsertProvider({
+        ...byName,
+        userId: user.id,
+        firstName: firstName || byName.firstName,
+        lastName: lastName || byName.lastName,
+        discipline: b.discipline != null && String(b.discipline) ? discipline : byName.discipline,
+        ...providerPayFields(b, byName),
+        hhaCaregiverCode:
+          b.hhaCaregiverCode === undefined ? byName.hhaCaregiverCode : hhaCaregiverCode,
+        active: true,
+      });
+    } else {
+      provider = store.upsertProvider({
+        id: newId(),
+        userId: user.id,
+        firstName,
+        lastName,
+        discipline,
+        ...providerPayFields(b),
+        hhaCaregiverCode,
+        active: true,
+        createdAt: nowIso(),
+      });
+    }
   } else {
     provider = store.upsertProvider({
       ...provider,
@@ -211,6 +231,8 @@ async function upsertTherapistAsProvider(
     });
   }
   linkUserToProvider(store, user.id, provider.id);
+  // Drop empty / merged orphan duplicates left after linking.
+  purgeOrphanProviders(store);
   return {
     user: store.userById(user.id)!,
     provider: store.data.providers.find((p) => p.id === provider!.id)!,
@@ -752,6 +774,20 @@ export async function handleTmsRequest(
     });
   }
 
+  if (req.method === 'POST' && path === '/admin/providers/purge-orphans') {
+    return adminUser(() => {
+      const result = purgeOrphanProviders(store);
+      store.audit(ctx.user.id, 'purge_orphan_providers', 'providers', null, result);
+      return json(200, {
+        ...result,
+        message:
+          result.retained.length > 0
+            ? `Deleted ${result.deleted.length} orphan(s); ${result.retained.length} kept (caseload with no linked match).`
+            : `Deleted ${result.deleted.length} orphan provider(s).`,
+      });
+    });
+  }
+
   if (req.method === 'POST' && path === '/admin/providers') {
     return adminUser(async () => {
       const b = obj(req);
@@ -769,13 +805,26 @@ export async function handleTmsRequest(
           return json(400, { error: err instanceof Error ? err.message : 'Could not save provider.' });
         }
       }
-      const discipline = parseDiscipline(b.discipline);
+      const firstName = String(b.firstName || '');
+      const lastName = String(b.lastName || '');
       const userId = String(b.userId || '');
+      // Avoid creating a new orphan twin when a linked profile already matches the name.
+      if (!userId) {
+        const existing = findProviderByName(store.data.providers, `${firstName} ${lastName}`.trim());
+        if (existing && !isOrphanProvider(store, existing)) {
+          return json(400, {
+            error:
+              'A linked provider with this name already exists. Open that profile instead of creating a duplicate without a login.',
+            existingProviderId: existing.id,
+          });
+        }
+      }
+      const discipline = parseDiscipline(b.discipline);
       const provider = store.upsertProvider({
         id: String(b.id || newId()),
         userId,
-        firstName: String(b.firstName || ''),
-        lastName: String(b.lastName || ''),
+        firstName,
+        lastName,
         discipline,
         ...providerPayFields(b),
         hhaCaregiverCode: String(b.hhaCaregiverCode || ''),
@@ -783,6 +832,7 @@ export async function handleTmsRequest(
         createdAt: nowIso(),
       });
       if (provider.userId) linkUserToProvider(store, provider.userId, provider.id);
+      purgeOrphanProviders(store);
       return json(201, {
         provider: store.data.providers.find((p) => p.id === provider.id),
         user: provider.userId ? store.userById(provider.userId) : undefined,
@@ -791,14 +841,17 @@ export async function handleTmsRequest(
   }
 
   if (req.method === 'GET' && path === '/admin/providers') {
-    return adminUser(() => json(200, { providers: store.data.providers }));
+    return adminUser(() => {
+      // Durable heal: merge alias caseloads and drop empty orphan twins on list.
+      const orphanPurge = purgeOrphanProviders(store);
+      return json(200, { providers: store.data.providers, orphanPurge });
+    });
   }
 
   if (req.method === 'GET' && /^\/admin\/providers\/[^/]+$/.test(path)) {
     return adminUser(() => {
       const id = path.split('/')[3];
-      // Persist repair of split same-name provider caseloads (orphan vs linked login).
-      consolidateDuplicateProviderMandates(store);
+      // Heal on list; detail stays read-only. Import / purge-orphans also write.
       const detail = adminProviderDetail(store, id);
       if (!detail) return json(404, { error: 'Provider not found.' });
       return json(200, detail);

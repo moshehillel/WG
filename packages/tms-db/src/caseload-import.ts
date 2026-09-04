@@ -790,6 +790,18 @@ function normName(s: string): string {
     .trim();
 }
 
+/**
+ * Order-independent name key: lowercase, strip punctuation/commas, collapse
+ * whitespace, then sort tokens so "Ali, Fatimah" ≡ "Fatimah Ali" ≡ "ALI FATIMAH".
+ */
+export function nameTokenKey(s: string): string {
+  return normName(s)
+    .split(/\s+/)
+    .filter(Boolean)
+    .sort()
+    .join(' ');
+}
+
 /** Agency / office labels in RS Provider (not a real therapist name). */
 export function isAgencyProviderName(rawName: string): boolean {
   const n = normName(rawName);
@@ -815,12 +827,74 @@ export function preferCanonicalProvider(providers: Provider[]): Provider | undef
 }
 
 export function providerDisplayNameKey(p: { firstName?: string; lastName?: string }): string {
-  return normName(`${p.firstName || ''} ${p.lastName || ''}`);
+  return nameTokenKey(`${p.firstName || ''} ${p.lastName || ''}`);
+}
+
+/** True when the provider has a linked AppUser / login (userId or reverse providerId). */
+export function providerHasLinkedLogin(store: MemoryStore, p: Provider): boolean {
+  if (String(p.userId || '').trim()) return true;
+  return store.data.users.some((u) => u.providerId === p.id);
+}
+
+/** Orphan = named provider profile with no linked therapist login. */
+export function isOrphanProvider(store: MemoryStore, p: Provider): boolean {
+  return !providerHasLinkedLogin(store, p);
+}
+
+export function providerOwnedDataCounts(store: MemoryStore, providerId: string) {
+  const id = String(providerId || '').trim();
+  return {
+    mandates: store.data.mandates.filter((m) => m.providerId === id).length,
+    weeks: store.data.weeks.filter((w) => w.providerId === id).length,
+    files: store.data.files.filter((f) => f.providerId === id).length,
+    notes: store.data.adminNotes.filter((n) => n.providerId === id).length,
+  };
+}
+
+/** Move mandates / weeks / files / notes from one provider id onto another. */
+export function reassignProviderOwnedData(
+  store: MemoryStore,
+  fromId: string,
+  toId: string,
+): { mandates: number; weeks: number; files: number; notes: number } {
+  if (!fromId || !toId || fromId === toId) {
+    return { mandates: 0, weeks: 0, files: 0, notes: 0 };
+  }
+  let mandates = 0;
+  let weeks = 0;
+  let files = 0;
+  let notes = 0;
+  for (const m of store.data.mandates) {
+    if (m.providerId === fromId) {
+      store.upsertMandate({ ...m, providerId: toId });
+      mandates += 1;
+    }
+  }
+  for (const w of [...store.data.weeks]) {
+    if (w.providerId !== fromId) continue;
+    const clash = store.data.weeks.find((x) => x.providerId === toId && x.weekStart === w.weekStart);
+    if (clash) continue;
+    store.upsertWeek({ ...w, providerId: toId });
+    weeks += 1;
+  }
+  for (let i = 0; i < store.data.files.length; i += 1) {
+    const f = store.data.files[i];
+    if (f.providerId !== fromId) continue;
+    store.data.files[i] = { ...f, providerId: toId };
+    files += 1;
+  }
+  for (const n of store.data.adminNotes) {
+    if (n.providerId === fromId) {
+      store.upsertAdminNote({ ...n, providerId: toId });
+      notes += 1;
+    }
+  }
+  return { mandates, weeks, files, notes };
 }
 
 /**
- * Match RS Provider text to a TMS provider.
- * Accepts "First Last", "Last First", and "Last, First".
+ * Match RS Provider text to a TMS provider by token-set equality
+ * (case-insensitive, comma/punctuation-insensitive, order-independent).
  * Agency labels like "White, Glove" / "White Glove" never match a person.
  * When several rows share a name, prefer the linked (login) active profile.
  */
@@ -828,48 +902,17 @@ export function findProviderByName(providers: Provider[], rawName: string): Prov
   const s = String(rawName || '').trim();
   if (!s) return undefined;
   if (isAgencyProviderName(s)) return undefined;
-  const lower = normName(s);
-  if (!lower) return undefined;
+  const needle = nameTokenKey(s);
+  if (!needle) return undefined;
 
   const hits: Provider[] = [];
-  const pushUnique = (p: Provider | undefined) => {
-    if (!p) return;
-    if (!hits.some((x) => x.id === p.id)) hits.push(p);
-  };
-
   for (const p of providers) {
-    if (normName(`${p.firstName} ${p.lastName}`) === lower) pushUnique(p);
+    if (providerDisplayNameKey(p) === needle) hits.push(p);
   }
-  for (const p of providers) {
-    if (normName(`${p.lastName} ${p.firstName}`) === lower) pushUnique(p);
-  }
-
-  if (s.includes(',')) {
-    const [last, ...rest] = s.split(',').map((p) => p.trim());
-    const first = rest.join(' ').trim();
-    if (first && last) {
-      for (const p of providers) {
-        if (normName(p.firstName) === normName(first) && normName(p.lastName) === normName(last)) {
-          pushUnique(p);
-        }
-      }
-    }
-  }
-
-  const tokens = lower.split(/\s+/).filter(Boolean);
-  if (tokens.length >= 2) {
-    for (const p of providers) {
-      const fn = normName(p.firstName);
-      const ln = normName(p.lastName);
-      if (!fn || !ln) continue;
-      if (tokens.includes(fn) && tokens.includes(ln)) pushUnique(p);
-    }
-  }
-
   return preferCanonicalProvider(hits);
 }
 
-/** Move mandates from same-name orphan provider rows onto the linked canonical profile. */
+/** Move owned data from same-name alias rows onto the linked canonical profile. */
 export function consolidateDuplicateProviderMandates(store: MemoryStore): number {
   const byName = new Map<string, Provider[]>();
   for (const p of store.data.providers) {
@@ -884,15 +927,98 @@ export function consolidateDuplicateProviderMandates(store: MemoryStore): number
     if (group.length < 2) continue;
     const canonical = preferCanonicalProvider(group);
     if (!canonical) continue;
-    const aliasIds = new Set(group.map((p) => p.id));
-    for (const m of store.data.mandates) {
-      if (aliasIds.has(m.providerId) && m.providerId !== canonical.id) {
-        store.upsertMandate({ ...m, providerId: canonical.id });
-        moved += 1;
-      }
+    for (const alias of group) {
+      if (alias.id === canonical.id) continue;
+      moved += reassignProviderOwnedData(store, alias.id, canonical.id).mandates;
     }
   }
   return moved;
+}
+
+export type OrphanPurgeDeleted = {
+  id: string;
+  name: string;
+  reason: 'empty' | 'merged_into_linked';
+  mergedIntoId?: string;
+};
+
+export type OrphanPurgeRetained = {
+  id: string;
+  name: string;
+  reason: 'has_data_no_linked_match';
+  mandates: number;
+  weeks: number;
+  files: number;
+  notes: number;
+};
+
+export type OrphanPurgeResult = {
+  consolidatedMandates: number;
+  deleted: OrphanPurgeDeleted[];
+  retained: OrphanPurgeRetained[];
+};
+
+/**
+ * Consolidate same-name aliases onto linked profiles, then delete orphan
+ * provider rows that were merged into a linked twin (or empty same-name
+ * duplicates). Unique empty orphans are kept for intentional pre-provisioning.
+ * Orphans that uniquely hold caseload/files/notes/weeks with no linked name
+ * match are retained (not silently destroyed).
+ */
+export function purgeOrphanProviders(store: MemoryStore): OrphanPurgeResult {
+  const consolidatedMandates = consolidateDuplicateProviderMandates(store);
+  const deleted: OrphanPurgeDeleted[] = [];
+  const retained: OrphanPurgeRetained[] = [];
+
+  const orphans = store.data.providers.filter((p) => isOrphanProvider(store, p));
+  for (const orphan of orphans) {
+    const name = `${orphan.firstName || ''} ${orphan.lastName || ''}`.trim() || orphan.id;
+    const nameKey = providerDisplayNameKey(orphan);
+    const sameName = nameKey
+      ? store.data.providers.filter((p) => providerDisplayNameKey(p) === nameKey)
+      : [orphan];
+    const linkedTwin = sameName.find((p) => p.id !== orphan.id && providerHasLinkedLogin(store, p));
+    const canonical = preferCanonicalProvider(sameName);
+
+    if (linkedTwin || (canonical && canonical.id !== orphan.id && providerHasLinkedLogin(store, canonical))) {
+      const target = (canonical && providerHasLinkedLogin(store, canonical) ? canonical : linkedTwin)!;
+      reassignProviderOwnedData(store, orphan.id, target.id);
+      // Drop leftover clash weeks still on the orphan so removeProvider won't clear mandates.
+      store.data.weeks = store.data.weeks.filter((w) => w.providerId !== orphan.id);
+      store.removeProvider(orphan.id);
+      deleted.push({
+        id: orphan.id,
+        name,
+        reason: 'merged_into_linked',
+        mergedIntoId: target.id,
+      });
+      continue;
+    }
+
+    const counts = providerOwnedDataCounts(store, orphan.id);
+    const hasData = counts.mandates + counts.weeks + counts.files + counts.notes > 0;
+    if (hasData) {
+      retained.push({
+        id: orphan.id,
+        name,
+        reason: 'has_data_no_linked_match',
+        ...counts,
+      });
+      continue;
+    }
+
+    // Empty duplicate of another same-name row (failed-match leftovers).
+    const siblings = sameName.filter((p) => p.id !== orphan.id);
+    if (siblings.length > 0) {
+      store.removeProvider(orphan.id);
+      deleted.push({ id: orphan.id, name, reason: 'empty' });
+      continue;
+    }
+
+    // Sole empty orphan = intentional pre-provision profile; leave it.
+  }
+
+  return { consolidatedMandates, deleted, retained };
 }
 
 function studentKey(first: string, last: string, school: string): string {
@@ -1198,6 +1324,9 @@ export function applyCaseloadImport(
       schoolExists,
     });
   }
+
+  // After import, drop empty orphan twins left from older duplicate rows.
+  if (!dryRun) purgeOrphanProviders(store);
 
   return {
     dryRun,

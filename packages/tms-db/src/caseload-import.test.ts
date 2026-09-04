@@ -6,10 +6,14 @@ import {
   findProviderByName,
   formatFreqDisplay,
   isAgencyProviderName,
+  isOrphanProvider,
   mandateMatchKey,
+  nameTokenKey,
   parseCaseloadCsv,
   parseCaseloadUpload,
   parseCaseloadWorkbook,
+  providerDisplayNameKey,
+  purgeOrphanProviders,
   splitCsvLine,
 } from './caseload-import.js';
 import { checkMandatesForWeek } from './mandate.js';
@@ -747,6 +751,60 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
     expect(isAgencyProviderName('White Glove')).toBe(true);
   });
 
+  it('matches provider names order-independently and case-insensitively', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-fatimah',
+      userId: 'u-fatimah',
+      firstName: 'Fatimah',
+      lastName: 'Ali',
+      discipline: 'OT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertProvider({
+      id: 'p-john',
+      userId: '',
+      firstName: 'John',
+      lastName: 'Smith',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    for (const raw of [
+      'Fatimah Ali',
+      'Ali Fatimah',
+      'Ali, Fatimah',
+      'fatimah ali',
+      'ALI, FATIMAH',
+      '  Ali ,  Fatimah  ',
+    ]) {
+      expect(findProviderByName(store.data.providers, raw)?.id).toBe('p-fatimah');
+    }
+    expect(findProviderByName(store.data.providers, 'John Doe')).toBeUndefined();
+    expect(findProviderByName(store.data.providers, 'John')).toBeUndefined();
+    expect(findProviderByName(store.data.providers, 'Smith')).toBeUndefined();
+    expect(findProviderByName(store.data.providers, 'John Smith Jr')).toBeUndefined();
+  });
+
   it('prefers linked login provider when duplicate names exist', () => {
     const store = new MemoryStore();
     store.upsertProvider({
@@ -803,6 +861,251 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
     });
     expect(consolidateDuplicateProviderMandates(store)).toBe(1);
     expect(store.data.mandates[0]?.providerId).toBe('p-linked');
+  });
+
+  it('consolidates aliases when first/last fields are swapped', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-orphan-swapped',
+      userId: '',
+      firstName: 'Lee',
+      lastName: 'Pat',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertProvider({
+      id: 'p-linked-pat',
+      userId: 'u-pat2',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertStudent({
+      id: 'st-swap',
+      schoolId: 'sch',
+      firstName: 'A',
+      lastName: 'B',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      ...mandate({ id: 'm-swapped', studentId: 'st-swap', providerId: 'p-orphan-swapped' }),
+    });
+    expect(consolidateDuplicateProviderMandates(store)).toBe(1);
+    expect(store.data.mandates[0]?.providerId).toBe('p-linked-pat');
+  });
+
+  it('purgeOrphanProviders merges onto linked twin then deletes orphan', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-orphan',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertProvider({
+      id: 'p-linked',
+      userId: 'u-pat',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertStudent({
+      id: 'st1',
+      schoolId: 'sch',
+      firstName: 'A',
+      lastName: 'B',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      ...mandate({ id: 'm-orphan', studentId: 'st1', providerId: 'p-orphan' }),
+    });
+    store.addAdminNote({
+      id: 'n1',
+      providerId: 'p-orphan',
+      authorId: 'admin',
+      body: 'follow up',
+      tags: [],
+      createdAt: nowIso(),
+    });
+
+    const result = purgeOrphanProviders(store);
+    expect(result.consolidatedMandates).toBe(1);
+    expect(result.deleted).toEqual([
+      expect.objectContaining({
+        id: 'p-orphan',
+        reason: 'merged_into_linked',
+        mergedIntoId: 'p-linked',
+      }),
+    ]);
+    expect(result.retained).toEqual([]);
+    expect(store.data.providers.map((p) => p.id)).toEqual(['p-linked']);
+    expect(store.data.mandates[0]?.providerId).toBe('p-linked');
+    expect(store.data.adminNotes[0]?.providerId).toBe('p-linked');
+    expect(isOrphanProvider(store, store.data.providers[0]!)).toBe(false);
+  });
+
+  it('purgeOrphanProviders keeps orphan that uniquely holds caseload', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-solo-orphan',
+      userId: '',
+      firstName: 'Solo',
+      lastName: 'Orphan',
+      discipline: 'OT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertStudent({
+      id: 'st-solo',
+      schoolId: 'sch',
+      firstName: 'Kid',
+      lastName: 'One',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      ...mandate({ id: 'm-solo', studentId: 'st-solo', providerId: 'p-solo-orphan' }),
+    });
+
+    const result = purgeOrphanProviders(store);
+    expect(result.deleted).toEqual([]);
+    expect(result.retained).toEqual([
+      expect.objectContaining({
+        id: 'p-solo-orphan',
+        reason: 'has_data_no_linked_match',
+        mandates: 1,
+      }),
+    ]);
+    expect(store.data.providers.map((p) => p.id)).toEqual(['p-solo-orphan']);
+    expect(store.data.mandates[0]?.providerId).toBe('p-solo-orphan');
+  });
+
+  it('purgeOrphanProviders deletes empty duplicate orphans but keeps sole pre-provision', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-empty-solo',
+      userId: '',
+      firstName: 'Solo',
+      lastName: 'Empty',
+      discipline: 'SLP',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertProvider({
+      id: 'p-dup-a',
+      userId: '',
+      firstName: 'Dup',
+      lastName: 'Name',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertProvider({
+      id: 'p-dup-b',
+      userId: '',
+      firstName: 'Dup',
+      lastName: 'Name',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const result = purgeOrphanProviders(store);
+    expect(result.deleted.some((d) => d.reason === 'empty')).toBe(true);
+    expect(store.data.providers.find((p) => p.id === 'p-empty-solo')).toBeTruthy();
+    expect(store.data.providers.filter((p) => providerDisplayNameKey(p) === nameTokenKey('Dup Name'))).toHaveLength(
+      1,
+    );
   });
 
   it('parseCaseloadUpload reads xlsx from base64', () => {
