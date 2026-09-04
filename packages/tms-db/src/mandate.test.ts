@@ -4,7 +4,7 @@ import { dueDateStatus, migrateDueDatesToSchools, shouldNagDue } from './due-dat
 import { weekStartFromDos } from './ids.js';
 import { checkMandate, isMakeupAuthMandate, parseFrequencyPerWeek } from './mandate.js';
 import { parseMandatePdfText } from './mandate-parse.js';
-import { unusedMissedForStudent, validateMakeup } from './makeup.js';
+import { unusedMissedForStudent, validateMakeup, resolveMakeupOfSessionId } from './makeup.js';
 import { MemoryStore } from './memory-store.js';
 import {
   adminWeeksList,
@@ -95,9 +95,16 @@ describe('mandate math', () => {
 });
 
 describe('makeup', () => {
-  it('blocks makeup without a missed id', () => {
-    const err = validateMakeup(sess({ attendance: 'makeup', makeupOfSessionId: '' }), []);
-    expect(err).toMatch(/documented missed/i);
+  it('blocks makeup without a missed id or makeup-auth', () => {
+    const err = validateMakeup(
+      sess({
+        attendance: 'makeup',
+        makeupOfSessionId: '',
+        notes: 'Makeup session without a miss link',
+      }),
+      [],
+    );
+    expect(err).toMatch(/missed session|makeup authorization/i);
   });
 
   it('requires makeup word and missed date in notes', () => {
@@ -138,6 +145,56 @@ describe('makeup', () => {
     expect(unusedMissedForStudent([missed, makeup], 'st1')).toEqual([]);
   });
 
+  it('resolves miss on date first, then makeup-auth, else errors', () => {
+    const missed = sess({ id: 'miss', attendance: 'missed', dateOfService: '09/03/2026' });
+    const other = sess({ id: 'miss2', attendance: 'missed', dateOfService: '09/01/2026' });
+    const makeup = sess({
+      id: 'mu',
+      attendance: 'makeup',
+      makeupOfSessionId: '',
+      notes: 'Makeup for missed session on 09/03/2026',
+      dateOfService: '09/05/2026',
+    });
+    expect(resolveMakeupOfSessionId(makeup, [missed, other, makeup], [])).toEqual({
+      makeupOfSessionId: 'miss',
+      via: 'miss',
+    });
+
+    const auth = mandate({
+      id: 'm-auth',
+      mandateKind: 'makeup_auth',
+      serviceType: 'PT Makeup authorization',
+      frequencyPerWeek: 0,
+      sessionsPerPeriod: 2,
+    });
+    const noMiss = sess({
+      id: 'mu2',
+      attendance: 'makeup',
+      makeupOfSessionId: '',
+      notes: 'Makeup for missed session on 09/10/2026',
+      dateOfService: '09/12/2026',
+    });
+    expect(resolveMakeupOfSessionId(noMiss, [missed, noMiss], [auth])).toEqual({
+      makeupOfSessionId: '',
+      via: 'makeup_auth',
+    });
+    expect(validateMakeup(noMiss, [missed, noMiss], [auth])).toBeNull();
+
+    expect(resolveMakeupOfSessionId(noMiss, [missed, noMiss], [])).toMatchObject({
+      error: expect.stringMatching(/No unused missed session on 09\/10/i),
+    });
+
+    const weekly = mandate({
+      id: 'm-week',
+      mandateKind: 'regular',
+      frequencyPerWeek: 2,
+      sessionsPerPeriod: 2,
+    });
+    expect(resolveMakeupOfSessionId(noMiss, [missed, noMiss], [weekly])).toMatchObject({
+      error: expect.stringMatching(/no makeup authorization/i),
+    });
+  });
+
   it('does not count linked makeup against weekly mandate', () => {
     const missed = sess({ id: 'miss', attendance: 'missed' });
     const attended = sess({ id: 'a' });
@@ -152,7 +209,7 @@ describe('makeup', () => {
     expect(r.used).toBe(1);
   });
 
-  it('links makeups to makeup-auth mandate instead of weekly', () => {
+  it('counts only unlinked makeups against makeup-auth pool', () => {
     const auth = mandate({
       id: 'm-auth',
       mandateKind: 'makeup_auth',
@@ -161,18 +218,24 @@ describe('makeup', () => {
       sessionsPerPeriod: 12,
     });
     expect(isMakeupAuthMandate(auth)).toBe(true);
-    const makeups = [
-      sess({ id: 'mu1', attendance: 'makeup', makeupOfSessionId: 'm1' }),
-      sess({ id: 'mu2', attendance: 'makeup', makeupOfSessionId: 'm2' }),
+    const linked = sess({
+      id: 'mu1',
+      attendance: 'makeup',
+      makeupOfSessionId: 'm1',
+      notes: 'Makeup for 09/01/2026',
+    });
+    const pool = [
+      sess({ id: 'mu2', attendance: 'makeup', makeupOfSessionId: '', notes: 'Makeup session leftover' }),
+      sess({ id: 'mu3', attendance: 'makeup', makeupOfSessionId: '', notes: 'Makeup session leftover two' }),
     ];
-    const r = checkMandate(auth, makeups, makeups);
+    const r = checkMandate(auth, [linked, ...pool], [linked, ...pool]);
     expect(r.over).toBe(false);
     expect(r.used).toBe(2);
     expect(r.allowed).toBe(12);
-    const over = checkMandate(auth, makeups, [
-      ...makeups,
+    const over = checkMandate(auth, pool, [
+      ...pool,
       ...Array.from({ length: 11 }, (_, i) =>
-        sess({ id: `x${i}`, attendance: 'makeup', makeupOfSessionId: `mx${i}` }),
+        sess({ id: `x${i}`, attendance: 'makeup', makeupOfSessionId: '', notes: 'Makeup leftover' }),
       ),
     ]);
     expect(over.over).toBe(true);

@@ -1564,4 +1564,193 @@ describe('TMS upload-sessions errors', () => {
     expect(auth.status).toBe(201);
     expect((auth.body as { mandate: { mandateKind: string } }).mandate.mandateKind).toBe('makeup_auth');
   });
+
+  it('PDF makeup upload links to unused miss on note date and rejects when none exists', async () => {
+    const { store, provider } = storeWithTherapist();
+    const parsed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 2x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    expect(parsed.status).toBe(200);
+    const studentId = (parsed.body as { student: { id: string } }).student.id;
+
+    const weekStart = '2026-08-31';
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart },
+    });
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+
+    const missed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/03/2026',
+        attendance: 'missed',
+        notes: 'Student Absence',
+        serviceType: 'PT School',
+      },
+    });
+    expect(missed.status).toBe(200);
+    const missedId = (missed.body as { session: { id: string } }).session.id;
+
+    const badPdf = [
+      'Student Name: Odne, Aiden',
+      'Service Provider: Pat Lee',
+      'Service: PT School',
+      '09/04/2026 9:00 am 9:30 am',
+      'Make up for missed session on 09/01/2026 balance work',
+    ].join('\n');
+    const rejected = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-09-07', pdfText: badPdf },
+    });
+    expect(rejected.status).toBe(400);
+    expect((rejected.body as { error: string }).error).toMatch(
+      /No unused missed session on 09\/01|no makeup authorization/i,
+    );
+
+    const goodPdf = [
+      'Student Name: Odne, Aiden',
+      'Service Provider: Pat Lee',
+      'Service: PT School',
+      '09/08/2026 9:00 am 9:30 am',
+      'Make up for missed session on 09/03/2026 balance work',
+    ].join('\n');
+    const ok = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-09-07', pdfText: goodPdf },
+    });
+    expect(ok.status).toBe(200);
+    const sessions = (ok.body as { sessions: Array<{ attendance: string; makeupOfSessionId: string }> })
+      .sessions;
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.attendance).toBe('makeup');
+    expect(sessions[0]?.makeupOfSessionId).toBe(missedId);
+  });
+
+  it('allows makeup via makeup-auth when no miss on date; weekly alone cannot', async () => {
+    const { store, provider } = storeWithTherapist();
+    const parsed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 1x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    const studentId = (parsed.body as { student: { id: string } }).student.id;
+
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-08-31' },
+    });
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+
+    const noAuth = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/03/2026',
+        attendance: 'makeup',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Makeup for missed session on 09/01/2026 balance work in gym',
+        serviceType: 'PT School',
+      },
+    });
+    expect(noAuth.status).toBe(400);
+    expect((noAuth.body as { error: string }).error).toMatch(
+      /No unused missed session|no makeup authorization|Makeup requires/i,
+    );
+
+    const auth = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates',
+      headers: adminH,
+      query: {},
+      body: {
+        studentId,
+        providerId: provider.id,
+        mandateKind: 'makeup_auth',
+        serviceType: 'Makeup authorization',
+        discipline: 'PT',
+        sessionsPerPeriod: 12,
+        frequencyPerWeek: 0,
+      },
+    });
+    expect(auth.status).toBe(201);
+    expect((auth.body as { mandate: { mandateKind: string } }).mandate.mandateKind).toBe(
+      'makeup_auth',
+    );
+
+    const viaAuth = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/03/2026',
+        attendance: 'makeup',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Makeup for missed session on 09/01/2026 balance work in gym',
+        serviceType: 'PT School',
+      },
+    });
+    expect(viaAuth.status).toBe(200);
+    expect(
+      (viaAuth.body as { session: { makeupOfSessionId: string } }).session.makeupOfSessionId,
+    ).toBe('');
+
+    const weeklyKind = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates',
+      headers: adminH,
+      query: {},
+      body: {
+        studentId,
+        providerId: provider.id,
+        mandateKind: 'regular',
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 2,
+        sessionsPerPeriod: 2,
+      },
+    });
+    expect(weeklyKind.status).toBe(201);
+    expect((weeklyKind.body as { mandate: { mandateKind: string } }).mandate.mandateKind).toBe(
+      'regular',
+    );
+  });
 });

@@ -23,6 +23,7 @@ import {
   screenServiceNote,
   splitPersonName,
   therapistCanEdit,
+  resolveMakeupOfSessionId,
   unusedMissedForStudent,
   validateMakeup,
   weekStartFromDos,
@@ -1520,6 +1521,28 @@ export async function handleTmsRequest(
       });
       created.push(session);
     }
+    // Resolve makeups: miss on note date first, else leftover makeup-auth capacity.
+    for (let i = 0; i < created.length; i++) {
+      const s = created[i]!;
+      if (s.attendance !== 'makeup') continue;
+      const resolved = resolveMakeupOfSessionId(s, store.data.sessions, store.data.mandates);
+      if ('error' in resolved) {
+        for (const c of created) store.removeSession(c.id);
+        for (const p of prior) store.upsertSession(p);
+        return json(400, { error: resolved.error, errors: [resolved.error], warnings: [] });
+      }
+      const linked = store.upsertSession({
+        ...s,
+        makeupOfSessionId: resolved.makeupOfSessionId,
+      });
+      created[i] = linked;
+      const makeupErr = validateMakeup(linked, store.data.sessions, store.data.mandates);
+      if (makeupErr) {
+        for (const c of created) store.removeSession(c.id);
+        for (const p of prior) store.upsertSession(p);
+        return json(400, { error: makeupErr, errors: [makeupErr], warnings: [] });
+      }
+    }
     const check = checkMandatesForWeek(
       store.data.mandates,
       store.sessionsForWeek(week.id),
@@ -1599,9 +1622,19 @@ export async function handleTmsRequest(
     if (additionalServiceType && !b.serviceType) {
       session.serviceType = serviceTypeFromAdditional;
     }
+    if (session.attendance === 'makeup') {
+      const resolved = resolveMakeupOfSessionId(
+        session,
+        store.data.sessions.filter((s) => s.id !== session.id).concat(session),
+        store.data.mandates,
+      );
+      if ('error' in resolved) return json(400, { error: resolved.error });
+      session.makeupOfSessionId = resolved.makeupOfSessionId;
+    }
     const makeupErr = validateMakeup(
       session,
       store.data.sessions.filter((s) => s.id !== session.id).concat(session),
+      store.data.mandates,
     );
     if (makeupErr) return json(400, { error: makeupErr });
     const screenedLocal = screenServiceNote(session);
@@ -1649,7 +1682,7 @@ export async function handleTmsRequest(
     if (check.errors.length) return json(400, { error: 'Over mandate', errors: check.errors });
     const aiErrors: string[] = [];
     for (const s of sessions) {
-      const makeupErr = validateMakeup(s, store.data.sessions);
+      const makeupErr = validateMakeup(s, store.data.sessions, store.data.mandates);
       if (makeupErr) return json(400, { error: makeupErr });
       if (s.attendance !== 'missed') {
         const screened = await screenNoteWithOptionalBedrock(s);

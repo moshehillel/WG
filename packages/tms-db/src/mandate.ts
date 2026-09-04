@@ -1,4 +1,4 @@
-import type { Discipline, FrequencyKind, Mandate, SessionRow } from './types.js';
+import type { Discipline, FrequencyKind, Mandate, MandateKind, SessionRow } from './types.js';
 
 export function parseFrequencyPerWeek(raw: string): number | null {
   const s = String(raw || '').toLowerCase().replace(/\s+/g, ' ').trim();
@@ -44,6 +44,22 @@ export function sessionLooksGroup(serviceType: string): boolean | null {
   return null;
 }
 
+export function mandateKindOf(mandate: Mandate | undefined): MandateKind {
+  if (!mandate) return 'regular';
+  if (mandate.mandateKind === 'makeup_auth') return 'makeup_auth';
+  if (/\bmakeup\b|make[\s-]?up/i.test(mandate.serviceType || '')) return 'makeup_auth';
+  return 'regular';
+}
+
+export function isMakeupAuthMandate(mandate: Mandate | undefined): boolean {
+  return mandateKindOf(mandate) === 'makeup_auth';
+}
+
+/** Makeup linked to a prior missed session does not consume the weekly mandate. */
+export function makeupExemptFromWeeklyMandate(session: SessionRow): boolean {
+  return session.attendance === 'makeup' && Boolean(session.makeupOfSessionId);
+}
+
 /** True when a session can count against this mandate (discipline + ratio when known). */
 export function sessionMatchesMandate(session: SessionRow, mandate: Mandate): boolean {
   const sessDisc = disciplineFromServiceType(session.serviceType);
@@ -73,11 +89,28 @@ export function assignSessionsToMandates(
     }
     const sessGroup = sessionLooksGroup(s.serviceType);
     let preferred = candidates[0];
-    if (sessGroup != null) {
-      preferred = candidates.find((m) => Boolean(m.ratioGroup) === sessGroup) || candidates[0];
+    if (s.attendance === 'makeup' && !s.makeupOfSessionId) {
+      // Unlinked makeups consume leftover makeup-auth; miss-linked makeups do not.
+      preferred =
+        candidates.find((m) => isMakeupAuthMandate(m)) ||
+        candidates.find((m) => Boolean(m.ratioGroup) === Boolean(sessGroup)) ||
+        candidates[0];
+    } else if (s.attendance === 'makeup' && s.makeupOfSessionId) {
+      preferred =
+        candidates.find((m) => !isMakeupAuthMandate(m) && Boolean(m.ratioGroup) === Boolean(sessGroup)) ||
+        candidates.find((m) => !isMakeupAuthMandate(m)) ||
+        candidates[0];
+    } else if (sessGroup != null) {
+      preferred =
+        candidates.find((m) => !isMakeupAuthMandate(m) && Boolean(m.ratioGroup) === sessGroup) ||
+        candidates.find((m) => !isMakeupAuthMandate(m)) ||
+        candidates[0];
     } else if (candidates.length > 1) {
       // No ratio signal — prefer individual when both exist so group slots aren't double-spent.
-      preferred = candidates.find((m) => !m.ratioGroup) || candidates[0];
+      preferred =
+        candidates.find((m) => !isMakeupAuthMandate(m) && !m.ratioGroup) ||
+        candidates.find((m) => !isMakeupAuthMandate(m)) ||
+        candidates[0];
     }
     byMandateId.get(preferred.id)!.push(s);
   }
@@ -94,13 +127,47 @@ export interface MandateCheck {
   skippedWeekly?: boolean;
 }
 
-/** Attended + makeup count toward the delivery week. Missed does not consume. */
+/** True when the row is an eval / report / consult / meeting (not a caseload visit). */
+export function isAdditionalServiceSession(session: SessionRow): boolean {
+  return Boolean(session.additionalServiceType);
+}
+
+/** Attended counts toward the delivery week. Missed does not. Makeup linked to a missed session does not. */
 export function checkMandate(
   mandate: Mandate | undefined,
   weekSessions: SessionRow[],
+  allSessions: SessionRow[] = weekSessions,
 ): MandateCheck {
+  if (isMakeupAuthMandate(mandate) && mandate) {
+    const allowed = Number(mandate.sessionsPerPeriod ?? mandate.frequencyPerWeek) || 0;
+    // Only unlinked makeups consume the leftover pool; miss-linked makeups do not.
+    const pool = allSessions.filter(
+      (s) =>
+        s.studentId === mandate.studentId &&
+        !isAdditionalServiceSession(s) &&
+        s.attendance === 'makeup' &&
+        !s.makeupOfSessionId,
+    );
+    const used = pool.length;
+    const over = allowed > 0 && used > allowed;
+    return {
+      used,
+      allowed,
+      over,
+      under: allowed > 0 && used < allowed,
+      message: over
+        ? `Over makeup authorization: ${used} of ${allowed} leftover makeup session(s).`
+        : allowed > 0 && used < allowed
+          ? `Makeup authorization: ${used} of ${allowed} leftover makeup session(s).`
+          : '',
+    };
+  }
+
   const used = weekSessions.filter(
-    (s) => s.attendance === 'attended' || s.attendance === 'makeup',
+    (s) =>
+      !isAdditionalServiceSession(s) &&
+      s.attendance === 'attended' &&
+      !makeupExemptFromWeeklyMandate(s),
   ).length;
 
   if (!mandate) {
@@ -156,11 +223,13 @@ export function checkMandate(
 export function checkMandatesForWeek(
   mandates: Mandate[],
   sessions: SessionRow[],
+  allSessions: SessionRow[] = sessions,
 ): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
   const byStudent = new Map<string, SessionRow[]>();
   for (const s of sessions) {
+    if (isAdditionalServiceSession(s)) continue;
     const list = byStudent.get(s.studentId) ?? [];
     list.push(s);
     byStudent.set(s.studentId, list);
@@ -168,13 +237,13 @@ export function checkMandatesForWeek(
   for (const [studentId, rows] of byStudent) {
     const studentMandates = mandates.filter((m) => m.studentId === studentId);
     if (!studentMandates.length) {
-      const result = checkMandate(undefined, rows);
+      const result = checkMandate(undefined, rows, allSessions);
       warnings.push(result.message);
       continue;
     }
 
     if (studentMandates.length === 1) {
-      const result = checkMandate(studentMandates[0], rows);
+      const result = checkMandate(studentMandates[0], rows, allSessions);
       if (result.skippedWeekly) warnings.push(result.message);
       else if (result.over) errors.push(result.message);
       else if (result.under) warnings.push(result.message);
@@ -183,8 +252,16 @@ export function checkMandatesForWeek(
 
     const { byMandateId, unmatched } = assignSessionsToMandates(studentMandates, rows);
     for (const mandate of studentMandates) {
-      const assigned = byMandateId.get(mandate.id) ?? [];
-      const result = checkMandate(mandate, assigned);
+      const assigned = isMakeupAuthMandate(mandate)
+        ? allSessions.filter(
+            (s) =>
+              s.studentId === studentId &&
+              !isAdditionalServiceSession(s) &&
+              s.attendance === 'makeup' &&
+              !s.makeupOfSessionId,
+          )
+        : (byMandateId.get(mandate.id) ?? []);
+      const result = checkMandate(mandate, assigned, allSessions);
       const label = `${mandate.discipline || mandate.serviceType || 'service'}${
         mandate.ratioGroup ? ' group' : ' individual'
       }`;
@@ -197,7 +274,7 @@ export function checkMandatesForWeek(
       }
     }
     const unmatchedUsed = unmatched.filter(
-      (s) => s.attendance === 'attended' || s.attendance === 'makeup',
+      (s) => s.attendance === 'attended' && !makeupExemptFromWeeklyMandate(s),
     );
     if (unmatchedUsed.length) {
       warnings.push(

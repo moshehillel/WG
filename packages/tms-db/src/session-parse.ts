@@ -51,9 +51,18 @@ function dateIndexForSession(blob: string, date: string): number {
   while (from < blob.length) {
     const idx = blob.indexOf(date, from);
     if (idx < 0) return -1;
-    const before = blob.slice(Math.max(0, idx - 24), idx);
+    const before = blob.slice(Math.max(0, idx - 48), idx);
     // Skip report range header "From: … To: …" and DOB lines.
     if (/\bFrom:\s*$/i.test(before) || /\bTo:\s*$/i.test(before) || /D\.?O\.?B\.?\s*$/i.test(before)) {
+      from = idx + date.length;
+      continue;
+    }
+    // Skip "makeup for / missed on …" reference dates — those are not session DOS rows.
+    if (
+      /(?:makeup for|make[\s-]?up for|missed(?:\s+session)?(?:\s+on)?|original(?:\s+date|\s+dos)?|for(?:\s+date)?)\s*$/i.test(
+        before,
+      )
+    ) {
       from = idx + date.length;
       continue;
     }
