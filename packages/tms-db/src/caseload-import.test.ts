@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
 import {
   applyCaseloadImport,
+  consolidateDuplicateProviderMandates,
   findProviderByName,
   formatFreqDisplay,
   isAgencyProviderName,
@@ -515,6 +516,8 @@ describe('caseload Excel parser', () => {
       serviceType: 'Physical Therapy',
       discipline: 'PT',
       ratioGroup: false,
+      durationMinutes: 30,
+      groupSize: 1,
       frequencyKind: 'weekly',
       frequencyPerWeek: 2,
       sessionsPerPeriod: 2,
@@ -527,6 +530,8 @@ describe('caseload Excel parser', () => {
 
     const sincere = parsed.rows.find((r) => r.lastName === 'Fox');
     expect(sincere?.location).toBe('Therapy Room');
+    expect(sincere?.durationMinutes).toBe(30);
+    expect(sincere?.groupSize).toBe(1);
     expect(sincere?.providerName).toBe('White, Glove');
 
     const elmer = parsed.rows.find((r) => r.lastName === 'Diaz');
@@ -536,8 +541,35 @@ describe('caseload Excel parser', () => {
     expect(elmer?.periodSchoolDays).toBe(6);
     expect(elmer?.freqDisplay).toBe('2 / 6 school days');
     expect(elmer?.ratioGroup).toBe(true);
+    expect(elmer?.durationMinutes).toBe(30);
+    expect(elmer?.groupSize).toBeNull();
     expect(elmer?.discipline).toBe('OT');
     expect(elmer?.providerName).toBe('White Glove');
+  });
+
+  it('maps RS Duration and derives group size from Ratio / Group Size column', () => {
+    const csv = `Student Last Name,Student First Name,Related Service,RS Ratio,RS Frequency,RS Period,RS Duration,Group Size,RS Provider
+Haris,Ahmad,PT,Individual,1,Weekly,45,,Pat Lee
+Diaz,Elmer,OT,Small Group,2,Weekly,30,3,Pat Lee
+Fox,Sincere,PT,2:1,1,Weekly,42,,Pat Lee
+`;
+    const parsed = parseCaseloadCsv(csv);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows.find((r) => r.lastName === 'Haris')).toMatchObject({
+      durationMinutes: 45,
+      groupSize: 1,
+      ratioGroup: false,
+    });
+    expect(parsed.rows.find((r) => r.lastName === 'Diaz')).toMatchObject({
+      durationMinutes: 30,
+      groupSize: 3,
+      ratioGroup: true,
+    });
+    expect(parsed.rows.find((r) => r.lastName === 'Fox')).toMatchObject({
+      durationMinutes: 42,
+      groupSize: 2,
+      ratioGroup: true,
+    });
   });
 
   it('treats White Glove as agency and hard-errors unmatched providers (no default)', () => {
@@ -713,6 +745,64 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
     expect(findProviderByName(store.data.providers, 'James Vasaturo')?.id).toBe('p-james');
     expect(findProviderByName(store.data.providers, 'White, Glove')).toBeUndefined();
     expect(isAgencyProviderName('White Glove')).toBe(true);
+  });
+
+  it('prefers linked login provider when duplicate names exist', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-orphan',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertProvider({
+      id: 'p-linked',
+      userId: 'u-pat',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    expect(findProviderByName(store.data.providers, 'Pat Lee')?.id).toBe('p-linked');
+    expect(findProviderByName(store.data.providers, 'Lee, Pat')?.id).toBe('p-linked');
+    store.upsertStudent({
+      id: 'st1',
+      schoolId: 'sch',
+      firstName: 'A',
+      lastName: 'B',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      ...mandate({ id: 'm-orphan', studentId: 'st1', providerId: 'p-orphan' }),
+    });
+    expect(consolidateDuplicateProviderMandates(store)).toBe(1);
+    expect(store.data.mandates[0]?.providerId).toBe('p-linked');
   });
 
   it('parseCaseloadUpload reads xlsx from base64', () => {

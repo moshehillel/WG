@@ -4,6 +4,7 @@ import { MemoryStore } from '@white-glove/tms-db';
 import { handleTmsRequest, type HttpRequest } from './router.js';
 import { createMailer, type Mailer } from './mail.js';
 import { runDueNags } from './due-nags.js';
+import { deleteCognitoLogin } from './invite.js';
 import { loadSnapshotFromS3, saveSnapshotToS3 } from './s3-state.js';
 
 const store = new MemoryStore();
@@ -29,13 +30,91 @@ function hhaClient() {
   return new MockHhaClient();
 }
 
+/** One-shot / ops: remove smoke test AppUsers (+ linked Provider) and Cognito login. */
+async function purgeSmokeUsers(
+  emails: string[],
+): Promise<{ deleted: Array<Record<string, unknown>> }> {
+  await loadSnapshotFromS3(store);
+  const deleted: Array<Record<string, unknown>> = [];
+  for (const raw of emails) {
+    const email = String(raw || '').trim().toLowerCase();
+    if (!email.endsWith('@whiteglove.local')) {
+      deleted.push({ email, status: 'skipped', reason: 'only @whiteglove.local allowed' });
+      continue;
+    }
+    const user = store.userByEmail(email);
+    if (!user) {
+      deleted.push({ email, status: 'not_in_store' });
+      try {
+        await deleteCognitoLogin('', email);
+        deleted[deleted.length - 1] = { email, status: 'cognito_only_cleared' };
+      } catch {
+        /* none in Cognito either */
+      }
+      continue;
+    }
+    if (user.role === 'admin') {
+      deleted.push({ email, userId: user.id, status: 'skipped', reason: 'admin protected' });
+      continue;
+    }
+    const provider =
+      (user.providerId
+        ? store.data.providers.find((p) => p.id === user.providerId)
+        : undefined) || store.data.providers.find((p) => p.userId === user.id);
+    const before = { user: { ...user }, provider: provider ? { ...provider } : null };
+    if (provider) store.removeProvider(provider.id);
+    let cognito = 'skipped';
+    try {
+      await deleteCognitoLogin(user.cognitoSub, user.email);
+      cognito = 'deleted_or_absent';
+    } catch (err) {
+      cognito = err instanceof Error ? err.message : 'cognito_error';
+    }
+    store.deleteUser(user.id);
+    store.audit('ops-purge', 'purge_smoke_user', `user:${user.id}`, before, null);
+    deleted.push({
+      email,
+      userId: user.id,
+      displayName: user.displayName,
+      providerId: provider?.id || null,
+      cognito,
+      status: 'deleted',
+    });
+  }
+  await saveSnapshotToS3(store);
+  return { deleted };
+}
+
 export const handler: APIGatewayProxyHandlerV2 = async (event) => {
-  const rec = event as { source?: string; tmsJob?: string };
+  const rec = event as { source?: string; tmsJob?: string; emails?: string[] };
   if (rec.source === 'aws.events' || rec.tmsJob === 'due-nags') {
     await loadSnapshotFromS3(store);
     const out = await runDueNags(store, await mail());
     await saveSnapshotToS3(store);
     return { statusCode: 200, body: JSON.stringify(out) };
+  }
+  if (rec.tmsJob === 'purge-smoke-users') {
+    const emails = Array.isArray(rec.emails) ? rec.emails : [];
+    const out = await purgeSmokeUsers(emails);
+    return { statusCode: 200, body: JSON.stringify(out) };
+  }
+  if (rec.tmsJob === 'list-users') {
+    await loadSnapshotFromS3(store);
+    const users = store.data.users.map((u) => ({
+      id: u.id,
+      email: u.email,
+      role: u.role,
+      displayName: u.displayName,
+      providerId: u.providerId || null,
+      active: u.active !== false,
+    }));
+    const providers = store.data.providers.map((p) => ({
+      id: p.id,
+      name: `${p.firstName} ${p.lastName}`.trim(),
+      userId: p.userId || null,
+      discipline: p.discipline,
+    }));
+    return { statusCode: 200, body: JSON.stringify({ users, providers }) };
   }
   const method = event.requestContext.http.method.toUpperCase();
   const rawPath = event.rawPath || event.requestContext.http.path || '/';
@@ -60,8 +139,15 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     body,
   };
   await loadSnapshotFromS3(store);
+  const mandateSig = () =>
+    store.data.mandates.map((m) => `${m.id}:${m.providerId}`).join('|');
+  const beforeMandates = mandateSig();
   const result = await handleTmsRequest(store, req, { hha: hhaClient(), mail: await mail() });
-  await saveSnapshotToS3(store);
+  // Skip S3 write on pure reads — but persist when a GET repairs provider caseload aliases.
+  const mutatedOnRead = beforeMandates !== mandateSig();
+  if ((method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') || mutatedOnRead) {
+    await saveSnapshotToS3(store);
+  }
   if (Buffer.isBuffer(result.body)) {
     const out: APIGatewayProxyStructuredResultV2 = {
       statusCode: result.status,

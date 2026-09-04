@@ -5,12 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>White Glove Therapy</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-  <link rel="stylesheet" href="styles.css?v=14" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css?v=33" />
 </head>
-<body>
-  <header>
-    <h1>White Glove Therapy</h1>
-    <p class="lede" id="ledeText">One week at a time. Big buttons. If something is wrong, the page will say so in red.</p>
+<body class="is-auth">
+  <div class="app-backdrop" aria-hidden="true"></div>
+  <header class="app-header">
+    <div class="brand">
+      <img class="brand-mark" src="favicon.svg" width="40" height="40" alt="" />
+      <div class="brand-copy">
+        <h1>White Glove Therapy</h1>
+        <p class="brand-tag">Clinical timesheets &amp; caseload ops</p>
+      </div>
+    </div>
     <div class="who" id="whoBar" hidden>
       <label id="rolePick" hidden>I am
         <select id="role">
@@ -24,19 +33,31 @@
     </div>
     <!-- Therapists use one page — keep this empty and always hidden -->
     <nav id="therapistNav" hidden></nav>
-    <nav id="adminNav" hidden>
+    <nav id="adminNav" class="admin-nav" hidden>
       <button type="button" data-admin="dash" class="nav on">Dashboard</button>
-      <button type="button" data-admin="people" class="nav">Provider</button>
+      <button type="button" data-admin="children" class="nav">Children</button>
+      <button type="button" data-admin="providers" class="nav">Providers</button>
       <button type="button" data-admin="mandates" class="nav">Mandates</button>
+      <button type="button" data-admin="schools" class="nav">Schools</button>
+      <button type="button" data-admin="admins" class="nav">Admins</button>
       <button type="button" data-admin="reports" class="nav">Reports</button>
     </nav>
   </header>
   <main>
     <p id="status"></p>
-    <section id="view"></section>
+    <div class="view-stage">
+      <aside id="authAside" class="auth-aside" aria-hidden="true">
+        <p class="auth-aside-kicker">White Glove Therapy</p>
+        <p class="auth-aside-lead">Secure access for therapists and office staff.</p>
+        <p class="auth-aside-sub">Track weeks, mandates, and signatures in one calm workspace.</p>
+      </aside>
+      <section id="view"></section>
+    </div>
   </main>
-  <footer id="siteFooter"></footer>
-  <script src="config.js?v=14"></script>
-  <script src="app.js?v=14"></script>
+  <footer id="siteFooter" class="site-footer">
+    <a href="https://www.advancedautomations.net" target="_blank" rel="noopener noreferrer">Powered by Advanced Automations</a>
+  </footer>
+  <script src="config.js?v=33"></script>
+  <script src="app.js?v=33"></script>
 </body>
 </html>
