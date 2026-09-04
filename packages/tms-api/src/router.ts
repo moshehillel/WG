@@ -1,28 +1,47 @@
 import {
+  adminProviderDetail,
+  adminSchoolDetail,
+  adminStudentDetail,
+  adminStudentsList,
   adminWeeksList,
   applyCaseloadImport,
   checkMandatesForWeek,
   collectHeuristicAiIssues,
   dashboard,
   dueDateReport,
+  findProviderByName,
   lastServiceByStudent,
   mappingName,
   missingNotes,
+  weekProgressReport,
   newId,
   nowIso,
-  parseCaseloadCsv,
+  parseCaseloadUpload,
   parseMandatePdfText,
   parseWeeklySessionText,
+  schoolNamesConflict,
   screenServiceNote,
   splitPersonName,
   therapistCanEdit,
   unusedMissedForStudent,
   validateMakeup,
   weekStartFromDos,
+  additionalServiceLabel,
+  isAdditionalServiceType,
+  emptySchoolCalendar,
+  isIsoDate,
+  normalizeOffDays,
+  parseOffDaysCsv,
+  blankProviderPay,
+  sessionPayAmount,
+  DEFAULT_ADMIN_NOTE_TAGS,
+  rowsToXlsxBuffer,
   type AppUser,
   type Discipline,
   type FrequencyKind,
+  type MandateKind,
   type MemoryStore,
+  type SchoolCalendar,
   type SessionRow,
   type Student,
 } from '@white-glove/tms-db';
@@ -132,7 +151,6 @@ async function upsertTherapistAsProvider(
   const firstName = String(b.firstName || fromDisplay.firstName || '').trim();
   const lastName = String(b.lastName || fromDisplay.lastName || '').trim();
   const discipline = parseDiscipline(b.discipline);
-  const payRate = b.payRate == null || b.payRate === '' ? null : Number(b.payRate);
   const hhaCaregiverCode = String(b.hhaCaregiverCode || '');
 
   let user = store.userByEmail(email);
@@ -172,7 +190,7 @@ async function upsertTherapistAsProvider(
       firstName,
       lastName,
       discipline,
-      payRate,
+      ...providerPayFields(b),
       hhaCaregiverCode,
       active: true,
       createdAt: nowIso(),
@@ -183,7 +201,7 @@ async function upsertTherapistAsProvider(
       firstName: firstName || provider.firstName,
       lastName: lastName || provider.lastName,
       discipline: b.discipline != null && String(b.discipline) ? discipline : provider.discipline,
-      payRate: b.payRate === undefined ? provider.payRate : payRate,
+      ...providerPayFields(b, provider),
       hhaCaregiverCode:
         b.hhaCaregiverCode === undefined ? provider.hhaCaregiverCode : hhaCaregiverCode,
       active: true,
@@ -216,10 +234,182 @@ function pickStr(v: unknown, fallback: string): string {
   return v != null ? String(v) : fallback;
 }
 
+function parseNoteTags(b: Record<string, unknown>, existing: string[] = []): string[] {
+  if (b.tags === undefined) return existing;
+  const raw = b.tags;
+  const list = Array.isArray(raw)
+    ? raw
+    : String(raw || '')
+        .split(',')
+        .map((t) => t.trim());
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of list) {
+    const s = String(t || '').trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+function parseMandateKind(raw: unknown, fallback: MandateKind = 'regular'): MandateKind {
+  return String(raw || fallback) === 'makeup_auth' ? 'makeup_auth' : 'regular';
+}
+
+function parseNullableNumber(v: unknown): number | null {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Prefer `payRatePerHour`; accept legacy `payRate` as alias for per-hour. */
+function resolvePayRatePerHour(
+  b: Record<string, unknown>,
+  existing: number | null | undefined,
+): number | null {
+  if (b.payRatePerHour !== undefined) return parseNullableNumber(b.payRatePerHour);
+  if (b.payRate !== undefined) return parseNullableNumber(b.payRate);
+  return existing ?? null;
+}
+
+function resolveOptionalPayField(
+  b: Record<string, unknown>,
+  key: string,
+  existing: number | null | undefined,
+): number | null {
+  if (b[key] !== undefined) return parseNullableNumber(b[key]);
+  return existing ?? null;
+}
+
+function providerPayFields(
+  b: Record<string, unknown>,
+  existing?: Partial<ReturnType<typeof blankProviderPay>> & { payRatePerHour?: number | null },
+) {
+  const payKeys = [
+    'payRate30Min',
+    'payRate42Min',
+    'payRate45Min',
+    'payRateGroup30Min',
+    'payRateGroup42Min',
+    'payRateGroup45Min',
+    'payRateAdditionalHourly',
+  ] as const;
+  const out = {
+    ...blankProviderPay(),
+    payRatePerHour: resolvePayRatePerHour(b, existing?.payRatePerHour),
+  };
+  for (const key of payKeys) {
+    out[key] = resolveOptionalPayField(b, key, existing?.[key]);
+  }
+  if (b.payRateAdditionalServices !== undefined && b.payRateAdditionalHourly === undefined) {
+    out.payRateAdditionalHourly = parseNullableNumber(b.payRateAdditionalServices);
+  }
+  return out;
+}
+
 function pdfBufferFromBody(b: Record<string, unknown>): Buffer | null {
   const raw = typeof b.pdfBase64 === 'string' ? b.pdfBase64.trim() : '';
   if (!raw) return null;
   return Buffer.from(raw.replace(/^data:application\/pdf;base64,/, ''), 'base64');
+}
+
+function anyFileBufferFromBody(b: Record<string, unknown>): Buffer | null {
+  const pdf = pdfBufferFromBody(b);
+  if (pdf) return pdf;
+  const raw = typeof b.fileBase64 === 'string' ? b.fileBase64.trim() : '';
+  if (!raw) return null;
+  return Buffer.from(raw.replace(/^data:[^;]+;base64,/, ''), 'base64');
+}
+
+function xlsxResponse(filename: string, buf: Buffer): HttpResponse {
+  return {
+    status: 200,
+    headers: {
+      'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'content-disposition': `attachment; filename="${filename}"`,
+    },
+    body: buf,
+  };
+}
+
+function reportRange(query: Record<string, string | undefined>) {
+  return { from: String(query.from || '').trim(), to: String(query.to || '').trim() };
+}
+
+function reportXlsxWeekProgress(
+  store: MemoryStore,
+  query: Record<string, string | undefined>,
+): HttpResponse {
+  const { from, to } = reportRange(query);
+  const rows = weekProgressReport(store, { from, to });
+  return xlsxResponse(
+    'sessions-notes-progress.xlsx',
+    rowsToXlsxBuffer(
+      'Sessions & notes',
+      [
+        'Child',
+        'Mandate',
+        'Week',
+        'Sessions provided',
+        'Notes posted',
+        'Missed',
+        'Notes follow-up',
+        'Progress %',
+      ],
+      rows.map((r) => [
+        r.childName,
+        r.mandateLabel,
+        r.weekLabel,
+        r.sessionsProvided,
+        r.notesPosted,
+        r.sessionsMissed,
+        r.notesFollowUp,
+        r.progressPct,
+      ]),
+    ),
+  );
+}
+
+function reportXlsxMissing(store: MemoryStore, query: Record<string, string | undefined>): HttpResponse {
+  const { from, to } = reportRange(query);
+  const rows = missingNotes(store, undefined, { from, to, includeMissed: true });
+  return xlsxResponse(
+    'missing-notes.xlsx',
+    rowsToXlsxBuffer(
+      'Note follow-ups',
+      ['Child', 'Date', 'Week', 'Attendance', 'Reason', 'Notes'],
+      rows.map((r) => [r.studentName, r.date, r.weekStart || r.weekId, r.attendance, r.reason, r.notes]),
+    ),
+  );
+}
+
+function reportXlsxLastService(store: MemoryStore, query: Record<string, string | undefined>): HttpResponse {
+  const providerId = String(query.providerId || '').trim();
+  const rows = lastServiceByStudent(store, { providerId: providerId || undefined });
+  return xlsxResponse(
+    'last-service.xlsx',
+    rowsToXlsxBuffer(
+      'Last service',
+      ['Child', 'Provider', 'School', 'Last DOS'],
+      rows.map((r) => [r.name, r.providerName, r.schoolName, r.lastDos]),
+    ),
+  );
+}
+
+function reportXlsxDueDates(store: MemoryStore, query: Record<string, string | undefined>): HttpResponse {
+  const { from, to } = reportRange(query);
+  const rows = dueDateReport(store, new Date(), { from, to });
+  return xlsxResponse(
+    'due-dates.xlsx',
+    rowsToXlsxBuffer(
+      'Due dates',
+      ['School', 'Kind', 'Due', 'Status'],
+      rows.map((r) => [r.schoolName, r.kind, r.dueOn, r.status]),
+    ),
+  );
 }
 
 export async function handleTmsRequest(
@@ -330,6 +520,9 @@ export async function handleTmsRequest(
           b.firstName != null ||
           b.lastName != null ||
           b.payRate != null ||
+          b.payRatePerHour != null ||
+          b.payRate30Min != null ||
+          b.payRateAdditionalHourly != null ||
           b.hhaCaregiverCode != null ||
           b.createProvider === true);
       if (wantsProvider) {
@@ -389,19 +582,25 @@ export async function handleTmsRequest(
       const id = path.split('/')[3];
       const target = store.userById(id);
       if (!target) return json(404, { error: 'User not found.' });
-      if (target.role !== 'admin') {
-        return json(400, { error: 'Only admin accounts can be deleted. Deactivate therapists instead.' });
-      }
       if (target.id === ctx.user.id) {
         return json(400, { error: 'You cannot delete your own admin account.' });
       }
-      const otherActiveAdmins = store.data.users.filter(
-        (u) => u.role === 'admin' && u.active !== false && u.id !== target.id,
-      );
-      if (otherActiveAdmins.length === 0) {
-        return json(400, { error: 'Cannot delete the last active admin.' });
+      if (target.role === 'admin') {
+        const otherActiveAdmins = store.data.users.filter(
+          (u) => u.role === 'admin' && u.active !== false && u.id !== target.id,
+        );
+        if (otherActiveAdmins.length === 0) {
+          return json(400, { error: 'Cannot delete the last active admin.' });
+        }
       }
-      const before = { ...target };
+      const linkedProvider =
+        (target.providerId
+          ? store.data.providers.find((p) => p.id === target.providerId)
+          : undefined) || store.data.providers.find((p) => p.userId === target.id);
+      const before = { user: { ...target }, provider: linkedProvider ? { ...linkedProvider } : null };
+      if (linkedProvider && target.role === 'therapist') {
+        store.removeProvider(linkedProvider.id);
+      }
       try {
         await deleteCognitoLogin(target.cognitoSub, target.email);
       } catch (err) {
@@ -410,7 +609,11 @@ export async function handleTmsRequest(
       }
       store.deleteUser(target.id);
       store.audit(ctx.user.id, 'delete_user', `user:${target.id}`, before, null);
-      return json(200, { deleted: true, id: target.id, message: 'Admin removed.' });
+      return json(200, {
+        deleted: true,
+        id: target.id,
+        message: target.role === 'admin' ? 'Admin removed.' : 'Therapist removed.',
+      });
     });
   }
 
@@ -462,7 +665,89 @@ export async function handleTmsRequest(
   }
 
   if (req.method === 'GET' && path === '/admin/schools') {
-    return adminUser(() => json(200, { schools: store.data.schools }));
+    return adminUser(() => {
+      const calendarsBySchoolId: Record<string, SchoolCalendar> = {};
+      for (const s of store.data.schools) {
+        calendarsBySchoolId[s.id] =
+          store.schoolCalendarForSchool(s.id) ?? emptySchoolCalendar(s.id);
+      }
+      return json(200, { schools: store.data.schools, calendarsBySchoolId });
+    });
+  }
+
+  if (req.method === 'GET' && /^\/admin\/schools\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const id = path.split('/')[3];
+      if (id === 'calendar') return json(404, { error: 'Not found.' });
+      const detail = adminSchoolDetail(store, id);
+      if (!detail) return json(404, { error: 'School not found.' });
+      return json(200, detail);
+    });
+  }
+
+  if (req.method === 'GET' && /^\/admin\/schools\/[^/]+\/calendar$/.test(path)) {
+    return adminUser(() => {
+      const schoolId = path.split('/')[3];
+      const school = store.data.schools.find((s) => s.id === schoolId);
+      if (!school) return json(404, { error: 'School not found.' });
+      const calendar =
+        store.schoolCalendarForSchool(schoolId) ?? emptySchoolCalendar(schoolId);
+      return json(200, { calendar });
+    });
+  }
+
+  if (req.method === 'POST' && /^\/admin\/schools\/[^/]+\/calendar$/.test(path)) {
+    return adminUser(() => {
+      const schoolId = path.split('/')[3];
+      const school = store.data.schools.find((s) => s.id === schoolId);
+      if (!school) return json(404, { error: 'School not found.' });
+      const b = obj(req);
+      const yearStart = String(b.yearStart ?? '').trim();
+      const yearEnd = String(b.yearEnd ?? '').trim();
+      if (yearStart && !isIsoDate(yearStart)) {
+        return json(400, { error: 'yearStart must be YYYY-MM-DD.' });
+      }
+      if (yearEnd && !isIsoDate(yearEnd)) {
+        return json(400, { error: 'yearEnd must be YYYY-MM-DD.' });
+      }
+      if (yearStart && yearEnd && yearStart > yearEnd) {
+        return json(400, { error: 'yearStart must be on or before yearEnd.' });
+      }
+      let offDays: string[] = [];
+      if (Array.isArray(b.offDays)) {
+        offDays = normalizeOffDays(b.offDays.map(String));
+      }
+      const csv = String(b.offDaysCsv ?? b.offDaysText ?? '').trim();
+      if (csv) offDays = normalizeOffDays([...offDays, ...parseOffDaysCsv(csv)]);
+      const before = store.schoolCalendarForSchool(schoolId) ?? null;
+      const calendar = store.upsertSchoolCalendar({
+        schoolId,
+        yearStart,
+        yearEnd,
+        offDays,
+      });
+      store.audit(ctx.user.id, 'upsert_school_calendar', `school:${schoolId}`, before, calendar);
+      return json(200, { calendar, message: 'School calendar saved.' });
+    });
+  }
+
+  if (req.method === 'DELETE' && /^\/admin\/schools\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const id = path.split('/')[3];
+      const existing = store.data.schools.find((s) => s.id === id);
+      if (!existing) return json(404, { error: 'School not found.' });
+      const childCount = store.data.students.filter((s) => s.schoolId === id).length;
+      store.removeSchool(id);
+      store.audit(ctx.user.id, 'delete_school', `school:${id}`, { ...existing, childCount }, null);
+      return json(200, {
+        deleted: true,
+        id,
+        message:
+          childCount > 0
+            ? `School removed. ${childCount} child(ren) no longer linked to a school.`
+            : 'School removed.',
+      });
+    });
   }
 
   if (req.method === 'POST' && path === '/admin/providers') {
@@ -490,7 +775,7 @@ export async function handleTmsRequest(
         firstName: String(b.firstName || ''),
         lastName: String(b.lastName || ''),
         discipline,
-        payRate: b.payRate == null || b.payRate === '' ? null : Number(b.payRate),
+        ...providerPayFields(b),
         hhaCaregiverCode: String(b.hhaCaregiverCode || ''),
         active: b.active === false ? false : true,
         createdAt: nowIso(),
@@ -505,6 +790,140 @@ export async function handleTmsRequest(
 
   if (req.method === 'GET' && path === '/admin/providers') {
     return adminUser(() => json(200, { providers: store.data.providers }));
+  }
+
+  if (req.method === 'GET' && /^\/admin\/providers\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const id = path.split('/')[3];
+      const detail = adminProviderDetail(store, id);
+      if (!detail) return json(404, { error: 'Provider not found.' });
+      return json(200, detail);
+    });
+  }
+
+  if ((req.method === 'POST' || req.method === 'PATCH') && /^\/admin\/providers\/[^/]+$/.test(path)) {
+    return adminUser(async () => {
+      const id = path.split('/')[3];
+      const existing = store.data.providers.find((p) => p.id === id);
+      if (!existing) return json(404, { error: 'Provider not found.' });
+      const b = obj(req);
+      const provider = store.upsertProvider({
+        ...existing,
+        firstName: pickStr(b.firstName, existing.firstName),
+        lastName: pickStr(b.lastName, existing.lastName),
+        discipline: parseDiscipline(b.discipline, existing.discipline),
+        ...providerPayFields(b, existing),
+        hhaCaregiverCode: pickStr(b.hhaCaregiverCode, existing.hhaCaregiverCode),
+        active: b.active === false ? false : b.active === true ? true : existing.active,
+      });
+      let user = provider.userId ? store.userById(provider.userId) : store.data.users.find((u) => u.providerId === provider.id);
+      if (user && (b.email != null || b.displayName != null)) {
+        const email = b.email != null ? String(b.email).trim().toLowerCase() : user.email;
+        const displayName =
+          b.displayName != null
+            ? String(b.displayName).trim()
+            : `${provider.firstName} ${provider.lastName}`.trim() || user.displayName;
+        user = store.upsertUser({ ...user, email: email || user.email, displayName: displayName || user.displayName });
+      }
+      store.audit(ctx.user.id, 'update_provider', `provider:${id}`, existing, provider);
+      return json(200, { provider, user: user || null });
+    });
+  }
+
+  if (req.method === 'DELETE' && /^\/admin\/providers\/[^/]+$/.test(path)) {
+    return adminUser(async () => {
+      const id = path.split('/')[3];
+      const existing = store.data.providers.find((p) => p.id === id);
+      if (!existing) return json(404, { error: 'Provider not found.' });
+      const linked =
+        (existing.userId ? store.userById(existing.userId) : undefined) ||
+        store.data.users.find((u) => u.providerId === existing.id);
+      const before = { provider: existing, user: linked || null };
+      store.removeProvider(id);
+      if (linked && linked.role === 'therapist') {
+        store.upsertUser({ ...linked, providerId: '', active: false });
+        try {
+          await deactivateCognitoLogin(linked.email, linked.role);
+        } catch {
+          /* app unlink still wins */
+        }
+      }
+      store.audit(ctx.user.id, 'delete_provider', `provider:${id}`, before, null);
+      return json(200, { deleted: true, id, message: 'Provider removed.' });
+    });
+  }
+
+  if ((req.method === 'POST' || req.method === 'PATCH') && /^\/admin\/providers\/[^/]+\/notes\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const providerId = path.split('/')[3];
+      const noteId = path.split('/')[5];
+      const existing = store.data.adminNotes.find((n) => n.id === noteId && n.providerId === providerId);
+      if (!existing) return json(404, { error: 'Note not found.' });
+      const text = String(obj(req).body || obj(req).note || obj(req).text || '').trim();
+      if (!text) return json(400, { error: 'Note text is required.' });
+      const tags = parseNoteTags(obj(req), existing.tags);
+      const note = store.upsertAdminNote({ ...existing, body: text, tags });
+      store.audit(ctx.user.id, 'update_admin_note', `note:${noteId}`, existing, note);
+      return json(200, { note, notes: store.notesForProvider(providerId) });
+    });
+  }
+
+  if (req.method === 'DELETE' && /^\/admin\/providers\/[^/]+\/notes\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const providerId = path.split('/')[3];
+      const noteId = path.split('/')[5];
+      const existing = store.data.adminNotes.find((n) => n.id === noteId && n.providerId === providerId);
+      if (!existing) return json(404, { error: 'Note not found.' });
+      store.removeAdminNote(noteId);
+      store.audit(ctx.user.id, 'delete_admin_note', `note:${noteId}`, existing, null);
+      return json(200, { deleted: true, notes: store.notesForProvider(providerId) });
+    });
+  }
+
+  if (req.method === 'GET' && path === '/admin/students') {
+    return adminUser(() => json(200, { students: adminStudentsList(store) }));
+  }
+
+  if (req.method === 'GET' && /^\/admin\/students\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const id = path.split('/')[3];
+      const detail = adminStudentDetail(store, id);
+      if (!detail) return json(404, { error: 'Child not found.' });
+      return json(200, detail);
+    });
+  }
+
+  if (req.method === 'DELETE' && /^\/admin\/students\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const id = path.split('/')[3];
+      const existing = store.data.students.find((s) => s.id === id);
+      if (!existing) return json(404, { error: 'Child not found.' });
+      store.removeStudent(id);
+      store.audit(ctx.user.id, 'delete_student', `student:${id}`, existing, null);
+      return json(200, { deleted: true, id, message: 'Child removed.' });
+    });
+  }
+
+  if (req.method === 'DELETE' && /^\/admin\/mandates\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const id = path.split('/')[3];
+      const existing = store.data.mandates.find((m) => m.id === id);
+      if (!existing) return json(404, { error: 'Mandate not found.' });
+      store.removeMandate(id);
+      store.audit(ctx.user.id, 'delete_mandate', `mandate:${id}`, existing, null);
+      return json(200, { deleted: true, id, message: 'Mandate removed.' });
+    });
+  }
+
+  if (req.method === 'DELETE' && /^\/admin\/files\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const id = path.split('/')[3];
+      const existing = store.data.files.find((f) => f.id === id);
+      if (!existing) return json(404, { error: 'File not found.' });
+      store.removeFile(id);
+      store.audit(ctx.user.id, 'delete_file', `file:${id}`, existing, null);
+      return json(200, { deleted: true, id, message: 'File removed.' });
+    });
   }
 
   if (req.method === 'GET' && path === '/admin/weeks') {
@@ -523,6 +942,7 @@ export async function handleTmsRequest(
         providerId,
         authorId: ctx.user.id,
         body: text,
+        tags: parseNoteTags(obj(req), []),
         createdAt: nowIso(),
       });
       return json(201, { note, notes: store.notesForProvider(providerId) });
@@ -532,7 +952,10 @@ export async function handleTmsRequest(
   if (req.method === 'GET' && /^\/admin\/providers\/[^/]+\/notes$/.test(path)) {
     return adminUser(() => {
       const providerId = path.split('/')[3];
-      return json(200, { notes: store.notesForProvider(providerId) });
+      return json(200, {
+        notes: store.notesForProvider(providerId),
+        tagOptions: [...DEFAULT_ADMIN_NOTE_TAGS],
+      });
     });
   }
 
@@ -590,28 +1013,19 @@ export async function handleTmsRequest(
     return adminUser(() => {
       const b = obj(req);
       const csvText = String(b.csvText || b.csv || textBody(req) || '');
-      if (!csvText.trim()) return json(400, { error: 'csvText is required.' });
-      if (/\.xlsx?$/i.test(String(b.fileName || ''))) {
-        return json(400, {
-          error:
-            'This looks like an Excel workbook (.xls/.xlsx), which is not supported. In Excel choose File → Save As → CSV (Comma delimited), then upload the .csv file.',
-          errors: [
-            {
-              row: 0,
-              rowNumber: 0,
-              field: 'File',
-              problem: 'Excel .xls/.xlsx files cannot be imported.',
-              fix: 'Save As CSV (Comma delimited) and upload the .csv file instead.',
-              message:
-                'Excel .xls/.xlsx files cannot be imported. Save As CSV (Comma delimited) and upload the .csv file instead.',
-            },
-          ],
-        });
+      const fileBase64 = String(b.fileBase64 || b.excelBase64 || b.contentBase64 || '');
+      if (!csvText.trim() && !fileBase64.trim()) {
+        return json(400, { error: 'csvText or fileBase64 is required.' });
       }
-      const parsed = parseCaseloadCsv(csvText);
-      const confirm = b.confirm === true || b.dryRun === false;
-      const dryRun = !confirm;
+      const parsed = parseCaseloadUpload({
+        fileName: String(b.fileName || ''),
+        mime: String(b.mime || b.contentType || ''),
+        csvText,
+        fileBase64,
+      });
+      const dryRun = b.dryRun === true && b.confirm !== true;
       // Persist only when confirming. Valid rows still commit even if some rows had parse errors.
+      // RS Provider must match an existing TMS therapist — no default-provider fallback.
       const result = applyCaseloadImport(store, parsed, { dryRun });
       if (!dryRun) {
         store.audit(
@@ -637,6 +1051,46 @@ export async function handleTmsRequest(
     });
   }
 
+  if (req.method === 'POST' && path === '/admin/mandates') {
+    return adminUser(() => {
+      const b = obj(req);
+      const studentId = String(b.studentId || '').trim();
+      if (!studentId) return json(400, { error: 'studentId is required.' });
+      const student = store.data.students.find((s) => s.id === studentId);
+      if (!student) return json(404, { error: 'Child not found.' });
+      const frequencyKind = (String(b.frequencyKind || 'weekly') === 'school_day_cycle'
+        ? 'school_day_cycle'
+        : 'weekly') as FrequencyKind;
+      const mandateKind = parseMandateKind(b.mandateKind);
+      const freq = Number(b.frequencyPerWeek ?? b.sessionsPerPeriod ?? 0);
+      const sessionsPerPeriod = Number(b.sessionsPerPeriod ?? b.frequencyPerWeek ?? freq);
+      const disciplineRaw = String(b.discipline || '');
+      const discipline = (['OT', 'PT', 'SLP'].includes(disciplineRaw) ? disciplineRaw : '') as Discipline | '';
+      const mandate = store.upsertMandate({
+        id: newId(),
+        studentId,
+        providerId: String(b.providerId || ''),
+        serviceType: String(b.serviceType || (mandateKind === 'makeup_auth' ? 'Makeup authorization' : '')),
+        discipline,
+        mandateKind,
+        frequencyPerWeek: frequencyKind === 'school_day_cycle' || mandateKind === 'makeup_auth' ? 0 : (Number.isFinite(freq) ? freq : 0),
+        frequencyKind: mandateKind === 'makeup_auth' ? 'weekly' : frequencyKind,
+        sessionsPerPeriod: Number.isFinite(sessionsPerPeriod) ? sessionsPerPeriod : 0,
+        periodSchoolDays:
+          frequencyKind === 'school_day_cycle' ? Number(b.periodSchoolDays || 6) : undefined,
+        ratioGroup: Boolean(b.ratioGroup),
+        location: String(b.location || ''),
+        sourcePdfKey: 'manual',
+        parsedAt: nowIso(),
+        startOn: String(b.startOn || ''),
+        endOn: String(b.endOn || ''),
+        createdAt: nowIso(),
+      });
+      store.audit(ctx.user.id, 'create_mandate', `mandate:${mandate.id}`, null, mandate);
+      return json(201, { mandate, message: 'Mandate saved.' });
+    });
+  }
+
   if (req.method === 'POST' && /^\/admin\/mandates\/[^/]+$/.test(path)) {
     return adminUser(() => {
       const id = path.split('/')[3];
@@ -658,12 +1112,16 @@ export async function handleTmsRequest(
         b.periodSchoolDays == null || b.periodSchoolDays === ''
           ? existing.periodSchoolDays
           : Number(b.periodSchoolDays);
+      const mandateKind = parseMandateKind(b.mandateKind, existing.mandateKind || 'regular');
       const mandate = store.upsertMandate({
         ...existing,
-        frequencyPerWeek: frequencyKind === 'school_day_cycle'
+        mandateKind,
+        frequencyPerWeek: mandateKind === 'makeup_auth'
+          ? 0
+          : frequencyKind === 'school_day_cycle'
           ? 0
           : Number.isFinite(freq) ? freq : existing.frequencyPerWeek,
-        frequencyKind,
+        frequencyKind: mandateKind === 'makeup_auth' ? 'weekly' : frequencyKind,
         sessionsPerPeriod: Number.isFinite(Number(sessionsPerPeriod)) ? Number(sessionsPerPeriod) : existing.sessionsPerPeriod,
         periodSchoolDays: frequencyKind === 'school_day_cycle'
           ? (Number.isFinite(Number(periodSchoolDays)) ? Number(periodSchoolDays) : existing.periodSchoolDays || 6)
@@ -752,14 +1210,65 @@ export async function handleTmsRequest(
     });
   }
 
+  if (req.method === 'DELETE' && /^\/admin\/due-dates\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const id = path.split('/')[3];
+      const existing = store.data.dueDates.find((d) => d.id === id);
+      if (!existing) return json(404, { error: 'Due date not found.' });
+      store.removeDueDate(id);
+      store.audit(ctx.user.id, 'delete_due_date', `due:${id}`, existing, null);
+      return json(200, { deleted: true, id, message: 'Due date removed.' });
+    });
+  }
+
   if (req.method === 'GET' && path === '/admin/reports/missing-notes') {
-    return adminUser(() => json(200, { rows: missingNotes(store) }));
+    return adminUser(() => {
+      const from = String(req.query.from || '').trim();
+      const to = String(req.query.to || '').trim();
+      return json(200, {
+        rows: missingNotes(store, undefined, { from, to, includeMissed: true }),
+      });
+    });
   }
   if (req.method === 'GET' && path === '/admin/reports/last-service') {
-    return adminUser(() => json(200, { rows: lastServiceByStudent(store) }));
+    return adminUser(() => {
+      const providerId = String(req.query.providerId || '').trim();
+      return json(200, {
+        rows: lastServiceByStudent(store, {
+          providerId: providerId || undefined,
+        }),
+      });
+    });
   }
   if (req.method === 'GET' && path === '/admin/reports/due-dates') {
-    return adminUser(() => json(200, { rows: dueDateReport(store) }));
+    return adminUser(() => {
+      const from = String(req.query.from || '').trim();
+      const to = String(req.query.to || '').trim();
+      return json(200, { rows: dueDateReport(store, new Date(), { from, to }) });
+    });
+  }
+  if (req.method === 'GET' && path === '/admin/reports/week-progress') {
+    return adminUser(() => {
+      const from = String(req.query.from || '').trim();
+      const to = String(req.query.to || '').trim();
+      return json(200, {
+        from: from || null,
+        to: to || null,
+        rows: weekProgressReport(store, { from, to }),
+      });
+    });
+  }
+  if (req.method === 'GET' && path === '/admin/reports/week-progress.xlsx') {
+    return adminUser(() => reportXlsxWeekProgress(store, req.query));
+  }
+  if (req.method === 'GET' && path === '/admin/reports/missing-notes.xlsx') {
+    return adminUser(() => reportXlsxMissing(store, req.query));
+  }
+  if (req.method === 'GET' && path === '/admin/reports/last-service.xlsx') {
+    return adminUser(() => reportXlsxLastService(store, req.query));
+  }
+  if (req.method === 'GET' && path === '/admin/reports/due-dates.xlsx') {
+    return adminUser(() => reportXlsxDueDates(store, req.query));
   }
 
   if (req.method === 'GET' && path === '/students') {
@@ -777,11 +1286,14 @@ export async function handleTmsRequest(
     const b = obj(req);
     const id = newId();
     const studentId = String(b.studentId || '');
-    const pdf = pdfBufferFromBody(b);
+    const buf = anyFileBufferFromBody(b);
     let s3Key = String(b.s3Key || '');
-    if (pdf) {
-      s3Key = `tms/locker/${studentId}/${id}.pdf`;
-      await putLockerPdf(s3Key, pdf);
+    if (buf) {
+      const ext = String(b.fileName || b.label || 'upload').split('.').pop() || 'bin';
+      s3Key = studentId
+        ? `tms/locker/${studentId}/${id}.${ext}`
+        : `tms/locker/providers/${String(b.providerId || 'p')}/${id}.${ext}`;
+      await putLockerPdf(s3Key, buf);
     } else if (!s3Key) {
       s3Key = String(b.label || 'local');
     }
@@ -790,7 +1302,7 @@ export async function handleTmsRequest(
       studentId,
       providerId: String(b.providerId || providerFor(store, ctx.user)?.id || ''),
       weekId: String(b.weekId || ''),
-      kind: String(b.kind || 'locker'),
+      kind: String(b.kind || (studentId ? 'locker' : 'provider_report')),
       s3Key,
       label: String(b.label || 'upload'),
       createdAt: nowIso(),
@@ -806,10 +1318,12 @@ export async function handleTmsRequest(
     const week = store.weekByProviderStart(providerId, weekStart) || (weekStart ? undefined : store.data.weeks.find((w) => w.providerId === providerId));
     const sessions = week ? store.sessionsForWeek(week.id) : [];
     const check = week
-      ? checkMandatesForWeek(store.data.mandates, sessions)
+      ? checkMandatesForWeek(store.data.mandates, sessions, store.data.sessions)
       : { errors: [] as string[], warnings: [] as string[] };
     const ai = week ? collectHeuristicAiIssues(sessions) : { errors: [] as string[], warnings: [] as string[] };
     const students = visibleStudents(store, ctx.user, weekStart || week?.weekStart || '');
+    const payProvider =
+      store.data.providers.find((p) => p.id === (week?.providerId || providerId)) || provider;
     const sessionsOut = sessions.map((s) => {
       const local = screenServiceNote(s);
       const flags = [...new Set([...(s.aiFlags || []), ...local.flags])];
@@ -817,6 +1331,7 @@ export async function handleTmsRequest(
         ...s,
         aiFlags: flags,
         aiBlock: Boolean(s.aiBlock) || local.block,
+        payAmount: payProvider ? sessionPayAmount(payProvider, s) : null,
       };
     });
     return json(200, {
@@ -858,6 +1373,8 @@ export async function handleTmsRequest(
     const provider = providerFor(store, ctx.user);
     const b = obj(req);
     const providerId = String(b.providerId || provider?.id || '');
+    const accountProvider =
+      (providerId ? store.data.providers.find((p) => p.id === providerId) : undefined) || provider;
     const text = pdfTextFromBody(b) || textBody(req) || String(b.pdfText || '');
     if (!String(text).trim()) {
       const error = bodyHasPdfBytes(b)
@@ -867,15 +1384,81 @@ export async function handleTmsRequest(
         hasPdf: bodyHasPdfBytes(b),
         pdfBase64Len: typeof b.pdfBase64 === 'string' ? b.pdfBase64.length : 0,
       });
-      return json(400, { error });
+      return json(400, { error, errors: [error] });
     }
     const parsed = parseWeeklySessionText(text);
     if (!parsed.length) {
       const error =
         'Could not find any sessions in this PDF. Use a Frontline Related Service Session Notes report with a text layer (not a scan).';
       console.warn('upload-sessions 400', error, { textLen: String(text).length });
-      return json(400, { error });
+      return json(400, { error, errors: [error] });
     }
+
+    const matchErrors: string[] = [];
+    const pdfProviderName = parsed.map((r) => r.providerName).find((n) => String(n || '').trim()) || '';
+    if (pdfProviderName) {
+      if (!accountProvider) {
+        matchErrors.push('Your provider profile is not linked yet. Ask the office for help.');
+      } else if (!findProviderByName([accountProvider], pdfProviderName)) {
+        matchErrors.push(
+          `Provider in PDF does not match your account (PDF: "${pdfProviderName}").`,
+        );
+      }
+    }
+
+    const studentByKey = new Map<string, { id: string; display: string }>();
+    for (const row of parsed) {
+      const display = String(row.studentName || '').trim() || 'Unknown';
+      const person = splitPersonName(row.studentName);
+      const mapped = mappingName(row.studentName);
+      const key = `${person.last}|${person.first}|${mapped.last}|${mapped.first}`.toLowerCase();
+      if (studentByKey.has(key)) continue;
+      const student =
+        store.findStudentByName(person.first, person.last) ||
+        store.findStudentByName(mapped.first, mapped.last) ||
+        (person.last && person.first
+          ? store.findStudentByName(person.last, person.first)
+          : undefined);
+      if (!student) {
+        matchErrors.push(`Child '${display}' not found — import caseload first`);
+        studentByKey.set(key, { id: '', display });
+        continue;
+      }
+      studentByKey.set(key, {
+        id: student.id,
+        display: `${student.firstName} ${student.lastName}`.trim() || display,
+      });
+
+      const pdfSchool = String(row.schoolName || row.location || '').trim();
+      if (pdfSchool) {
+        const knownSchool = store.data.schools.find((s) => s.id === student.schoolId);
+        if (knownSchool && schoolNamesConflict(pdfSchool, knownSchool.name)) {
+          matchErrors.push(
+            `School '${pdfSchool}' does not match child's school '${knownSchool.name}'.`,
+          );
+        } else if (!knownSchool) {
+          const exists = store.data.schools.some(
+            (s) => !schoolNamesConflict(pdfSchool, s.name) && Boolean(String(s.name || '').trim()),
+          );
+          if (!exists) {
+            matchErrors.push(`School '${pdfSchool}' not found`);
+          }
+        }
+      }
+    }
+
+    if (matchErrors.length) {
+      const unique = [...new Set(matchErrors)];
+      return json(400, {
+        error:
+          unique.length > 1
+            ? `Upload blocked — ${unique.length} issues. Fix caseload / provider match first.`
+            : unique[0],
+        errors: unique,
+        warnings: [],
+      });
+    }
+
     const weekStart = String(b.weekStart || (parsed[0] ? weekStartFromDos(parsed[0].dateOfService) : ''));
     let week = store.weekByProviderStart(providerId, weekStart);
     if (!week) {
@@ -894,7 +1477,8 @@ export async function handleTmsRequest(
       });
     }
     if (!therapistCanEdit(week.status) && ctx.user.role !== 'admin') {
-      return json(409, { error: 'This week is locked. Ask an admin to reopen it.' });
+      const error = 'This week is locked. Ask an admin to reopen it.';
+      return json(409, { error, errors: [error] });
     }
     // Replace prior draft rows so retries do not stack duplicates and trip Over mandate.
     const prior = store.sessionsForWeek(week.id);
@@ -906,17 +1490,17 @@ export async function handleTmsRequest(
       const student =
         store.findStudentByName(person.first, person.last) ||
         store.findStudentByName(mapped.first, mapped.last) ||
-        store.upsertStudent({
-          id: newId(),
-          schoolId: store.data.schools[0]?.id || '',
-          firstName: person.first || mapped.first,
-          lastName: person.last || mapped.last,
-          dob: '',
-          programId: '',
-          programType: '',
-          hhaPatientId: '',
-          createdAt: nowIso(),
-        });
+        (person.last && person.first
+          ? store.findStudentByName(person.last, person.first)
+          : undefined);
+      if (!student) {
+        // Should not happen after pre-check; roll back if it does.
+        for (const s of created) store.removeSession(s.id);
+        for (const s of prior) store.upsertSession(s);
+        const display = String(row.studentName || '').trim() || 'Unknown';
+        const error = `Child '${display}' not found — import caseload first`;
+        return json(400, { error, errors: [error] });
+      }
       const session = store.upsertSession({
         id: newId(),
         weekId: week.id,
@@ -928,6 +1512,7 @@ export async function handleTmsRequest(
         cancelReason: row.cancelReason,
         makeupOfSessionId: '',
         serviceType: row.serviceType,
+        additionalServiceType: '',
         location: row.location,
         notes: row.notes,
         aiFlags: [],
@@ -935,20 +1520,31 @@ export async function handleTmsRequest(
       });
       created.push(session);
     }
-    const check = checkMandatesForWeek(store.data.mandates, store.sessionsForWeek(week.id));
+    const check = checkMandatesForWeek(
+      store.data.mandates,
+      store.sessionsForWeek(week.id),
+      store.data.sessions,
+    );
     if (check.errors.length) {
       for (const s of created) store.removeSession(s.id);
       for (const s of prior) store.upsertSession(s);
-      const detail = check.errors.filter(Boolean).join(' ');
+      const errors = check.errors.filter(Boolean);
       return json(400, {
-        error: detail
-          ? `Over mandate — ${detail}`
-          : 'Over mandate — this PDF has more sessions than allowed for the week.',
-        errors: check.errors,
+        error:
+          errors.length > 1
+            ? `Over mandate — ${errors.length} issues. Upload is blocked.`
+            : `Over mandate — ${errors[0] || 'this PDF has more sessions than allowed for the week.'}`,
+        errors,
         warnings: check.warnings,
       });
     }
-    return json(200, { week, sessions: store.sessionsForWeek(week.id), warnings: check.warnings, parsed: parsed.length });
+    return json(200, {
+      week,
+      sessions: store.sessionsForWeek(week.id),
+      warnings: check.warnings,
+      errors: [],
+      parsed: parsed.length,
+    });
   }
 
   if (req.method === 'POST' && path === '/week/sessions') {
@@ -963,6 +1559,23 @@ export async function handleTmsRequest(
       b.attendance === 'missed' || b.attendance === 'makeup' || b.attendance === 'attended'
         ? b.attendance
         : existing?.attendance || 'attended';
+    const rawAdditional = b.additionalServiceType;
+    let additionalServiceType: SessionRow['additionalServiceType'] =
+      existing?.additionalServiceType || '';
+    if (rawAdditional === '' || rawAdditional == null) {
+      if (Object.prototype.hasOwnProperty.call(b, 'additionalServiceType')) {
+        additionalServiceType = '';
+      }
+    } else if (isAdditionalServiceType(rawAdditional)) {
+      additionalServiceType = rawAdditional;
+    } else {
+      return json(400, {
+        error: 'Pick a valid additional service: Eval, Progress report, Consultation, Meetings, or Paid absence.',
+      });
+    }
+    const serviceTypeFromAdditional = additionalServiceType
+      ? additionalServiceLabel(additionalServiceType)
+      : '';
     const session: SessionRow = {
       id: String(b.id || existing?.id || newId()),
       weekId: week.id,
@@ -973,12 +1586,19 @@ export async function handleTmsRequest(
       attendance,
       cancelReason: pickStr(b.cancelReason, existing?.cancelReason || ''),
       makeupOfSessionId: pickStr(b.makeupOfSessionId, existing?.makeupOfSessionId || ''),
-      serviceType: pickStr(b.serviceType, existing?.serviceType || ''),
+      serviceType: pickStr(
+        b.serviceType,
+        serviceTypeFromAdditional || existing?.serviceType || '',
+      ),
+      additionalServiceType,
       location: pickStr(b.location, existing?.location || ''),
       notes: pickStr(b.notes, existing?.notes || ''),
       aiFlags: Array.isArray(b.aiFlags) ? (b.aiFlags as string[]) : existing?.aiFlags || [],
       aiBlock: typeof b.aiBlock === 'boolean' ? b.aiBlock : existing?.aiBlock || false,
     };
+    if (additionalServiceType && !b.serviceType) {
+      session.serviceType = serviceTypeFromAdditional;
+    }
     const makeupErr = validateMakeup(
       session,
       store.data.sessions.filter((s) => s.id !== session.id).concat(session),
@@ -988,7 +1608,11 @@ export async function handleTmsRequest(
     session.aiFlags = screenedLocal.flags;
     session.aiBlock = screenedLocal.block;
     store.upsertSession(session);
-    const check = checkMandatesForWeek(store.data.mandates, store.sessionsForWeek(week.id));
+    const check = checkMandatesForWeek(
+      store.data.mandates,
+      store.sessionsForWeek(week.id),
+      store.data.sessions,
+    );
     if (check.errors.length) {
       store.removeSession(session.id);
       return json(400, { error: 'Over mandate', errors: check.errors });
@@ -1021,7 +1645,7 @@ export async function handleTmsRequest(
       return json(409, { error: 'This week is locked.' });
     }
     const sessions = store.sessionsForWeek(week.id);
-    const check = checkMandatesForWeek(store.data.mandates, sessions);
+    const check = checkMandatesForWeek(store.data.mandates, sessions, store.data.sessions);
     if (check.errors.length) return json(400, { error: 'Over mandate', errors: check.errors });
     const aiErrors: string[] = [];
     for (const s of sessions) {
@@ -1064,6 +1688,7 @@ export async function handleTmsRequest(
       rows: sessions.map((session) => ({
         session,
         student: store.data.students.find((s) => s.id === session.studentId) as Student | undefined,
+        payAmount: provider ? sessionPayAmount(provider, session) : null,
       })),
     });
     const envelope = await createSignEnvelope({
@@ -1105,6 +1730,7 @@ export async function handleTmsRequest(
       rows: store.sessionsForWeek(week.id).map((session) => ({
         session,
         student: store.data.students.find((s) => s.id === session.studentId) as Student | undefined,
+        payAmount: provider ? sessionPayAmount(provider, session) : null,
       })),
     });
     store.upsertWeek({ ...week, timesheetKey: `tms/timesheets/${week.id}.pdf` });
@@ -1139,9 +1765,6 @@ export async function handleTmsRequest(
     return adminUser(() => {
       const week = store.data.weeks.find((w) => w.id === path.split('/')[3]);
       if (!week) return json(404, { error: 'Week not found.' });
-      if (week.status !== 'draft') {
-        return json(409, { error: 'Only draft weeks can be removed. Reopen a signed week first if you need to cancel it.' });
-      }
       store.removeWeek(week.id);
       store.audit(ctx.user.id, 'remove_week', `week:${week.id}`, week, null);
       return json(200, { ok: true });

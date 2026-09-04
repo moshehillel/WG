@@ -80,7 +80,11 @@ Preview must flag new Service Types **and** pay codes that fail the discipline+r
 
 ## Alert emails
 
-**Current subscribers:** `elefkowitz@whiteglovecare.net`, `moshe@advancedautomations.net`
+**Primary path:** SNS email subscriptions (From: Amazon-managed **AWS Notifications** / no-reply style). No White Glove domain or DKIM required.
+
+**Optional:** SES HTML + CSV when a verified From identity works (`ALERT_ALWAYS_SNS=true` still publishes SNS every time).
+
+**Current subscribers:** `elefkowitz@whiteglovecare.net`, `moshe@advancedautomations.net`, `ggreenfeld@whiteglovecare.net` (Grace Greenfeld)
 
 ## Sample reports — column adequacy
 
@@ -131,4 +135,27 @@ Use when the child already exists in ProviderSoft/HHA but a **new Service Type**
 2. **Service Type → HHA ServiceCodeID** catalog
 3. **Schedule confirmation** — open/close frequency, timezone, Monday preview hour, Tuesday noon ET
 4. **HHA clock → visit linking** — pending HHA response
+
+## Due dates (school-scoped)
+
+Progress / annual / reeval due dates belong on the **school**, not each child. One due date (per kind) applies to that school’s caseload. Nags email providers with mandates at the school plus admins.
+
+In the UI these are labeled **Progress report due dates** (kinds remain progress / annual / reeval).
+
+**Migration:** legacy per-student due dates lift to the student’s school when unambiguous (same school + kind + dueOn). Rows with no school, or conflicting dueOn values for the same school+kind, are dropped — we do not invent dates.
+
+## Student DOB (TMS caseload)
+
+DOB on the student record is **optional for now** but **recommended for HHA** (session/patient transfer). Caseload Excel/CSV imports Program ID / Program Type / Date of Birth when those columns exist; the current WG “Related Service by serviceschool” export does not include them — leave blank and no import block. Admins can enter DOB on the child detail screen.
+
+## Caseload RS Provider (TMS)
+
+RS Provider on caseload import **must match an existing TMS therapist** (First Last / Last, First). Agency labels (“White Glove”, “White, Glove”) and unmatched names are **hard errors** — that row is skipped; do **not** save a mandate with an empty provider and do **not** invent providers. Schools/students still create from valid rows. There is **no Default provider** on import.
+
+## Frontline weekly PDF upload (TMS)
+
+`POST /week/upload-sessions` requires entities to **already exist**:
+- PDF Service Provider must match the logged-in therapist’s provider profile (when present on the PDF).
+- Child must already exist (from caseload) — unknown child → error; **no auto-create**.
+- PDF school must match the child’s school when both are known (clear mismatch → error).
 

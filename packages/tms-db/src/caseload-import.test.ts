@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
 import {
   applyCaseloadImport,
+  findProviderByName,
   formatFreqDisplay,
+  isAgencyProviderName,
   mandateMatchKey,
   parseCaseloadCsv,
   parseCaseloadUpload,
@@ -168,13 +170,15 @@ Shaw Avenue,Ok,Good,1,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Push
     expect(preview.dryRun).toBe(true);
     expect(store.data.students).toHaveLength(0);
     expect(store.data.mandates).toHaveLength(0);
-    expect(preview.createdMandates).toBe(6);
+    expect(preview.createdMandates).toBe(5);
     expect(preview.rows.filter((r) => r.lastName === 'Haris')).toHaveLength(2);
-    expect(preview.rows.find((r) => r.providerName === 'Unknown Provider')?.providerMatched).toBe(false);
+    expect(preview.errors.some((e) => /Unknown Provider/i.test(e.problem))).toBe(true);
+    expect(preview.rows.find((r) => r.providerName === 'Unknown Provider')).toBeUndefined();
 
     const committed = applyCaseloadImport(store, parsed);
     expect(committed.dryRun).toBe(false);
-    expect(store.data.students.length).toBeGreaterThanOrEqual(4);
+    expect(store.data.students.length).toBeGreaterThanOrEqual(3);
+    expect(store.findStudentByName('Mary Ann', "O'Brien")).toBeUndefined();
     const ahmad = store.findStudentByName('Ahmad', 'Haris');
     expect(ahmad).toBeTruthy();
     expect(store.mandatesForStudent(ahmad!.id)).toHaveLength(2);
@@ -187,6 +191,42 @@ Shaw Avenue,Ok,Good,1,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Push
     expect(cycle.periodSchoolDays).toBe(6);
   });
 
+  it('unmatched RS Provider is a hard error — no empty-provider mandate', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-pat',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
+Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Pull-Out,Pat Lee
+Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Individual,1,Weekly,Pull-Out,Nobody Here
+Shaw Avenue,Fox,Sincere,2,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Pull-Out,White Glove
+`;
+    const applied = applyCaseloadImport(store, parseCaseloadCsv(csv));
+    expect(applied.createdMandates).toBe(1);
+    expect(applied.errors.length).toBe(2);
+    expect(applied.errors.some((e) => /Nobody Here/i.test(e.problem))).toBe(true);
+    expect(applied.errors.some((e) => /agency label/i.test(e.problem))).toBe(true);
+    expect(store.data.mandates).toHaveLength(1);
+    expect(store.data.mandates[0]?.providerId).toBe('p-pat');
+    expect(store.findStudentByName('Elmer', 'Diaz')).toBeUndefined();
+    expect(store.findStudentByName('Sincere', 'Fox')).toBeUndefined();
+  });
+
   it('re-import upserts: no duplicate students/mandates; fills provider on second pass', () => {
     const store = new MemoryStore();
     const csvUnmatched = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
@@ -194,13 +234,12 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
 Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Individual,2,6 day cycle,Push-In,"White, Glove"
 `;
     const first = applyCaseloadImport(store, parseCaseloadCsv(csvUnmatched));
-    expect(first.createdStudents).toBe(2);
-    expect(first.createdMandates).toBe(2);
-    expect(first.updatedMandates).toBe(0);
-    expect(store.data.students).toHaveLength(2);
-    expect(store.data.mandates).toHaveLength(2);
-    expect(store.data.mandates.every((m) => !m.providerId)).toBe(true);
-    expect(first.warnings.some((w) => /White,\s*Glove/i.test(w.problem))).toBe(true);
+    expect(first.createdStudents).toBe(0);
+    expect(first.createdMandates).toBe(0);
+    expect(first.errors.length).toBe(2);
+    expect(store.data.students).toHaveLength(0);
+    expect(store.data.mandates).toHaveLength(0);
+    expect(first.errors.some((e) => /White,\s*Glove/i.test(e.problem))).toBe(true);
 
     store.upsertProvider({
       id: 'p-pat',
@@ -223,9 +262,9 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Individual,2,6 day cy
 
     const csvFixed = csvUnmatched.replace(/"White, Glove"/g, 'Pat Lee');
     const second = applyCaseloadImport(store, parseCaseloadCsv(csvFixed));
-    expect(second.createdStudents).toBe(0);
-    expect(second.createdMandates).toBe(0);
-    expect(second.updatedMandates).toBe(2);
+    expect(second.createdStudents).toBe(2);
+    expect(second.createdMandates).toBe(2);
+    expect(second.updatedMandates).toBe(0);
     expect(store.data.students).toHaveLength(2);
     expect(store.data.mandates).toHaveLength(2);
     expect(store.data.mandates.every((m) => m.providerId === 'p-pat')).toBe(true);
@@ -501,13 +540,13 @@ describe('caseload Excel parser', () => {
     expect(elmer?.providerName).toBe('White Glove');
   });
 
-  it('matches White Glove / White, Glove provider names on WG import', () => {
+  it('treats White Glove as agency and hard-errors unmatched providers (no default)', () => {
     const store = new MemoryStore();
     store.upsertProvider({
-      id: 'p-wg',
+      id: 'p-fatimah',
       userId: '',
-      firstName: 'White',
-      lastName: 'Glove',
+      firstName: 'Fatimah',
+      lastName: 'Dawan',
       discipline: 'PT',
       payRatePerHour: null,
       payRate30Min: null,
@@ -517,18 +556,163 @@ describe('caseload Excel parser', () => {
       payRateGroup42Min: null,
       payRateGroup45Min: null,
       payRateAdditionalHourly: null,
-      hhaCaregiverCode: 'WG-1',
+      hhaCaregiverCode: 'FD-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertProvider({
+      id: 'p-james',
+      userId: '',
+      firstName: 'James',
+      lastName: 'Vasaturo',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'JV-1',
       active: true,
       createdAt: nowIso(),
     });
     const applied = applyCaseloadImport(store, parseCaseloadWorkbook(writeWgBook('xlsx')));
     const fox = applied.rows.find((r) => r.lastName === 'Fox');
     const elmer = applied.rows.find((r) => r.lastName === 'Diaz');
-    expect(fox?.providerMatched).toBe(true);
-    expect(fox?.providerId).toBe('p-wg');
-    expect(elmer?.providerMatched).toBe(true);
-    expect(elmer?.providerId).toBe('p-wg');
-    expect(applied.rows.find((r) => r.lastName === 'Abedin')?.providerMatched).toBe(false);
+    const omar = applied.rows.find((r) => r.lastName === 'Abedin');
+    expect(omar?.providerMatched).toBe(true);
+    expect(omar?.providerId).toBe('p-james');
+    expect(fox).toBeUndefined();
+    expect(elmer).toBeUndefined();
+    expect(applied.errors.some((e) => /White,\s*Glove|White Glove|agency/i.test(e.problem))).toBe(
+      true,
+    );
+    expect(store.data.mandates.filter((m) => m.providerId === 'p-james').length).toBe(1);
+    expect(store.data.mandates.every((m) => Boolean(m.providerId))).toBe(true);
+    expect(store.data.students.every((s) => !('providerId' in s) || !(s as { providerId?: string }).providerId)).toBe(
+      true,
+    );
+  });
+
+  it('has no default-provider fallback path', () => {
+    const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
+Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Pull-Out,Pat Lee
+Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Individual,1,Weekly,Pull-Out,White Glove
+Shaw Avenue,Fox,Sincere,2,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Pull-Out,Unknown Nobody
+`;
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-pat',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertProvider({
+      id: 'p-default',
+      userId: '',
+      firstName: 'Default',
+      lastName: 'Therapist',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const applied = applyCaseloadImport(store, parseCaseloadCsv(csv), {
+      // @ts-expect-error defaultProviderId removed — must be ignored if passed
+      defaultProviderId: 'p-default',
+    });
+    const ahmad = applied.rows.find((r) => r.lastName === 'Haris');
+    expect(ahmad?.providerId).toBe('p-pat');
+    expect(ahmad?.providerMatched).toBe(true);
+    expect(applied.rows.find((r) => r.lastName === 'Diaz')).toBeUndefined();
+    expect(applied.rows.find((r) => r.lastName === 'Fox')).toBeUndefined();
+    expect(store.data.mandates.every((m) => m.providerId === 'p-pat')).toBe(true);
+    expect(store.data.mandates.some((m) => m.providerId === 'p-default')).toBe(false);
+  });
+
+  it('imports Program ID, Program Type, and DOB when columns are present', () => {
+    const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider,Program ID,Program Type,Date of Birth
+Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Pull-Out,Pat Lee,PROG-99,CPSE,01/15/2018
+`;
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-pat',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const parsed = parseCaseloadCsv(csv);
+    expect(parsed.rows[0]).toMatchObject({
+      programId: 'PROG-99',
+      programType: 'CPSE',
+      dob: '2018-01-15',
+    });
+    const applied = applyCaseloadImport(store, parsed);
+    const student = store.findStudentByName('Ahmad', 'Haris');
+    expect(student?.programId).toBe('PROG-99');
+    expect(student?.programType).toBe('CPSE');
+    expect(student?.dob).toBe('2018-01-15');
+    expect(applied.rows[0]?.providerMatched).toBe(true);
+  });
+
+  it('matches Last, First and First Last provider names', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-james',
+      userId: '',
+      firstName: 'James',
+      lastName: 'Vasaturo',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    expect(findProviderByName(store.data.providers, 'Vasaturo, James')?.id).toBe('p-james');
+    expect(findProviderByName(store.data.providers, 'James Vasaturo')?.id).toBe('p-james');
+    expect(findProviderByName(store.data.providers, 'White, Glove')).toBeUndefined();
+    expect(isAgencyProviderName('White Glove')).toBe(true);
   });
 
   it('parseCaseloadUpload reads xlsx from base64', () => {

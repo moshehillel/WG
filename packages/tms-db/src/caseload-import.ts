@@ -81,6 +81,12 @@ export interface CaseloadImportRow {
   frequencyPerWeek: number;
   location: string;
   providerName: string;
+  /** Optional Program ID from caseload when present. */
+  programId: string;
+  /** Optional Program Type from caseload when present. */
+  programType: string;
+  /** Optional DOB from caseload when present (YYYY-MM-DD preferred). */
+  dob: string;
   /** Human display e.g. "1 / week" or "2 / 6 school days". */
   freqDisplay: string;
 }
@@ -111,6 +117,7 @@ export interface CaseloadPreviewMandate {
   location: string;
   providerName: string;
   providerId: string;
+  /** True when RS Provider text matched an existing TMS therapist. */
   providerMatched: boolean;
   studentExists: boolean;
   schoolExists: boolean;
@@ -155,6 +162,10 @@ const HEADER_ALIASES: Record<string, string[]> = {
   provider: ['rs provider', 'related service provider', 'provider', 'therapist'],
   /** Present on final export; ignored by import (minutes live on the mandate elsewhere). */
   duration: ['rs duration', 'duration'],
+  /** Optional on some exports; blank is fine (recommended later for HHA). */
+  programId: ['program id', 'programid', 'program #', 'admission id', 'admissionid'],
+  programType: ['program type', 'programtype'],
+  dob: ['date of birth', 'dob', 'birth date', 'birthdate', 'real dob'],
 };
 
 function normHeader(h: string): string {
@@ -297,6 +308,9 @@ export function parseCaseloadGrid(
     period: colIndex(headers, HEADER_ALIASES.period),
     location: colIndex(headers, HEADER_ALIASES.location),
     provider: colIndex(headers, HEADER_ALIASES.provider),
+    programId: colIndex(headers, HEADER_ALIASES.programId),
+    programType: colIndex(headers, HEADER_ALIASES.programType),
+    dob: colIndex(headers, HEADER_ALIASES.dob),
   };
 
   if (idx.firstName < 0 || idx.lastName < 0) {
@@ -352,6 +366,9 @@ export function parseCaseloadGrid(
     const periodRaw = cell(cells, idx.period);
     const location = cell(cells, idx.location);
     const providerName = cell(cells, idx.provider);
+    const programId = cell(cells, idx.programId);
+    const programType = cell(cells, idx.programType);
+    const dobRaw = cell(cells, idx.dob);
     const startRaw = cell(cells, idx.startOn);
     const endRaw = cell(cells, idx.endOn);
     const who = studentLabel(firstName, lastName);
@@ -427,6 +444,16 @@ export function parseCaseloadGrid(
         }),
       );
       rowFailed = true;
+    }
+    if (dobRaw && !isOkCaseloadDate(dobRaw)) {
+      warnings.push(
+        caseloadErr(row, {
+          field: 'Date of Birth',
+          student: who || undefined,
+          problem: `Date of Birth "${dobRaw}" is not recognized.`,
+          fix: 'Use MM/DD/YYYY or YYYY-MM-DD. Row will still import with blank DOB.',
+        }),
+      );
     }
 
     const { kind, periodSchoolDays } = parsePeriod(periodRaw);
@@ -508,6 +535,9 @@ export function parseCaseloadGrid(
       frequencyPerWeek,
       location,
       providerName,
+      programId,
+      programType,
+      dob: dobRaw && isOkCaseloadDate(dobRaw) ? normalizeCaseloadDate(dobRaw) : '',
       freqDisplay: formatFreqDisplay(kind, sessionsPerPeriod, days),
     });
   }
@@ -715,21 +745,57 @@ function normName(s: string): string {
     .trim();
 }
 
+/** Agency / office labels in RS Provider (not a real therapist name). */
+export function isAgencyProviderName(rawName: string): boolean {
+  const n = normName(rawName);
+  if (!n) return false;
+  return (
+    n === 'white glove' ||
+    n === 'whiteglove' ||
+    n === 'white glove care' ||
+    /^white\s*glove\b/.test(n)
+  );
+}
+
+/**
+ * Match RS Provider text to a TMS provider.
+ * Accepts "First Last", "Last First", and "Last, First".
+ * Agency labels like "White, Glove" / "White Glove" never match a person.
+ */
 export function findProviderByName(providers: Provider[], rawName: string): Provider | undefined {
   const s = String(rawName || '').trim();
   if (!s) return undefined;
+  if (isAgencyProviderName(s)) return undefined;
   const lower = normName(s);
+  if (!lower) return undefined;
+
   const direct = providers.find((p) => normName(`${p.firstName} ${p.lastName}`) === lower);
   if (direct) return direct;
   const swapped = providers.find((p) => normName(`${p.lastName} ${p.firstName}`) === lower);
   if (swapped) return swapped;
+
   if (s.includes(',')) {
     const [last, ...rest] = s.split(',').map((p) => p.trim());
     const first = rest.join(' ').trim();
-    return providers.find(
-      (p) => normName(p.firstName) === normName(first) && normName(p.lastName) === normName(last),
-    );
+    if (first && last) {
+      const byComma = providers.find(
+        (p) => normName(p.firstName) === normName(first) && normName(p.lastName) === normName(last),
+      );
+      if (byComma) return byComma;
+    }
   }
+
+  const tokens = lower.split(/\s+/).filter(Boolean);
+  if (tokens.length >= 2) {
+    const hits = providers.filter((p) => {
+      const fn = normName(p.firstName);
+      const ln = normName(p.lastName);
+      if (!fn || !ln) return false;
+      return tokens.includes(fn) && tokens.includes(ln);
+    });
+    if (hits.length === 1) return hits[0];
+  }
+
   return undefined;
 }
 
@@ -800,6 +866,10 @@ function findStudentForCaseloadRow(
  * Persist parsed caseload into the store unless `dryRun` is true.
  * `dryRun` is unused by the live import path (upload commits immediately).
  * Skips rows already in `errors` from parse; commit still proceeds for valid rows.
+ *
+ * RS Provider must match an existing TMS therapist. Blank / agency labels /
+ * unmatched names are hard errors — the row is skipped (no mandate with empty provider).
+ * Schools and students are still created/updated only for rows that pass provider match.
  */
 export function applyCaseloadImport(
   store: MemoryStore,
@@ -837,6 +907,41 @@ export function applyCaseloadImport(
   }
 
   for (const row of parsed.rows) {
+    const label = studentLabel(row.firstName, row.lastName) || undefined;
+    const matchedProvider = findProviderByName(store.data.providers, row.providerName);
+    if (!matchedProvider) {
+      if (!String(row.providerName || '').trim()) {
+        errors.push(
+          caseloadErr(row.rowNumber, {
+            field: 'RS Provider',
+            student: label,
+            problem: 'RS Provider is blank.',
+            fix: 'Add a therapist name that already exists in TMS (First Last or Last, First), then re-import.',
+          }),
+        );
+      } else if (isAgencyProviderName(row.providerName)) {
+        errors.push(
+          caseloadErr(row.rowNumber, {
+            field: 'RS Provider',
+            student: label,
+            problem: `Provider "${row.providerName}" is an agency label, not a therapist name.`,
+            fix: 'Replace with the therapist name as it appears in TMS, then re-import.',
+          }),
+        );
+      } else {
+        errors.push(
+          caseloadErr(row.rowNumber, {
+            field: 'RS Provider',
+            student: label,
+            problem: `Provider "${row.providerName}" was not found in TMS.`,
+            fix: 'Add or rename the provider in TMS to match this RS Provider name, then re-import. Do not invent providers on import.',
+          }),
+        );
+      }
+      continue;
+    }
+    const provider = matchedProvider;
+
     const key = studentKey(row.firstName, row.lastName, row.schoolName);
     let school = row.schoolName ? schoolByName.get(normName(row.schoolName)) : undefined;
     const schoolExists = Boolean(school);
@@ -860,7 +965,7 @@ export function applyCaseloadImport(
       warnings.push(
         caseloadErr(row.rowNumber, {
           field: 'Recommended School',
-          student: studentLabel(row.firstName, row.lastName) || undefined,
+          student: label,
           problem: 'Recommended School is empty.',
           fix: 'Student will import with no school until you set one. Prefer filling Recommended School.',
         }),
@@ -882,9 +987,9 @@ export function applyCaseloadImport(
         schoolId: school?.id || '',
         firstName: row.firstName,
         lastName: row.lastName,
-        dob: '',
-        programId: '',
-        programType: '',
+        dob: row.dob || '',
+        programId: row.programId || '',
+        programType: row.programType || '',
         hhaPatientId: '',
         grade: row.grade || undefined,
         createdAt: nowIso(),
@@ -900,29 +1005,28 @@ export function applyCaseloadImport(
     } else {
       const beforeSchool = student.schoolId;
       const beforeGrade = student.grade;
+      const beforeDob = student.dob;
+      const beforeProgId = student.programId;
+      const beforeProgType = student.programType;
       const next: Student = {
         ...student,
         schoolId: school?.id || student.schoolId,
         grade: row.grade || student.grade,
+        dob: row.dob || student.dob,
+        programId: row.programId || student.programId,
+        programType: row.programType || student.programType,
       };
       student = next;
       studentByKey.set(key, student);
       studentByKey.set(studentKey(row.firstName, row.lastName, ''), student);
-      const changed = next.schoolId !== beforeSchool || next.grade !== beforeGrade;
+      const changed =
+        next.schoolId !== beforeSchool ||
+        next.grade !== beforeGrade ||
+        next.dob !== beforeDob ||
+        next.programId !== beforeProgId ||
+        next.programType !== beforeProgType;
       if (changed) updatedStudents += 1;
       if (!dryRun && changed) store.upsertStudent(student);
-    }
-
-    const provider = findProviderByName(store.data.providers, row.providerName);
-    if (row.providerName && !provider) {
-      warnings.push(
-        caseloadErr(row.rowNumber, {
-          field: 'RS Provider',
-          student: studentLabel(row.firstName, row.lastName) || undefined,
-          problem: `Provider "${row.providerName}" was not found in TMS.`,
-          fix: 'Mandate will save without a provider (no HHA id is invented). Add or rename the provider, then re-import if needed.',
-        }),
-      );
     }
 
     const existingList = mandatesByStudent.get(student.id) ?? [];
@@ -932,7 +1036,7 @@ export function applyCaseloadImport(
     const mandate: Mandate = {
       id: existing?.id || newId(),
       studentId: student.id,
-      providerId: provider?.id || existing?.providerId || '',
+      providerId: provider.id,
       serviceType: row.serviceType,
       discipline: row.discipline,
       frequencyPerWeek: row.frequencyPerWeek,
@@ -985,8 +1089,8 @@ export function applyCaseloadImport(
       endOn: row.endOn,
       location: row.location,
       providerName: row.providerName,
-      providerId: provider?.id || '',
-      providerMatched: Boolean(provider),
+      providerId: provider.id,
+      providerMatched: true,
       studentExists,
       schoolExists,
     });
