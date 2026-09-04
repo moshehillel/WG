@@ -19,12 +19,31 @@ const state = {
   caseloadImport: null,
   reportFrom: '',
   reportTo: '',
+  reportView: '',
   childDetailBack: 'children',
   focusSchoolId: '',
   lastServiceProviderId: '',
   childSessionFrom: '',
   childSessionTo: '',
 };
+
+const REPORT_LIST = [
+  {
+    id: 'week-progress',
+    title: 'Sessions & notes progress',
+    blurb: 'Sessions provided vs mandate, notes posted, and note follow-up.',
+  },
+  {
+    id: 'last-service',
+    title: 'Last service date',
+    blurb: 'Latest attended/makeup DOS per child and provider.',
+  },
+  {
+    id: 'due-dates',
+    title: 'Progress report due dates',
+    blurb: 'School progress / annual / reeval due dates and completion.',
+  },
+];
 
 function mondayIso() {
   const d = new Date();
@@ -416,7 +435,12 @@ function additionalServiceLabel(value) {
 }
 
 function studentOptions(students, selected) {
-  return `<option value="">Select a student</option>${(students || []).map((s) => {
+  const sorted = [...(students || [])].sort((a, b) => {
+    const la = `${a.firstName || ''} ${a.lastName || ''}`.trim() || a.id;
+    const lb = `${b.firstName || ''} ${b.lastName || ''}`.trim() || b.id;
+    return la.localeCompare(lb);
+  });
+  return `<option value="">Select a student</option>${sorted.map((s) => {
     const id = s.id;
     const label = `${s.firstName || ''} ${s.lastName || ''}`.trim() || id;
     return `<option value="${esc(id)}"${id === selected ? ' selected' : ''}>${esc(label)}</option>`;
@@ -424,7 +448,12 @@ function studentOptions(students, selected) {
 }
 
 function providerOptions(providers, selected) {
-  return `<option value="">Select a provider</option>${(providers || []).map((p) => {
+  const sorted = [...(providers || [])].sort((a, b) => {
+    const la = `${a.firstName || ''} ${a.lastName || ''}`.trim() || a.id;
+    const lb = `${b.firstName || ''} ${b.lastName || ''}`.trim() || b.id;
+    return la.localeCompare(lb);
+  });
+  return `<option value="">Select a provider by name</option>${sorted.map((p) => {
     const label = `${p.firstName || ''} ${p.lastName || ''}`.trim() || p.id;
     return `<option value="${esc(p.id)}"${p.id === selected ? ' selected' : ''}>${esc(label)}</option>`;
   }).join('')}`;
@@ -489,6 +518,13 @@ function childNameLink(studentId, label) {
   return `<button type="button" class="linkish" data-open-child="${esc(id)}">${esc(text)}</button>`;
 }
 
+function providerNameLink(providerId, label) {
+  const id = String(providerId || '').trim();
+  const text = String(label || '').trim() || id || '—';
+  if (!id) return esc(text);
+  return `<button type="button" class="linkish" data-open-provider="${esc(id)}">${esc(text)}</button>`;
+}
+
 function mandateFreqLabel(m) {
   if (m?.freqDisplay) return m.freqDisplay;
   const kind = m?.frequencyKind === 'school_day_cycle' ? 'school_day_cycle' : 'weekly';
@@ -498,11 +534,32 @@ function mandateFreqLabel(m) {
   return `${n} / week`;
 }
 
+function mandateDurationLabel(m) {
+  const n = m?.durationMinutes;
+  if (n == null || n === '') return '—';
+  return `${n} min`;
+}
+
+function mandateGroupSizeLabel(m) {
+  const n = m?.groupSize;
+  if (n == null || n === '') return '—';
+  return String(n);
+}
+
 function bindOpenChildLinks(opts = {}) {
   document.querySelectorAll('[data-open-child]').forEach((el) => {
     el.addEventListener('click', () => {
       const id = el.getAttribute('data-open-child');
       if (id) adminChildDetail(id, opts);
+    });
+  });
+}
+
+function bindOpenProviderLinks() {
+  document.querySelectorAll('[data-open-provider]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = el.getAttribute('data-open-provider');
+      if (id) adminProviderDetail(id);
     });
   });
 }
@@ -1216,7 +1273,6 @@ async function adminChildDetail(studentId, opts = {}) {
       m.providerId || m.providerName,
       { id: m.providerId || '', name: m.providerName || m.providerId || '—' },
     ])).values()];
-  const providerNames = assignedProviders.map((p) => p.name).filter(Boolean);
   const backLabel = state.childDetailBack === 'reports' ? '← Reports' : '← Children';
   const sessFrom = state.childSessionFrom || '';
   const sessTo = state.childSessionTo || '';
@@ -1232,7 +1288,11 @@ async function adminChildDetail(studentId, opts = {}) {
       <h2>${esc(`${s.firstName || ''} ${s.lastName || ''}`.trim() || 'Child')}</h2>
       <p class="muted"><strong>School:</strong> ${esc(schoolName)}</p>
       ${calendarLine}
-      <p class="muted"><strong>Provider(s) on mandates:</strong> ${esc(providerNames.length ? providerNames.join(', ') : '—')}</p>
+      <p class="muted"><strong>Provider(s) on mandates:</strong> ${
+        assignedProviders.length
+          ? assignedProviders.map((p) => providerNameLink(p.id, p.name)).join(', ')
+          : '—'
+      }</p>
       <div class="row">
         <label>First name <input id="cFirst" value="${esc(s.firstName || '')}" /></label>
         <label>Last name <input id="cLast" value="${esc(s.lastName || '')}" /></label>
@@ -1260,7 +1320,7 @@ async function adminChildDetail(studentId, opts = {}) {
       <h3>Mandates</h3>
       ${bulkBar('child-mandates')}
       <table>
-        <tr>${bulkTh('child-mandates')}<th>Discipline / service</th><th>Ratio</th><th>Frequency</th><th>Dates</th><th>Provider</th><th></th></tr>
+        <tr>${bulkTh('child-mandates')}<th>Discipline / service</th><th>Ratio</th><th>Group size</th><th>Duration</th><th>Frequency</th><th>Dates</th><th>Provider</th><th></th></tr>
         ${mandates.map((m) => {
           const service = [m.discipline, m.serviceType].filter(Boolean).join(' · ') || '—';
           const dates = [m.startOn, m.endOn].filter(Boolean).join(' → ') || '—';
@@ -1268,12 +1328,14 @@ async function adminChildDetail(studentId, opts = {}) {
           ${bulkTd('child-mandates', m.id)}
           <td>${esc(service)}</td>
           <td>${esc(m.ratioLabel || (m.ratioGroup ? 'Group' : 'Individual'))}</td>
+          <td>${esc(mandateGroupSizeLabel(m))}</td>
+          <td>${esc(mandateDurationLabel(m))}</td>
           <td>${esc(mandateFreqLabel(m))}</td>
           <td>${esc(dates)}</td>
-          <td>${esc(m.providerName || '—')}</td>
+          <td>${providerNameLink(m.providerId, m.providerName || '—')}</td>
           <td><button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete</button></td>
         </tr>`;
-        }).join('') || '<tr><td colspan="7">No mandates.</td></tr>'}
+        }).join('') || '<tr><td colspan="9">No mandates.</td></tr>'}
       </table>
     </div>
     <div class="card">
@@ -1345,6 +1407,7 @@ async function adminChildDetail(studentId, opts = {}) {
     </div>
   `);
   const refreshChild = () => adminChildDetail(studentId, { backTo: state.childDetailBack });
+  bindOpenProviderLinks();
   bindBulkDelete('child-mandates', {
     noun: 'mandates',
     deleteOne: (id) => api('DELETE', `/admin/mandates/${id}`),
@@ -1468,11 +1531,14 @@ async function adminProviderDetail(providerId) {
   const notes = detail.notes || [];
   const mandates = detail.mandates || [];
   const weeks = detail.weeks || [];
+  // Keep URL/state on the canonical linked id when duplicates were merged server-side.
+  if (p?.id && String(p.id) !== String(providerId)) providerId = p.id;
   view(`
     <div class="card">
       <button type="button" class="btn" id="backProviders">← Providers</button>
       <h2>${esc(`${p.firstName || ''} ${p.lastName || ''}`.trim() || 'Provider')}</h2>
       <p class="muted">Linked login: ${esc(user?.email || '—')} · Cognito: ${esc(user?.cognitoSub || '—')}</p>
+      ${detail.redirectedFromProviderId ? `<p class="muted">Caseload from a duplicate profile was merged onto this linked provider.</p>` : ''}
       <div class="row">
         <label>First name <input id="pFirst" value="${esc(p.firstName || '')}" /></label>
         <label>Last name <input id="pLast" value="${esc(p.lastName || '')}" /></label>
@@ -1503,14 +1569,16 @@ async function adminProviderDetail(providerId) {
       <p class="muted">From this provider’s mandates (a child can appear under more than one provider).</p>
       ${bulkBar('prov-mandates')}
       <table>
-        <tr>${bulkTh('prov-mandates')}<th>Child</th><th>Service</th><th>Freq</th><th></th></tr>
+        <tr>${bulkTh('prov-mandates')}<th>Child</th><th>Service</th><th>Group size</th><th>Duration</th><th>Freq</th><th></th></tr>
         ${mandates.map((m) => `<tr>
           ${bulkTd('prov-mandates', m.id)}
-          <td>${esc(m.studentName || '—')}</td>
+          <td>${childNameLink(m.studentId, m.studentName || '—')}</td>
           <td>${esc(m.serviceType || '—')}</td>
-          <td>${esc(m.sessionsPerPeriod ?? m.frequencyPerWeek ?? '—')}</td>
+          <td>${esc(mandateGroupSizeLabel(m))}</td>
+          <td>${esc(mandateDurationLabel(m))}</td>
+          <td>${esc(mandateFreqLabel(m))}</td>
           <td><button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete mandate</button></td>
-        </tr>`).join('') || '<tr><td colspan="5">No mandates assigned.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="7">No mandates assigned.</td></tr>'}
       </table>
     </div>
     <div class="card">
@@ -1624,6 +1692,7 @@ async function adminProviderDetail(providerId) {
     deleteOne: (id) => api('DELETE', `/admin/files/${id}`),
     refresh: refreshProvider,
   });
+  bindOpenChildLinks();
   document.getElementById('backProviders').onclick = () => adminProviders();
   document.getElementById('saveProvider').onclick = async () => {
     try {
@@ -1952,6 +2021,25 @@ async function adminProviders() {
   const users = usersOut.users || [];
   const providers = providersOut.providers || [];
   const therapists = users.filter((u) => u.role === 'therapist');
+  // List every provider profile (not only therapist logins) so caseload orphans are visible.
+  const providerRows = [...providers]
+    .sort((a, b) => {
+      const an = `${a.lastName || ''} ${a.firstName || ''}`.trim().toLowerCase();
+      const bn = `${b.lastName || ''} ${b.firstName || ''}`.trim().toLowerCase();
+      return an.localeCompare(bn);
+    })
+    .map((p) => {
+      const u =
+        (p.userId ? users.find((x) => x.id === p.userId) : null) ||
+        users.find((x) => x.providerId === p.id) ||
+        null;
+      const name = `${p.firstName || ''} ${p.lastName || ''}`.trim() || u?.displayName || p.id;
+      const orphan = !String(p.userId || '').trim() && !u;
+      return { p, u, name, pid: p.id, orphan };
+    });
+  const loginOnly = therapists.filter(
+    (u) => !providers.some((p) => p.id === u.providerId || p.userId === u.id),
+  );
   view(`
     <div class="card entry-card">
       <div class="entry-collapsed" id="addProviderCollapsed">
@@ -1984,24 +2072,26 @@ async function adminProviders() {
       ${bulkBar('providers')}
       <table>
         <tr>${bulkTh('providers')}<th>Name</th><th>Email</th><th>Provider id</th><th>Discipline</th><th></th></tr>
-        ${therapists.map((u) => {
-          const p = providers.find((x) => x.id === u.providerId) || providers.find((x) => x.userId === u.id);
-          const name = p ? `${p.firstName} ${p.lastName}`.trim() : u.displayName;
-          const pid = p?.id || u.providerId || '';
-          return `<tr>
-            ${pid
-              ? bulkTd('providers', pid, ' data-bulk-kind="provider"')
-              : bulkTd('providers', u.id, ' data-bulk-kind="user"')}
-            <td>${esc(name || '—')}</td>
-            <td>${esc(u.email)}</td>
-            <td>${esc(pid || '—')}</td>
-            <td>${esc(p?.discipline || '—')}</td>
-            <td>${pid ? `
+        ${providerRows.map(({ p, u, name, pid, orphan }) => `<tr>
+            ${bulkTd('providers', pid, ' data-bulk-kind="provider"')}
+            <td>${providerNameLink(pid, name || '—')}${orphan ? ' <span class="muted">(no login)</span>' : ''}</td>
+            <td>${esc(u?.email || '—')}</td>
+            <td>${esc(pid)}</td>
+            <td>${esc(p.discipline || '—')}</td>
+            <td>
               <button type="button" class="btn" data-open-provider="${esc(pid)}">Open</button>
               <button type="button" class="btn" data-del-provider="${esc(pid)}">Remove</button>
-            ` : `<button type="button" class="btn" data-remove-therapist="${esc(u.id)}">Remove</button>`}</td>
-          </tr>`;
-        }).join('') || '<tr><td colspan="6">None yet</td></tr>'}
+            </td>
+          </tr>`).join('') || ''}
+        ${loginOnly.map((u) => `<tr>
+            ${bulkTd('providers', u.id, ' data-bulk-kind="user"')}
+            <td>${esc(u.displayName || '—')} <span class="muted">(login only)</span></td>
+            <td>${esc(u.email)}</td>
+            <td>—</td>
+            <td>—</td>
+            <td><button type="button" class="btn" data-remove-therapist="${esc(u.id)}">Remove</button></td>
+          </tr>`).join('')}
+        ${!providerRows.length && !loginOnly.length ? '<tr><td colspan="6">None yet</td></tr>' : ''}
       </table>
     </div>
   `);
@@ -2065,9 +2155,7 @@ async function adminProviders() {
       await adminProviders();
     } catch (e) { setStatus(e.message, 'err'); }
   };
-  document.querySelectorAll('[data-open-provider]').forEach((btn) => {
-    btn.addEventListener('click', () => adminProviderDetail(btn.getAttribute('data-open-provider')));
-  });
+  bindOpenProviderLinks();
   document.querySelectorAll('[data-del-provider]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
@@ -2275,7 +2363,7 @@ async function adminMandates() {
     <div class="card">
       <h2>Import caseload</h2>
       <p class="muted">Use the KU export <strong>Related Service by serviceschool (WG)</strong> (Listing Results sheet) as CSV or Excel (.xls / .xlsx). Import saves immediately.</p>
-      <p class="muted" style="margin-top:0.35rem">Columns: CR Recommended School, Student Last/First Name, CR Expected Grade, CR Decision/Status, Related Service, RS Start/End, RS Ratio, RS Frequency, RS Period, RS Location, RS Provider. Optional when present: Program ID, Program Type, Date of Birth. (RS Duration is ignored. Older short headers still work.)</p>
+      <p class="muted" style="margin-top:0.35rem">Columns: CR Recommended School, Student Last/First Name, CR Expected Grade, CR Decision/Status, Related Service, RS Start/End, RS Ratio, RS Frequency, RS Period, <strong>RS Duration</strong>, RS Location, RS Provider. Optional when present: Group Size, Program ID, Program Type, Date of Birth. (Older short headers still work.)</p>
       <p class="muted" style="margin-top:0.35rem">Freq: <em>Weekly</em> = sessions per week; <em>6 day cycle</em> = N sessions per 6 school days. Providers must already exist in TMS and match “Last, First” / “First Last”. Agency labels like “White Glove” / “White, Glove” are errors — replace with the therapist name. Unmatched RS Provider rows are skipped (no empty-provider mandates).</p>
       <input id="caseloadFile" type="file" accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
       <div class="row" style="margin-top:0.6rem">
@@ -2384,6 +2472,10 @@ async function adminMandates() {
             <option value="group">Group</option>
           </select>
         </label>
+        <label>Group size <input id="manGroupSize" type="number" min="1" step="1" placeholder="1" /></label>
+      </div>
+      <div class="row">
+        <label>Duration (minutes) <input id="manDuration" type="number" min="1" step="1" placeholder="30" /></label>
         <label>Freq / count <input id="manFreq" type="number" min="0" step="1" placeholder="2" /></label>
       </div>
       <div class="row">
@@ -2425,24 +2517,26 @@ async function adminMandates() {
       const out = await api('POST', '/admin/caseloads/import', payload);
       state.caseloadPreview = out;
       const errN = (out.errors || []).length;
+      const warnN = (out.warnings || []).length;
       const createdM = out.createdMandates || 0;
       const updatedM = out.updatedMandates || 0;
       const createdS = out.createdStudents || 0;
       const updatedS = out.updatedStudents || 0;
-      if (errN && !createdM && !updatedM && !createdS) {
-        setStatus(`Import failed: ${errN} row error(s). See the table below.`, 'err');
-      } else if (errN) {
+      const saved =
+        createdM > 0 || updatedM > 0 || createdS > 0 || updatedS > 0 || (out.rows || []).length > 0;
+      const summary = `${createdM} new / ${updatedM} updated mandate(s), ${createdS} new / ${updatedS} updated student(s)`;
+      // Re-render first so the status chip is not wiped by navigation work.
+      await adminMandates();
+      if (errN && !saved) {
+        setStatus(`Error: Import failed — no rows saved. ${errN} row error(s). See the table below.`, 'err');
+      } else if (errN || warnN) {
         setStatus(
-          `Imported with ${errN} row error(s). ${createdM} new / ${updatedM} updated mandate(s), ${createdS} new / ${updatedS} updated student(s).`,
-          'warn',
+          `Success with warnings: ${errN ? `${errN} row error(s)` : ''}${errN && warnN ? ', ' : ''}${warnN ? `${warnN} warning(s)` : ''}. Saved: ${summary}.`,
+          errN ? 'warn' : 'ok',
         );
       } else {
-        setStatus(
-          `Imported ${createdM} new / ${updatedM} updated mandate(s), ${createdS} new / ${updatedS} updated student(s).`,
-          'ok',
-        );
+        setStatus(`Success: Imported ${summary}.`, 'ok');
       }
-      await adminMandates();
     } catch (e) { setStatus(e.message, 'err'); }
   };
 
@@ -2461,14 +2555,26 @@ async function adminMandates() {
       const studentId = document.getElementById('manStudent').value;
       const mandateKind = document.getElementById('manKind').value;
       const freq = Number(document.getElementById('manFreq').value);
+      const durationRaw = document.getElementById('manDuration').value;
+      const groupSizeRaw = document.getElementById('manGroupSize').value;
+      const durationMinutes = durationRaw === '' ? null : Number(durationRaw);
+      const groupSize = groupSizeRaw === '' ? null : Number(groupSizeRaw);
       if (!studentId) throw new Error('Pick a student.');
       if (!Number.isFinite(freq) || freq < 0) throw new Error('Enter frequency / makeup count.');
+      if (durationMinutes != null && (!Number.isFinite(durationMinutes) || durationMinutes <= 0)) {
+        throw new Error('Duration must be a positive number of minutes.');
+      }
+      if (groupSize != null && (!Number.isFinite(groupSize) || groupSize <= 0)) {
+        throw new Error('Group size must be a positive number.');
+      }
       const out = await api('POST', '/admin/mandates', {
         studentId,
         providerId: document.getElementById('manProvider').value,
         serviceType: document.getElementById('manService').value || (mandateKind === 'makeup_auth' ? 'Makeup authorization' : ''),
         mandateKind,
         ratioGroup: document.getElementById('manRatio').value === 'group',
+        durationMinutes,
+        groupSize,
         frequencyKind: document.getElementById('manPeriod').value,
         frequencyPerWeek: freq,
         sessionsPerPeriod: freq,

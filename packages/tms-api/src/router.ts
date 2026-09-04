@@ -7,6 +7,7 @@ import {
   applyCaseloadImport,
   checkMandatesForWeek,
   collectHeuristicAiIssues,
+  consolidateDuplicateProviderMandates,
   dashboard,
   dueDateReport,
   findProviderByName,
@@ -796,6 +797,8 @@ export async function handleTmsRequest(
   if (req.method === 'GET' && /^\/admin\/providers\/[^/]+$/.test(path)) {
     return adminUser(() => {
       const id = path.split('/')[3];
+      // Persist repair of split same-name provider caseloads (orphan vs linked login).
+      consolidateDuplicateProviderMandates(store);
       const detail = adminProviderDetail(store, id);
       if (!detail) return json(404, { error: 'Provider not found.' });
       return json(200, detail);
@@ -1067,6 +1070,8 @@ export async function handleTmsRequest(
       const sessionsPerPeriod = Number(b.sessionsPerPeriod ?? b.frequencyPerWeek ?? freq);
       const disciplineRaw = String(b.discipline || '');
       const discipline = (['OT', 'PT', 'SLP'].includes(disciplineRaw) ? disciplineRaw : '') as Discipline | '';
+      const durationMinutes = parseNullableNumber(b.durationMinutes);
+      const groupSize = parseNullableNumber(b.groupSize);
       const mandate = store.upsertMandate({
         id: newId(),
         studentId,
@@ -1080,6 +1085,8 @@ export async function handleTmsRequest(
         periodSchoolDays:
           frequencyKind === 'school_day_cycle' ? Number(b.periodSchoolDays || 6) : undefined,
         ratioGroup: Boolean(b.ratioGroup),
+        durationMinutes,
+        groupSize: groupSize ?? (Boolean(b.ratioGroup) ? null : 1),
         location: String(b.location || ''),
         sourcePdfKey: 'manual',
         parsedAt: nowIso(),
@@ -1114,6 +1121,11 @@ export async function handleTmsRequest(
           ? existing.periodSchoolDays
           : Number(b.periodSchoolDays);
       const mandateKind = parseMandateKind(b.mandateKind, existing.mandateKind || 'regular');
+      const ratioGroup = b.ratioGroup == null ? existing.ratioGroup : Boolean(b.ratioGroup);
+      const durationMinutes =
+        b.durationMinutes === undefined ? existing.durationMinutes ?? null : parseNullableNumber(b.durationMinutes);
+      const groupSize =
+        b.groupSize === undefined ? existing.groupSize ?? null : parseNullableNumber(b.groupSize);
       const mandate = store.upsertMandate({
         ...existing,
         mandateKind,
@@ -1133,7 +1145,9 @@ export async function handleTmsRequest(
         startOn: pickStr(b.startOn, existing.startOn),
         endOn: pickStr(b.endOn, existing.endOn),
         location: b.location != null ? String(b.location) : existing.location,
-        ratioGroup: b.ratioGroup == null ? existing.ratioGroup : Boolean(b.ratioGroup),
+        ratioGroup,
+        durationMinutes,
+        groupSize,
       });
       store.audit(ctx.user.id, 'update_mandate', `mandate:${id}`, existing, mandate);
       return json(200, { mandate });

@@ -74,6 +74,10 @@ export interface CaseloadImportRow {
   serviceType: string;
   discipline: Discipline | '';
   ratioGroup: boolean;
+  /** Minutes from RS Duration when present. */
+  durationMinutes: number | null;
+  /** From group-size column, or derived from RS Ratio (Individual → 1). */
+  groupSize: number | null;
   frequencyKind: FrequencyKind;
   sessionsPerPeriod: number;
   periodSchoolDays: number;
@@ -107,6 +111,8 @@ export interface CaseloadPreviewMandate {
   serviceType: string;
   discipline: Discipline | '';
   ratioGroup: boolean;
+  durationMinutes: number | null;
+  groupSize: number | null;
   freqDisplay: string;
   frequencyKind: FrequencyKind;
   sessionsPerPeriod: number;
@@ -160,8 +166,10 @@ const HEADER_ALIASES: Record<string, string[]> = {
   period: ['rs period', 'freq period', 'period'],
   location: ['rs location', 'location'],
   provider: ['rs provider', 'related service provider', 'provider', 'therapist'],
-  /** Present on final export; ignored by import (minutes live on the mandate elsewhere). */
-  duration: ['rs duration', 'duration'],
+  /** Minutes per session (e.g. 30, 42, 45). */
+  duration: ['rs duration', 'duration', 'duration minutes', 'session duration'],
+  /** Optional group size; otherwise derived from RS Ratio. */
+  groupSize: ['rs group size', 'group size', 'groupsize', 'rs size', 'group #'],
   /** Optional on some exports; blank is fine (recommended later for HHA). */
   programId: ['program id', 'programid', 'program #', 'admission id', 'admissionid'],
   programType: ['program type', 'programtype'],
@@ -220,6 +228,35 @@ function parseRatioGroup(raw: string): boolean {
   if (/\bgroup\b|\b2\s*:\s*1\b|\b3\s*:\s*1\b|\b4\s*:\s*1\b|\bsmall\s*group\b/.test(s)) return true;
   if (/\bindividual\b|\b1\s*:\s*1\b/.test(s)) return false;
   return false;
+}
+
+/** Positive whole minutes from RS Duration (e.g. "30", "45 min"). */
+export function parseDurationMinutes(raw: string): number | null {
+  const n = parseFreqNumber(raw);
+  if (n == null || n <= 0) return null;
+  return Math.round(n);
+}
+
+/**
+ * Prefer explicit group-size column; else Individual → 1, N:1 ratio → N,
+ * Small Group without a number → null.
+ */
+export function parseGroupSize(groupSizeRaw: string, ratioRaw: string, ratioGroup: boolean): number | null {
+  const fromCol = parseFreqNumber(groupSizeRaw);
+  if (fromCol != null && fromCol > 0) return Math.round(fromCol);
+
+  const ratio = String(ratioRaw || '').toLowerCase();
+  const nToOne = ratio.match(/(\d+)\s*:\s*1/);
+  if (nToOne) {
+    const n = Number(nToOne[1]);
+    if (Number.isFinite(n) && n > 0) return Math.round(n);
+  }
+  const loneNum = parseFreqNumber(ratioRaw);
+  if (ratioGroup && loneNum != null && loneNum > 1) return Math.round(loneNum);
+
+  if (/\bindividual\b|\b1\s*:\s*1\b/.test(ratio) || (!ratioGroup && !ratio.trim())) return 1;
+  if (!ratioGroup) return 1;
+  return null;
 }
 
 function parsePeriod(raw: string): { kind: FrequencyKind; periodSchoolDays: number } {
@@ -308,6 +345,8 @@ export function parseCaseloadGrid(
     period: colIndex(headers, HEADER_ALIASES.period),
     location: colIndex(headers, HEADER_ALIASES.location),
     provider: colIndex(headers, HEADER_ALIASES.provider),
+    duration: colIndex(headers, HEADER_ALIASES.duration),
+    groupSize: colIndex(headers, HEADER_ALIASES.groupSize),
     programId: colIndex(headers, HEADER_ALIASES.programId),
     programType: colIndex(headers, HEADER_ALIASES.programType),
     dob: colIndex(headers, HEADER_ALIASES.dob),
@@ -366,6 +405,8 @@ export function parseCaseloadGrid(
     const periodRaw = cell(cells, idx.period);
     const location = cell(cells, idx.location);
     const providerName = cell(cells, idx.provider);
+    const durationRaw = cell(cells, idx.duration);
+    const groupSizeRaw = cell(cells, idx.groupSize);
     const programId = cell(cells, idx.programId);
     const programType = cell(cells, idx.programType);
     const dobRaw = cell(cells, idx.dob);
@@ -513,6 +554,8 @@ export function parseCaseloadGrid(
     }
 
     const ratioGroup = parseRatioGroup(ratioRaw);
+    const durationMinutes = parseDurationMinutes(durationRaw);
+    const groupSize = parseGroupSize(groupSizeRaw, ratioRaw, ratioGroup);
     const frequencyPerWeek = kind === 'weekly' ? freqNum! : 0;
     const sessionsPerPeriod = freqNum!;
     const days = kind === 'school_day_cycle' ? periodSchoolDays || 6 : 0;
@@ -529,6 +572,8 @@ export function parseCaseloadGrid(
       serviceType,
       discipline,
       ratioGroup,
+      durationMinutes,
+      groupSize,
       frequencyKind: kind,
       sessionsPerPeriod,
       periodSchoolDays: days,
@@ -757,10 +802,27 @@ export function isAgencyProviderName(rawName: string): boolean {
   );
 }
 
+/** Prefer linked login + active when duplicate provider rows share a name. */
+export function preferCanonicalProvider(providers: Provider[]): Provider | undefined {
+  if (!providers.length) return undefined;
+  const linkedActive = providers.find((p) => String(p.userId || '').trim() && p.active !== false);
+  if (linkedActive) return linkedActive;
+  const linked = providers.find((p) => String(p.userId || '').trim());
+  if (linked) return linked;
+  const active = providers.find((p) => p.active !== false);
+  if (active) return active;
+  return providers[0];
+}
+
+export function providerDisplayNameKey(p: { firstName?: string; lastName?: string }): string {
+  return normName(`${p.firstName || ''} ${p.lastName || ''}`);
+}
+
 /**
  * Match RS Provider text to a TMS provider.
  * Accepts "First Last", "Last First", and "Last, First".
  * Agency labels like "White, Glove" / "White Glove" never match a person.
+ * When several rows share a name, prefer the linked (login) active profile.
  */
 export function findProviderByName(providers: Provider[], rawName: string): Provider | undefined {
   const s = String(rawName || '').trim();
@@ -769,34 +831,68 @@ export function findProviderByName(providers: Provider[], rawName: string): Prov
   const lower = normName(s);
   if (!lower) return undefined;
 
-  const direct = providers.find((p) => normName(`${p.firstName} ${p.lastName}`) === lower);
-  if (direct) return direct;
-  const swapped = providers.find((p) => normName(`${p.lastName} ${p.firstName}`) === lower);
-  if (swapped) return swapped;
+  const hits: Provider[] = [];
+  const pushUnique = (p: Provider | undefined) => {
+    if (!p) return;
+    if (!hits.some((x) => x.id === p.id)) hits.push(p);
+  };
+
+  for (const p of providers) {
+    if (normName(`${p.firstName} ${p.lastName}`) === lower) pushUnique(p);
+  }
+  for (const p of providers) {
+    if (normName(`${p.lastName} ${p.firstName}`) === lower) pushUnique(p);
+  }
 
   if (s.includes(',')) {
     const [last, ...rest] = s.split(',').map((p) => p.trim());
     const first = rest.join(' ').trim();
     if (first && last) {
-      const byComma = providers.find(
-        (p) => normName(p.firstName) === normName(first) && normName(p.lastName) === normName(last),
-      );
-      if (byComma) return byComma;
+      for (const p of providers) {
+        if (normName(p.firstName) === normName(first) && normName(p.lastName) === normName(last)) {
+          pushUnique(p);
+        }
+      }
     }
   }
 
   const tokens = lower.split(/\s+/).filter(Boolean);
   if (tokens.length >= 2) {
-    const hits = providers.filter((p) => {
+    for (const p of providers) {
       const fn = normName(p.firstName);
       const ln = normName(p.lastName);
-      if (!fn || !ln) return false;
-      return tokens.includes(fn) && tokens.includes(ln);
-    });
-    if (hits.length === 1) return hits[0];
+      if (!fn || !ln) continue;
+      if (tokens.includes(fn) && tokens.includes(ln)) pushUnique(p);
+    }
   }
 
-  return undefined;
+  return preferCanonicalProvider(hits);
+}
+
+/** Move mandates from same-name orphan provider rows onto the linked canonical profile. */
+export function consolidateDuplicateProviderMandates(store: MemoryStore): number {
+  const byName = new Map<string, Provider[]>();
+  for (const p of store.data.providers) {
+    const key = providerDisplayNameKey(p);
+    if (!key) continue;
+    const list = byName.get(key) || [];
+    list.push(p);
+    byName.set(key, list);
+  }
+  let moved = 0;
+  for (const group of byName.values()) {
+    if (group.length < 2) continue;
+    const canonical = preferCanonicalProvider(group);
+    if (!canonical) continue;
+    const aliasIds = new Set(group.map((p) => p.id));
+    for (const m of store.data.mandates) {
+      if (aliasIds.has(m.providerId) && m.providerId !== canonical.id) {
+        store.upsertMandate({ ...m, providerId: canonical.id });
+        moved += 1;
+      }
+    }
+  }
+  return moved;
 }
 
 function studentKey(first: string, last: string, school: string): string {
@@ -887,6 +983,9 @@ export function applyCaseloadImport(
   let createdSchools = 0;
   const studentsOut: Student[] = [];
   const mandatesOut: Mandate[] = [];
+
+  // Repair existing split caseloads before applying this file (persists on write path).
+  if (!dryRun) consolidateDuplicateProviderMandates(store);
 
   /** Staging maps for dry-run so we don't mutate the live store. */
   const schoolByName = new Map<string, School>();
@@ -1047,6 +1146,8 @@ export function applyCaseloadImport(
           ? row.periodSchoolDays || 6
           : row.periodSchoolDays || undefined,
       ratioGroup: row.ratioGroup,
+      durationMinutes: row.durationMinutes,
+      groupSize: row.groupSize,
       location: row.location || existing?.location || undefined,
       sourcePdfKey: existing?.sourcePdfKey || 'caseload-csv',
       parsedAt: nowIso(),
@@ -1080,6 +1181,8 @@ export function applyCaseloadImport(
       serviceType: row.serviceType,
       discipline: row.discipline,
       ratioGroup: row.ratioGroup,
+      durationMinutes: row.durationMinutes,
+      groupSize: row.groupSize,
       freqDisplay: row.freqDisplay,
       frequencyKind: row.frequencyKind,
       sessionsPerPeriod: row.sessionsPerPeriod,
