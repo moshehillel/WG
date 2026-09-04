@@ -1,6 +1,6 @@
 import type { APIGatewayProxyHandlerV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { createHhaClient, MockHhaClient } from '@white-glove/hha-client';
-import { MemoryStore } from '@white-glove/tms-db';
+import { MemoryStore, purgeOrphanProviders } from '@white-glove/tms-db';
 import { handleTmsRequest, type HttpRequest } from './router.js';
 import { createMailer, type Mailer } from './mail.js';
 import { runDueNags } from './due-nags.js';
@@ -96,6 +96,13 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
   if (rec.tmsJob === 'purge-smoke-users') {
     const emails = Array.isArray(rec.emails) ? rec.emails : [];
     const out = await purgeSmokeUsers(emails);
+    return { statusCode: 200, body: JSON.stringify(out) };
+  }
+  if (rec.tmsJob === 'purge-orphan-providers') {
+    await loadSnapshotFromS3(store);
+    const out = purgeOrphanProviders(store);
+    store.audit('ops-purge', 'purge_orphan_providers', 'providers', null, out);
+    await saveSnapshotToS3(store);
     return { statusCode: 200, body: JSON.stringify(out) };
   }
   if (rec.tmsJob === 'list-users') {
