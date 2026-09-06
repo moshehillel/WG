@@ -61,10 +61,18 @@ describe('mandate math', () => {
   });
 
   it('blocks over mandate', () => {
-    const rows = [sess({ id: 'a' }), sess({ id: 'b' }), sess({ id: 'c' })];
-    const r = checkMandate(mandate(), rows);
+    const rows = [
+      sess({ id: 'a', dateOfService: '09/01/2026', beginTime: '9:00 am', endTime: '9:30 am' }),
+      sess({ id: 'b', dateOfService: '09/02/2026', beginTime: '10:00 am', endTime: '10:30 am' }),
+      sess({ id: 'c', dateOfService: '09/03/2026', beginTime: '11:00 am', endTime: '11:30 am' }),
+    ];
+    const r = checkMandate(mandate(), rows, rows, { studentLabel: 'Aiden Odne' });
     expect(r.over).toBe(true);
     expect(r.used).toBe(3);
+    expect(r.message).toMatch(/This exceeds the mandate for Aiden Odne/i);
+    expect(r.message).toMatch(/09\/01\/2026 9:00 am–9:30 am/);
+    expect(r.message).toMatch(/09\/02\/2026 10:00 am–10:30 am/);
+    expect(r.message).toMatch(/Mandate allows 2 session\(s\) per week; this upload would make it 3/);
   });
 
   it('ignores additional services in mandate count', () => {
@@ -415,6 +423,7 @@ describe('due dates and dashboard', () => {
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -470,12 +479,16 @@ describe('due dates and dashboard', () => {
       hhaPatientId: '',
       createdAt: '',
     });
-    store.upsertSession(sess({ notes: 'short', weekId: 'w1', studentId: 'st' }));
+    store.upsertSession(sess({ notes: '', weekId: 'w1', studentId: 'st' }));
     const rows = missingNotes(store);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.studentName).toBe('Aiden Odne');
     expect(rows[0]?.date).toBe('09/01/2026');
     expect(rows[0]?.weekId).toBe('w1');
+    expect(rows[0]?.reason).toMatch(/missing/i);
+    // Very short notes count as posted for missing-notes / pay progress.
+    store.upsertSession(sess({ notes: 'ok', weekId: 'w1', studentId: 'st' }));
+    expect(missingNotes(store)).toHaveLength(0);
   });
 
   it('lists admin weeks with provider name and session count', () => {
@@ -493,6 +506,7 @@ describe('due dates and dashboard', () => {
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -515,6 +529,61 @@ describe('due dates and dashboard', () => {
     expect(rows[0]?.providerName).toBe('Pat Lee');
     expect(rows[0]?.sessionCount).toBe(1);
     expect(rows[0]?.signerName).toBe('Principal');
+  });
+
+  it('admin weeks list survives missing hhaTransfers and merges transfer errors', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 72,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    });
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p',
+      weekStart: '2026-08-31',
+      status: 'signed',
+      signerName: 'Principal',
+      signerEmail: 'p@school.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'failed',
+      hhaError: '',
+    });
+    // Simulate a corrupted/partial snapshot (legacy field name / missing array).
+    (store.data as { transfers?: unknown }).transfers = undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (store.data as any).hhaTransfers = undefined;
+    expect(() => adminWeeksList(store)).not.toThrow();
+    expect(adminWeeksList(store)[0]?.hhaError).toBe('');
+
+    store.data.hhaTransfers = [
+      {
+        id: 't1',
+        sessionId: 's1',
+        weekId: 'w',
+        status: 'failed',
+        hhaVisitId: '',
+        lastError: 'HHA reject: bad auth',
+        payloadHash: '',
+      },
+    ];
+    expect(adminWeeksList(store)[0]?.hhaError).toContain('HHA reject');
   });
 
   it('week progress: provided = 50%, notes = 100%', () => {
@@ -540,6 +609,7 @@ describe('due dates and dashboard', () => {
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -577,7 +647,7 @@ describe('due dates and dashboard', () => {
         weekId: 'w',
         studentId: 'st',
         attendance: 'attended',
-        notes: 'ok',
+        notes: '',
       }),
     );
     store.upsertSession(
@@ -603,7 +673,7 @@ describe('due dates and dashboard', () => {
         weekId: 'w',
         studentId: 'st',
         attendance: 'attended',
-        notes: 'Service Provided: gait work in gym',
+        notes: 'ok',
       }),
     );
     const full = weekProgressReport(store, { from: '2026-08-31', to: '2026-08-31' });
@@ -620,7 +690,7 @@ describe('week start', () => {
 });
 
 describe('AI heuristic', () => {
-  it('blocks short notes on attended sessions', () => {
+  it('allows very short notes on attended sessions', () => {
     const r = screenServiceNote({
       notes: 'ok',
       attendance: 'attended',
@@ -629,20 +699,33 @@ describe('AI heuristic', () => {
       makeupOfSessionId: '',
       dateOfService: '09/01/2026',
     });
-    expect(r.block).toBe(true);
-    expect(r.blockFlags.some((f) => /incomplete/i.test(f))).toBe(true);
+    expect(r.block).toBe(false);
+    expect(r.flags).toEqual([]);
   });
 
-  it('blocks short notes on makeup sessions', () => {
+  it('blocks empty notes on attended sessions', () => {
     const r = screenServiceNote({
-      notes: 'brief',
+      notes: '   ',
+      attendance: 'attended',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      makeupOfSessionId: '',
+      dateOfService: '09/01/2026',
+    });
+    expect(r.block).toBe(true);
+    expect(r.blockFlags.some((f) => /required/i.test(f))).toBe(true);
+  });
+
+  it('allows very short makeup notes that include the word makeup', () => {
+    const r = screenServiceNote({
+      notes: 'makeup ok',
       attendance: 'makeup',
       beginTime: '9:00 am',
       endTime: '9:30 am',
       makeupOfSessionId: 'missed-1',
       dateOfService: '09/01/2026',
     });
-    expect(r.block).toBe(true);
+    expect(r.block).toBe(false);
   });
 
   it('blocks attended sessions missing times', () => {

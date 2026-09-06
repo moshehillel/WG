@@ -6,12 +6,66 @@ Sync UI changes from this monorepo:
 
   npm run tms:sync-frontend
 
-Backend (API) stays here â€” deploy with CDK (TmsApiUrl output).
+Backend (API) stays here — deploy with CDK (TmsApiUrl output).
 
 No ProviderSoft on this product.
 
-Deployed API (WhiteGloveStack, us-east-1):
+Browser API (same-origin proxy on Netlify):
+  TMS_API_URL / config.js apiUrl: https://wgfront.netlify.app/api
+  Netlify proxies /api/* → Lambda Function URL (server-side; not blocked by NetFree in the browser).
+
+Lambda Function URL (private to Netlify edge / ops — do not point the SPA at this):
   TmsApiUrl:     https://latakehjufxtl37yvnds5pfjga0bbgby.lambda-url.us-east-1.on.aws/
   TmsUserPoolId: us-east-1_nDJo2pcjL
 
-  localStorage.setItem('tmsApi', 'https://latakehjufxtl37yvnds5pfjga0bbgby.lambda-url.us-east-1.on.aws/')
+  localStorage.setItem('tmsApi', 'https://wgfront.netlify.app/api')
+
+Cognito still calls cognito-idp.us-east-1.amazonaws.com directly from the browser.
+NetFree allowlist (required for sign-in if NetFree blocks AWS):
+  cognito-idp.us-east-1.amazonaws.com
+Do not try to proxy Cognito through Netlify — Cognito has no shared secret in the SPA;
+a proxy would not help and cannot hide ClientId.
+
+---- Luna support chatbot ----
+UI: floating ball in apps/tms-web (index.html #lunaRoot + styles.css + app.js).
+API (auth required):
+  POST /support/luna/chat
+  POST /support/luna/handoff
+
+OpenAI key (NEVER in the frontend / Netlify env):
+  Live (preferred): AWS Secrets Manager → secret created by CDK as TmsLunaOpenAiSecret
+    (stack output TmsLunaOpenAiSecretArn). Open the secret → Retrieve secret value → Edit →
+    paste the plain API key string (sk-...) replacing REPLACE_ME_IN_SECRETS_MANAGER.
+    Optional one-time seed on deploy: cd infra && npx cdk deploy -c openaiApiKey=sk-...
+    (value is ignored on later deploys once the secret already exists).
+  Local: set OPENAI_API_KEY in the shell (or .env loaded by your process) before
+    npm run tms:local
+  Optional: OPENAI_MODEL (default gpt-4o-mini), LUNA_SUPPORT_EMAIL
+    (default moshe@advancedautomations.net)
+
+Handoff email:
+  Uses existing TMS SES mailer (TMS_FROM_EMAIL / ALERT_FROM_EMAIL).
+  Sends to LUNA_SUPPORT_EMAIL. If TMS_FROM_EMAIL is empty, local MemoryMailer logs only.
+  Live stack already sets TMS_FROM_EMAIL from alertFromEmail (moshe@advancedautomations.net
+  in cdk.json) and grants ses:SendEmail — ensure that From identity is verified in SES.
+
+---- HHA transfer (lock / sign / admin "Send to HHA") ----
+Live TmsApiFn must have:
+  HHA_USE_MOCK=false
+  HHA_SECRET_ARN=<same imported HhaSecret as pipeline processors>
+  HHA_USE_PRODUCTION=true
+  HHA_ALLOW_PRODUCTION=true
+  HHA_PRODUCTION_BASE_URL=https://app.hhaexchange.com/Integration/ENT/V1.8/ws.asmx
+
+Secret JSON keys used for SOAP (already shared with processors — do not invent new creds):
+  appName, appSecret, appKey, baseUrl / productionBaseUrl
+  (apiKey may be PLACEHOLDER — SOAP path does not need it)
+
+Optional local override to force mock on Lambda: TMS_HHA_MOCK=1
+Local `npm run tms:local` always uses MockHhaClient.
+
+Verify after deploy:
+  aws lambda get-function-configuration --function-name <TmsApiFn> \
+    --query "Environment.Variables.[HHA_USE_MOCK,HHA_SECRET_ARN]"
+  CloudWatch log line: "[tms-hha] Real HHA client ready"
+  Sign/lock a week or admin POST /weeks/{id}/hha → transfer status confirmed (not mock ids).

@@ -19,12 +19,24 @@ import {
   newId,
   nowIso,
   parseCaseloadUpload,
+  parseDos,
   parseMandatePdfText,
   parseWeeklySessionText,
+  isGenericSettingLabel,
   schoolNamesConflict,
   screenServiceNote,
+  sessionSlotLabel,
+  cptDurationError,
+  notesLookCopyPasted,
+  noteCopyPasteError,
+  sessionSignatureError,
+  sessionOverlapError,
+  providerDaySessions,
+  presentGroupPeerCount,
+  soloGroupMandateNoteWarning,
   splitPersonName,
   therapistCanEdit,
+  therapistCanImportOrAddServices,
   resolveMakeupOfSessionId,
   unusedMissedForStudent,
   validateMakeup,
@@ -39,6 +51,10 @@ import {
   sessionPayAmount,
   DEFAULT_ADMIN_NOTE_TAGS,
   rowsToXlsxBuffer,
+  appSettingsFromStore,
+  sessionImportAgeError,
+  defaultAppSettings,
+  type AppSettings,
   type AppUser,
   type Discipline,
   type FrequencyKind,
@@ -52,13 +68,15 @@ import { authenticate, requireAdmin, type AuthContext } from './auth.js';
 import { screenNoteWithOptionalBedrock } from './bedrock.js';
 import { transferLockedWeek } from './hha-transfer.js';
 import { buildTimesheetPdf } from './timesheet.js';
-import { createSignEnvelope, envelopeCompleted } from './esign.js';
+import { createSignEnvelope, envelopeCompleted, voidSignEnvelope } from './esign.js';
 import { deactivateCognitoLogin, deleteCognitoLogin, inviteTherapist } from './invite.js';
 import { PDF_NO_TEXT_ERROR, bodyHasPdfBytes, pdfTextFromBody } from './pdf-text.js';
 import { runDueNags } from './due-nags.js';
+import { runHhaErrorDigest } from './hha-error-digest.js';
 import { putLockerPdf } from './s3-state.js';
 import type { Mailer } from './mail.js';
 import type { HhaClient } from '@white-glove/hha-client';
+import { runLunaChat, sendLunaHandoff } from './luna.js';
 
 export interface HttpRequest {
   method: string;
@@ -96,11 +114,116 @@ function obj(req: HttpRequest): Record<string, unknown> {
   return {};
 }
 
+/** Child id → "First Last" for mandate over/under messages. */
+function studentNameById(store: MemoryStore): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const s of store.data.students) {
+    const name = `${s.firstName} ${s.lastName}`.trim();
+    map.set(s.id, name || s.id);
+  }
+  return map;
+}
+
+function overMandateSummary(errors: string[]): string {
+  if (!errors.length) return 'This upload exceeds the mandate.';
+  if (errors.length === 1) return errors[0]!;
+  return `Upload blocked — ${errors.length} sessions exceed the mandate. See details for each child and date/time.`;
+}
+
+/** Identity for upload dedupe / skip-already-saved (child + DOS + times). */
+function uploadSessionKey(s: {
+  studentId: string;
+  dateOfService: string;
+  beginTime: string;
+  endTime: string;
+}): string {
+  return [
+    String(s.studentId || '').trim().toLowerCase(),
+    String(s.dateOfService || '').trim().toLowerCase(),
+    String(s.beginTime || '').trim().toLowerCase().replace(/\./g, ''),
+    String(s.endTime || '').trim().toLowerCase().replace(/\./g, ''),
+  ].join('|');
+}
+
+function formatUploadRowLabel(row: {
+  studentName?: string;
+  dateOfService?: string;
+  beginTime?: string;
+  endTime?: string;
+}): string {
+  const who = String(row.studentName || '').trim() || 'Unknown child';
+  const slot = sessionSlotLabel({
+    dateOfService: String(row.dateOfService || ''),
+    beginTime: String(row.beginTime || ''),
+    endTime: String(row.endTime || ''),
+  } as SessionRow);
+  return `${who} — ${slot}`;
+}
+
 function providerFor(store: MemoryStore, user: AppUser) {
   if (user.providerId) {
     return store.data.providers.find((p) => p.id === user.providerId);
   }
   return store.data.providers.find((p) => p.userId === user.id);
+}
+
+function getAppSettings(store: MemoryStore): AppSettings {
+  return appSettingsFromStore(store.data.settings);
+}
+
+function upsertAppSettings(store: MemoryStore, next: AppSettings): AppSettings {
+  const row: AppSettings = { ...defaultAppSettings(), ...next, id: 'global' };
+  store.data.settings = [row];
+  return row;
+}
+
+/** Schools on this provider's caseload (via mandates). */
+function schoolsForProvider(store: MemoryStore, providerId: string) {
+  const studentIds = new Set(
+    store.data.mandates.filter((m) => m.providerId === providerId || !m.providerId).map((m) => m.studentId),
+  );
+  const schoolIds = new Set(
+    store.data.students.filter((s) => studentIds.has(s.id)).map((s) => s.schoolId).filter(Boolean),
+  );
+  return store.data.schools.filter((s) => schoolIds.has(s.id));
+}
+
+function schoolDistrictForWeek(
+  store: MemoryStore,
+  weekId: string,
+  preferredSchoolId?: string,
+): string {
+  if (preferredSchoolId) {
+    const preferred = store.data.schools.find((s) => s.id === preferredSchoolId);
+    const label = String(preferred?.district || preferred?.name || '').trim();
+    if (label) return label;
+  }
+  const sessions = store.sessionsForWeek(weekId);
+  const counts = new Map<string, number>();
+  for (const s of sessions) {
+    const student = store.data.students.find((st) => st.id === s.studentId);
+    const school = student
+      ? store.data.schools.find((sc) => sc.id === student.schoolId)
+      : undefined;
+    const label = String(school?.district || school?.name || '').trim();
+    if (!label) continue;
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  let best = '';
+  let bestN = 0;
+  for (const [label, n] of counts) {
+    if (n > bestN) {
+      best = label;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+function cptLabelFromParts(codes: string[], procedures: string[], units: number): string {
+  if (procedures.length) return procedures.join(', ');
+  if (codes.length) return codes.map((c) => (units > 0 && codes.length === 1 ? `${c}x${units}` : c)).join(', ');
+  return '';
 }
 
 /** School-scoped due dates visible to the signed-in user (admins see all). */
@@ -240,8 +363,16 @@ async function upsertTherapistAsProvider(
   };
 }
 
-function visibleStudents(store: MemoryStore, user: AppUser, weekStart: string): Student[] {
-  if (user.role === 'admin') return store.data.students;
+function visibleStudents(
+  store: MemoryStore,
+  user: AppUser,
+  weekStart: string,
+  schoolId?: string,
+): Student[] {
+  if (user.role === 'admin') {
+    const all = store.data.students;
+    return schoolId ? all.filter((s) => s.schoolId === schoolId) : all;
+  }
   const provider = providerFor(store, user);
   const providerId = provider?.id || '';
   const mandated = new Set(
@@ -251,7 +382,9 @@ function visibleStudents(store: MemoryStore, user: AppUser, weekStart: string): 
   );
   const week = weekStart ? store.weekByProviderStart(providerId, weekStart) : undefined;
   const fromWeek = new Set((week ? store.sessionsForWeek(week.id) : []).map((s) => s.studentId));
-  return store.data.students.filter((s) => mandated.has(s.id) || fromWeek.has(s.id));
+  const students = store.data.students.filter((s) => mandated.has(s.id) || fromWeek.has(s.id));
+  if (!schoolId) return students;
+  return students.filter((s) => s.schoolId === schoolId);
 }
 
 function pickStr(v: unknown, fallback: string): string {
@@ -319,6 +452,7 @@ function providerPayFields(
     'payRateGroup30Min',
     'payRateGroup42Min',
     'payRateGroup45Min',
+    'payRateEval',
     'payRateAdditionalHourly',
   ] as const;
   const out = {
@@ -379,9 +513,6 @@ function reportXlsxWeekProgress(
         'Week',
         'Sessions provided',
         'Notes posted',
-        'Missed',
-        'Notes follow-up',
-        'Progress %',
       ],
       rows.map((r) => [
         r.childName,
@@ -389,9 +520,6 @@ function reportXlsxWeekProgress(
         r.weekLabel,
         r.sessionsProvided,
         r.notesPosted,
-        r.sessionsMissed,
-        r.notesFollowUp,
-        r.progressPct,
       ]),
     ),
   );
@@ -480,14 +608,30 @@ export async function handleTmsRequest(
     return json(200, out);
   }
 
+  if (req.method === 'POST' && path === '/internal/hha-error-digest') {
+    const key = process.env.TMS_INTERNAL_KEY || '';
+    const provided = req.headers['x-tms-internal'] || obj(req).key;
+    if (!key || provided !== key) return json(401, { error: 'Unauthorized HHA digest job.' });
+    if (!deps.mail) return json(503, { error: 'Mailer missing.' });
+    const out = await runHhaErrorDigest(store, deps.mail);
+    return json(200, out);
+  }
+
   const auth = await authenticate(store, req.headers);
   if ('error' in auth) return json(auth.status, { error: auth.error });
   const ctx = auth;
 
   if (req.method === 'GET' && path === '/me') {
+    const provider = providerFor(store, ctx.user);
+    const schools = provider ? schoolsForProvider(store, provider.id) : [];
     return json(200, {
       user: ctx.user,
-      provider: providerFor(store, ctx.user),
+      provider,
+      schools,
+      settings: {
+        sessionImportAgeLockEnabled: getAppSettings(store).sessionImportAgeLockEnabled,
+        sessionImportMaxAgeDays: getAppSettings(store).sessionImportMaxAgeDays,
+      },
       alerts: store.openAlerts().slice(0, 20),
       dueDates: dueDatesForUser(store, ctx.user),
     });
@@ -506,6 +650,36 @@ export async function handleTmsRequest(
     if (denied) return json(403, { error: denied });
     return fn(ctx);
   };
+
+  if (req.method === 'GET' && path === '/admin/settings') {
+    return adminUser(() => json(200, { settings: getAppSettings(store) }));
+  }
+
+  if (req.method === 'POST' && path === '/admin/settings') {
+    return adminUser(() => {
+      const b = obj(req);
+      const prev = getAppSettings(store);
+      const next = upsertAppSettings(store, {
+        ...prev,
+        sessionImportAgeLockEnabled:
+          typeof b.sessionImportAgeLockEnabled === 'boolean'
+            ? b.sessionImportAgeLockEnabled
+            : prev.sessionImportAgeLockEnabled,
+        sessionImportMaxAgeDays:
+          Number(b.sessionImportMaxAgeDays) > 0
+            ? Math.floor(Number(b.sessionImportMaxAgeDays))
+            : prev.sessionImportMaxAgeDays,
+        unlockedWeekIds: Array.isArray(b.unlockedWeekIds)
+          ? b.unlockedWeekIds.map(String)
+          : prev.unlockedWeekIds,
+        unlockedProviderIds: Array.isArray(b.unlockedProviderIds)
+          ? b.unlockedProviderIds.map(String)
+          : prev.unlockedProviderIds,
+      });
+      store.audit(ctx.user.id, 'update_settings', 'settings:global', prev, next);
+      return json(200, { settings: next });
+    });
+  }
 
   if (req.method === 'POST' && path === '/admin/therapists') {
     return adminUser(async () => {
@@ -1341,7 +1515,8 @@ export async function handleTmsRequest(
 
   if (req.method === 'GET' && path === '/students') {
     const weekStart = String(req.query.weekStart || weekStartFromDos(nowIso().slice(0, 10)));
-    const students = visibleStudents(store, ctx.user, weekStart);
+    const schoolId = String(req.query.schoolId || '').trim();
+    const students = visibleStudents(store, ctx.user, weekStart, schoolId || undefined);
     const ids = new Set(students.map((s) => s.id));
     return json(200, {
       students,
@@ -1378,36 +1553,101 @@ export async function handleTmsRequest(
     return json(201, { file });
   }
 
+  if (req.method === 'GET' && path === '/weeks') {
+    const provider = providerFor(store, ctx.user);
+    if (!provider && ctx.user.role !== 'admin') {
+      return json(400, { error: 'No provider profile on this login.' });
+    }
+    const providerId = String(req.query.providerId || provider?.id || '');
+    if (!providerId) return json(400, { error: 'providerId is required.' });
+    if (ctx.user.role !== 'admin' && provider?.id !== providerId) {
+      return json(403, { error: 'You can only list your own weeks.' });
+    }
+    const currentStart = weekStartFromDos(nowIso().slice(0, 10));
+    const weeks = store.data.weeks
+      .filter((w) => w.providerId === providerId)
+      .map((w) => ({
+        id: w.id,
+        weekStart: w.weekStart,
+        status: w.status,
+        sessionCount: store.sessionsForWeek(w.id).length,
+        isCurrent: w.weekStart === currentStart,
+        processed: w.status === 'signed' || w.status === 'locked',
+      }))
+      .sort((a, b) => String(b.weekStart).localeCompare(String(a.weekStart)));
+    return json(200, { weeks, currentWeekStart: currentStart });
+  }
+
   if (req.method === 'GET' && path === '/week') {
     const provider = providerFor(store, ctx.user);
     if (!provider && ctx.user.role !== 'admin') return json(400, { error: 'No provider profile on this login.' });
     const weekStart = String(req.query.weekStart || obj(req).weekStart || '');
     const providerId = String(req.query.providerId || provider?.id || '');
+    const schoolId = String(req.query.schoolId || '').trim();
     const week = store.weekByProviderStart(providerId, weekStart) || (weekStart ? undefined : store.data.weeks.find((w) => w.providerId === providerId));
-    const sessions = week ? store.sessionsForWeek(week.id) : [];
+    let sessions = week ? store.sessionsForWeek(week.id) : [];
+    if (schoolId) {
+      const schoolStudentIds = new Set(
+        store.data.students.filter((s) => s.schoolId === schoolId).map((s) => s.id),
+      );
+      sessions = sessions.filter((s) => schoolStudentIds.has(s.studentId));
+    }
     const check = week
-      ? checkMandatesForWeek(store.data.mandates, sessions, store.data.sessions)
+      ? checkMandatesForWeek(
+          store.data.mandates,
+          sessions,
+          store.data.sessions,
+          studentNameById(store),
+        )
       : { errors: [] as string[], warnings: [] as string[] };
     const ai = week ? collectHeuristicAiIssues(sessions) : { errors: [] as string[], warnings: [] as string[] };
-    const students = visibleStudents(store, ctx.user, weekStart || week?.weekStart || '');
+    const students = visibleStudents(store, ctx.user, weekStart || week?.weekStart || '', schoolId || undefined);
     const payProvider =
       store.data.providers.find((p) => p.id === (week?.providerId || providerId)) || provider;
+    const payProviderId = week?.providerId || providerId;
+    const soloNoteWarnings: string[] = [];
     const sessionsOut = sessions.map((s) => {
       const local = screenServiceNote(s);
       const flags = [...new Set([...(s.aiFlags || []), ...local.flags])];
+      const dayPeers = payProviderId
+        ? providerDaySessions(store.data.sessions, store.data.weeks, payProviderId, s.dateOfService, s.id)
+        : [];
+      const payOpts = {
+        presentGroupPeerCount: presentGroupPeerCount({
+          candidate: s,
+          peers: dayPeers,
+          mandates: store.data.mandates,
+        }),
+      };
+      const soloNote = soloGroupMandateNoteWarning({
+        notes: s.notes,
+        serviceType: s.serviceType,
+        studentId: s.studentId,
+        attendance: s.attendance,
+        mandates: store.data.mandates,
+        presentGroupPeerCount: payOpts.presentGroupPeerCount,
+      });
+      if (soloNote) {
+        const who = studentNameById(store).get(s.studentId) || s.studentId;
+        soloNoteWarnings.push(`${s.dateOfService} ${who}: ${soloNote}`);
+      }
       return {
         ...s,
         aiFlags: flags,
         aiBlock: Boolean(s.aiBlock) || local.block,
-        payAmount: payProvider ? sessionPayAmount(payProvider, s) : null,
+        payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
       };
     });
+    const schoolDistrict = week
+      ? schoolDistrictForWeek(store, week.id, schoolId || undefined)
+      : '';
     return json(200, {
       week,
       sessions: sessionsOut,
       students,
+      schoolDistrict,
       mandates: store.data.mandates.filter((m) => students.some((s) => s.id === m.studentId) || ctx.user.role === 'admin'),
-      warnings: [...new Set([...check.warnings, ...ai.warnings])],
+      warnings: [...new Set([...check.warnings, ...ai.warnings, ...soloNoteWarnings])],
       errors: [...new Set([...check.errors, ...ai.errors])],
     });
   }
@@ -1417,24 +1657,39 @@ export async function handleTmsRequest(
     const b = obj(req);
     const providerId = String(b.providerId || provider?.id || '');
     const weekStart = String(b.weekStart || '');
+    const schoolId = String(b.schoolId || '').trim();
     if (!providerId || !weekStart) return json(400, { error: 'providerId and weekStart are required.' });
     let week = store.weekByProviderStart(providerId, weekStart);
+    const preferredSchool =
+      (schoolId ? store.data.schools.find((s) => s.id === schoolId) : undefined) ||
+      schoolsForProvider(store, providerId)[0] ||
+      store.data.schools[0];
     if (!week) {
-      const school = store.data.schools[0];
       week = store.upsertWeek({
         id: newId(),
         providerId,
         weekStart,
         status: 'draft',
-        signerName: school?.signerName || '',
-        signerEmail: school?.signerEmail || '',
+        signerName: preferredSchool?.signerName || '',
+        signerEmail: preferredSchool?.signerEmail || '',
         timesheetKey: '',
         signedKey: '',
         envelopeId: '',
         hhaStatus: 'none',
+        hhaError: '',
+      });
+    } else if (
+      preferredSchool &&
+      therapistCanEdit(week.status) &&
+      (!week.signerEmail || schoolId)
+    ) {
+      week = store.upsertWeek({
+        ...week,
+        signerName: preferredSchool.signerName || week.signerName,
+        signerEmail: preferredSchool.signerEmail || week.signerEmail,
       });
     }
-    return json(200, { week });
+    return json(200, { week, school: preferredSchool || null });
   }
 
   if (req.method === 'POST' && path === '/week/upload-sessions') {
@@ -1457,74 +1712,22 @@ export async function handleTmsRequest(
     const parsed = parseWeeklySessionText(text);
     if (!parsed.length) {
       const error =
-        'Could not find any sessions in this PDF. Use a Frontline Related Service Session Notes report with a text layer (not a scan).';
+        'Could not find any sessions in this PDF. Use a Frontline Related Service Session Notes or Therapist Activity Output report with a text layer (not a scan).';
       console.warn('upload-sessions 400', error, { textLen: String(text).length });
       return json(400, { error, errors: [error] });
     }
 
-    const matchErrors: string[] = [];
+    // Provider mismatch is whole-file — cannot attribute rows to this account safely.
     const pdfProviderName = parsed.map((r) => r.providerName).find((n) => String(n || '').trim()) || '';
     if (pdfProviderName) {
       if (!accountProvider) {
-        matchErrors.push('Your provider profile is not linked yet. Ask the office for help.');
-      } else if (!findProviderByName([accountProvider], pdfProviderName)) {
-        matchErrors.push(
-          `Provider in PDF does not match your account (PDF: "${pdfProviderName}").`,
-        );
+        const error = 'Your provider profile is not linked yet. Ask the office for help.';
+        return json(400, { error, errors: [error], saved: [], failed: [], skipped: [] });
       }
-    }
-
-    const studentByKey = new Map<string, { id: string; display: string }>();
-    for (const row of parsed) {
-      const display = String(row.studentName || '').trim() || 'Unknown';
-      const person = splitPersonName(row.studentName);
-      const mapped = mappingName(row.studentName);
-      const key = `${person.last}|${person.first}|${mapped.last}|${mapped.first}`.toLowerCase();
-      if (studentByKey.has(key)) continue;
-      const student =
-        store.findStudentByName(person.first, person.last) ||
-        store.findStudentByName(mapped.first, mapped.last) ||
-        (person.last && person.first
-          ? store.findStudentByName(person.last, person.first)
-          : undefined);
-      if (!student) {
-        matchErrors.push(`Child '${display}' not found — import caseload first`);
-        studentByKey.set(key, { id: '', display });
-        continue;
+      if (!findProviderByName([accountProvider], pdfProviderName)) {
+        const error = `Provider in PDF does not match your account (PDF: "${pdfProviderName}").`;
+        return json(400, { error, errors: [error], saved: [], failed: [], skipped: [] });
       }
-      studentByKey.set(key, {
-        id: student.id,
-        display: `${student.firstName} ${student.lastName}`.trim() || display,
-      });
-
-      const pdfSchool = String(row.schoolName || row.location || '').trim();
-      if (pdfSchool) {
-        const knownSchool = store.data.schools.find((s) => s.id === student.schoolId);
-        if (knownSchool && schoolNamesConflict(pdfSchool, knownSchool.name)) {
-          matchErrors.push(
-            `School '${pdfSchool}' does not match child's school '${knownSchool.name}'.`,
-          );
-        } else if (!knownSchool) {
-          const exists = store.data.schools.some(
-            (s) => !schoolNamesConflict(pdfSchool, s.name) && Boolean(String(s.name || '').trim()),
-          );
-          if (!exists) {
-            matchErrors.push(`School '${pdfSchool}' not found`);
-          }
-        }
-      }
-    }
-
-    if (matchErrors.length) {
-      const unique = [...new Set(matchErrors)];
-      return json(400, {
-        error:
-          unique.length > 1
-            ? `Upload blocked — ${unique.length} issues. Fix caseload / provider match first.`
-            : unique[0],
-        errors: unique,
-        warnings: [],
-      });
     }
 
     const weekStart = String(b.weekStart || (parsed[0] ? weekStartFromDos(parsed[0].dateOfService) : ''));
@@ -1542,34 +1745,150 @@ export async function handleTmsRequest(
         signedKey: '',
         envelopeId: '',
         hhaStatus: 'none',
+        hhaError: '',
       });
     }
-    if (!therapistCanEdit(week.status) && ctx.user.role !== 'admin') {
+    if (!therapistCanImportOrAddServices(week.status) && ctx.user.role !== 'admin') {
       const error = 'This week is locked. Ask an admin to reopen it.';
       return json(409, { error, errors: [error] });
     }
-    // Replace prior draft rows so retries do not stack duplicates and trip Over mandate.
-    const prior = store.sessionsForWeek(week.id);
-    for (const s of prior) store.removeSession(s.id);
-    const created: SessionRow[] = [];
-    for (const row of parsed) {
-      const person = splitPersonName(row.studentName);
-      const mapped = mappingName(row.studentName);
-      const student =
+
+    type UploadFail = {
+      studentName: string;
+      dateOfService: string;
+      beginTime: string;
+      endTime: string;
+      error: string;
+    };
+    type UploadSaved = {
+      id: string;
+      studentId: string;
+      studentName: string;
+      dateOfService: string;
+      beginTime: string;
+      endTime: string;
+      notes: string;
+    };
+    const failed: UploadFail[] = [];
+    const pending: Array<{ session: SessionRow; studentName: string }> = [];
+    const skipped: UploadSaved[] = [];
+    const names = studentNameById(store);
+    const settings = getAppSettings(store);
+    const existingKeys = new Map<string, SessionRow>();
+    for (const s of store.sessionsForWeek(week.id)) {
+      existingKeys.set(uploadSessionKey(s), s);
+    }
+
+    const resolveStudent = (studentName: string) => {
+      const person = splitPersonName(studentName);
+      const mapped = mappingName(studentName);
+      return (
         store.findStudentByName(person.first, person.last) ||
         store.findStudentByName(mapped.first, mapped.last) ||
         (person.last && person.first
           ? store.findStudentByName(person.last, person.first)
-          : undefined);
+          : undefined)
+      );
+    };
+
+    // Sort so earlier sessions claim mandate slots first when some exceed.
+    const ordered = [...parsed].sort((a, b) => {
+      const da = parseDos(a.dateOfService)?.getTime() ?? 0;
+      const db = parseDos(b.dateOfService)?.getTime() ?? 0;
+      if (da !== db) return da - db;
+      return String(a.beginTime || '').localeCompare(String(b.beginTime || ''));
+    });
+
+    // Validate all rows in memory first — all-or-nothing (no partial save).
+    for (const row of ordered) {
+      const label = formatUploadRowLabel(row);
+      const display = String(row.studentName || '').trim() || 'Unknown';
+      const student = resolveStudent(row.studentName);
       if (!student) {
-        // Should not happen after pre-check; roll back if it does.
-        for (const s of created) store.removeSession(s.id);
-        for (const s of prior) store.upsertSession(s);
-        const display = String(row.studentName || '').trim() || 'Unknown';
-        const error = `Child '${display}' not found — import caseload first`;
-        return json(400, { error, errors: [error] });
+        failed.push({
+          studentName: display,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: Not found. Please reach out to your administrator to import the caseload first.`,
+        });
+        continue;
       }
-      const session = store.upsertSession({
+      const studentName =
+        `${student.firstName} ${student.lastName}`.trim() || display;
+
+      const ageErr = sessionImportAgeError(row.dateOfService, {
+        settings,
+        providerId,
+        weekId: week.id,
+        isAdmin: ctx.user.role === 'admin',
+      });
+      if (ageErr) {
+        failed.push({
+          studentName,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: ${ageErr}`,
+        });
+        continue;
+      }
+
+      const rawSchool = String(row.schoolName || row.location || '').trim();
+      const pdfSchool = rawSchool && !isGenericSettingLabel(rawSchool) ? rawSchool : '';
+      if (pdfSchool) {
+        const knownSchool = store.data.schools.find((s) => s.id === student.schoolId);
+        if (knownSchool && schoolNamesConflict(pdfSchool, knownSchool.name)) {
+          failed.push({
+            studentName,
+            dateOfService: row.dateOfService,
+            beginTime: row.beginTime,
+            endTime: row.endTime,
+            error: `${label}: School '${pdfSchool}' does not match child's school '${knownSchool.name}'.`,
+          });
+          continue;
+        }
+        if (!knownSchool) {
+          const exists = store.data.schools.some(
+            (s) => !schoolNamesConflict(pdfSchool, s.name) && Boolean(String(s.name || '').trim()),
+          );
+          if (!exists) {
+            failed.push({
+              studentName,
+              dateOfService: row.dateOfService,
+              beginTime: row.beginTime,
+              endTime: row.endTime,
+              error: `${label}: School '${pdfSchool}' not found`,
+            });
+            continue;
+          }
+        }
+      }
+
+      const key = uploadSessionKey({
+        studentId: student.id,
+        dateOfService: row.dateOfService,
+        beginTime: row.beginTime,
+        endTime: row.endTime,
+      });
+      const already = existingKeys.get(key);
+      if (already) {
+        skipped.push({
+          id: already.id,
+          studentId: already.studentId,
+          studentName,
+          dateOfService: already.dateOfService,
+          beginTime: already.beginTime,
+          endTime: already.endTime,
+          notes: already.notes,
+        });
+        continue;
+      }
+
+      const cptCodes = row.cptCodes || [];
+      const cptUnits = row.cptUnits || 0;
+      const cptProcedures = row.cptProcedures || [];
+      let session: SessionRow = {
         id: newId(),
         weekId: week.id,
         studentId: student.id,
@@ -1583,57 +1902,238 @@ export async function handleTmsRequest(
         additionalServiceType: '',
         location: row.location,
         notes: row.notes,
+        cptCodes,
+        cptUnits,
+        cptLabel: cptLabelFromParts(cptCodes, cptProcedures, cptUnits),
         aiFlags: [],
         aiBlock: false,
-      });
-      created.push(session);
-    }
-    // Resolve makeups: miss on note date first, else leftover makeup-auth capacity.
-    for (let i = 0; i < created.length; i++) {
-      const s = created[i]!;
-      if (s.attendance !== 'makeup') continue;
-      const resolved = resolveMakeupOfSessionId(s, store.data.sessions, store.data.mandates);
-      if ('error' in resolved) {
-        for (const c of created) store.removeSession(c.id);
-        for (const p of prior) store.upsertSession(p);
-        return json(400, { error: resolved.error, errors: [resolved.error], warnings: [] });
+      };
+
+      const projectedSessions = [
+        ...store.sessionsForWeek(week.id),
+        ...pending.map((p) => p.session),
+        session,
+      ];
+      const allSessionsProjected = [
+        ...store.data.sessions.filter((s) => s.weekId !== week.id),
+        ...projectedSessions,
+      ];
+
+      if (session.attendance === 'makeup') {
+        const resolved = resolveMakeupOfSessionId(session, allSessionsProjected, store.data.mandates);
+        if ('error' in resolved) {
+          failed.push({
+            studentName,
+            dateOfService: row.dateOfService,
+            beginTime: row.beginTime,
+            endTime: row.endTime,
+            error: `${label}: ${resolved.error}`,
+          });
+          continue;
+        }
+        session = { ...session, makeupOfSessionId: resolved.makeupOfSessionId };
+        const makeupErr = validateMakeup(session, allSessionsProjected, store.data.mandates);
+        if (makeupErr) {
+          failed.push({
+            studentName,
+            dateOfService: row.dateOfService,
+            beginTime: row.beginTime,
+            endTime: row.endTime,
+            error: `${label}: ${makeupErr}`,
+          });
+          continue;
+        }
       }
-      const linked = store.upsertSession({
-        ...s,
-        makeupOfSessionId: resolved.makeupOfSessionId,
-      });
-      created[i] = linked;
-      const makeupErr = validateMakeup(linked, store.data.sessions, store.data.mandates);
-      if (makeupErr) {
-        for (const c of created) store.removeSession(c.id);
-        for (const p of prior) store.upsertSession(p);
-        return json(400, { error: makeupErr, errors: [makeupErr], warnings: [] });
+
+      const cptErr = cptDurationError(
+        session.beginTime,
+        session.endTime,
+        { codes: cptCodes, totalUnits: cptUnits, procedures: cptProcedures },
+        session.attendance,
+      );
+      if (cptErr) {
+        failed.push({
+          studentName,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: ${cptErr}`,
+        });
+        continue;
       }
+
+      const sigErr = sessionSignatureError(row.sourceSlice || row.notes || '', session.attendance);
+      if (sigErr) {
+        failed.push({
+          studentName,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: ${sigErr}`,
+        });
+        continue;
+      }
+
+      const dayPeers = [
+        ...providerDaySessions(
+          store.data.sessions,
+          store.data.weeks,
+          providerId,
+          session.dateOfService,
+          session.id,
+        ),
+        ...pending
+          .map((p) => p.session)
+          .filter((s) => s.dateOfService === session.dateOfService),
+      ];
+      const overlapErr = sessionOverlapError({
+        candidate: session,
+        peers: dayPeers,
+        studentNameById: names,
+        mandates: store.data.mandates,
+      });
+      if (overlapErr) {
+        failed.push({
+          studentName,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: ${overlapErr}`,
+        });
+        continue;
+      }
+
+      const notePeers: Array<{ studentId: string; studentName: string; notes: string; dateOfService: string }> =
+        [
+          ...pending.map((p) => ({
+            studentId: p.session.studentId,
+            studentName: p.studentName,
+            notes: p.session.notes,
+            dateOfService: p.session.dateOfService,
+          })),
+          ...store
+            .sessionsForWeek(week.id)
+            .filter((s) => s.studentId !== student.id)
+            .map((s) => ({
+              studentId: s.studentId,
+              studentName: names.get(s.studentId) || s.studentId,
+              notes: s.notes,
+              dateOfService: s.dateOfService,
+            })),
+        ];
+      const peer = notePeers.find(
+        (p) => p.studentId !== student.id && notesLookCopyPasted(session.notes, p.notes),
+      );
+      if (peer) {
+        failed.push({
+          studentName,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: ${noteCopyPasteError(studentName, peer.studentName, peer.dateOfService)}`,
+        });
+        continue;
+      }
+
+      const screened = screenServiceNote(session);
+      session = {
+        ...session,
+        aiFlags: screened.flags,
+        aiBlock: screened.block,
+      };
+      // Red (block) or yellow (warn) both reject the whole import.
+      if (screened.block || screened.warnFlags.length) {
+        failed.push({
+          studentName,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: ${(screened.blockFlags.length ? screened.blockFlags : screened.warnFlags).join('; ') || 'Note screening failed'}`,
+        });
+        continue;
+      }
+
+      const check = checkMandatesForWeek(
+        store.data.mandates,
+        projectedSessions,
+        allSessionsProjected,
+        names,
+      );
+      if (check.errors.length) {
+        const detail =
+          check.errors.find((e) => e.includes(studentName) || e.includes(session.dateOfService)) ||
+          check.errors[0] ||
+          'This exceeds the mandate.';
+        failed.push({
+          studentName,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: ${detail}`,
+        });
+        continue;
+      }
+
+      existingKeys.set(key, session);
+      pending.push({ session, studentName });
     }
-    const check = checkMandatesForWeek(
+
+    // Any issue → save nothing.
+    if (failed.length) {
+      const errors = failed.map((f) => f.error);
+      return json(200, {
+        ok: false,
+        partial: false,
+        week,
+        sessions: store.sessionsForWeek(week.id),
+        saved: [],
+        failed,
+        skipped,
+        warnings: [],
+        errors,
+        error:
+          errors[0] ||
+          `Import blocked — ${failed.length} issue(s). Nothing was saved. Fix all errors and import again.`,
+        parsed: parsed.length,
+        imported: 0,
+        skippedCount: skipped.length,
+      });
+    }
+
+    const saved: UploadSaved[] = [];
+    for (const item of pending) {
+      store.upsertSession(item.session);
+      saved.push({
+        id: item.session.id,
+        studentId: item.session.studentId,
+        studentName: item.studentName,
+        dateOfService: item.session.dateOfService,
+        beginTime: item.session.beginTime,
+        endTime: item.session.endTime,
+        notes: item.session.notes,
+      });
+    }
+
+    const weekCheck = checkMandatesForWeek(
       store.data.mandates,
       store.sessionsForWeek(week.id),
       store.data.sessions,
+      names,
     );
-    if (check.errors.length) {
-      for (const s of created) store.removeSession(s.id);
-      for (const s of prior) store.upsertSession(s);
-      const errors = check.errors.filter(Boolean);
-      return json(400, {
-        error:
-          errors.length > 1
-            ? `Over mandate — ${errors.length} issues. Upload is blocked.`
-            : `Over mandate — ${errors[0] || 'this PDF has more sessions than allowed for the week.'}`,
-        errors,
-        warnings: check.warnings,
-      });
-    }
+
     return json(200, {
+      ok: true,
+      partial: false,
       week,
       sessions: store.sessionsForWeek(week.id),
-      warnings: check.warnings,
+      saved,
+      failed: [],
+      skipped,
+      warnings: weekCheck.warnings,
       errors: [],
       parsed: parsed.length,
+      imported: saved.length,
+      skippedCount: skipped.length,
     });
   }
 
@@ -1641,10 +2141,22 @@ export async function handleTmsRequest(
     const b = obj(req);
     const week = store.data.weeks.find((w) => w.id === String(b.weekId || ''));
     if (!week) return json(404, { error: 'Week not found.' });
-    if (!therapistCanEdit(week.status) && ctx.user.role !== 'admin') {
+    if (!therapistCanImportOrAddServices(week.status) && ctx.user.role !== 'admin') {
       return json(409, { error: 'This week is locked. Ask an admin to reopen it.' });
     }
     const existing = store.data.sessions.find((s) => s.id === String(b.id || ''));
+    // While pending approval, therapists may only add/edit additional services (not PDF caseload rows).
+    if (
+      week.status === 'submitted' &&
+      ctx.user.role !== 'admin' &&
+      existing &&
+      !existing.additionalServiceType &&
+      !b.additionalServiceType
+    ) {
+      return json(409, {
+        error: 'While approval is pending, you can import notes or edit additional services only.',
+      });
+    }
     const attendance =
       b.attendance === 'missed' || b.attendance === 'makeup' || b.attendance === 'attended'
         ? b.attendance
@@ -1663,14 +2175,38 @@ export async function handleTmsRequest(
         error: 'Pick a valid additional service: Eval, Progress report, Consultation, Meetings, or Paid absence.',
       });
     }
+    if (week.status === 'submitted' && ctx.user.role !== 'admin' && !additionalServiceType) {
+      return json(409, {
+        error: 'While approval is pending, add additional services only (or import a PDF).',
+      });
+    }
     const serviceTypeFromAdditional = additionalServiceType
       ? additionalServiceLabel(additionalServiceType)
       : '';
+    const cptRaw = String(b.cptLabel || b.cptCode || '').trim();
+    const cptCodes = Array.isArray(b.cptCodes)
+      ? (b.cptCodes as unknown[]).map(String).filter(Boolean)
+      : cptRaw
+        ? cptRaw.split(/[,;\s]+/).map((c) => c.replace(/x\d+$/i, '')).filter(Boolean)
+        : existing?.cptCodes || [];
+    const cptLabel = cptRaw || existing?.cptLabel || cptCodes.join(', ');
+    const cptUnits =
+      typeof b.cptUnits === 'number' && Number.isFinite(b.cptUnits)
+        ? Number(b.cptUnits)
+        : existing?.cptUnits || 0;
+    const dateOfService = pickStr(b.dateOfService, existing?.dateOfService || '');
+    const ageErr = sessionImportAgeError(dateOfService, {
+      settings: getAppSettings(store),
+      providerId: week.providerId,
+      weekId: week.id,
+      isAdmin: ctx.user.role === 'admin',
+    });
+    if (ageErr) return json(400, { error: ageErr, errors: [ageErr] });
     const session: SessionRow = {
       id: String(b.id || existing?.id || newId()),
       weekId: week.id,
       studentId: pickStr(b.studentId, existing?.studentId || ''),
-      dateOfService: pickStr(b.dateOfService, existing?.dateOfService || ''),
+      dateOfService,
       beginTime: pickStr(b.beginTime, existing?.beginTime || ''),
       endTime: pickStr(b.endTime, existing?.endTime || ''),
       attendance,
@@ -1683,6 +2219,9 @@ export async function handleTmsRequest(
       additionalServiceType,
       location: pickStr(b.location, existing?.location || ''),
       notes: pickStr(b.notes, existing?.notes || ''),
+      cptCodes,
+      cptUnits,
+      cptLabel,
       aiFlags: Array.isArray(b.aiFlags) ? (b.aiFlags as string[]) : existing?.aiFlags || [],
       aiBlock: typeof b.aiBlock === 'boolean' ? b.aiBlock : existing?.aiBlock || false,
     };
@@ -1712,10 +2251,14 @@ export async function handleTmsRequest(
       store.data.mandates,
       store.sessionsForWeek(week.id),
       store.data.sessions,
+      studentNameById(store),
     );
     if (check.errors.length) {
       store.removeSession(session.id);
-      return json(400, { error: 'Over mandate', errors: check.errors });
+      return json(400, {
+        error: overMandateSummary(check.errors),
+        errors: check.errors,
+      });
     }
     return json(200, { session, warnings: [...check.warnings, ...screenedLocal.warnFlags] });
   }
@@ -1745,8 +2288,18 @@ export async function handleTmsRequest(
       return json(409, { error: 'This week is locked.' });
     }
     const sessions = store.sessionsForWeek(week.id);
-    const check = checkMandatesForWeek(store.data.mandates, sessions, store.data.sessions);
-    if (check.errors.length) return json(400, { error: 'Over mandate', errors: check.errors });
+    const check = checkMandatesForWeek(
+      store.data.mandates,
+      sessions,
+      store.data.sessions,
+      studentNameById(store),
+    );
+    if (check.errors.length) {
+      return json(400, {
+        error: overMandateSummary(check.errors),
+        errors: check.errors,
+      });
+    }
     const aiErrors: string[] = [];
     for (const s of sessions) {
       const makeupErr = validateMakeup(s, store.data.sessions, store.data.mandates);
@@ -1780,16 +2333,38 @@ export async function handleTmsRequest(
       signerEmail: String(b.signerEmail || week.signerEmail),
     });
     const provider = store.data.providers.find((p) => p.id === next.providerId);
+    const schoolDistrict = schoolDistrictForWeek(
+      store,
+      next.id,
+      String(b.schoolId || '').trim() || undefined,
+    );
     const pdf = buildTimesheetPdf({
       week: next,
       providerLabel: provider ? `${provider.firstName} ${provider.lastName}` : next.providerId,
       signerName: next.signerName,
       signerEmail: next.signerEmail,
-      rows: sessions.map((session) => ({
-        session,
-        student: store.data.students.find((s) => s.id === session.studentId) as Student | undefined,
-        payAmount: provider ? sessionPayAmount(provider, session) : null,
-      })),
+      schoolDistrict,
+      rows: sessions.map((session) => {
+        const dayPeers = providerDaySessions(
+          store.data.sessions,
+          store.data.weeks,
+          next.providerId,
+          session.dateOfService,
+          session.id,
+        );
+        const payOpts = {
+          presentGroupPeerCount: presentGroupPeerCount({
+            candidate: session,
+            peers: dayPeers,
+            mandates: store.data.mandates,
+          }),
+        };
+        return {
+          session,
+          student: store.data.students.find((s) => s.id === session.studentId) as Student | undefined,
+          payAmount: provider ? sessionPayAmount(provider, session, payOpts) : null,
+        };
+      }),
     });
     const envelope = await createSignEnvelope({
       signerEmail: next.signerEmail,
@@ -1798,16 +2373,23 @@ export async function handleTmsRequest(
       pdf,
     });
     store.upsertWeek({ ...next, envelopeId: envelope.envelopeId, timesheetKey: `tms/timesheets/${next.id}.pdf` });
-    if (deps.mail && next.signerEmail) {
-      await deps.mail.send({
-        to: [next.signerEmail],
-        subject: `Please sign related-service timesheet (week of ${next.weekStart})`,
-        text: envelope.vendor === 'email'
-          ? `Please review and sign the attached timesheet for ${provider ? `${provider.firstName} ${provider.lastName}` : 'the therapist'}. Reply with the signed copy or sign in the e-sign link when it is enabled.`
-          : `A signing envelope was sent (${envelope.vendor}). Envelope ${envelope.envelopeId}.`,
-        attachmentName: envelope.vendor === 'email' ? `timesheet-${next.weekStart}.pdf` : undefined,
-        attachment: envelope.vendor === 'email' ? pdf : undefined,
-      });
+    // DocuSign emails the principal; only SES-attach the PDF on email fallback.
+    if (deps.mail && next.signerEmail && envelope.vendor === 'email') {
+      try {
+        await deps.mail.send({
+          to: [next.signerEmail],
+          subject: `Please sign related-service timesheet (week of ${next.weekStart})`,
+          text: `Please review and sign the attached timesheet for ${provider ? `${provider.firstName} ${provider.lastName}` : 'the therapist'}. Reply with the signed copy or complete the e-sign link when DocuSign is configured.\n\nPowered by advancedautomations.net`,
+          attachmentName: `timesheet-${next.weekStart}.pdf`,
+          attachment: pdf,
+        });
+      } catch (err) {
+        // Roll back so a SES sandbox / identity failure does not leave the week stuck submitted.
+        store.upsertWeek({ ...week });
+        return json(503, {
+          error: err instanceof Error ? err.message : 'Could not email the timesheet to the signer.',
+        });
+      }
     }
     store.audit(ctx.user.id, 'submit_week', `week:${week.id}`, week, next);
     return json(200, {
@@ -1822,23 +2404,74 @@ export async function handleTmsRequest(
     const week = store.data.weeks.find((w) => w.id === path.split('/')[2]);
     if (!week) return json(404, { error: 'Week not found.' });
     const provider = store.data.providers.find((p) => p.id === week.providerId);
+    const schoolId = String(req.query.schoolId || '').trim();
+    const schoolDistrict = schoolDistrictForWeek(store, week.id, schoolId || undefined);
     const pdf = buildTimesheetPdf({
       week,
       providerLabel: provider ? `${provider.firstName} ${provider.lastName}` : week.providerId,
       signerName: week.signerName,
       signerEmail: week.signerEmail,
-      rows: store.sessionsForWeek(week.id).map((session) => ({
-        session,
-        student: store.data.students.find((s) => s.id === session.studentId) as Student | undefined,
-        payAmount: provider ? sessionPayAmount(provider, session) : null,
-      })),
+      schoolDistrict,
+      rows: store.sessionsForWeek(week.id).map((session) => {
+        const dayPeers = providerDaySessions(
+          store.data.sessions,
+          store.data.weeks,
+          week.providerId,
+          session.dateOfService,
+          session.id,
+        );
+        const payOpts = {
+          presentGroupPeerCount: presentGroupPeerCount({
+            candidate: session,
+            peers: dayPeers,
+            mandates: store.data.mandates,
+          }),
+        };
+        return {
+          session,
+          student: store.data.students.find((s) => s.id === session.studentId) as Student | undefined,
+          payAmount: provider ? sessionPayAmount(provider, session, payOpts) : null,
+        };
+      }),
     });
     store.upsertWeek({ ...week, timesheetKey: `tms/timesheets/${week.id}.pdf` });
     return {
       status: 200,
-      headers: { 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="timesheet-${week.weekStart}.pdf"` },
+      headers: {
+        'content-type': 'application/pdf',
+        'content-disposition': `inline; filename="timesheet-${week.weekStart}.pdf"`,
+      },
       body: Buffer.from(pdf),
     };
+  }
+
+  if (req.method === 'POST' && /^\/weeks\/[^/]+\/cancel-approval$/.test(path)) {
+    const week = store.data.weeks.find((w) => w.id === path.split('/')[2]);
+    if (!week) return json(404, { error: 'Week not found.' });
+    if (week.status !== 'submitted') {
+      return json(409, { error: 'Only a pending (submitted) timesheet can cancel approval.' });
+    }
+    if (ctx.user.role !== 'admin') {
+      const provider = providerFor(store, ctx.user);
+      if (!provider || week.providerId !== provider.id) {
+        return json(403, { error: 'You can only cancel your own pending timesheet.' });
+      }
+    }
+    if (week.envelopeId) {
+      await voidSignEnvelope(week.envelopeId, 'Timesheet approval cancelled in TMS');
+    }
+    const next = store.upsertWeek({
+      ...week,
+      status: 'draft',
+      envelopeId: '',
+      timesheetKey: '',
+      signedKey: '',
+    });
+    store.audit(ctx.user.id, 'cancel_approval', `week:${week.id}`, week, next);
+    return json(200, {
+      week: next,
+      message: 'Approval request cancelled. Week is back to draft.',
+    });
   }
 
   if (req.method === 'DELETE' && /^\/sessions\/[^/]+$/.test(path)) {
@@ -1847,8 +2480,17 @@ export async function handleTmsRequest(
     if (!session) return json(404, { error: 'Session not found.' });
     const week = store.data.weeks.find((w) => w.id === session.weekId);
     if (!week) return json(404, { error: 'Week not found.' });
-    if (!therapistCanEdit(week.status) && ctx.user.role !== 'admin') {
+    if (!therapistCanImportOrAddServices(week.status) && ctx.user.role !== 'admin') {
       return json(409, { error: 'This week is locked. Ask an admin to reopen it.' });
+    }
+    if (
+      week.status === 'submitted' &&
+      ctx.user.role !== 'admin' &&
+      !session.additionalServiceType
+    ) {
+      return json(409, {
+        error: 'While approval is pending, remove additional services only (or cancel approval first).',
+      });
     }
     if (ctx.user.role !== 'admin') {
       const provider = providerFor(store, ctx.user);
@@ -1872,36 +2514,12 @@ export async function handleTmsRequest(
   }
 
   if (req.method === 'POST' && /^\/admin\/weeks\/[^/]+\/sign$/.test(path)) {
-    return adminUser(async () => {
-      const week = store.data.weeks.find((w) => w.id === path.split('/')[3]);
-      if (!week) return json(404, { error: 'Week not found.' });
-      if (week.status !== 'submitted') {
-        return json(409, { error: 'Week must be submitted before it can be marked signed.' });
-      }
-      const signed = store.upsertWeek({
-        ...week,
-        status: 'signed',
-        signedKey: String(obj(req).signedKey || `tms/signed/${week.id}.pdf`),
-      });
-      const locked = store.upsertWeek({ ...signed, status: 'locked' });
-      store.audit(ctx.user.id, 'sign_and_lock', `week:${week.id}`, week, locked);
-      const provider = store.data.providers.find((p) => p.id === locked.providerId);
-      const therapist = provider ? store.userById(provider.userId) : undefined;
-      if (deps.mail && therapist?.email) {
-        await deps.mail.send({
-          to: [therapist.email],
-          subject: 'Timesheet signed — you will be paid',
-          text: 'Success. This week is signed and locked. You will be paid.',
-        });
-      }
-      if (deps.hha) {
-        await transferLockedWeek({ store, week: locked, hha: deps.hha, actorId: ctx.user.id });
-      }
-      return json(200, {
-        week: store.data.weeks.find((w) => w.id === locked.id),
-        therapistMessage: 'Success. This week is signed and locked. You will be paid.',
-      });
-    });
+    return adminUser(() =>
+      json(410, {
+        error:
+          'Manual Sign is disabled. After the therapist sends the timesheet, the school principal signs via DocuSign; completion auto-locks and sends to HHA. Use Send to HHA to retry a failed transfer.',
+      }),
+    );
   }
 
   if (req.method === 'POST' && /^\/admin\/weeks\/[^/]+\/reopen$/.test(path)) {
@@ -1935,6 +2553,51 @@ export async function handleTmsRequest(
   if (req.method === 'GET' && path === '/alerts') {
     const rows = store.openAlerts();
     return json(200, { alerts: rows, dueDates: dueDatesForUser(store, ctx.user) });
+  }
+
+  if (req.method === 'POST' && path === '/support/luna/chat') {
+    const b = obj(req);
+    try {
+      const out = await runLunaChat({
+        messages: b.messages,
+        pageUrl: String(b.pageUrl || '').trim(),
+        user: ctx.user,
+      });
+      return json(200, out);
+    } catch (err) {
+      const status = Number((err as { status?: number })?.status) || 502;
+      return json(status, {
+        error: err instanceof Error ? err.message : 'Luna is unavailable.',
+      });
+    }
+  }
+
+  if (req.method === 'POST' && path === '/support/luna/handoff') {
+    if (!deps.mail) return json(503, { error: 'Mailer is not configured.' });
+    const b = obj(req);
+    try {
+      const out = await sendLunaHandoff({
+        mail: deps.mail,
+        user: ctx.user,
+        messages: b.messages,
+        summary: String(b.summary || '').trim(),
+        pageUrl: String(b.pageUrl || '').trim(),
+      });
+      store.audit(ctx.user.id, 'luna_handoff', `user:${ctx.user.id}`, null, {
+        to: out.to,
+        mailId: out.id,
+      });
+      return json(200, {
+        ok: true,
+        to: out.to,
+        id: out.id,
+        reply: `Thanks — I sent this to ${out.to}. Moshe will follow up by email.`,
+      });
+    } catch (err) {
+      return json(502, {
+        error: err instanceof Error ? err.message : 'Unable to send the support handoff.',
+      });
+    }
   }
 
   return json(404, { error: `No route ${req.method} ${path}` });

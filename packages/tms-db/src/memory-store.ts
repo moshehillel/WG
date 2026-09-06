@@ -1,5 +1,6 @@
 import { migrateDueDatesToSchools } from './due-dates.js';
 import { newId, nowIso } from './ids.js';
+import { migrateProviders } from './provider-pay.js';
 import type {
   AdminNote,
   AlertRow,
@@ -10,13 +11,14 @@ import type {
   Mandate,
   Provider,
   School,
+  SchoolCalendar,
   SessionRow,
   StoredFile,
   Student,
   TmsSnapshot,
   WeeklyPeriod,
 } from './types.js';
-import { emptySnapshot } from './types.js';
+import { defaultAppSettings, emptySnapshot } from './types.js';
 
 function mergeSnapshot(snapshot: Partial<TmsSnapshot> | null | undefined): TmsSnapshot {
   const base = emptySnapshot();
@@ -26,6 +28,16 @@ function mergeSnapshot(snapshot: Partial<TmsSnapshot> | null | undefined): TmsSn
     if (Array.isArray(value)) (base as TmsSnapshot)[key] = structuredClone(value) as never;
   }
   base.dueDates = migrateDueDatesToSchools(base.dueDates as never, base.students);
+  base.providers = migrateProviders(base.providers);
+  base.adminNotes = (base.adminNotes || []).map((n) => ({
+    ...n,
+    tags: Array.isArray((n as { tags?: unknown }).tags)
+      ? (n as { tags: string[] }).tags.map((t) => String(t)).filter(Boolean)
+      : [],
+  }));
+  if (!base.settings?.length) {
+    base.settings = [defaultAppSettings()];
+  }
   return base;
 }
 
@@ -92,6 +104,43 @@ export class MemoryStore {
     return row;
   }
 
+  /** Remove a school, its due dates, and clear schoolId on linked students. */
+  removeSchool(id: string): School | undefined {
+    const i = this.data.schools.findIndex((s) => s.id === id);
+    if (i < 0) return undefined;
+    const [removed] = this.data.schools.splice(i, 1);
+    const dueIds = new Set(
+      this.data.dueDates.filter((d) => d.schoolId === id).map((d) => d.id),
+    );
+    this.data.dueDates = this.data.dueDates.filter((d) => d.schoolId !== id);
+    for (const s of this.data.students) {
+      if (s.schoolId === id) s.schoolId = '';
+    }
+    for (const a of this.data.alerts) {
+      if (dueIds.has(a.entityRef.replace(/^due:/, ''))) a.resolved = true;
+    }
+    this.data.schoolCalendars = this.data.schoolCalendars.filter((c) => c.schoolId !== id);
+    return removed;
+  }
+
+  schoolCalendarForSchool(schoolId: string): SchoolCalendar | undefined {
+    return this.data.schoolCalendars.find((c) => c.schoolId === schoolId);
+  }
+
+  upsertSchoolCalendar(row: SchoolCalendar): SchoolCalendar {
+    const i = this.data.schoolCalendars.findIndex((c) => c.schoolId === row.schoolId);
+    if (i >= 0) this.data.schoolCalendars[i] = row;
+    else this.data.schoolCalendars.push(row);
+    return row;
+  }
+
+  removeSchoolCalendar(schoolId: string): SchoolCalendar | undefined {
+    const i = this.data.schoolCalendars.findIndex((c) => c.schoolId === schoolId);
+    if (i < 0) return undefined;
+    const [removed] = this.data.schoolCalendars.splice(i, 1);
+    return removed;
+  }
+
   upsertProvider(row: Provider): Provider {
     const i = this.data.providers.findIndex((s) => s.id === row.id);
     if (i >= 0) this.data.providers[i] = row;
@@ -108,11 +157,53 @@ export class MemoryStore {
     return this.data.adminNotes.filter((n) => n.providerId === providerId);
   }
 
+  upsertAdminNote(row: AdminNote): AdminNote {
+    const i = this.data.adminNotes.findIndex((n) => n.id === row.id);
+    if (i >= 0) this.data.adminNotes[i] = row;
+    else this.data.adminNotes.push(row);
+    return row;
+  }
+
+  removeAdminNote(id: string): AdminNote | undefined {
+    const i = this.data.adminNotes.findIndex((n) => n.id === id);
+    if (i < 0) return undefined;
+    const [removed] = this.data.adminNotes.splice(i, 1);
+    return removed;
+  }
+
+  removeProvider(id: string): Provider | undefined {
+    const i = this.data.providers.findIndex((p) => p.id === id);
+    if (i < 0) return undefined;
+    const [removed] = this.data.providers.splice(i, 1);
+    this.data.adminNotes = this.data.adminNotes.filter((n) => n.providerId !== id);
+    for (const m of this.data.mandates) {
+      if (m.providerId === id) m.providerId = '';
+    }
+    for (const u of this.data.users) {
+      if (u.providerId === id) u.providerId = '';
+    }
+    return removed;
+  }
+
   upsertStudent(row: Student): Student {
     const i = this.data.students.findIndex((s) => s.id === row.id);
     if (i >= 0) this.data.students[i] = row;
     else this.data.students.push(row);
     return row;
+  }
+
+  removeStudent(id: string): Student | undefined {
+    const i = this.data.students.findIndex((s) => s.id === id);
+    if (i < 0) return undefined;
+    const [removed] = this.data.students.splice(i, 1);
+    this.data.mandates = this.data.mandates.filter((m) => m.studentId !== id);
+    const sessionIds = new Set(
+      this.data.sessions.filter((s) => s.studentId === id).map((s) => s.id),
+    );
+    this.data.sessions = this.data.sessions.filter((s) => s.studentId !== id);
+    this.data.hhaTransfers = this.data.hhaTransfers.filter((t) => !sessionIds.has(t.sessionId));
+    this.data.files = this.data.files.filter((f) => f.studentId !== id);
+    return removed;
   }
 
   findStudentByName(first: string, last: string): Student | undefined {
@@ -138,6 +229,20 @@ export class MemoryStore {
   /** All mandates for a student (individual + group, dual services, etc.). */
   mandatesForStudent(studentId: string): Mandate[] {
     return this.data.mandates.filter((m) => m.studentId === studentId);
+  }
+
+  removeMandate(id: string): Mandate | undefined {
+    const i = this.data.mandates.findIndex((m) => m.id === id);
+    if (i < 0) return undefined;
+    const [removed] = this.data.mandates.splice(i, 1);
+    return removed;
+  }
+
+  removeFile(id: string): StoredFile | undefined {
+    const i = this.data.files.findIndex((f) => f.id === id);
+    if (i < 0) return undefined;
+    const [removed] = this.data.files.splice(i, 1);
+    return removed;
   }
 
   weekByProviderStart(providerId: string, weekStart: string): WeeklyPeriod | undefined {
@@ -187,11 +292,25 @@ export class MemoryStore {
     return this.data.files.filter((f) => f.studentId === studentId);
   }
 
+  filesForProvider(providerId: string): StoredFile[] {
+    return this.data.files.filter((f) => f.providerId === providerId && !f.studentId);
+  }
+
   upsertDueDate(row: DueDate): DueDate {
     const i = this.data.dueDates.findIndex((s) => s.id === row.id);
     if (i >= 0) this.data.dueDates[i] = row;
     else this.data.dueDates.push(row);
     return row;
+  }
+
+  removeDueDate(id: string): DueDate | undefined {
+    const i = this.data.dueDates.findIndex((d) => d.id === id);
+    if (i < 0) return undefined;
+    const [removed] = this.data.dueDates.splice(i, 1);
+    for (const a of this.data.alerts) {
+      if (a.entityRef === `due:${id}`) a.resolved = true;
+    }
+    return removed;
   }
 
   /** Providers with at least one mandate for a student at this school. */

@@ -14,19 +14,54 @@ Record of answers from White Glove. Drives config in `program-types.ts`, schedul
 
 Program type list source: client email Jul 2026 (EVV vs “no evv” suffix on each payer/program name).
 
-## Pay codes (confirmed Jul 2026)
+## Pay codes (updated Sep 2026)
 
-HHA pay codes are titled **discipline + pay-rate number** (e.g. **OT72** = OT discipline, $72 rate).
+HHA pay codes are titled **discipline + $rate**, or **discipline + Group + $rate** for group visits.
+
+**Solo group rule:** Group-tagged session with no other attended/makeup peers in the same caregiver clock window → bill **individual** rate / pay code (`OT $62.5`), not group.
+
+### Group size / overlap (Sep 2026)
+
+| Rule | Behavior |
+|------|----------|
+| **Fewer than mandate groupSize** | Always allowed (e.g. 2 of 3 OK) |
+| **More than mandate groupSize** | Blocked |
+| **Small Group** (no numeric size) | Cap **2** (client: small group = fewer than 3) |
+| **Group-mandate seen individually** | Individual pay; note should say **no peer available**; treated as **individual for overlap** (later peer in same window blocked) |
+| **Group↔group share window** | Only when both sessions are **group-tagged** (Group / 2:1 / 3:1 / 4:1) |
 
 | Source | Field | Example |
 |--------|-------|---------|
-| ProviderSoft API Report | **Service Type** (discipline prefix) | `OT CHHA EXTENDED` → **OT** |
-| ProviderSoft API Report | **Pay Rate** | `72.0000` → **72** |
-| HHA | Pay code name | **OT72** |
+| Service Type / TMS discipline | discipline prefix | `OT School` → **OT** |
+| Pay Rate / TMS provider pay | applicable rate | `62.5` → **$62.5** |
+| Eval sessions | provider `payRateEval` | `95` → **OT $95** |
+| HHA individual | Pay code name | **OT $62.5** |
+| HHA group | Pay code name | **OT Group $34** |
 
-Implementation: `packages/shared/src/config/pay-codes.ts` — `buildPayCodeName(serviceType, payRate)`.
+Examples to create in HHA (match rate decimals as stored): `OT $62.5`, `OT $70`, `PT $70`, `OT Group $34`, `SLP $52.5` (HHA may also list ST for SLP — resolver accepts both).
 
-Resolve to HHA `PayCodeID` via `GetCaregiverPayCodes` / office reference table at schedule time.
+Implementation: `packages/shared/src/config/pay-codes.ts` — `buildPayCodeName(serviceType, payRate, { group? })`.
+
+Resolve to HHA `PayCodeID` via `GetCaregiverPayCodes` / office reference table at schedule time. Missing pay code → **hard-fail that session**.
+
+## TMS school billing service codes (Sep 2026 — for billing)
+
+Create these **exact** ServiceCode names under each school contract (lookup is case-insensitive). Per discipline **OT / PT / SLP**:
+
+| Kind | Exact name pattern | Examples |
+|------|--------------------|----------|
+| Eval | `{Disc} School eval` | `OT School eval`, `PT School eval`, `SLP School eval` |
+| ~30 min | `{Disc} school 30` | `OT school 30`, … |
+| ~42 min | `{Disc} school 42` | `OT school 42`, … |
+| ~45 min | `{Disc} school 45` | `OT school 45`, … |
+| ~60 min / other | `{Disc} school 60` | `OT school 60`, … |
+| Additional | `{Disc} additional services` | `OT additional services`, … |
+
+**Duration bucket:** nearest of 30 / 42 / 45 within **3 minutes**; otherwise **60** (same rule as TMS provider pay).
+
+**Kind detection:** `additionalServiceType=eval` or “eval” in Service Type → School eval; other additional kinds (progress report, consultation, meetings, paid absence) → additional services; else school + duration.
+
+Implementation: `packages/shared/src/config/school-billing-codes.ts`. Missing service code → **hard-fail that session**.
 
 ## Caregiver codes (confirmed Jul 2026)
 
@@ -84,7 +119,17 @@ Preview must flag new Service Types **and** pay codes that fail the discipline+r
 
 **Optional:** SES HTML + CSV when a verified From identity works (`ALERT_ALWAYS_SNS=true` still publishes SNS every time).
 
-**Current subscribers:** `elefkowitz@whiteglovecare.net`, `moshe@advancedautomations.net`, `ggreenfeld@whiteglovecare.net` (Grace Greenfeld)
+**Current subscribers:** `elefkowitz@whiteglovecare.net`, `moshe@advancedautomations.net`, `ggreenfeld@whiteglovecare.net` (Grace Greenfeld), `alowy@whiteglovecare.net` (Aliza Lowy), `gfriedman@whiteglovecare.net` (Gila Friedman)
+
+### TMS HHA failure digest (SES)
+
+Daily **~6:00 PM Eastern** (EventBridge `22:00 UTC`) email to **`mgluck@whiteglovecare.net`** listing that day’s HHA transfer failures (missing pay/service code, CreatePatient fail, and other `hhaStatus=failed` / transfer errors).
+
+- **Subject:** `HHA errors for YYYY-MM-DD`
+- **Body:** provider, child, week, session date/time, error, and a link to `https://wgfront.netlify.app/?hhaWeek=<id>` (opens admin dashboard, highlights the week, triage + **Send to HHA / Retry HHA**)
+- **No failures that day → no email**
+- **SES sandbox:** recipient must be a verified identity (mgluck was verified for timesheet email). From address is `TMS_FROM_EMAIL` / `alertFromEmail` (`alerts@advancedautomations.net`).
+- **Job flag:** Lambda invoke `{ "tmsJob": "hha-error-digest" }` (also `POST /internal/hha-error-digest` with `TMS_INTERNAL_KEY`)
 
 ## Sample reports — column adequacy
 
@@ -96,6 +141,15 @@ Preview must flag new Service Types **and** pay codes that fail the discipline+r
 | **API Report** | **Yes** | Pay Rate + Service Type for pay code; Provider Name for caregiver lookup |
 | **Caregiver codes** | **Yes** | UserReportId **4541** (network capture Jul 2026) |
 | **New service** (existing child) | **Yes** — see below | Filter **Service Begin Date** in PS; save as **"new service"** |
+
+## Gluck open — one open per child
+
+ProviderSoft Gluck open is a **Service Report**: intake date selects the case, then the CSV lists **every service period** on that case (same Program Id can appear many times; same Service Type with different Service Begin Dates = different auth periods, not bot duplicates).
+
+**Bot rule:**
+1. **One Gluck open per child (`caseId`)** — create/update the HHA patient once and process one primary service line (prefer begin date closest to Date of Intake).
+2. **Extra intake-aligned lines** (Service Begin within ~14 days of intake) → processed on the **new service** path (find existing child, add auth/placement).
+3. **Historical periods** (older begin dates on the Gluck export) → **skipped** — not re-opened from Gluck; genuinely new begins should come from the **new service** report.
 
 ## New service report (existing child, new service line)
 
@@ -112,14 +166,15 @@ Use when the child already exists in ProviderSoft/HHA but a **new Service Type**
 | 1 | Child's Name | Patient match |
 | 2 | Program Id | Case ID |
 | 3 | Date of Birth | HHA patient |
-| 4 | Provider Name | Reference |
+| 4 | Provider Name | EVV placeholder caregiver (CreateSchedule) |
 | 7–9 | Child's Address / City / State | HHA address |
 | 10–11 | Primary Contact Name / Phone | HHA contact |
 | 14 | Child's Zip Code | HHA address |
-| 20 | **Service Type** | HHA service code mapping |
+| 20 | **Service Type** | HHA service code mapping + pay-code discipline prefix |
 | 36–37 | **Service Begin Date / Service End Date** | Contract + auth dates; bot filters on Begin Date |
 | 65 | **Authorization Number** | HHA authorization |
 | 75 | **Program Type** | Contract ID mapping |
+| — | **Pay Rate** | Required for EVV programs: Service Type + Pay Rate → HHA PayCode (e.g. OT + 72 → **OT72**) on placeholder CreateSchedule |
 | 118 | Real DOB (For school Cases) | School cases only |
 
 4. **Step 3 — filter:** leave empty; bot sets **Service Begin Date** at download time (today → today).
@@ -152,10 +207,26 @@ DOB on the student record is **optional for now** but **recommended for HHA** (s
 
 RS Provider on caseload import **must match an existing TMS therapist** (First Last / Last, First). Agency labels (“White Glove”, “White, Glove”) and unmatched names are **hard errors** — that row is skipped; do **not** save a mandate with an empty provider and do **not** invent providers. Schools/students still create from valid rows. There is **no Default provider** on import.
 
+## Group sessions (TMS overlap + pay)
+
+| Rule | Behavior |
+|------|----------|
+| **Small group** | Fewer than 3 students (caseload “Small Group” with no numeric size → cap **2**) |
+| **Fewer than mandate groupSize** | Always allowed |
+| **More than mandate groupSize** | Blocked on import |
+| **Group-tagged with ≥1 present peer** | Group pay rate / `OT Group $rate` |
+| **Solo group (0 present peers) or individual tag on group-mandate child** | Individual pay; soft note warning to say **no peer was available**; treated as **individual for overlap** (later same-time note → overlap error) |
+
 ## Frontline weekly PDF upload (TMS)
 
 `POST /week/upload-sessions` requires entities to **already exist**:
 - PDF Service Provider must match the logged-in therapist’s provider profile (when present on the PDF).
 - Child must already exist (from caseload) — unknown child → error; **no auto-create**.
 - PDF school must match the child’s school when both are known (clear mismatch → error).
+
+## TMS HHA environment (sandbox until go-live)
+
+Live `TmsApiFn` uses **real** SOAP (`HHA_USE_MOCK=false`) against **sandbox** (`HHA_USE_PRODUCTION=false`). Same `HhaSecret` creds; URL forced to `sandbox1.hhaexchange.com`.
+
+**Flip to production later (CDK):** in `infra/lib/tms.ts` set `HHA_USE_PRODUCTION: 'true'` and `HHA_ALLOW_PRODUCTION: 'true'`, then `cdk deploy`.
 

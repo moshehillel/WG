@@ -170,8 +170,21 @@ const HEADER_ALIASES: Record<string, string[]> = {
   duration: ['rs duration', 'duration', 'duration minutes', 'session duration'],
   /** Optional group size; otherwise derived from RS Ratio. */
   groupSize: ['rs group size', 'group size', 'groupsize', 'rs size', 'group #'],
-  /** Optional on some exports; blank is fine (recommended later for HHA). */
-  programId: ['program id', 'programid', 'program #', 'admission id', 'admissionid'],
+  /**
+   * HHA Program Id / Case Id. WG “Related Service by serviceschool” puts this in
+   * column 1 as “Student Gen Ed ID#” — treat that as Program ID for patient find.
+   */
+  programId: [
+    'program id',
+    'programid',
+    'program #',
+    'admission id',
+    'admissionid',
+    'student gen ed id#',
+    'student gen ed id',
+    'gen ed id#',
+    'gen ed id',
+  ],
   programType: ['program type', 'programtype'],
   dob: ['date of birth', 'dob', 'birth date', 'birthdate', 'real dob'],
 };
@@ -230,16 +243,37 @@ function parseRatioGroup(raw: string): boolean {
   return false;
 }
 
-/** Positive whole minutes from RS Duration (e.g. "30", "45 min"). */
+/**
+ * Positive whole minutes from RS Duration (e.g. "30", "45 min").
+ * Also handles Excel time fractions (30 min → ~0.0208 day) and clock text ("0:30").
+ */
 export function parseDurationMinutes(raw: string): number | null {
-  const n = parseFreqNumber(raw);
+  const s = String(raw || '').trim();
+  if (!s) return null;
+
+  // Excel time serial as fraction of a day (raw sheet value).
+  const asNum = Number(s);
+  if (Number.isFinite(asNum) && asNum > 0 && asNum < 1) {
+    const mins = Math.round(asNum * 24 * 60);
+    return mins > 0 ? mins : null;
+  }
+
+  // Clock-style cells sometimes stringify as H:MM or H:MM:SS.
+  const clock = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (clock) {
+    const mins = Number(clock[1]) * 60 + Number(clock[2]);
+    return Number.isFinite(mins) && mins > 0 ? mins : null;
+  }
+
+  const n = parseFreqNumber(s);
   if (n == null || n <= 0) return null;
-  return Math.round(n);
+  const rounded = Math.round(n);
+  return rounded > 0 ? rounded : null;
 }
 
 /**
  * Prefer explicit group-size column; else Individual → 1, N:1 ratio → N,
- * Small Group without a number → null.
+ * Small Group without a number → null (overlap cap treats as 2: fewer than 3).
  */
 export function parseGroupSize(groupSizeRaw: string, ratioRaw: string, ratioGroup: boolean): number | null {
   const fromCol = parseFreqNumber(groupSizeRaw);
@@ -387,6 +421,15 @@ export function parseCaseloadGrid(
       }),
     );
     return { rows, errors, warnings };
+  }
+  if (idx.duration < 0) {
+    warnings.push(
+      caseloadErr(0, {
+        field: 'RS Duration',
+        problem: 'This file has no RS Duration column — mandate Duration will show as blank (—).',
+        fix: 'Use the KU “Related Service by serviceschool (WG)” export that includes RS Duration (minutes), then import again.',
+      }),
+    );
   }
 
   for (const data of dataRows) {

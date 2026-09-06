@@ -2,7 +2,9 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -19,12 +21,18 @@ export function addTherapyManagement(
   props: {
     reportsBucket: s3.IBucket;
     hhaSecret: secretsmanager.ISecret;
+    /** CMK used for TMS DynamoDB (same stack data key). */
+    encryptionKey: kms.IKey;
     fromEmail?: string;
     bedrockModelId?: string;
     spaOrigin?: string;
     internalKey?: string;
+    /** OpenAI key for Luna — optional CDK seed; preferred live store is Secrets Manager (see TmsLunaOpenAiSecret). */
+    openaiApiKey?: string;
+    lunaSupportEmail?: string;
+    openaiModel?: string;
   },
-): { apiUrl: lambda.FunctionUrl; userPool: cognito.UserPool } {
+): { apiUrl: lambda.FunctionUrl; userPool: cognito.UserPool; stateTable: dynamodb.Table } {
   const userPool = new cognito.UserPool(scope, 'TmsUserPool', {
     userPoolName: 'white-glove-tms',
     selfSignUpEnabled: false,
@@ -68,6 +76,50 @@ export function addTherapyManagement(
       : {}),
   });
 
+  /**
+   * Luna OpenAI key. Initial placeholder is ignored after the secret exists —
+   * paste the real key in Secrets Manager (or seed once via -c openaiApiKey=sk-...).
+   */
+  const lunaOpenAiSecret = new secretsmanager.Secret(scope, 'TmsLunaOpenAiSecret', {
+    description: 'OpenAI API key for Luna TMS support chatbot (plain string, not JSON)',
+    secretStringValue: cdk.SecretValue.unsafePlainText(
+      (props.openaiApiKey || '').trim() || 'REPLACE_ME_IN_SECRETS_MANAGER',
+    ),
+  });
+
+  /**
+   * DocuSign REST creds for principal e-sign after therapist "Send timesheet".
+   * JSON: { "baseUrl", "accessToken", "accountId", "webhookUrl"? }.
+   * webhookUrl should be `{TmsApiUrl}/webhooks/esign` (DocuSign Connect completed).
+   */
+  const docusignSecret = new secretsmanager.Secret(scope, 'TmsDocuSignSecret', {
+    description:
+      'DocuSign API for TMS timesheet e-sign (JSON: baseUrl, accessToken, accountId, webhookUrl)',
+    secretStringValue: cdk.SecretValue.unsafePlainText(
+      JSON.stringify({
+        baseUrl: 'https://demo.docusign.net/restapi',
+        accessToken: 'REPLACE_ME',
+        accountId: 'REPLACE_ME',
+        webhookUrl: '',
+      }),
+    ),
+  });
+
+  /**
+   * Single-table TMS state: one item per entity (sessions, weeks, users, …).
+   * Replaces whole-file S3 tms/state.json for concurrency-safe writes.
+   * PDFs / locker files remain on the reports bucket under tms/*.
+   */
+  const stateTable = new dynamodb.Table(scope, 'TmsStateTable', {
+    partitionKey: { name: 'pk', type: dynamodb.AttributeType.STRING },
+    sortKey: { name: 'sk', type: dynamodb.AttributeType.STRING },
+    billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+    removalPolicy: cdk.RemovalPolicy.RETAIN,
+    pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+    encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+    encryptionKey: props.encryptionKey,
+  });
+
   const fn = new NodejsFunction(scope, 'TmsApiFn', {
     entry: path.join(repoRoot, 'packages/tms-api/src/handler.ts'),
     handler: 'handler',
@@ -76,14 +128,27 @@ export function addTherapyManagement(
     memorySize: 1024,
     environment: {
       REPORTS_BUCKET: props.reportsBucket.bucketName,
+      TMS_STATE_TABLE: stateTable.tableName,
       HHA_SECRET_ARN: props.hhaSecret.secretArn,
       TMS_BEDROCK_MODEL_ID: props.bedrockModelId || '',
       TMS_FROM_EMAIL: props.fromEmail || '',
       TMS_USER_POOL_ID: userPool.userPoolId,
       TMS_CLIENT_ID: webClient.userPoolClientId,
       TMS_INTERNAL_KEY: props.internalKey || '',
+      /** Real SOAP client; sandbox until Moshe says otherwise (do not force production). */
       HHA_USE_MOCK: 'false',
-      ...(spaOrigin ? { TMS_CORS_ORIGIN: spaOrigin } : {}),
+      HHA_PRODUCTION_BASE_URL: 'https://app.hhaexchange.com/Integration/ENT/V1.8/ws.asmx',
+      HHA_USE_PRODUCTION: 'false',
+      HHA_ALLOW_PRODUCTION: 'false',
+      OPENAI_SECRET_ARN: lunaOpenAiSecret.secretArn,
+      TMS_DOCUSIGN_SECRET_ARN: docusignSecret.secretArn,
+      LUNA_SUPPORT_EMAIL: props.lunaSupportEmail || 'moshe@advancedautomations.net',
+      OPENAI_MODEL: props.openaiModel || 'gpt-4o-mini',
+      /** End-of-day HHA failure digest (SES). Recipient must be verified while SES is in sandbox. */
+      TMS_HHA_ERROR_EMAIL: 'mgluck@whiteglovecare.net',
+      ...(spaOrigin
+        ? { TMS_CORS_ORIGIN: spaOrigin, TMS_SPA_ORIGIN: spaOrigin }
+        : { TMS_SPA_ORIGIN: 'https://wgfront.netlify.app' }),
     },
     bundling: {
       minify: true,
@@ -98,7 +163,10 @@ export function addTherapyManagement(
     projectRoot: repoRoot,
   });
   props.reportsBucket.grantReadWrite(fn, 'tms/*');
+  stateTable.grantReadWriteData(fn);
   props.hhaSecret.grantRead(fn);
+  lunaOpenAiSecret.grantRead(fn);
+  docusignSecret.grantRead(fn);
   userPool.grant(
     fn,
     'cognito-idp:AdminCreateUser',
@@ -120,6 +188,18 @@ export function addTherapyManagement(
     targets: [new targets.LambdaFunction(fn, { event: events.RuleTargetInput.fromObject({ tmsJob: 'due-nags' }) })],
   });
 
+  // 22:00 UTC ≈ 6:00 PM Eastern (EDT). During EST this is 5:00 PM Eastern.
+  new events.Rule(scope, 'TmsHhaErrorDigestRule', {
+    schedule: events.Schedule.cron({ minute: '0', hour: '22' }),
+    description:
+      'Daily end-of-day HHA transfer failure digest to mgluck@whiteglovecare.net (~6pm Eastern)',
+    targets: [
+      new targets.LambdaFunction(fn, {
+        event: events.RuleTargetInput.fromObject({ tmsJob: 'hha-error-digest' }),
+      }),
+    ],
+  });
+
   const apiUrl = fn.addFunctionUrl({
     authType: lambda.FunctionUrlAuthType.NONE,
     cors: {
@@ -138,11 +218,25 @@ export function addTherapyManagement(
     value: webClient.userPoolClientId,
     description: 'Cognito app client id (set as TMS_CLIENT_ID for the SPA build).',
   });
+  new cdk.CfnOutput(scope, 'TmsLunaOpenAiSecretArn', {
+    value: lunaOpenAiSecret.secretArn,
+    description:
+      'Paste OpenAI API key as the secret string value (Secrets Manager console). Used by Luna chatbot.',
+  });
+  new cdk.CfnOutput(scope, 'TmsDocuSignSecretArn', {
+    value: docusignSecret.secretArn,
+    description:
+      'DocuSign JSON secret (baseUrl, accessToken, accountId, webhookUrl={TmsApiUrl}webhooks/esign).',
+  });
   new cdk.CfnOutput(scope, 'TmsWebHint', {
     value: spaOrigin
       ? `Host apps/tms-web on ${spaOrigin} (e.g. Netlify). Set TMS_API_URL there to TmsApiUrl.`
       : 'Host apps/tms-web elsewhere (e.g. Netlify). Set TMS_API_URL to TmsApiUrl. Redeploy with -c tmsSpaOrigin=https://your-site.netlify.app for Cognito + CORS.',
   });
+  new cdk.CfnOutput(scope, 'TmsStateTableName', {
+    value: stateTable.tableName,
+    description: 'DynamoDB single-table for TMS entities (sessions, weeks, caseload, …).',
+  });
 
-  return { apiUrl, userPool };
+  return { apiUrl, userPool, stateTable };
 }

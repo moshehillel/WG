@@ -35,6 +35,16 @@ export const HhaAuthSchema = z.object({
   /** Human-monitored address for replies (defaults to FROM). */
   ALERT_REPLY_TO: z.string().optional(),
   ALERT_LOGO_URL: z.string().optional(),
+  /**
+   * When true (default), publish SNS plain-text alerts even if SES HTML succeeds.
+   * SES can accept mail that M365/Barracuda later quarantine — SNS is the reliable path.
+   */
+  ALERT_ALWAYS_SNS: z.string().optional(),
+  /** Luna TMS support chatbot (OpenAI) — server-side only; never ship to the SPA. */
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_SECRET_ARN: z.string().optional(),
+  OPENAI_MODEL: z.string().optional(),
+  LUNA_SUPPORT_EMAIL: z.string().optional(),
 });
 
 export type Env = z.infer<typeof HhaAuthSchema>;

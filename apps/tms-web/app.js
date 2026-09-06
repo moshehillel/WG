@@ -22,26 +22,29 @@ const state = {
   reportView: '',
   childDetailBack: 'children',
   focusSchoolId: '',
+  selectedSchoolId: sessionStorage.getItem('tmsSchoolId') || '',
   lastServiceProviderId: '',
   childSessionFrom: '',
   childSessionTo: '',
+  therapistPane: sessionStorage.getItem('tmsTherapistPane') || 'current',
+  listTabLetter: 'A',
 };
 
 const REPORT_LIST = [
   {
     id: 'week-progress',
-    title: 'Sessions & notes progress',
-    blurb: 'Sessions provided vs mandate, notes posted, and note follow-up.',
+    title: 'Weekly session progress',
+    blurb: 'Sessions delivered and notes posted by child and week.',
   },
   {
     id: 'last-service',
-    title: 'Last service date',
-    blurb: 'Latest attended/makeup DOS per child and provider.',
+    title: 'Last date of service',
+    blurb: 'Most recent attended or makeup date of service by child and provider.',
   },
   {
     id: 'due-dates',
-    title: 'Progress report due dates',
-    blurb: 'School progress / annual / reeval due dates and completion.',
+    title: 'Progress-report due dates',
+    blurb: 'School progress, annual, and reevaluation due dates with completion status.',
   },
 ];
 
@@ -74,7 +77,7 @@ async function downloadReportXlsx(path, filename) {
   const res = await fetch(API + path, { method: 'GET', headers: headers() });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || `Could not export ${filename}`);
+    throw new Error(data.error || `Unable to export ${filename}`);
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -115,28 +118,41 @@ function issueListFromPayload(data) {
 }
 
 function apiError(message, extras = {}) {
-  const err = new Error(message || 'Request failed.');
+  const err = new Error(message || 'The request could not be completed.');
   err.errors = Array.isArray(extras.errors) ? extras.errors : [];
   err.warnings = Array.isArray(extras.warnings) ? extras.warnings : [];
   err.status = extras.status;
   return err;
 }
 
-async function api(method, path, body) {
+async function api(method, path, body, opts = {}) {
+  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 0;
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
   let res;
   try {
     res = await fetch(API + path, {
       method,
       headers: headers(),
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller ? controller.signal : undefined,
     });
-  } catch {
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      throw apiError(
+        `Request timed out after ${Math.round(timeoutMs / 1000)}s. Check your connection and try again.`,
+      );
+    }
     throw apiError(
-      'Could not reach the server. If you use NetFree, the app must use the /api proxy. Try refresh.',
+      'Unable to reach the server. If you use NetFree, route traffic through the /api proxy, then refresh.',
     );
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   if (res.status === 401 && COGNITO_MODE) {
-    signOut('Your sign in ended. Please sign in again.');
+    signOut('Your session has ended. Please sign in again.');
     throw apiError('Please sign in again.', { status: 401 });
   }
   const ct = res.headers.get('content-type') || '';
@@ -146,26 +162,32 @@ async function api(method, path, body) {
     const msg =
       summary ||
       (res.statusText && res.statusText !== 'Bad Request' ? res.statusText : '') ||
-      `Request failed (${res.status}). Check the red messages under Read PDF.`;
+      `Request failed (${res.status}). Review the error details under Import.`;
     throw apiError(msg, { errors, warnings, status: res.status });
   }
   return data;
 }
 
-function setUploadIssues(errors, warnings) {
+function setUploadIssues(errors, warnings, successes) {
   const el = document.getElementById('uploadIssues');
   if (!el) return;
   const errs = (errors || []).map((e) => String(e || '').trim()).filter(Boolean);
   const warns = (warnings || []).map((w) => String(w || '').trim()).filter(Boolean);
-  if (!errs.length && !warns.length) {
+  const oks = (successes || []).map((s) => String(s || '').trim()).filter(Boolean);
+  if (!errs.length && !warns.length && !oks.length) {
     el.hidden = true;
     el.innerHTML = '';
     return;
   }
   el.hidden = false;
   el.innerHTML = [
+    oks.length
+      ? `<div class="ok-box upload-issue-block"><strong>Saved</strong>${oks
+          .map((s) => `<div class="upload-issue-line">${esc(s)}</div>`)
+          .join('')}</div>`
+      : '',
     errs.length
-      ? `<div class="err-box upload-issue-block"><strong>Upload blocked</strong>${errs
+      ? `<div class="err-box upload-issue-block"><strong>${oks.length ? 'Failed sessions' : 'Upload issues'}</strong>${errs
           .map((e) => `<div class="upload-issue-line">${esc(e)}</div>`)
           .join('')}</div>`
       : '',
@@ -182,8 +204,8 @@ function setUploadIssues(errors, warnings) {
 function openingAccountView() {
   view(`
     <div class="card">
-      <h2>Opening your account…</h2>
-      <p>Please wait a moment.</p>
+      <h2>Loading your account…</h2>
+      <p>One moment, please.</p>
     </div>
   `);
 }
@@ -191,8 +213,8 @@ function openingAccountView() {
 function homeLoadErrorView(err) {
   view(`
     <div class="card">
-      <h2>Could not load</h2>
-      <div class="err-box">${esc(err?.message || 'Something went wrong.')}</div>
+      <h2>Unable to load</h2>
+      <div class="err-box">${esc(err?.message || 'An unexpected error occurred.')}</div>
       <button type="button" class="btn-primary" id="retryHome">Retry</button>
     </div>
   `);
@@ -259,6 +281,55 @@ function setWeekTopStatus({ success = [], error = [], warn = [] } = {}) {
   setStatus({ success, error, warn });
 }
 
+/** Bring top status chips into view — Send lives at the bottom of a long page. */
+function revealStatus() {
+  const el = document.getElementById('status');
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+let actionToastTimer = 0;
+/** Fixed toast so Send feedback is visible without scrolling to the top status bar. */
+function showActionToast(message, kind = 'neutral', { sticky = false } = {}) {
+  let el = document.getElementById('actionToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'actionToast';
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    document.body.appendChild(el);
+  }
+  const text = String(message || '').trim();
+  if (!text) {
+    el.hidden = true;
+    el.textContent = '';
+    el.className = 'action-toast';
+    return;
+  }
+  el.hidden = false;
+  el.className = `action-toast ${normalizeStatusKind(kind) || 'neutral'}`;
+  el.textContent = text;
+  if (actionToastTimer) clearTimeout(actionToastTimer);
+  actionToastTimer = 0;
+  if (!sticky) {
+    actionToastTimer = setTimeout(() => {
+      el.hidden = true;
+    }, kind === 'error' || kind === 'err' ? 10000 : 7000);
+  }
+}
+
+function timesheetSendBlockReason({ week, sessions, locked, errors, signerEmail }) {
+  if (locked) return 'This week is already submitted and cannot be sent again.';
+  if (!week) return 'Your provider profile is not ready yet. Contact the office.';
+  if (!sessions.length) return 'Add at least one session before submitting.';
+  if (errors.length) {
+    return 'Resolve the red blocking issues above before submitting.';
+  }
+  if (!String(signerEmail || '').trim()) {
+    return 'No school signer is on file. Contact the office to assign a signer.';
+  }
+  return '';
+}
+
 function view(html) {
   document.getElementById('view').innerHTML = html;
 }
@@ -317,7 +388,7 @@ function syncBulkBar(group) {
 
 function confirmBulkDelete(n, noun) {
   if (!confirm(`Delete ${n} selected ${noun}? This cannot be undone.`)) return false;
-  if (!confirm(`Really delete ${n} items permanently?`)) return false;
+  if (!confirm(`Permanently delete ${n} items? This cannot be reversed.`)) return false;
   return true;
 }
 
@@ -358,11 +429,11 @@ function bindBulkDelete(group, { noun, deleteOne, refresh }) {
         }
         if (errors.length) {
           setStatus(
-            `Deleted ${ok}. ${errors.length} failed: ${errors[0]}`,
+            `Removed ${ok}. ${errors.length} could not be removed: ${errors[0]}`,
             ok === 0 ? 'err' : 'warn',
           );
         } else {
-          setStatus(`Deleted ${ok} ${noun}.`, 'ok');
+          setStatus(`Removed ${ok} ${noun}.`, 'ok');
         }
         await refresh();
       } catch (e) {
@@ -388,6 +459,7 @@ function readPayRatesFromIds(ids) {
     payRateGroup30Min: num(ids.g30),
     payRateGroup42Min: num(ids.g42),
     payRateGroup45Min: num(ids.g45),
+    payRateEval: num(ids.eval),
     payRateAdditionalHourly: num(ids.extra),
   };
 }
@@ -402,7 +474,7 @@ function payRatesFieldset(p, prefix) {
         </div>
         <div class="row">
           <label>45 min session <input id="${prefix}45" type="number" step="0.01" min="0" value="${v('payRate45Min')}" /></label>
-          <label>Per hour session <input id="${prefix}Hour" type="number" step="0.01" min="0" value="${v('payRatePerHour')}" /></label>
+          <label>Hourly session <input id="${prefix}Hour" type="number" step="0.01" min="0" value="${v('payRatePerHour')}" /></label>
         </div>
         <div class="row">
           <label>Group 30 min <input id="${prefix}G30" type="number" step="0.01" min="0" value="${v('payRateGroup30Min')}" /></label>
@@ -410,7 +482,10 @@ function payRatesFieldset(p, prefix) {
         </div>
         <div class="row">
           <label>Group 45 min <input id="${prefix}G45" type="number" step="0.01" min="0" value="${v('payRateGroup45Min')}" /></label>
-          <label>Additional services (hourly, billed to the minute) <input id="${prefix}Extra" type="number" step="0.01" min="0" value="${v('payRateAdditionalHourly')}" /></label>
+          <label>Eval <input id="${prefix}Eval" type="number" step="0.01" min="0" value="${v('payRateEval')}" /></label>
+        </div>
+        <div class="row">
+          <label>Additional services (hourly, billed by the minute) <input id="${prefix}Extra" type="number" step="0.01" min="0" value="${v('payRateAdditionalHourly')}" /></label>
         </div>
       </fieldset>`;
 }
@@ -453,7 +528,7 @@ function providerOptions(providers, selected) {
     const lb = `${b.firstName || ''} ${b.lastName || ''}`.trim() || b.id;
     return la.localeCompare(lb);
   });
-  return `<option value="">Select a provider by name</option>${sorted.map((p) => {
+  return `<option value="">Select a provider</option>${sorted.map((p) => {
     const label = `${p.firstName || ''} ${p.lastName || ''}`.trim() || p.id;
     return `<option value="${esc(p.id)}"${p.id === selected ? ' selected' : ''}>${esc(label)}</option>`;
   }).join('')}`;
@@ -482,12 +557,12 @@ function formatCalendarSummary(calendar) {
 function renderCalendarSavedHtml(calendar, schoolName) {
   const name = schoolName ? ` for ${esc(schoolName)}` : '';
   if (!calendar?.yearStart && !calendar?.yearEnd && !(calendar?.offDays || []).length) {
-    return `<div class="cal-saved muted"><p>No calendar saved yet${name}. Set first day, last day, and off days below, then Save calendar.</p></div>`;
+    return `<div class="cal-saved muted"><p>No calendar on file yet${name}. Enter the first day, last day, and off days below, then save the calendar.</p></div>`;
   }
   const offs = [...(calendar.offDays || [])].sort();
   const offList = offs.length
     ? `<ul class="cal-off-summary">${offs.map((d) => `<li>${esc(formatIsoDateLabel(d))} <span class="muted">(${esc(d)})</span></li>`).join('')}</ul>`
-    : '<p class="muted">No off days.</p>';
+    : '<p class="muted">No off days recorded.</p>';
   return `<div class="cal-saved">
     <h3>Saved calendar${name}</h3>
     <p><strong>First day:</strong> ${esc(calendar.yearStart ? formatIsoDateLabel(calendar.yearStart) : '—')} ${calendar.yearStart ? `<span class="muted">(${esc(calendar.yearStart)})</span>` : ''}</p>
@@ -575,40 +650,47 @@ function sessionExtraLabel(s) {
 }
 
 function closeTimesheetModal() {
-  document.getElementById('timesheetModal')?.remove();
+  const modal = document.getElementById('timesheetModal');
+  if (modal) {
+    const frame = modal.querySelector('iframe');
+    const src = frame?.getAttribute('src') || '';
+    if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+    modal.remove();
+  }
 }
 
-function openTimesheetModal(opts) {
+async function openTimesheetModal(opts) {
   closeTimesheetModal();
   const {
+    weekId = '',
     weekStart = '',
     providerName = '',
     status = '',
     signerName = '',
     signerEmail = '',
-    sessions = [],
-    students = [],
+    schoolDistrict = '',
   } = opts || {};
-  const sorted = [...(sessions || [])].sort((a, b) =>
-    String(a.dateOfService || '').localeCompare(String(b.dateOfService || ''))
-      || String(a.beginTime || '').localeCompare(String(b.beginTime || '')),
-  );
-  const meta = [
-    weekStart ? `Week of ${weekStart}` : '',
-    providerName ? `Provider: ${providerName}` : '',
-    status ? `Status: ${status}` : '',
-    signerEmail || signerName
-      ? `Signer: ${signerName || signerEmail}${signerEmail && signerName ? ` <${signerEmail}>` : ''}`
-      : '',
-  ].filter(Boolean);
+  if (!weekId) {
+    setStatus('Open a week before viewing the timesheet.', 'error');
+    return;
+  }
   const backdrop = document.createElement('div');
   backdrop.id = 'timesheetModal';
   backdrop.className = 'modal-backdrop';
   backdrop.setAttribute('role', 'dialog');
   backdrop.setAttribute('aria-modal', 'true');
   backdrop.setAttribute('aria-label', 'Timesheet');
+  const meta = [
+    weekStart ? `Week of ${weekStart}` : '',
+    providerName ? `Provider: ${providerName}` : '',
+    schoolDistrict ? `District: ${schoolDistrict}` : '',
+    status ? `Status: ${status}` : '',
+    signerEmail || signerName
+      ? `Signer: ${signerName || signerEmail}${signerEmail && signerName ? ` <${signerEmail}>` : ''}`
+      : '',
+  ].filter(Boolean);
   backdrop.innerHTML = `
-    <div class="modal-panel timesheet-print">
+    <div class="modal-panel timesheet-print timesheet-pdf-panel">
       <div class="modal-head">
         <h2>Timesheet</h2>
         <div class="modal-actions">
@@ -617,29 +699,8 @@ function openTimesheetModal(opts) {
         </div>
       </div>
       ${meta.length ? `<p class="muted">${meta.map((m) => esc(m)).join(' · ')}</p>` : ''}
-      <table class="timesheet-table">
-        <tr>
-          <th>Date</th><th>Child</th><th>Time</th><th>Attendance</th>
-          <th>Flags</th><th>Notes</th><th>Additional</th>
-        </tr>
-        ${sorted.map((s) => {
-          const name = studentName(students, s.studentId);
-          const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ');
-          const flags = s.aiFlags || [];
-          const hard = Boolean(s.aiBlock);
-          const pill = hard ? 'pill-err' : 'pill-warn';
-          const extra = sessionExtraLabel(s);
-          return `<tr class="${hard ? 'hard' : flags.length ? 'warn' : ''}">
-            <td>${esc(s.dateOfService)}</td>
-            <td>${esc(name)}</td>
-            <td>${esc(time)}</td>
-            <td>${esc(s.attendance)}</td>
-            <td>${flags.length ? `<span class="${pill}">${esc(flags.join('; '))}</span>` : '—'}</td>
-            <td>${esc(s.notes || '—')}</td>
-            <td>${extra ? esc(extra) : '—'}</td>
-          </tr>`;
-        }).join('') || '<tr><td colspan="7">No sessions for this week.</td></tr>'}
-      </table>
+      <div class="timesheet-pdf-loading muted">Loading branded timesheet…</div>
+      <iframe class="timesheet-pdf-frame" title="Timesheet PDF" hidden></iframe>
     </div>
   `;
   document.body.appendChild(backdrop);
@@ -647,22 +708,46 @@ function openTimesheetModal(opts) {
     if (e.target === backdrop) closeTimesheetModal();
   });
   backdrop.querySelector('[data-close-timesheet]').onclick = () => closeTimesheetModal();
-  backdrop.querySelector('[data-print-timesheet]').onclick = () => window.print();
+  try {
+    const q = state.selectedSchoolId
+      ? `?schoolId=${encodeURIComponent(state.selectedSchoolId)}`
+      : '';
+    const blob = await api('GET', `/weeks/${weekId}/timesheet${q}`);
+    const url = URL.createObjectURL(blob);
+    const frame = backdrop.querySelector('.timesheet-pdf-frame');
+    const loading = backdrop.querySelector('.timesheet-pdf-loading');
+    frame.src = url;
+    frame.hidden = false;
+    if (loading) loading.hidden = true;
+    backdrop.querySelector('[data-print-timesheet]').onclick = () => {
+      try {
+        frame.contentWindow?.focus();
+        frame.contentWindow?.print();
+      } catch {
+        window.open(url, '_blank');
+      }
+    };
+  } catch (err) {
+    closeTimesheetModal();
+    setStatus(err.message || 'Unable to load timesheet PDF.', 'error');
+  }
 }
 
-async function fetchAndShowTimesheet({ weekStart, providerId, providerName, status }) {
+async function fetchAndShowTimesheet({ weekId, weekStart, providerId, providerName, status }) {
   const q = new URLSearchParams();
   if (weekStart) q.set('weekStart', weekStart);
   if (providerId) q.set('providerId', providerId);
+  if (state.selectedSchoolId) q.set('schoolId', state.selectedSchoolId);
   const data = await api('GET', `/week?${q.toString()}`);
-  openTimesheetModal({
+  const id = data.week?.id || weekId;
+  await openTimesheetModal({
+    weekId: id,
     weekStart: data.week?.weekStart || weekStart || '',
     providerName: providerName || '',
     status: data.week?.status || status || '',
     signerName: data.week?.signerName || '',
     signerEmail: data.week?.signerEmail || '',
-    sessions: data.sessions || [],
-    students: data.students || [],
+    schoolDistrict: data.schoolDistrict || '',
   });
 }
 
@@ -670,17 +755,17 @@ async function loadMissedOptions(studentId, selected) {
   const sel = document.getElementById('makeupOf');
   if (!sel) return;
   if (!studentId) {
-    sel.innerHTML = '<option value="">None — use makeup auth if needed</option>';
+    sel.innerHTML = '<option value="">None — apply makeup authorization if needed</option>';
     return;
   }
   try {
     const out = await api('GET', `/students/${studentId}/missed`);
     const missed = out.missed || [];
-    sel.innerHTML = `<option value="">None — use makeup auth if needed</option>${missed.map((m) =>
+    sel.innerHTML = `<option value="">None — apply makeup authorization if needed</option>${missed.map((m) =>
       `<option value="${esc(m.id)}"${m.id === selected ? ' selected' : ''}>${esc(m.dateOfService || m.id)}</option>`,
     ).join('')}`;
   } catch {
-    sel.innerHTML = '<option value="">None — use makeup auth if needed</option>';
+    sel.innerHTML = '<option value="">None — apply makeup authorization if needed</option>';
   }
 }
 
@@ -722,7 +807,7 @@ function weekApprovalLabel(status) {
     return {
       key: 'approved',
       title: 'Approved',
-      detail: 'Your timesheet is signed and locked. You will be paid.',
+      detail: 'This timesheet is signed and locked. Payment will proceed.',
       box: 'ok-box',
     };
   }
@@ -730,29 +815,81 @@ function weekApprovalLabel(status) {
     return {
       key: 'pending',
       title: 'Pending',
-      detail: 'Waiting for the school signer (or admin) to approve. This will change to Approved when it is signed.',
+      detail: 'Awaiting approval from the school signer or an administrator. Status becomes Approved once signed.',
       box: 'warn-box',
     };
   }
   if (status === 'reopened') {
     return {
       key: 'reopened',
-      title: 'Needs fixes',
-      detail: 'An admin reopened this week. Fix it and send the timesheet again.',
+      title: 'Revision required',
+      detail: 'An administrator reopened this week. Revise it and resubmit the timesheet.',
       box: 'warn-box',
     };
   }
   return {
     key: 'draft',
-    title: 'Not sent yet',
-    detail: 'Upload notes or add sessions, then send the timesheet.',
+    title: 'Not submitted',
+    detail: 'Upload session notes or add sessions, then submit the timesheet.',
     box: 'warn-box',
   };
 }
 
+/** Hide approval status until week or status key changes (not forever). */
+const dismissedApprovalBanners = new Set();
+
 function approvalBanner(status) {
   const a = weekApprovalLabel(status);
-  return `<div class="${a.box}"><strong>Status: ${esc(a.title)}</strong><div>${esc(a.detail)}</div></div>`;
+  const key = `${state.weekStart}:${a.key}`;
+  if (dismissedApprovalBanners.has(key)) return '';
+  return `<div class="${a.box} status-banner" data-approval-key="${esc(key)}">
+    <button type="button" class="status-banner-dismiss" id="dismissApprovalBanner" aria-label="Dismiss status">×</button>
+    <strong>Status: ${esc(a.title)}</strong>
+    <div>${esc(a.detail)}</div>
+  </div>`;
+}
+
+
+function alphaLetterFromName(name) {
+  const ch = String(name || '').trim().charAt(0).toUpperCase();
+  return ch >= 'A' && ch <= 'Z' ? ch : '#';
+}
+
+function letterTabsHtml(active, letters) {
+  const tabs = letters.length ? letters : ['#'];
+  return `<div class="letter-tabs" role="tablist">${tabs
+    .map(
+      (L) =>
+        `<button type="button" class="letter-tab${L === active ? ' on' : ''}" data-letter="${esc(L)}" role="tab" aria-selected="${L === active ? 'true' : 'false'}">${esc(L)}</button>`,
+    )
+    .join('')}</div>`;
+}
+
+function bindLetterTabs(getRows, getName) {
+  const rows = [...getRows()];
+  const letters = [
+    ...new Set(rows.map((row) => alphaLetterFromName(getName(row)))),
+  ].sort((a, b) => (a === '#' ? 1 : b === '#' ? -1 : a.localeCompare(b)));
+  if (!letters.includes(state.listTabLetter)) state.listTabLetter = letters[0] || 'A';
+  const host = document.getElementById('listLetterTabs');
+  if (host) host.innerHTML = letterTabsHtml(state.listTabLetter, letters);
+  const apply = () => {
+    getRows().forEach((row) => {
+      row.hidden = alphaLetterFromName(getName(row)) !== state.listTabLetter;
+    });
+    document.querySelectorAll('#listLetterTabs .letter-tab').forEach((btn) => {
+      const on = btn.getAttribute('data-letter') === state.listTabLetter;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  };
+  document.querySelectorAll('#listLetterTabs .letter-tab').forEach((btn) => {
+    btn.onclick = () => {
+      state.listTabLetter = btn.getAttribute('data-letter') || 'A';
+      apply();
+    };
+  });
+  apply();
 }
 
 async function therapistHome(statusFlash) {
@@ -765,36 +902,64 @@ async function therapistHome(statusFlash) {
   let signerName = '';
   let signerEmail = '';
   let providerId = '';
+  let schoolDistrict = '';
   let loadFailed = null;
+  let schools = [];
 
   try {
     const me = await api('GET', '/me');
     providerId = me.provider?.id || '';
+    schools = me.schools || [];
+    if (schools.length === 1 && !state.selectedSchoolId) {
+      state.selectedSchoolId = schools[0].id;
+      sessionStorage.setItem('tmsSchoolId', state.selectedSchoolId);
+    }
+    if (schools.length > 1) {
+      const stillValid = schools.some((s) => s.id === state.selectedSchoolId);
+      if (!stillValid) {
+        await showSchoolPicker(schools);
+        return;
+      }
+    }
     const dues = (me.dueDates || []).filter((d) => d.status !== 'done');
     const alerts = me.alerts || [];
     if (dues.length || alerts.length) {
       banner = `<div class="warn-box">${[...alerts.map((a) => a.body), ...dues.map((d) => `${d.schoolName || d.schoolId || 'School'}: ${d.kind} due ${d.dueOn}`)].map((t) => `<div>${esc(t)}</div>`).join('')}</div>`;
     }
     if (providerId) {
-      const ensured = await api('POST', '/week/ensure', { weekStart: state.weekStart, providerId });
+      const ensured = await api('POST', '/week/ensure', {
+        weekStart: state.weekStart,
+        providerId,
+        schoolId: state.selectedSchoolId || undefined,
+      });
       week = ensured.week;
       state.weekId = week.id;
       signerName = week.signerName || '';
       signerEmail = week.signerEmail || '';
     }
   } catch (e) {
-    loadFailed = e.message || 'Could not load week.';
+    loadFailed = e.message || 'Unable to load this week.';
   }
 
+  const schoolQ = state.selectedSchoolId
+    ? `&schoolId=${encodeURIComponent(state.selectedSchoolId)}`
+    : '';
+
   try {
-    const list = await api('GET', `/students?weekStart=${encodeURIComponent(state.weekStart)}`);
+    const list = await api(
+      'GET',
+      `/students?weekStart=${encodeURIComponent(state.weekStart)}${schoolQ}`,
+    );
     students = list.students || [];
   } catch {
     students = [];
   }
 
   try {
-    const data = await api('GET', `/week?weekStart=${encodeURIComponent(state.weekStart)}`);
+    const data = await api(
+      'GET',
+      `/week?weekStart=${encodeURIComponent(state.weekStart)}${schoolQ}`,
+    );
     if (data.week) {
       week = data.week;
       state.weekId = week.id;
@@ -804,14 +969,28 @@ async function therapistHome(statusFlash) {
       warnings = data.warnings || [];
       signerName = week.signerName || signerName;
       signerEmail = week.signerEmail || signerEmail;
+      schoolDistrict = data.schoolDistrict || '';
     }
   } catch {
     /* keep empty week */
   }
 
   const status = week?.status || 'draft';
-  const locked = status === 'submitted' || status === 'signed' || status === 'locked';
-  const canSend = Boolean(week) && sessions.length > 0 && !locked && errors.length === 0;
+  const fullyLocked = status === 'signed' || status === 'locked';
+  const pending = status === 'submitted';
+  const canImport = !fullyLocked;
+  const sendBlockReason = timesheetSendBlockReason({
+    week,
+    sessions,
+    locked: pending || fullyLocked,
+    errors,
+    signerEmail,
+  });
+  const canSend = !sendBlockReason;
+  const selectedSchool = schools.find((s) => s.id === state.selectedSchoolId);
+  const schoolLabel = selectedSchool
+    ? (selectedSchool.district || selectedSchool.name || '')
+    : schoolDistrict;
 
   const flash = statusFlash && typeof statusFlash === 'object' ? statusFlash : null;
   const topSuccess = [...(flash?.success || [])];
@@ -824,54 +1003,22 @@ async function therapistHome(statusFlash) {
     warn: [...(flash?.warn || []), ...warnings],
   });
 
-  view(`
-    <div class="card">
-      <h2>My week</h2>
-      ${banner}
-      ${week ? approvalBanner(status) : '<div class="warn-box">Ask the office to finish setting up your therapist profile.</div>'}
-      <p class="muted">Week of ${esc(state.weekStart)}</p>
-      <button class="btn" id="refreshHome">Refresh status</button>
-      ${errors.length ? `<div class="err-box"><strong>Fix these before sending.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}</div>` : ''}
-      ${warnings.length ? `<div class="warn-box"><strong>Warnings (you can still send).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}</div>` : ''}
-      <p class="muted">Red = blocked (over-mandate or AI note issues). Yellow = under-mandate / soft warnings only.</p>
-      <div class="table-wrap">
-      <table>
-        <tr><th>Date</th><th>Child</th><th>Service</th><th>Time</th><th>Attendance</th><th>Flags</th><th>Notes</th>${locked ? '' : '<th></th>'}</tr>
-        ${sessions.map((s) => {
-          const name = studentName(students, s.studentId);
-          const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ');
-          const flags = s.aiFlags || [];
-          const hard = Boolean(s.aiBlock);
-          const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
-          const pill = hard ? 'pill-err' : 'pill-warn';
-          const serviceLabel = additionalServiceLabel(s.additionalServiceType) || s.serviceType || '—';
-          const removeCell = locked
-            ? ''
-            : `<td><button type="button" class="btn" data-remove-session="${esc(s.id)}">Remove</button></td>`;
-          return `<tr class="${rowClass}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${esc(serviceLabel)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${flags.length ? `<span class="${pill}">${esc(flags.join('; '))}</span>` : ''}</td><td>${esc(s.notes || '')}</td>${removeCell}</tr>`;
-        }).join('') || `<tr><td colspan="${locked ? 7 : 8}">No sessions yet.</td></tr>`}
-      </table>
-    </div>
-    </div>
+  let priorWeeks = [];
+  if (providerId) {
+    try {
+      const listed = await api('GET', '/weeks');
+      priorWeeks = (listed.weeks || []).filter((w) => w.weekStart !== mondayIso());
+    } catch {
+      priorWeeks = [];
+    }
+  }
+  const pane = state.therapistPane === 'prior' ? 'prior' : 'current';
+  const isPriorPane = pane === 'prior';
 
-    ${locked ? `
-    <div class="card">
-      <p>This week is ${esc(weekApprovalLabel(status).title.toLowerCase())}. You cannot edit it.</p>
-      <button type="button" class="btn" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
-    </div>
-    ` : `
+  const addlForm = `
     <div class="card sec-card">
-      <h2 class="sec"><span class="sec-num">1</span> Upload weekly report</h2>
-      <p>Choose your Frontline Related Service Session Notes PDF (text PDF, not a scan). Children and schools must already exist from caseload import — this upload will not create them.</p>
-      <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
-      <button class="btn-primary big" id="upload">Read PDF</button>
-      <p class="muted" id="uploadHint">This upload is for weekly session notes PDFs only (Frontline text). Caseloads go to Mandates → Import. Scanned PDFs won’t work.</p>
-    </div>
-
-    <div id="uploadIssues" class="upload-issues" hidden></div>
-
-    <div class="card sec-card">
-      <h2 class="sec"><span class="sec-num">2</span> Additional Services</h2>
+      <h2 class="sec"><span class="sec-num">2</span> Additional services</h2>
+      <input type="hidden" id="editSessionId" value="" />
       <div class="row">
         <label>Service type
           <select id="additionalServiceType">
@@ -902,176 +1049,522 @@ async function therapistHome(statusFlash) {
         <label>End time <input id="endTime" placeholder="9:30 am" /></label>
       </div>
       <div class="row">
-        <label id="makeupWrap" hidden>Makeup of missed (optional)
-          <select id="makeupOf"><option value="">None — use makeup auth if needed</option></select>
+        <label>CPT code <input id="cptLabel" placeholder="97110x2" /></label>
+        <label id="makeupWrap" hidden>Makeup for missed session (optional)
+          <select id="makeupOf"><option value="">None — apply makeup authorization if needed</option></select>
         </label>
       </div>
       <label>Notes <textarea id="notes" rows="3"></textarea></label>
       <button type="button" class="btn big" id="add">Save session</button>
+    </div>`;
+
+  view(`
+    <div class="hero-strip" aria-hidden="true"></div>
+    <div class="card">
+      <div class="pane-tabs" id="therapistPaneTabs" role="tablist">
+        <button type="button" class="pane-tab${pane === 'current' ? ' on' : ''}" data-therapist-pane="current" role="tab">This week</button>
+        <button type="button" class="pane-tab${pane === 'prior' ? ' on' : ''}" data-therapist-pane="prior" role="tab">Prior weeks</button>
+      </div>
+      ${isPriorPane ? `
+      <h2>Previously processed sessions</h2>
+      <p class="muted">View-only history. Open a week to review sessions and timesheets. Admins can reopen if edits are needed.</p>
+      <div class="table-wrap"><table>
+        <tr><th>Week</th><th>Status</th><th>Sessions</th><th></th></tr>
+        ${priorWeeks.map((w) => `<tr>
+          <td>${esc(w.weekStart)}</td>
+          <td>${esc(w.status)}</td>
+          <td>${esc(String(w.sessionCount ?? 0))}</td>
+          <td><button type="button" class="btn" data-open-prior-week="${esc(w.weekStart)}">Open</button></td>
+        </tr>`).join('') || '<tr><td colspan="4">No prior weeks yet.</td></tr>'}
+      </table></div>
+      ` : `
+      <h2>My week</h2>
+      ${banner}
+      ${week ? approvalBanner(status) : '<div class="warn-box">Contact the office to complete your therapist profile setup.</div>'}
+      <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${fullyLocked ? ' · view only' : ''}</p>
+      <div class="row">
+        ${schools.length > 1 ? `<button type="button" class="btn" id="changeSchool">Change school</button>` : ''}
+        <button class="btn" id="refreshHome">Reload week</button>
+        ${pending ? `<button type="button" class="btn" id="cancelApproval">Cancel approval request</button>` : ''}
+      </div>
+      `}
+      ${!isPriorPane && errors.length ? `<div class="err-box"><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}</div>` : ''}
+      ${!isPriorPane && warnings.length ? `<div class="warn-box"><strong>Warnings (submission is still allowed).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}</div>` : ''}
+      ${!isPriorPane ? `<p class="muted">Red indicates a blocking issue (over-mandate or note review). Yellow indicates under-mandate or soft warnings only.</p>
+      <div class="table-wrap">
+      <table>
+        <tr><th>Date</th><th>Child</th><th>Service</th><th>CPT</th><th>Time</th><th>Attendance</th><th>Notes</th>${canImport ? '<th></th>' : ''}</tr>
+        ${sessions.map((s) => {
+          const name = studentName(students, s.studentId);
+          const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ');
+          const hard = Boolean(s.aiBlock);
+          const flags = s.aiFlags || [];
+          const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
+          const serviceLabel = additionalServiceLabel(s.additionalServiceType) || s.serviceType || '—';
+          const cpt = s.cptLabel || (s.cptCodes || []).join(', ') || '—';
+          const canEditAddl = canImport && Boolean(s.additionalServiceType);
+          const canRemove = canImport && (!pending || Boolean(s.additionalServiceType));
+          const payload = {
+            id: s.id,
+            studentId: s.studentId,
+            dateOfService: s.dateOfService,
+            beginTime: s.beginTime,
+            endTime: s.endTime,
+            attendance: s.attendance,
+            additionalServiceType: s.additionalServiceType || '',
+            notes: s.notes || '',
+            cptLabel: s.cptLabel || '',
+            makeupOfSessionId: s.makeupOfSessionId || '',
+          };
+          const actions = canImport
+            ? `<td class="row-actions">
+                ${canEditAddl ? `<button type="button" class="icon-btn" data-edit-session="${esc(s.id)}" title="Edit" aria-label="Edit">${pencilIcon()}</button>` : ''}
+                ${canRemove ? `<button type="button" class="btn" data-remove-session="${esc(s.id)}">Remove</button>` : ''}
+              </td>`
+            : '';
+          return `<tr class="${rowClass}" data-session-json="${esc(JSON.stringify(payload))}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${esc(serviceLabel)}</td><td>${esc(cpt)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${esc(s.notes || '')}</td>${actions}</tr>`;
+        }).join('') || `<tr><td colspan="${canImport ? 8 : 7}">No sessions recorded yet.</td></tr>`}
+      </table>
+    </div>` : ''}
     </div>
 
+    ${!isPriorPane && fullyLocked ? `
+    <div class="card">
+      <p>This week is ${esc(weekApprovalLabel(status).title.toLowerCase())} and cannot be edited.</p>
+      <button type="button" class="btn" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
+    </div>
+    ` : !isPriorPane ? `
+    ${pending ? `<div class="warn-box">Approval is pending. You can still import session notes and edit additional services, or cancel the approval request to return to draft.</div>` : ''}
+    <div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">1</span> Import weekly notes</h2>
+      <p>Select a Frontline Related Service Session Notes PDF or a Therapist Activity Output PDF (text-based, not a scan). Children and schools must already exist from caseload import; this upload will not create them. Import is all-or-nothing — any error or yellow warning blocks the whole file.</p>
+      <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
+      <button class="btn-primary big" id="upload">Import</button>
+      <p class="muted" id="uploadHint">Accepts Frontline session-notes or Therapist Activity Output PDFs. Import caseloads under Mandates. Scanned PDFs are not supported.</p>
+    </div>
+
+    <div id="uploadIssues" class="upload-issues" hidden></div>
+
+    ${addlForm}
+
+    ${pending ? `
+    <div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">3</span> Timesheet</h2>
+      <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
+    </div>` : `
     <div class="card sec-card">
       <h2 class="sec"><span class="sec-num">3</span> Send timesheet</h2>
-      <p>We send it to the school signer on file${signerEmail ? `: ${esc(signerName || signerEmail)} &lt;${esc(signerEmail)}&gt;` : ''}.</p>
+      <p>The timesheet is sent to the school signer on file${signerEmail ? `: ${esc(signerName || signerEmail)} &lt;${esc(signerEmail)}&gt;` : ''}.</p>
       <div class="row timesheet-actions">
         <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
-        <button type="button" class="btn-primary big" id="submit" ${canSend ? '' : 'disabled'}>Send timesheet</button>
+        <button type="button" class="btn-primary big${canSend ? '' : ' is-blocked'}" id="submit" title="${esc(sendBlockReason || 'Send timesheet to the school signer')}">Send timesheet</button>
       </div>
-      ${!canSend && !errors.length ? '<p class="muted">Add at least one session before sending.</p>' : ''}
+      <p id="submitHint" class="${canSend ? 'muted' : 'err-inline'}"${canSend ? ' hidden' : ''}>${esc(sendBlockReason || '')}</p>
     </div>
     `}
+    ` : ''}
   `);
 
-  document.getElementById('refreshHome').onclick = () => therapistHome();
+  document.querySelectorAll('[data-therapist-pane]').forEach((btn) => {
+    btn.onclick = () => {
+      state.therapistPane = btn.getAttribute('data-therapist-pane') || 'current';
+      sessionStorage.setItem('tmsTherapistPane', state.therapistPane);
+      if (state.therapistPane === 'current') state.weekStart = mondayIso();
+      therapistHome();
+    };
+  });
+  document.querySelectorAll('[data-open-prior-week]').forEach((btn) => {
+    btn.onclick = () => {
+      state.weekStart = btn.getAttribute('data-open-prior-week') || mondayIso();
+      state.therapistPane = 'current';
+      sessionStorage.setItem('tmsTherapistPane', 'current');
+      therapistHome();
+    };
+  });
+  document.getElementById('refreshHome')?.addEventListener('click', () => therapistHome());
+  document.getElementById('changeSchool')?.addEventListener('click', async () => {
+    await showSchoolPicker(schools, { allowKeep: true });
+  });
+  document.getElementById('cancelApproval')?.addEventListener('click', async () => {
+    if (!state.weekId) return;
+    if (!confirm('Cancel the pending approval request? This voids the DocuSign envelope (if any) and returns the week to draft.')) return;
+    try {
+      const out = await api('POST', `/weeks/${state.weekId}/cancel-approval`);
+      await therapistHome({ success: [out.message || 'Approval cancelled. Week is draft again.'] });
+    } catch (err) {
+      setStatus(err.message, 'error');
+    }
+  });
+
+  const dismissApproval = document.getElementById('dismissApprovalBanner');
+  if (dismissApproval) {
+    dismissApproval.onclick = () => {
+      const bannerEl = dismissApproval.closest('.status-banner');
+      const key = bannerEl?.getAttribute('data-approval-key');
+      if (key) dismissedApprovalBanners.add(key);
+      if (bannerEl) bannerEl.remove();
+    };
+  }
 
   const viewTimesheetBtn = document.getElementById('viewTimesheet');
   if (viewTimesheetBtn) {
     viewTimesheetBtn.onclick = () => {
       openTimesheetModal({
+        weekId: state.weekId || week?.id,
         weekStart: state.weekStart,
         status,
         signerName,
         signerEmail,
-        sessions,
-        students,
+        schoolDistrict: schoolLabel,
       });
     };
   }
 
+  if (isPriorPane) return;
+
   const viewEl = document.getElementById('view');
-  if (locked) {
+  if (!canImport) {
     viewEl.onclick = null;
+    return;
   }
 
-  if (!locked) {
-    bindMakeupPickers();
+  bindMakeupPickers();
 
-    viewEl.onclick = async (e) => {
-      const removeBtn = e.target.closest('[data-remove-session]');
-      if (!removeBtn) return;
-      if (!confirm('Remove this session (including additional services)? This cannot be undone.')) return;
+  viewEl.onclick = async (e) => {
+    const editBtn = e.target.closest('[data-edit-session]');
+    if (editBtn) {
+      const row = editBtn.closest('tr');
+      let raw = {};
       try {
-        await api('DELETE', `/sessions/${removeBtn.getAttribute('data-remove-session')}`);
-        await therapistHome({ success: ['Session removed.'] });
-      } catch (err) {
-        setStatus(err.message, 'error');
+        raw = JSON.parse(row?.getAttribute('data-session-json') || '{}');
+      } catch {
+        raw = {};
       }
-    };
+      document.getElementById('editSessionId').value = raw.id || '';
+      document.getElementById('additionalServiceType').value = raw.additionalServiceType || '';
+      document.getElementById('studentId').value = raw.studentId || '';
+      document.getElementById('dos').value = raw.dateOfService || '';
+      document.getElementById('att').value = raw.attendance || 'attended';
+      document.getElementById('beginTime').value = raw.beginTime || '';
+      document.getElementById('endTime').value = raw.endTime || '';
+      document.getElementById('cptLabel').value = raw.cptLabel || '';
+      document.getElementById('notes').value = raw.notes || '';
+      bindMakeupPickers();
+      if (raw.makeupOfSessionId) {
+        await loadMissedOptions(raw.studentId, raw.makeupOfSessionId);
+      }
+      document.getElementById('add').textContent = 'Update session';
+      document.getElementById('additionalServiceType')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    const removeBtn = e.target.closest('[data-remove-session]');
+    if (!removeBtn) return;
+    if (!confirm('Remove this session, including any additional services? This cannot be undone.')) return;
+    try {
+      await api('DELETE', `/sessions/${removeBtn.getAttribute('data-remove-session')}`);
+      await therapistHome({ success: ['Session removed.'] });
+    } catch (err) {
+      setStatus(err.message, 'error');
+    }
+  };
 
-    document.getElementById('upload').onclick = async () => {
-      const btn = document.getElementById('upload');
-      try {
-        const file = document.getElementById('pdfFile').files[0];
-        if (!file) throw apiError('Choose your notes PDF first.', { errors: ['Choose your notes PDF first.'] });
-        if (!providerId) {
-          throw apiError('Your provider profile is not linked yet. Ask the office for help.', {
-            errors: ['Your provider profile is not linked yet. Ask the office for help.'],
-          });
-        }
-        btn.disabled = true;
-        btn.textContent = 'Reading…';
-        setUploadIssues([], []);
-        setStatus('Reading PDF…', '');
-        const pdfBase64 = await fileToBase64(file);
-        const out = await api('POST', '/week/upload-sessions', {
+  document.getElementById('upload').onclick = async () => {
+    const btn = document.getElementById('upload');
+    try {
+      const file = document.getElementById('pdfFile').files[0];
+      if (!file) throw apiError('Select a notes PDF first.', { errors: ['Select a notes PDF first.'] });
+      if (!providerId) {
+        throw apiError('Your provider profile is not linked yet. Contact the office for assistance.', {
+          errors: ['Your provider profile is not linked yet. Contact the office for assistance.'],
+        });
+      }
+      btn.disabled = true;
+      btn.textContent = 'Importing…';
+      setUploadIssues([], [], []);
+      setStatus('Importing PDF…', '');
+      const pdfBase64 = await fileToBase64(file);
+      const out = await api('POST', '/week/upload-sessions', {
+        weekStart: state.weekStart,
+        providerId,
+        pdfBase64,
+      });
+      state.weekId = out.week.id;
+      const warnList = Array.isArray(out.warnings) ? out.warnings : [];
+      const failedList = Array.isArray(out.failed)
+        ? out.failed.map((f) => (typeof f === 'string' ? f : f.error || JSON.stringify(f)))
+        : Array.isArray(out.errors)
+          ? out.errors
+          : [];
+      const savedList = Array.isArray(out.saved)
+        ? out.saved.map((s) => {
+            if (typeof s === 'string') return s;
+            const who = s.studentName || 'Session';
+            const slot = [s.dateOfService, s.beginTime && s.endTime ? `${s.beginTime}–${s.endTime}` : '']
+              .filter(Boolean)
+              .join(' ');
+            return `${who}${slot ? ` — ${slot}` : ''}`;
+          })
+        : [];
+      const skippedN = Number(out.skippedCount || (out.skipped || []).length || 0);
+      const importedN = Number(out.imported != null ? out.imported : savedList.length);
+      const successMsgs = [];
+      if (importedN > 0) successMsgs.push(`Imported ${importedN} session(s).`);
+      if (skippedN > 0) successMsgs.push(`Skipped ${skippedN} already saved session(s).`);
+      if (!successMsgs.length && !failedList.length) {
+        successMsgs.push(`Imported ${out.parsed || 0} session(s).`);
+      }
+      if (failedList.length) successMsgs.length = 0;
+      await therapistHome({
+        success: successMsgs,
+        error: failedList,
+        warn: warnList,
+      });
+      setUploadIssues(failedList, warnList, failedList.length ? [] : savedList);
+    } catch (e) {
+      const errs = Array.isArray(e.errors) && e.errors.length
+        ? e.errors
+        : [e.message || 'Unable to import this PDF.'];
+      const warns = Array.isArray(e.warnings) ? e.warnings : [];
+      setUploadIssues(errs, warns);
+      setStatus({
+        error: errs.length ? errs : ['Import blocked — see details below.'],
+        warn: warns,
+      });
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Import';
+      }
+    }
+  };
+
+  document.getElementById('add').onclick = async () => {
+    const btn = document.getElementById('add');
+    try {
+      if (!state.weekId) {
+        if (!providerId) throw new Error('This week is not open yet. Contact the office to complete your provider profile.');
+        const ensured = await api('POST', '/week/ensure', {
           weekStart: state.weekStart,
           providerId,
-          pdfBase64,
+          schoolId: state.selectedSchoolId || undefined,
         });
-        state.weekId = out.week.id;
-        const warnList = Array.isArray(out.warnings) ? out.warnings : [];
-        await therapistHome({
-          success: [`Loaded ${out.parsed} session(s).`],
-          warn: warnList,
-        });
-        if (warnList.length) setUploadIssues([], warnList);
+        state.weekId = ensured.week?.id || '';
+      }
+      if (!state.weekId) throw new Error('This week is not open yet. Contact the office for assistance.');
+      const additionalServiceType = document.getElementById('additionalServiceType').value;
+      const studentId = document.getElementById('studentId').value;
+      const dateOfService = document.getElementById('dos').value.trim();
+      const notes = document.getElementById('notes').value.trim();
+      const editId = document.getElementById('editSessionId').value.trim();
+      if (!additionalServiceType) throw new Error('Select a service type.');
+      if (!studentId) throw new Error('Select a student.');
+      if (!dateOfService) throw new Error('Enter the date of service.');
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+      await api('POST', '/week/sessions', {
+        id: editId || undefined,
+        weekId: state.weekId,
+        studentId,
+        dateOfService,
+        beginTime: document.getElementById('beginTime').value,
+        endTime: document.getElementById('endTime').value,
+        attendance: document.getElementById('att').value,
+        makeupOfSessionId: document.getElementById('makeupOf').value,
+        additionalServiceType,
+        cptLabel: document.getElementById('cptLabel').value.trim(),
+        notes,
+      });
+      await therapistHome({ success: [editId ? 'Session updated.' : 'Session saved.'] });
+    } catch (e) {
+      const errs = Array.isArray(e.errors) && e.errors.length ? e.errors : [e.message];
+      const warns = Array.isArray(e.warnings) ? e.warnings : [];
+      setStatus({ error: errs, warn: warns });
+      btn.disabled = false;
+      btn.textContent = document.getElementById('editSessionId')?.value ? 'Update session' : 'Save session';
+    }
+  };
+
+  const submitBtn = document.getElementById('submit');
+  if (submitBtn) {
+    submitBtn.onclick = async () => {
+      const hint = document.getElementById('submitHint');
+      const blockNow = timesheetSendBlockReason({
+        week,
+        sessions,
+        locked: false,
+        errors,
+        signerEmail,
+      });
+      if (blockNow) {
+        if (hint) {
+          hint.hidden = false;
+          hint.className = 'err-inline';
+          hint.textContent = blockNow;
+        }
+        setStatus({ error: [blockNow] });
+        showActionToast(blockNow, 'error');
+        revealStatus();
+        return;
+      }
+      const prevLabel = submitBtn.textContent;
+      try {
+        if (!state.weekId) throw new Error('Add at least one session first.');
+        if (!signerEmail) throw new Error('No school signer is on file. Contact the office to assign a signer.');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Sending…';
+        if (hint) {
+          hint.hidden = false;
+          hint.className = 'muted';
+          hint.textContent = 'Sending timesheet — this can take up to a minute (note review + email)…';
+        }
+        setStatus('Sending timesheet…', '');
+        showActionToast(
+          'Sending timesheet… note review can take up to a minute.',
+          'neutral',
+          { sticky: true },
+        );
+        revealStatus();
+        const out = await api(
+          'POST',
+          `/weeks/${state.weekId}/submit`,
+          { signerName, signerEmail, schoolId: state.selectedSchoolId || undefined },
+          { timeoutMs: 120000 },
+        );
+        state.last = out;
+        const okMsg = out.message || 'Submitted. Status is now Pending.';
+        showActionToast(okMsg, 'success');
+        await therapistHome({ success: [okMsg] });
+        revealStatus();
       } catch (e) {
         const errs = Array.isArray(e.errors) && e.errors.length
           ? e.errors
-          : [e.message || 'Could not read this PDF.'];
-        const warns = Array.isArray(e.warnings) ? e.warnings : [];
-        setUploadIssues(errs, warns);
-        setStatus({
-          error: errs.length
-            ? errs
-            : ['Upload blocked — see details below.'],
-          warn: warns,
-        });
-        if (btn) {
-          btn.disabled = false;
-          btn.textContent = 'Read PDF';
-        }
-      }
-    };
-
-    document.getElementById('add').onclick = async () => {
-      const btn = document.getElementById('add');
-      try {
-        if (!state.weekId) {
-          if (!providerId) throw new Error('Your week is not open yet. Ask the office to finish your provider profile.');
-          const ensured = await api('POST', '/week/ensure', { weekStart: state.weekStart, providerId });
-          state.weekId = ensured.week?.id || '';
-        }
-        if (!state.weekId) throw new Error('Your week is not open yet. Ask the office for help.');
-        const additionalServiceType = document.getElementById('additionalServiceType').value;
-        const studentId = document.getElementById('studentId').value;
-        const dateOfService = document.getElementById('dos').value.trim();
-        const notes = document.getElementById('notes').value.trim();
-        if (!additionalServiceType) throw new Error('Pick a service type.');
-        if (!studentId) throw new Error('Pick a student.');
-        if (!dateOfService) throw new Error('Enter the date of service.');
-        btn.disabled = true;
-        btn.textContent = 'Saving…';
-        await api('POST', '/week/sessions', {
-          weekId: state.weekId,
-          studentId,
-          dateOfService,
-          beginTime: document.getElementById('beginTime').value,
-          endTime: document.getElementById('endTime').value,
-          attendance: document.getElementById('att').value,
-          makeupOfSessionId: document.getElementById('makeupOf').value,
-          additionalServiceType,
-          notes,
-        });
-        await therapistHome({ success: ['Session saved.'] });
-      } catch (e) {
-        const errs = Array.isArray(e.errors) && e.errors.length ? e.errors : [e.message];
+          : [e.message || 'Unable to send timesheet.'];
         const warns = Array.isArray(e.warnings) ? e.warnings : [];
         setStatus({ error: errs, warn: warns });
-        btn.disabled = false;
-        btn.textContent = 'Save session';
-      }
-    };
-
-    document.getElementById('submit').onclick = async () => {
-      try {
-        if (!state.weekId) throw new Error('Add sessions first.');
-        if (!signerEmail) throw new Error('No school signer on file. Ask the office to set the signer.');
-        const out = await api('POST', `/weeks/${state.weekId}/submit`, {
-          signerName,
-          signerEmail,
-        });
-        state.last = out;
-        await therapistHome({
-          success: [out.message || 'Sent. Status is now Pending.'],
-        });
-      } catch (e) {
-        const errs = Array.isArray(e.errors) && e.errors.length ? e.errors : [e.message];
-        const warns = Array.isArray(e.warnings) ? e.warnings : [];
-        setStatus({ error: errs, warn: warns });
+        if (hint) {
+          hint.hidden = false;
+          hint.className = 'err-inline';
+          hint.textContent = errs[0] || 'Unable to send timesheet.';
+        }
+        showActionToast(errs[0] || 'Unable to send timesheet.', 'error');
+        revealStatus();
+        submitBtn.disabled = false;
+        submitBtn.textContent = prevLabel || 'Send timesheet';
       }
     };
   }
 }
 
+function pencilIcon() {
+  return `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm17.71-10.04a1.003 1.003 0 0 0 0-1.42l-2.5-2.5a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.999-1.66z"/></svg>`;
+}
+
+async function showSchoolPicker(schools, opts = {}) {
+  view(`
+    <div class="hero-strip" aria-hidden="true"></div>
+    <div class="card school-picker-card">
+      <h2>Select your school</h2>
+      <p class="muted">Choose the school for this session. Your caseload and timesheet will be filtered to that school.</p>
+      <div class="school-picker-grid">
+        ${(schools || []).map((s) => `
+          <button type="button" class="school-pick-btn" data-school-id="${esc(s.id)}">
+            <strong>${esc(s.name || 'School')}</strong>
+            ${s.district ? `<span class="muted">${esc(s.district)}</span>` : ''}
+          </button>
+        `).join('') || '<p class="muted">No schools on your caseload yet. Contact the office.</p>'}
+      </div>
+      ${opts.allowKeep && state.selectedSchoolId ? `<p><button type="button" class="btn" id="keepSchool">Keep current school</button></p>` : ''}
+    </div>
+  `);
+  document.querySelectorAll('[data-school-id]').forEach((btn) => {
+    btn.onclick = async () => {
+      state.selectedSchoolId = btn.getAttribute('data-school-id') || '';
+      sessionStorage.setItem('tmsSchoolId', state.selectedSchoolId);
+      await therapistHome();
+    };
+  });
+  document.getElementById('keepSchool')?.addEventListener('click', () => therapistHome());
+}
+
+
+function hhaStatusCell(w) {
+  const status = String(w.hhaStatus || 'none');
+  if (status === 'failed') {
+    const reason = String(w.hhaError || '').trim() || 'HHA transfer failed (no detail stored). Use Send to HHA after fixing data.';
+    const tip = 'HHA failed — click for details';
+    return `<button type="button" class="triage-badge" data-triage-week="${esc(w.id)}" data-triage-error="${esc(reason)}" title="${tip}" aria-label="${tip}"><svg class="triage-warn-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg></button>`;
+  }
+  return esc(status);
+}
+
+function showTriageDetail(errorText, weekId) {
+  closeTimesheetModal();
+  const existing = document.getElementById('triageModal');
+  if (existing) existing.remove();
+  const backdrop = document.createElement('div');
+  backdrop.id = 'triageModal';
+  backdrop.className = 'modal-backdrop';
+  backdrop.setAttribute('role', 'dialog');
+  backdrop.setAttribute('aria-modal', 'true');
+  backdrop.setAttribute('aria-label', 'HHA triage');
+  const lines = String(errorText || '')
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const retryBtn = weekId
+    ? `<button type="button" class="btn-primary" data-triage-hha="${esc(weekId)}">Send to HHA (retry)</button>`
+    : '';
+  backdrop.innerHTML = `
+    <div class="modal-panel">
+      <div class="modal-head">
+        <h2>HHA Triage</h2>
+        <div class="modal-actions">
+          ${retryBtn}
+          <button type="button" class="btn" data-close-triage>Close</button>
+        </div>
+      </div>
+      <p class="muted">Exact failure reason from the last HHA transfer. Fix the data, then use <strong>Send to HHA</strong> to retry.</p>
+      <div class="err-box triage-detail">${lines.map((l) => esc(l)).join('<br>') || 'No error detail available.'}</div>
+    </div>
+  `;
+  backdrop.addEventListener('click', async (e) => {
+    if (e.target === backdrop || e.target.closest('[data-close-triage]')) {
+      backdrop.remove();
+      return;
+    }
+    const retry = e.target.closest('[data-triage-hha]');
+    if (retry) {
+      const id = retry.getAttribute('data-triage-hha');
+      backdrop.remove();
+      if (!id) return;
+      try {
+        await api('POST', `/weeks/${id}/hha`);
+        setStatus('Sent to HHA.', 'ok');
+        await adminDash();
+      } catch (err) {
+        setStatus(err.message || 'HHA transfer failed.', 'err');
+      }
+    }
+  });
+  document.body.appendChild(backdrop);
+}
+
 async function adminDash() {
-  const d = await api('GET', '/dashboard');
-  const listed = await api('GET', '/admin/weeks');
-  const weeks = listed.weeks || [];
+  let d = { timesheet: { draft: 0, submitted: 0, signed: 0, locked: 0 }, hha: { pending: 0, confirmed: 0, failed: 0 } };
+  let weeks = [];
+  try {
+    d = await api('GET', '/dashboard');
+  } catch (err) {
+    console.warn('dashboard load failed', err);
+  }
+  try {
+    const listed = await api('GET', '/admin/weeks');
+    weeks = Array.isArray(listed?.weeks) ? listed.weeks : [];
+  } catch (err) {
+    console.warn('admin weeks load failed', err);
+    weeks = [];
+  }
   const weekActions = (w) => {
     const status = w.status || 'draft';
-    const sessions = Number(w.sessionCount) || 0;
-    const canSign = status === 'submitted' && sessions > 0;
     const canReopen = status === 'signed' || status === 'locked';
     const canHha = status === 'signed' || status === 'locked';
     const parts = [];
@@ -1081,30 +1574,49 @@ async function adminDash() {
     // Remove so it stays visible even when the actions cell is narrow.
     parts.push(`<button type="button" class="btn" data-remove-week="${esc(w.id)}" data-week-status="${esc(status)}">Remove</button>`);
     if (status === 'submitted') {
-      parts.push(
-        canSign
-          ? `<button type="button" class="btn-primary" data-sign="${esc(w.id)}">Sign</button>`
-          : `<button type="button" class="btn-primary" disabled title="Week needs at least one session before it can be signed.">Sign</button>`,
-      );
+      parts.push(`<span class="muted">Awaiting DocuSign</span>`);
     }
     if (canReopen) {
       parts.push(`<button type="button" class="btn" data-reopen="${esc(w.id)}">Reopen</button>`);
     }
     if (canHha) {
-      parts.push(`<button type="button" class="btn" data-hha="${esc(w.id)}">Send to HHA</button>`);
+      const failed = String(w.hhaStatus || '') === 'failed';
+      parts.push(
+        `<button type="button" class="btn${failed ? '-primary' : ''}" data-hha="${esc(w.id)}" title="${failed ? 'Retry HHA transfer after fixing the error' : 'Send week to HHA'}">${failed ? 'Retry HHA' : 'Send to HHA'}</button>`,
+      );
     }
     if (status === 'draft') {
-      parts.push(`<span class="muted">Waiting for therapist to submit</span>`);
+      parts.push(`<span class="muted">Awaiting therapist submission</span>`);
     } else if (status === 'reopened') {
-      parts.push(`<span class="muted">Waiting for therapist to resubmit</span>`);
+      parts.push(`<span class="muted">Awaiting therapist resubmission</span>`);
     }
     return parts.join(' ') || '<span class="muted">—</span>';
   };
   view(`
+    <div class="hero-strip" aria-hidden="true"></div>
     <div class="card">
       <h2>Dashboard</h2>
-      <p>Timesheets — draft ${d.timesheet.draft} · submitted ${d.timesheet.submitted} · signed ${d.timesheet.signed} · locked ${d.timesheet.locked}</p>
-      <p>HHA — pending ${d.hha.pending} · confirmed ${d.hha.confirmed} · failed ${d.hha.failed}</p>
+      <p>Timesheets — draft ${d?.timesheet?.draft ?? 0} · submitted ${d?.timesheet?.submitted ?? 0} · signed ${d?.timesheet?.signed ?? 0} · locked ${d?.timesheet?.locked ?? 0}</p>
+      <p>HHA — pending ${d?.hha?.pending ?? 0} · confirmed ${d?.hha?.confirmed ?? 0} · failed ${d?.hha?.failed ?? 0}</p>
+    </div>
+    <div class="card">
+      <h2>14-day session import locker</h2>
+      <p class="muted">When enabled, providers cannot import or add sessions older than the max age. Unlock a week or provider below to grant an exception.</p>
+      <div class="row">
+        <label>Rule enabled
+          <select id="ageLockEnabled">
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+          </select>
+        </label>
+        <label>Max age (days) <input id="ageLockDays" type="number" min="1" step="1" value="14" /></label>
+      </div>
+      <div class="row">
+        <label>Unlocked week IDs (comma-separated) <input id="ageUnlockWeeks" placeholder="week-uuid, …" /></label>
+        <label>Unlocked provider IDs (comma-separated) <input id="ageUnlockProviders" placeholder="provider-uuid, …" /></label>
+      </div>
+      <button type="button" class="btn-primary" id="saveAgeLock">Save locker settings</button>
+      <p class="muted" id="ageLockStatus"></p>
     </div>
     <div class="card">
       <h2>Weeks</h2>
@@ -1112,20 +1624,61 @@ async function adminDash() {
       <div class="table-wrap">
       <table>
         <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
-        ${weeks.map((w) => `<tr>
+        ${weeks.map((w) => `<tr data-week-row="${esc(w.id)}" class="${String(w.hhaStatus) === 'failed' ? 'hha-failed-row' : ''}">
           ${bulkTd('weeks', w.id)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.providerName || '—')}</td>
           <td>${esc(w.sessionCount)}</td>
           <td>${esc(w.status)}</td>
           <td>${esc(w.signerName || w.signerEmail || '—')}</td>
-          <td>${esc(w.hhaStatus)}</td>
+          <td>${hhaStatusCell(w)}</td>
           <td class="week-actions">${weekActions(w)}</td>
         </tr>`).join('') || `<tr><td colspan="8">No weeks yet.</td></tr>`}
       </table>
       </div>
     </div>
   `);
+  // Load 14-day locker settings
+  (async () => {
+    try {
+      const out = await api('GET', '/admin/settings');
+      const s = out.settings || {};
+      const en = document.getElementById('ageLockEnabled');
+      const days = document.getElementById('ageLockDays');
+      const weeks = document.getElementById('ageUnlockWeeks');
+      const providers = document.getElementById('ageUnlockProviders');
+      if (en) en.value = s.sessionImportAgeLockEnabled === false ? 'false' : 'true';
+      if (days) days.value = String(s.sessionImportMaxAgeDays || 14);
+      if (weeks) weeks.value = (s.unlockedWeekIds || []).join(', ');
+      if (providers) providers.value = (s.unlockedProviderIds || []).join(', ');
+    } catch {
+      /* ignore */
+    }
+  })();
+  document.getElementById('saveAgeLock')?.addEventListener('click', async () => {
+    const statusEl = document.getElementById('ageLockStatus');
+    try {
+      const splitIds = (raw) =>
+        String(raw || '')
+          .split(/[,;\s]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+      const out = await api('POST', '/admin/settings', {
+        sessionImportAgeLockEnabled: document.getElementById('ageLockEnabled').value === 'true',
+        sessionImportMaxAgeDays: Number(document.getElementById('ageLockDays').value) || 14,
+        unlockedWeekIds: splitIds(document.getElementById('ageUnlockWeeks').value),
+        unlockedProviderIds: splitIds(document.getElementById('ageUnlockProviders').value),
+      });
+      if (statusEl) statusEl.textContent = 'Locker settings saved.';
+      setStatus('14-day locker settings saved.', 'ok');
+      const s = out.settings || {};
+      document.getElementById('ageUnlockWeeks').value = (s.unlockedWeekIds || []).join(', ');
+      document.getElementById('ageUnlockProviders').value = (s.unlockedProviderIds || []).join(', ');
+    } catch (err) {
+      if (statusEl) statusEl.textContent = err.message || 'Save failed.';
+      setStatus(err.message || 'Unable to save locker settings.', 'err');
+    }
+  });
   bindBulkDelete('weeks', {
     noun: 'weeks',
     deleteOne: (id) => api('DELETE', `/admin/weeks/${id}`),
@@ -1133,13 +1686,14 @@ async function adminDash() {
   });
   document.getElementById('view').onclick = async (e) => {
     const viewTs = e.target.closest('[data-view-timesheet]');
-    const sign = e.target.closest('[data-sign]');
+    const triage = e.target.closest('[data-triage-week]');
     const reopen = e.target.closest('[data-reopen]');
     const hha = e.target.closest('[data-hha]');
     const removeWeek = e.target.closest('[data-remove-week]');
     try {
       if (viewTs) {
         await fetchAndShowTimesheet({
+          weekId: viewTs.getAttribute('data-view-timesheet') || '',
           weekStart: viewTs.getAttribute('data-week-start') || '',
           providerId: viewTs.getAttribute('data-provider-id') || '',
           providerName: viewTs.getAttribute('data-provider-name') || '',
@@ -1147,23 +1701,24 @@ async function adminDash() {
         });
         return;
       }
-      if (sign) {
-        const out = await api('POST', `/admin/weeks/${sign.getAttribute('data-sign')}/sign`, {});
-        setStatus(out.therapistMessage || 'Success. This week is signed and locked. You will be paid.', 'ok');
-        await adminDash();
+      if (triage) {
+        showTriageDetail(
+          triage.getAttribute('data-triage-error') || '',
+          triage.getAttribute('data-triage-week') || '',
+        );
         return;
       }
       if (reopen) {
         await api('POST', `/admin/weeks/${reopen.getAttribute('data-reopen')}/reopen`, {});
-        setStatus('Week reopened.', 'ok');
+        setStatus('Week reopened for revision.', 'ok');
         await adminDash();
         return;
       }
       if (hha) {
         const out = await api('POST', `/weeks/${hha.getAttribute('data-hha')}/hha`, {});
         setStatus({
-          success: [`HHA transferred ${out.transferred}.`],
-          error: out.ok ? [] : out.errors?.length ? out.errors : ['HHA transfer had errors.'],
+          success: [`HHA transfer completed: ${out.transferred}.`],
+          error: out.ok ? [] : out.errors?.length ? out.errors : ['HHA transfer completed with errors.'],
           warn: out.ok && out.errors?.length ? out.errors : [],
         });
         await adminDash();
@@ -1180,6 +1735,28 @@ async function adminDash() {
       setStatus(err.message, 'err');
     }
   };
+
+  // Deep link from HHA error digest email: ?hhaWeek=<weekId>
+  const focusWeek = new URLSearchParams(location.search).get('hhaWeek');
+  if (focusWeek) {
+    const row = document.querySelector(`[data-week-row="${CSS.escape(focusWeek)}"]`);
+    if (row) {
+      row.classList.add('hha-focus-row');
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const triage = row.querySelector('[data-triage-week]');
+      if (triage) {
+        showTriageDetail(
+          triage.getAttribute('data-triage-error') || '',
+          triage.getAttribute('data-triage-week') || focusWeek,
+        );
+      }
+    } else {
+      setStatus('Linked week not found on the dashboard (may already be fixed or removed).', 'warn');
+    }
+    const url = new URL(location.href);
+    url.searchParams.delete('hhaWeek');
+    history.replaceState({}, '', url.pathname + url.search + url.hash);
+  }
 }
 
 async function adminChildren() {
@@ -1188,7 +1765,8 @@ async function adminChildren() {
   view(`
     <div class="card">
       <h2>Children</h2>
-      <p class="muted">All students on the caseload. Open one to edit, review mandates/sessions, or remove.</p>
+      <p class="muted">All students on the caseload. Open a record to edit details, review mandates and sessions, or remove.</p>
+      <div id="listLetterTabs" class="letter-tabs-host"></div>
       <label>Search
         <input id="childSearch" type="search" placeholder="First, last, school, program type, ID, grade…" autocomplete="off" />
       </label>
@@ -1209,7 +1787,7 @@ async function adminChildren() {
             <button type="button" class="btn" data-open-child="${esc(s.id)}">Open</button>
             <button type="button" class="btn" data-del-child="${esc(s.id)}">Remove</button>
           </td>
-        </tr>`).join('') || '<tr id="childrenEmpty"><td colspan="8">No children yet. Import a caseload on Mandates.</td></tr>'}
+        </tr>`).join('') || '<tr id="childrenEmpty"><td colspan="8">No children on file. Import a caseload under Mandates.</td></tr>'}
         </tbody>
       </table>
       <p class="muted" id="childrenFilterEmpty" hidden>No children match this search.</p>
@@ -1222,13 +1800,19 @@ async function adminChildren() {
     let shown = 0;
     document.querySelectorAll('[data-child-row]').forEach((row) => {
       const hay = row.getAttribute('data-search') || '';
-      const ok = !q || hay.includes(q) || q.split(/\s+/).every((t) => hay.includes(t));
+      const okSearch = !q || hay.includes(q) || q.split(/\s+/).every((t) => hay.includes(t));
+      const okLetter = !q && alphaLetterFromName(hay) === state.listTabLetter;
+      const ok = okSearch && (q ? true : okLetter);
       row.hidden = !ok;
       if (ok) shown += 1;
     });
     if (filterEmpty) filterEmpty.hidden = shown > 0 || !q;
   };
   if (searchEl) searchEl.addEventListener('input', applyChildFilter);
+  bindLetterTabs(
+    () => document.querySelectorAll('[data-child-row]'),
+    (row) => row.getAttribute('data-search') || '',
+  );
   bindOpenChildLinks();
   bindBulkDelete('children', {
     noun: 'children',
@@ -1266,13 +1850,18 @@ async function adminChildDetail(studentId, opts = {}) {
   const calSummary = detail.schoolCalendarSummary || formatCalendarSummary(cal);
   const calendarLine = calSummary
     ? `<p class="muted"><strong>Calendar:</strong> ${esc(calSummary)}${(cal?.offDays || []).length ? ` — off: ${esc((cal.offDays || []).slice().sort().join(', '))}` : ''}</p>`
-    : '<p class="muted"><strong>Calendar:</strong> Not set (Schools → open school)</p>';
+    : '<p class="muted"><strong>Calendar:</strong> Not set (open the school under Schools)</p>';
+  // Only show providers that have a real providerId (never name-only / unmatched text).
   const assignedProviders = detail.assignedProviders?.length
-    ? detail.assignedProviders
-    : [...new Map(mandates.filter((m) => m.providerId || m.providerName).map((m) => [
-      m.providerId || m.providerName,
-      { id: m.providerId || '', name: m.providerName || m.providerId || '—' },
-    ])).values()];
+    ? detail.assignedProviders.filter((p) => String(p.id || '').trim())
+    : [...new Map(
+      mandates
+        .filter((m) => String(m.providerId || '').trim())
+        .map((m) => [
+          m.providerId,
+          { id: m.providerId, name: m.providerName && m.providerName !== '—' ? m.providerName : m.providerId },
+        ]),
+    ).values()];
   const backLabel = state.childDetailBack === 'reports' ? '← Reports' : '← Children';
   const sessFrom = state.childSessionFrom || '';
   const sessTo = state.childSessionTo || '';
@@ -1305,7 +1894,7 @@ async function adminChildDetail(studentId, opts = {}) {
       </div>
       <div class="row">
         <label>DOB <input id="cDob" value="${esc(s.dob || '')}" placeholder="YYYY-MM-DD" />
-          <span class="muted" style="display:block;font-size:0.85rem">Optional now; recommended for HHA transfer later.</span>
+          <span class="muted" style="display:block;font-size:0.85rem">Optional now; recommended before HHA transfer.</span>
         </label>
         <label>HHA patient id <input id="cHha" value="${esc(s.hhaPatientId || '')}" /></label>
       </div>
@@ -1335,7 +1924,7 @@ async function adminChildDetail(studentId, opts = {}) {
           <td>${providerNameLink(m.providerId, m.providerName || '—')}</td>
           <td><button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete</button></td>
         </tr>`;
-        }).join('') || '<tr><td colspan="9">No mandates.</td></tr>'}
+        }).join('') || '<tr><td colspan="9">No mandates on file.</td></tr>'}
       </table>
     </div>
     <div class="card">
@@ -1357,7 +1946,7 @@ async function adminChildDetail(studentId, opts = {}) {
           <td>${esc(x.attendance)}</td>
           <td>${esc(x.notes || '')}</td>
           <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="7">No sessions in this range.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
       </table>
     </div>
     <div class="card">
@@ -1370,14 +1959,14 @@ async function adminChildDetail(studentId, opts = {}) {
           ${bulkTd('child-weeks', w.id)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.status)}</td>
-          <td>${esc(w.hhaStatus)}</td>
+          <td>${hhaStatusCell(w)}</td>
           <td><button type="button" class="btn" data-del-week="${esc(w.id)}" data-week-status="${esc(w.status || '')}">Remove</button></td>
         </tr>`).join('') || '<tr><td colspan="5">None.</td></tr>'}
       </table>
     </div>
     <div class="card">
-      <h3>Progress report due dates</h3>
-      <p class="muted">School-level progress / annual / reeval due dates for this child’s school.</p>
+      <h3>Progress-report due dates</h3>
+      <p class="muted">School-level progress, annual, and reevaluation due dates for this child’s school.</p>
       ${bulkBar('child-dues')}
       <table>
         <tr>${bulkTh('child-dues')}<th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
@@ -1392,7 +1981,7 @@ async function adminChildDetail(studentId, opts = {}) {
     </div>
     <div class="card">
       <h3 title="Uploaded PDFs and documents kept with this child">Student files</h3>
-      <p class="muted">Uploaded documents kept with this child (timesheets, notes PDFs, etc.).</p>
+      <p class="muted">Documents stored with this child (timesheets, notes PDFs, and related files).</p>
       ${bulkBar('child-files')}
       <table>
         <tr>${bulkTh('child-files')}<th>Label</th><th>Kind</th><th>When</th><th></th></tr>
@@ -1402,7 +1991,7 @@ async function adminChildDetail(studentId, opts = {}) {
           <td>${esc(f.kind || '—')}</td>
           <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
           <td><button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="5">No files.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="5">No files on file.</td></tr>'}
       </table>
     </div>
   `);
@@ -1512,10 +2101,15 @@ async function adminChildDetail(studentId, opts = {}) {
       } catch (e) { setStatus(e.message, 'err'); }
     });
   });
+  document.querySelectorAll('[data-triage-week]').forEach((btn) => {
+    btn.addEventListener('click', () =>
+      showTriageDetail(btn.getAttribute('data-triage-error') || '', btn.getAttribute('data-triage-week') || ''),
+    );
+  });
   document.querySelectorAll('[data-del-due]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        if (!confirm('Remove this progress report due date? Alerts for it will stop. This cannot be undone.')) return;
+        if (!confirm('Remove this progress-report due date? Related alerts will stop. This cannot be undone.')) return;
         await api('DELETE', `/admin/due-dates/${btn.getAttribute('data-del-due')}`);
         setStatus('Due date removed.', 'ok');
         await adminChildDetail(studentId, { backTo: state.childDetailBack });
@@ -1537,8 +2131,8 @@ async function adminProviderDetail(providerId) {
     <div class="card">
       <button type="button" class="btn" id="backProviders">← Providers</button>
       <h2>${esc(`${p.firstName || ''} ${p.lastName || ''}`.trim() || 'Provider')}</h2>
-      <p class="muted">Linked login: ${esc(user?.email || '—')} · Cognito: ${esc(user?.cognitoSub || '—')}</p>
-      ${detail.redirectedFromProviderId ? `<p class="muted">Caseload from a duplicate profile was merged onto this linked provider.</p>` : ''}
+      <p class="muted">Linked account: ${esc(user?.email || '—')} · Cognito: ${esc(user?.cognitoSub || '—')}</p>
+      ${detail.redirectedFromProviderId ? `<p class="muted">Caseload from a duplicate profile was merged into this linked provider.</p>` : ''}
       <div class="row">
         <label>First name <input id="pFirst" value="${esc(p.firstName || '')}" /></label>
         <label>Last name <input id="pLast" value="${esc(p.lastName || '')}" /></label>
@@ -1566,7 +2160,7 @@ async function adminProviderDetail(providerId) {
     </div>
     <div class="card">
       <h3>Caseload (${esc(detail.caseloadCount || 0)} children)</h3>
-      <p class="muted">From this provider’s mandates (a child can appear under more than one provider).</p>
+      <p class="muted">Drawn from this provider’s mandates (a child may appear under more than one provider).</p>
       ${bulkBar('prov-mandates')}
       <table>
         <tr>${bulkTh('prov-mandates')}<th>Child</th><th>Service</th><th>Group size</th><th>Duration</th><th>Freq</th><th></th></tr>
@@ -1590,7 +2184,7 @@ async function adminProviderDetail(providerId) {
           ${bulkTd('prov-weeks', w.id)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.status)}</td>
-          <td>${esc(w.hhaStatus)}</td>
+          <td>${hhaStatusCell(w)}</td>
           <td><button type="button" class="btn" data-del-week="${esc(w.id)}" data-week-status="${esc(w.status || '')}">Remove</button></td>
         </tr>`).join('') || '<tr><td colspan="5">No weeks yet.</td></tr>'}
       </table>
@@ -1605,7 +2199,7 @@ async function adminProviderDetail(providerId) {
     </div>
     <div class="card">
       <h3>Additional services</h3>
-      <p class="muted">Same kinds as therapist login, including paid absence.</p>
+      <p class="muted">Same service types as the therapist workspace, including paid absence.</p>
       <div class="row">
         <label>Service type
           <select id="pAddlType">
@@ -1627,13 +2221,15 @@ async function adminProviderDetail(providerId) {
         </label>
       </div>
       <label>Notes <textarea id="pAddlNotes" rows="2"></textarea></label>
+      <label>CPT code <input id="pAddlCpt" placeholder="97110x2" /></label>
       <button type="button" class="btn" id="pAddlSave">Save additional service</button>
     </div>
     <div class="card">
-      <h3>Uploaded reports</h3>
+      <h3>Upload reports</h3>
+      <p class="muted">Admins can upload provider reports and documents here.</p>
       <input id="pReportFile" type="file" />
       <label>Label <input id="pReportLabel" placeholder="IEP / progress / other" /></label>
-      <button type="button" class="btn" id="pUploadReport">Upload</button>
+      <button type="button" class="btn" id="pUploadReport">Upload report</button>
       ${bulkBar('prov-files')}
       <table>
         <tr>${bulkTh('prov-files')}<th>Label</th><th>When</th><th></th></tr>
@@ -1642,12 +2238,12 @@ async function adminProviderDetail(providerId) {
           <td>${esc(f.label || f.s3Key)}</td>
           <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
           <td><button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="4">No files.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="4">No files on file.</td></tr>'}
       </table>
     </div>
     <div class="card">
       <h3>Internal notes</h3>
-      <p class="muted">Hidden from the therapist. Tag notes so you can filter later.</p>
+      <p class="muted">Visible to administrators only. Tag notes to support later filtering.</p>
       <label>Filter by tag
         <select id="pNoteFilter">
           <option value="">All</option>
@@ -1660,7 +2256,7 @@ async function adminProviderDetail(providerId) {
           `<label class="chk"><input type="checkbox" data-new-tag value="${esc(t)}" /> ${esc(t)}</label>`,
         ).join('')}
       </div>
-      <label>Add a tag <input id="pNoteTagCustom" placeholder="New tag name" /></label>
+      <label>Add tag <input id="pNoteTagCustom" placeholder="New tag name" /></label>
       <button type="button" class="btn" id="pAddNote">Add note</button>
       <table>
         <tr><th>When</th><th>Tags</th><th>Note</th><th></th></tr>
@@ -1709,6 +2305,7 @@ async function adminProviderDetail(providerId) {
           g30: 'pRateG30',
           g42: 'pRateG42',
           g45: 'pRateG45',
+          eval: 'pRateEval',
           extra: 'pRateExtra',
         }),
         hhaCaregiverCode: document.getElementById('pHha').value,
@@ -1720,7 +2317,7 @@ async function adminProviderDetail(providerId) {
   };
   document.getElementById('deleteProvider').onclick = async () => {
     try {
-      if (!confirm('Remove this provider? Their profile and internal notes will be deleted, and the linked therapist login will be deactivated. Mandates stay but become unassigned. This cannot be undone.')) return;
+      if (!confirm('Remove this provider? The profile and internal notes will be deleted, and the linked therapist account will be deactivated. Mandates remain but become unassigned. This cannot be undone.')) return;
       await api('DELETE', `/admin/providers/${providerId}`);
       setStatus('Provider removed.', 'ok');
       await adminProviders();
@@ -1729,7 +2326,7 @@ async function adminProviderDetail(providerId) {
   document.getElementById('pAddNote').onclick = async () => {
     try {
       const text = document.getElementById('pNoteBody').value.trim();
-      if (!text) throw new Error('Type a note first.');
+      if (!text) throw new Error('Enter a note first.');
       const tags = [...document.querySelectorAll('[data-new-tag]:checked')].map((el) => el.value);
       const custom = document.getElementById('pNoteTagCustom')?.value?.trim();
       if (custom) tags.push(custom);
@@ -1751,7 +2348,7 @@ async function adminProviderDetail(providerId) {
   document.getElementById('pUploadReport').onclick = async () => {
     try {
       const file = document.getElementById('pReportFile').files[0];
-      if (!file) throw new Error('Choose a file first.');
+      if (!file) throw new Error('Select a file first.');
       const fileBase64 = await fileToBase64(file);
       await api('POST', '/files', {
         providerId,
@@ -1768,7 +2365,7 @@ async function adminProviderDetail(providerId) {
   document.getElementById('pGenTimesheet').onclick = async () => {
     try {
       const weekStart = document.getElementById('pWeekStart').value;
-      if (!weekStart) throw new Error('Pick a week start.');
+      if (!weekStart) throw new Error('Select a week start date.');
       await api('POST', '/week/ensure', { providerId, weekStart });
       await fetchAndShowTimesheet({
         weekStart,
@@ -1782,8 +2379,8 @@ async function adminProviderDetail(providerId) {
       const additionalServiceType = document.getElementById('pAddlType').value;
       const studentId = document.getElementById('pAddlStudent').value;
       const dateOfService = document.getElementById('pAddlDos').value.trim();
-      if (!additionalServiceType) throw new Error('Pick a service type.');
-      if (!studentId) throw new Error('Pick a child.');
+      if (!additionalServiceType) throw new Error('Select a service type.');
+      if (!studentId) throw new Error('Select a child.');
       if (!dateOfService) throw new Error('Enter the date of service.');
       const weekStart = mondayFromDos(dateOfService) || mondayIso();
       const ensured = await api('POST', '/week/ensure', { providerId, weekStart });
@@ -1795,6 +2392,7 @@ async function adminProviderDetail(providerId) {
         endTime: document.getElementById('pAddlEnd').value,
         attendance: additionalServiceType === 'paid_absence' ? 'attended' : 'attended',
         additionalServiceType,
+        cptLabel: document.getElementById('pAddlCpt')?.value?.trim() || '',
         notes: document.getElementById('pAddlNotes').value,
       });
       setStatus('Additional service saved.', 'ok');
@@ -1854,6 +2452,11 @@ async function adminProviderDetail(providerId) {
       } catch (e) { setStatus(e.message, 'err'); }
     });
   });
+  document.querySelectorAll('[data-triage-week]').forEach((btn) => {
+    btn.addEventListener('click', () =>
+      showTriageDetail(btn.getAttribute('data-triage-error') || '', btn.getAttribute('data-triage-week') || ''),
+    );
+  });
 }
 
 async function adminSchoolDetail(schoolId) {
@@ -1883,7 +2486,7 @@ async function adminSchoolDetail(schoolId) {
     </div>
     <div class="card" id="schoolCalendarSection">
       <h3>School calendar</h3>
-      <p class="muted">School year and closed days (holidays, breaks). Used for school-day mandate tracking.</p>
+      <p class="muted">School year dates and closed days (holidays and breaks). Used for school-day mandate tracking.</p>
       <div id="calSavedView" class="cal-saved-view">${renderCalendarSavedHtml(cal, school.name)}</div>
       <div class="row">
         <label>First day (YYYY-MM-DD) <input id="calYearStart" type="date" value="${esc(cal?.yearStart || '')}" /></label>
@@ -1901,8 +2504,8 @@ async function adminSchoolDetail(schoolId) {
       ${calSummary ? `<p class="muted" style="margin-top:0.5rem">Saved: ${esc(calSummary)}</p>` : ''}
     </div>
     <div class="card">
-      <h3>Progress report due dates</h3>
-      <p class="muted">One due date per kind (progress / annual / reeval) applies to this school’s whole caseload.</p>
+      <h3>Progress-report due dates</h3>
+      <p class="muted">One due date per kind (progress, annual, or reevaluation) applies to this school’s full caseload.</p>
       <div class="row">
         <label>Kind
           <select id="dueKind"><option value="progress">progress</option><option value="annual">annual</option><option value="reeval">reeval</option></select>
@@ -1991,7 +2594,7 @@ async function adminSchoolDetail(schoolId) {
         kind: document.getElementById('dueKind').value,
         dueOn: document.getElementById('dueOn').value,
       });
-      setStatus('Progress report due date saved. Alerts stay until marked complete.', 'ok');
+      setStatus('Progress-report due date saved. Alerts remain until marked complete.', 'ok');
       document.getElementById('dueOn').value = '';
       await adminSchoolDetail(schoolId);
     } catch (e) { setStatus(e.message, 'err'); }
@@ -2004,7 +2607,7 @@ async function adminSchoolDetail(schoolId) {
   document.querySelectorAll('[data-del-due]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        if (!confirm('Remove this progress report due date? Alerts for it will stop. This cannot be undone.')) return;
+        if (!confirm('Remove this progress-report due date? Related alerts will stop. This cannot be undone.')) return;
         await api('DELETE', `/admin/due-dates/${btn.getAttribute('data-del-due')}`);
         setStatus('Due date removed.', 'ok');
         await adminSchoolDetail(schoolId);
@@ -2020,8 +2623,18 @@ async function adminProviders() {
   ]);
   const users = usersOut.users || [];
   const providers = providersOut.providers || [];
+  const orphanPurge = providersOut.orphanPurge;
+  if (orphanPurge?.deleted?.length) {
+    const kept = orphanPurge.retained?.length
+      ? ` Kept ${orphanPurge.retained.length} named orphan(s) that still hold caseload with no linked account.`
+      : '';
+    setStatus(
+      `Cleaned ${orphanPurge.deleted.length} orphan provider profile(s).${kept}`,
+      orphanPurge.retained?.length ? 'warn' : 'ok',
+    );
+  }
   const therapists = users.filter((u) => u.role === 'therapist');
-  // List every provider profile (not only therapist logins) so caseload orphans are visible.
+  // List every provider profile (not only therapist logins). Orphans are purged on this GET when empty/merged.
   const providerRows = [...providers]
     .sort((a, b) => {
       const an = `${a.lastName || ''} ${a.firstName || ''}`.trim().toLowerCase();
@@ -2047,7 +2660,7 @@ async function adminProviders() {
       </div>
       <div id="addProviderForm" hidden>
         <h2>Add provider</h2>
-        <p class="muted">One person = one login + provider profile, already linked.</p>
+        <p class="muted">Creates one linked account and provider profile.</p>
         <label>Email <input id="temail" type="email" autocomplete="off" /></label>
         <div class="row">
           <label>First name <input id="tfirst" /></label>
@@ -2060,7 +2673,7 @@ async function adminProviders() {
         </div>
         ${payRatesFieldset({}, 't')}
         <label>HHA caregiver code (optional) <input id="thha" /></label>
-        <label>Internal note (optional, hidden from therapist) <textarea id="tnote" rows="3"></textarea></label>
+        <label>Internal note (optional; hidden from the therapist) <textarea id="tnote" rows="3"></textarea></label>
         <div class="entry-form-actions">
           <button class="btn-primary big" id="createTherapist">Create provider</button>
           <button type="button" class="btn" id="cancelAddProvider">Cancel</button>
@@ -2069,12 +2682,13 @@ async function adminProviders() {
     </div>
     <div class="card">
       <h2>Providers</h2>
+      <div id="listLetterTabs" class="letter-tabs-host"></div>
       ${bulkBar('providers')}
       <table>
         <tr>${bulkTh('providers')}<th>Name</th><th>Email</th><th>Provider id</th><th>Discipline</th><th></th></tr>
-        ${providerRows.map(({ p, u, name, pid, orphan }) => `<tr>
+        ${providerRows.map(({ p, u, name, pid, orphan }) => `<tr data-provider-row data-provider-name="${esc(name || '')}">
             ${bulkTd('providers', pid, ' data-bulk-kind="provider"')}
-            <td>${providerNameLink(pid, name || '—')}${orphan ? ' <span class="muted">(no login)</span>' : ''}</td>
+            <td>${providerNameLink(pid, name || '—')}${orphan ? ' <span class="muted">(no account)</span>' : ''}</td>
             <td>${esc(u?.email || '—')}</td>
             <td>${esc(pid)}</td>
             <td>${esc(p.discipline || '—')}</td>
@@ -2085,7 +2699,7 @@ async function adminProviders() {
           </tr>`).join('') || ''}
         ${loginOnly.map((u) => `<tr>
             ${bulkTd('providers', u.id, ' data-bulk-kind="user"')}
-            <td>${esc(u.displayName || '—')} <span class="muted">(login only)</span></td>
+            <td>${esc(u.displayName || '—')} <span class="muted">(account only)</span></td>
             <td>${esc(u.email)}</td>
             <td>—</td>
             <td>—</td>
@@ -2096,6 +2710,10 @@ async function adminProviders() {
     </div>
   `);
 
+  bindLetterTabs(
+    () => document.querySelectorAll('[data-provider-row]'),
+    (row) => row.getAttribute('data-provider-name') || '',
+  );
   bindBulkDelete('providers', {
     noun: 'providers',
     deleteOne: (id, el) => {
@@ -2118,7 +2736,7 @@ async function adminProviders() {
   document.querySelectorAll('[data-remove-therapist]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        if (!confirm('Remove this therapist login? They have no provider profile. Their login will be deleted and they will disappear from this list.')) return;
+        if (!confirm('Remove this therapist account? There is no provider profile. The account will be deleted and removed from this list.')) return;
         const id = btn.getAttribute('data-remove-therapist');
         const out = await api('DELETE', `/admin/users/${id}`);
         setStatus(out.message || 'Therapist removed.', 'ok');
@@ -2142,6 +2760,7 @@ async function adminProviders() {
           g30: 'tG30',
           g42: 'tG42',
           g45: 'tG45',
+          eval: 'tEval',
           extra: 'tExtra',
         }),
         hhaCaregiverCode: document.getElementById('thha').value,
@@ -2159,7 +2778,7 @@ async function adminProviders() {
   document.querySelectorAll('[data-del-provider]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        if (!confirm('Remove this provider? Their profile and internal notes will be deleted, and the linked therapist login will be deactivated. Mandates stay but become unassigned. This cannot be undone.')) return;
+        if (!confirm('Remove this provider? The profile and internal notes will be deleted, and the linked therapist account will be deactivated. Mandates remain but become unassigned. This cannot be undone.')) return;
         await api('DELETE', `/admin/providers/${btn.getAttribute('data-del-provider')}`);
         setStatus('Provider removed.', 'ok');
         await adminProviders();
@@ -2191,7 +2810,7 @@ async function adminSchools(opts = {}) {
     </div>
     <div class="card">
       <h2>Schools</h2>
-      <p class="muted">Open a school for signer, progress report due dates, and calendar.</p>
+      <p class="muted">Open a school to manage the signer, progress-report due dates, and calendar.</p>
       ${bulkBar('schools')}
       <table>
         <tr>${bulkTh('schools')}<th>School</th><th>Signer</th><th>Calendar</th><th></th></tr>
@@ -2275,7 +2894,7 @@ async function adminAdmins() {
       </div>
       <div id="addAdminForm" hidden>
         <h2>Add admin</h2>
-        <p class="muted">Invites another office login (Cognito Admin group). Only existing admins can do this.</p>
+        <p class="muted">Invites another office account (Cognito Admin group). Only existing administrators can do this.</p>
         <label>Email <input id="aemail" type="email" autocomplete="off" /></label>
         <label>Display name <input id="aname" placeholder="Optional" /></label>
         <div class="entry-form-actions">
@@ -2338,7 +2957,7 @@ async function adminAdmins() {
   document.querySelectorAll('[data-remove-admin]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        if (!confirm('Remove this admin? Their login will be deleted and they will disappear from this list.')) return;
+        if (!confirm('Remove this administrator? Their account will be deleted and removed from this list.')) return;
         const id = btn.getAttribute('data-remove-admin');
         const out = await api('DELETE', `/admin/users/${id}`);
         setStatus(out.message || 'Admin removed.', 'ok');
@@ -2364,7 +2983,7 @@ async function adminMandates() {
       <h2>Import caseload</h2>
       <p class="muted">Use the KU export <strong>Related Service by serviceschool (WG)</strong> (Listing Results sheet) as CSV or Excel (.xls / .xlsx). Import saves immediately.</p>
       <p class="muted" style="margin-top:0.35rem">Columns: CR Recommended School, Student Last/First Name, CR Expected Grade, CR Decision/Status, Related Service, RS Start/End, RS Ratio, RS Frequency, RS Period, <strong>RS Duration</strong>, RS Location, RS Provider. Optional when present: Group Size, Program ID, Program Type, Date of Birth. (Older short headers still work.)</p>
-      <p class="muted" style="margin-top:0.35rem">Freq: <em>Weekly</em> = sessions per week; <em>6 day cycle</em> = N sessions per 6 school days. Providers must already exist in TMS and match “Last, First” / “First Last”. Agency labels like “White Glove” / “White, Glove” are errors — replace with the therapist name. Unmatched RS Provider rows are skipped (no empty-provider mandates).</p>
+      <p class="muted" style="margin-top:0.35rem">Frequency: <em>Weekly</em> = sessions per week; <em>6 day cycle</em> = N sessions per 6 school days. Providers must already exist in TMS and match “Last, First” or “First Last”. Agency labels such as “White Glove” or “White, Glove” are invalid — use the therapist name. Unmatched RS Provider rows are skipped (no empty-provider mandates).</p>
       <input id="caseloadFile" type="file" accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
       <div class="row" style="margin-top:0.6rem">
         <button class="btn-primary" id="caseloadImportBtn">Import caseload</button>
@@ -2375,9 +2994,9 @@ async function adminMandates() {
       ${previewErrors.length ? `
       <div class="err-box caseload-issues">
         <strong>Errors (${previewErrors.length})</strong>
-        <p class="muted" style="margin:0.35rem 0 0.5rem">One problem per row. Fix these in the spreadsheet, then import again. Valid rows in the table below can still be imported.</p>
+        <p class="muted" style="margin:0.35rem 0 0.5rem">One issue per row. Correct these in the spreadsheet, then import again. Valid rows in the table below can still be imported.</p>
         <table class="issue-table">
-          <tr><th>Row #</th><th>Field</th><th>What went wrong</th><th>How to fix</th></tr>
+          <tr><th>Row #</th><th>Field</th><th>Issue</th><th>Resolution</th></tr>
           ${previewErrors.map((e) => {
             const rowNum = e.row ?? e.rowNumber ?? 0;
             const rowLabel = Number(rowNum) > 0 ? String(rowNum) : 'File';
@@ -2397,7 +3016,7 @@ async function adminMandates() {
       <div class="warn-box caseload-issues">
         <strong>Warnings (${previewWarnings.length})</strong>
         <table class="issue-table">
-          <tr><th>Row #</th><th>Field</th><th>What went wrong</th><th>How to fix</th></tr>
+          <tr><th>Row #</th><th>Field</th><th>Issue</th><th>Resolution</th></tr>
           ${previewWarnings.map((w) => {
             const rowNum = w.row ?? w.rowNumber ?? 0;
             const rowLabel = Number(rowNum) > 0 ? String(rowNum) : 'File';
@@ -2445,60 +3064,68 @@ async function adminMandates() {
         })()}
       </table>` : ''}
     </div>
-    <div class="card">
-      <h2>Add mandate manually</h2>
-      <p class="muted">Kind: <strong>Weekly</strong> (normal frequency) or <strong>Makeup auth</strong> (leftover pool, e.g. 12). Unlinked makeups use Makeup auth; miss-linked makeups do not.</p>
-      <div class="row">
-        <label>Student
-          <select id="manStudent">${studentOptions(students)}</select>
-        </label>
-        <label>Provider
-          <select id="manProvider">${providerOptions(providers)}</select>
-        </label>
+    <div class="card entry-card">
+      <div class="entry-collapsed" id="addMandateCollapsed">
+        <button type="button" class="btn-primary" id="openAddMandate">Add mandate manually</button>
       </div>
-      <div class="row">
-        <label>Service type <input id="manService" placeholder="PT School" /></label>
-        <label>Kind
-          <select id="manKind">
-            <option value="regular">Weekly</option>
-            <option value="makeup_auth">Makeup auth</option>
-          </select>
-        </label>
+      <div id="addMandateForm" hidden>
+        <h2>Add mandate manually</h2>
+        <p class="muted">Kind: <strong>Weekly</strong> (standard frequency) or <strong>Makeup auth</strong> (remaining session pool, e.g. 12). Unlinked makeups use Makeup auth; miss-linked makeups do not.</p>
+        <div class="row">
+          <label>Student
+            <select id="manStudent">${studentOptions(students)}</select>
+          </label>
+          <label>Provider
+            <select id="manProvider">${providerOptions(providers)}</select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Service type <input id="manService" placeholder="PT School" /></label>
+          <label>Kind
+            <select id="manKind">
+              <option value="regular">Weekly</option>
+              <option value="makeup_auth">Makeup auth</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Ratio
+            <select id="manRatio">
+              <option value="individual">Individual</option>
+              <option value="group">Group</option>
+            </select>
+          </label>
+          <label>Group size <input id="manGroupSize" type="number" min="1" step="1" placeholder="1" /></label>
+        </div>
+        <div class="row">
+          <label>Duration (minutes) <input id="manDuration" type="number" min="1" step="1" placeholder="30" /></label>
+          <label>Freq / count <input id="manFreq" type="number" min="0" step="1" placeholder="2" /></label>
+        </div>
+        <div class="row">
+          <label>Period
+            <select id="manPeriod">
+              <option value="weekly">Weekly</option>
+              <option value="school_day_cycle">School-day cycle</option>
+            </select>
+          </label>
+          <label>Start / end
+            <div class="row">
+              <input id="manStart" type="date" />
+              <input id="manEnd" type="date" />
+            </div>
+          </label>
+        </div>
+        <div class="entry-form-actions">
+          <button type="button" class="btn-primary big" id="manSave">Save mandate</button>
+          <button type="button" class="btn" id="cancelAddMandate">Cancel</button>
+        </div>
       </div>
-      <div class="row">
-        <label>Ratio
-          <select id="manRatio">
-            <option value="individual">Individual</option>
-            <option value="group">Group</option>
-          </select>
-        </label>
-        <label>Group size <input id="manGroupSize" type="number" min="1" step="1" placeholder="1" /></label>
-      </div>
-      <div class="row">
-        <label>Duration (minutes) <input id="manDuration" type="number" min="1" step="1" placeholder="30" /></label>
-        <label>Freq / count <input id="manFreq" type="number" min="0" step="1" placeholder="2" /></label>
-      </div>
-      <div class="row">
-        <label>Period
-          <select id="manPeriod">
-            <option value="weekly">Weekly</option>
-            <option value="school_day_cycle">School-day cycle</option>
-          </select>
-        </label>
-        <label>Start / end
-          <div class="row">
-            <input id="manStart" type="date" />
-            <input id="manEnd" type="date" />
-          </div>
-        </label>
-      </div>
-      <button type="button" class="btn-primary" id="manSave">Save mandate</button>
     </div>
   `);
 
   async function readCaseloadFile() {
     const file = document.getElementById('caseloadFile').files[0];
-    if (!file) throw new Error('Choose a CSV or Excel file first.');
+    if (!file) throw new Error('Select a CSV or Excel file first.');
     const name = file.name || '';
     const mime = file.type || '';
     if (/\.xlsx?$/i.test(name) || /excel|spreadsheetml/i.test(mime)) {
@@ -2528,14 +3155,14 @@ async function adminMandates() {
       // Re-render first so the status chip is not wiped by navigation work.
       await adminMandates();
       if (errN && !saved) {
-        setStatus(`Error: Import failed — no rows saved. ${errN} row error(s). See the table below.`, 'err');
+        setStatus(`Import failed — no rows were saved. ${errN} row error(s). See the table below.`, 'err');
       } else if (errN || warnN) {
         setStatus(
-          `Success with warnings: ${errN ? `${errN} row error(s)` : ''}${errN && warnN ? ', ' : ''}${warnN ? `${warnN} warning(s)` : ''}. Saved: ${summary}.`,
+          `Imported with warnings: ${errN ? `${errN} row error(s)` : ''}${errN && warnN ? ', ' : ''}${warnN ? `${warnN} warning(s)` : ''}. Saved: ${summary}.`,
           errN ? 'warn' : 'ok',
         );
       } else {
-        setStatus(`Success: Imported ${summary}.`, 'ok');
+        setStatus(`Import complete: ${summary}.`, 'ok');
       }
     } catch (e) { setStatus(e.message, 'err'); }
   };
@@ -2550,6 +3177,15 @@ async function adminMandates() {
     };
   }
 
+  const setAddMandateOpen = (open) => {
+    const c = document.getElementById('addMandateCollapsed');
+    const f = document.getElementById('addMandateForm');
+    if (c) c.hidden = open;
+    if (f) f.hidden = !open;
+  };
+  document.getElementById('openAddMandate').onclick = () => setAddMandateOpen(true);
+  document.getElementById('cancelAddMandate').onclick = () => setAddMandateOpen(false);
+
   document.getElementById('manSave').onclick = async () => {
     try {
       const studentId = document.getElementById('manStudent').value;
@@ -2559,8 +3195,8 @@ async function adminMandates() {
       const groupSizeRaw = document.getElementById('manGroupSize').value;
       const durationMinutes = durationRaw === '' ? null : Number(durationRaw);
       const groupSize = groupSizeRaw === '' ? null : Number(groupSizeRaw);
-      if (!studentId) throw new Error('Pick a student.');
-      if (!Number.isFinite(freq) || freq < 0) throw new Error('Enter frequency / makeup count.');
+      if (!studentId) throw new Error('Select a student.');
+      if (!Number.isFinite(freq) || freq < 0) throw new Error('Enter frequency or makeup count.');
       if (durationMinutes != null && (!Number.isFinite(durationMinutes) || durationMinutes <= 0)) {
         throw new Error('Duration must be a positive number of minutes.');
       }
@@ -2590,60 +3226,37 @@ async function adminMandates() {
 function weekProgressRowsHtml(progressRows) {
   return (progressRows || [])
     .map((r) => {
-      const badge =
-        r.progressPct >= 100
-          ? '<span class="prog-badge prog-100">100% notes</span>'
-          : r.progressPct >= 50
-            ? '<span class="prog-badge prog-50">50% provided</span>'
-            : '<span class="prog-badge prog-0">0%</span>';
       return `<tr>
             <td><button type="button" class="linkish" data-open-child="${esc(r.studentId)}">${esc(r.childName)}</button></td>
             <td>${esc(r.mandateLabel || '—')}</td>
             <td>${esc(r.weekLabel || r.weekStart || '—')}</td>
             <td>${esc(String(r.sessionsProvided ?? 0))}</td>
             <td>${esc(String(r.notesPosted ?? 0))}</td>
-            <td>${esc(String(r.sessionsMissed ?? 0))}</td>
-            <td>${esc(String(r.notesFollowUp ?? 0))}</td>
-            <td>${badge}</td>
           </tr>`;
     })
-    .join('') || '<tr><td colspan="8">No sessions in this week range.</td></tr>';
+    .join('') || '<tr><td colspan="5">No sessions in this week range.</td></tr>';
 }
 
-function bindAdminReportsShell({ from, to }) {
-  const loadBtn = document.getElementById('progLoad');
-  if (loadBtn) {
-    loadBtn.onclick = async () => {
-      if (loadBtn.disabled) return;
-      state.reportFrom = document.getElementById('progFrom').value || from;
-      state.reportTo = document.getElementById('progTo').value || to;
-      const nextFrom = state.reportFrom;
-      const nextTo = state.reportTo;
-      const q = `from=${encodeURIComponent(nextFrom)}&to=${encodeURIComponent(nextTo)}`;
-      const tbody = document.getElementById('progBody');
-      loadBtn.disabled = true;
-      loadBtn.textContent = 'Loading…';
-      if (tbody) tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
-      try {
-        const progress = await api('GET', `/admin/reports/week-progress?${q}`);
-        if (tbody) tbody.innerHTML = weekProgressRowsHtml(progress.rows || []);
-        setStatus('', '');
-      } catch (e) {
-        if (tbody) {
-          tbody.innerHTML = `<tr><td colspan="8">${esc(e.message || 'Could not load progress.')}</td></tr>`;
-        }
-        setStatus(e.message || 'Could not load progress.', 'err');
-      } finally {
-        loadBtn.disabled = false;
-        loadBtn.textContent = 'Load';
-      }
-    };
-  }
-  const lastLoad = document.getElementById('lastLoad');
-  if (lastLoad) {
-    lastLoad.onclick = async () => {
-      state.lastServiceProviderId = document.getElementById('lastProvider')?.value || '';
-      await adminReports();
+function reportDateDefaults() {
+  const fromDefault = state.reportFrom || (() => {
+    const d = new Date(`${mondayIso()}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 28);
+    return d.toISOString().slice(0, 10);
+  })();
+  const toDefault = state.reportTo || mondayIso();
+  const from = state.reportFrom || fromDefault;
+  const to = state.reportTo || toDefault;
+  state.reportFrom = from;
+  state.reportTo = to;
+  return { from, to };
+}
+
+function bindReportDetailChrome() {
+  const back = document.getElementById('backReports');
+  if (back) {
+    back.onclick = () => {
+      state.reportView = '';
+      adminReports();
     };
   }
   document.getElementById('view').onclick = async (e) => {
@@ -2668,7 +3281,7 @@ function bindAdminReportsShell({ from, to }) {
     if (!btn) return;
     try {
       await api('POST', `/admin/due-dates/${btn.getAttribute('data-complete')}/complete`, {});
-      setStatus('Due date marked complete. Alerts stop.', 'ok');
+      setStatus('Due date marked complete. Alerts stopped.', 'ok');
       adminReports();
     } catch (err) {
       setStatus(err.message, 'err');
@@ -2676,27 +3289,43 @@ function bindAdminReportsShell({ from, to }) {
   };
 }
 
-async function adminReports() {
-  const fromDefault = state.reportFrom || (() => {
-    const d = new Date(`${mondayIso()}T00:00:00Z`);
-    d.setUTCDate(d.getUTCDate() - 28);
-    return d.toISOString().slice(0, 10);
-  })();
-  const toDefault = state.reportTo || mondayIso();
-  const from = state.reportFrom || fromDefault;
-  const to = state.reportTo || toDefault;
-  state.reportFrom = from;
-  state.reportTo = to;
-  const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-  const lastProviderId = state.lastServiceProviderId || '';
-
-  const providersOut = await api('GET', '/admin/providers').catch(() => ({ providers: [] }));
-  const providers = providersOut.providers || [];
-
+function adminReportsLanding() {
+  state.reportView = '';
   view(`
     <div class="card">
-      <h2>Sessions &amp; notes progress</h2>
-      <p class="muted">Sessions provided vs mandate (e.g. 50%). Session notes posted (e.g. 100%). Note follow-up counts missing or short notes plus missed sessions that still need attention.</p>
+      <h2>Reports</h2>
+      <p class="muted">Open a report to review caseload progress, last dates of service, or progress-report due dates.</p>
+      <ul class="report-pick">
+        ${REPORT_LIST.map(
+          (r) => `<li>
+            <button type="button" data-open-report="${esc(r.id)}">
+              <span class="report-pick-copy">
+                <span class="report-pick-title">${esc(r.title)}</span>
+                <span class="report-pick-blurb muted">${esc(r.blurb)}</span>
+              </span>
+              <span class="report-pick-go">Open</span>
+            </button>
+          </li>`,
+        ).join('')}
+      </ul>
+    </div>
+  `);
+  document.querySelectorAll('[data-open-report]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.reportView = btn.getAttribute('data-open-report') || '';
+      adminReports();
+    });
+  });
+}
+
+async function adminReportWeekProgress() {
+  const { from, to } = reportDateDefaults();
+  const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  view(`
+    <div class="card">
+      <button type="button" class="btn" id="backReports">← Reports</button>
+      <h2>Weekly session progress</h2>
+      <p class="muted">Sessions delivered versus notes posted for each child and week.</p>
       <div class="row">
         <label>Week from <input id="progFrom" type="date" value="${esc(from)}" /></label>
         <label>Week to <input id="progTo" type="date" value="${esc(to)}" /></label>
@@ -2708,18 +3337,86 @@ async function adminReports() {
           <th>Child</th>
           <th>Mandate</th>
           <th>Week</th>
-          <th>Sessions provided</th>
-          <th>Session notes posted</th>
-          <th>Missed</th>
-          <th>Note follow-up</th>
-          <th>Progress</th>
+          <th>Sessions delivered</th>
+          <th>Notes posted</th>
         </tr>
-        <tbody id="progBody"><tr><td colspan="8">Loading…</td></tr></tbody>
+        <tbody id="progBody"><tr><td colspan="5">Loading…</td></tr></tbody>
       </table>
     </div>
+  `);
+  bindReportDetailChrome();
+  const loadBtn = document.getElementById('progLoad');
+  const loadProgress = async () => {
+    if (loadBtn?.disabled) return;
+    state.reportFrom = document.getElementById('progFrom').value || from;
+    state.reportTo = document.getElementById('progTo').value || to;
+    const nextFrom = state.reportFrom;
+    const nextTo = state.reportTo;
+    const qq = `from=${encodeURIComponent(nextFrom)}&to=${encodeURIComponent(nextTo)}`;
+    const tbody = document.getElementById('progBody');
+    if (loadBtn) {
+      loadBtn.disabled = true;
+      loadBtn.textContent = 'Loading…';
+    }
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5">Loading…</td></tr>';
+    try {
+      const progress = await api('GET', `/admin/reports/week-progress?${qq}`);
+      if (tbody) tbody.innerHTML = weekProgressRowsHtml(progress.rows || []);
+      setStatus('', '');
+    } catch (e) {
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="5">${esc(e.message || 'Unable to load progress.')}</td></tr>`;
+      }
+      setStatus(e.message || 'Unable to load progress.', 'err');
+    } finally {
+      if (loadBtn) {
+        loadBtn.disabled = false;
+        loadBtn.textContent = 'Load';
+      }
+    }
+  };
+  if (loadBtn) loadBtn.onclick = () => loadProgress();
+  const progXlsx = document.getElementById('progXlsx');
+  if (progXlsx) {
+    progXlsx.onclick = async () => {
+      try {
+        const f = document.getElementById('progFrom')?.value || from;
+        const t = document.getElementById('progTo')?.value || to;
+        const qq = `from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
+        await downloadReportXlsx(`/admin/reports/week-progress.xlsx?${qq}`, 'weekly-session-progress.xlsx');
+        setStatus('Downloaded weekly-session-progress.xlsx.', 'ok');
+      } catch (e) {
+        setStatus(e.message, 'err');
+      }
+    };
+  }
+  try {
+    const progress = await api('GET', `/admin/reports/week-progress?${q}`);
+    const progBody = document.getElementById('progBody');
+    if (progBody) progBody.innerHTML = weekProgressRowsHtml(progress.rows || []);
+  } catch (e) {
+    const progBody = document.getElementById('progBody');
+    if (progBody) {
+      progBody.innerHTML = `<tr><td colspan="5">${esc(e.message || 'Unable to load progress.')}</td></tr>`;
+    }
+    setStatus(e.message || 'Unable to load progress.', 'err');
+  } finally {
+    if (loadBtn) {
+      loadBtn.disabled = false;
+      loadBtn.textContent = 'Load';
+    }
+  }
+}
+
+async function adminReportLastService() {
+  const lastProviderId = state.lastServiceProviderId || '';
+  const providersOut = await api('GET', '/admin/providers').catch(() => ({ providers: [] }));
+  const providers = providersOut.providers || [];
+  view(`
     <div class="card">
-      <h2>Last service date</h2>
-      <p class="muted">Latest attended/makeup DOS per child and provider. Filter by provider.</p>
+      <button type="button" class="btn" id="backReports">← Reports</button>
+      <h2>Last date of service</h2>
+      <p class="muted">Most recent attended or makeup date of service by child and provider. Filter by provider as needed.</p>
       <div class="row">
         <label>Provider
           <select id="lastProvider">
@@ -2737,94 +3434,16 @@ async function adminReports() {
       <table><tr><th>Child</th><th>Provider</th><th>School</th><th>Last DOS</th></tr>
       <tbody id="lastBody"><tr><td colspan="4">Loading…</td></tr></tbody>
       </table>
-      <h2>Progress report due dates</h2>
-      <div class="row">
-        <label>From <input id="dueFrom" type="date" value="${esc(from)}" /></label>
-        <label>To <input id="dueTo" type="date" value="${esc(to)}" /></label>
-        <button type="button" class="btn" id="duesXlsx">Export Excel</button>
-      </div>
-      ${bulkBar('report-dues')}
-      <table><tr>${bulkTh('report-dues')}<th>School</th><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
-      <tbody id="duesBody"><tr><td colspan="6">Loading…</td></tr></tbody>
-      </table>
     </div>
   `);
-  bindAdminReportsShell({ from, to });
-
-  const loadBtn = document.getElementById('progLoad');
-  let progress = { rows: [] };
-  let last = { rows: [] };
-  let dues = { rows: [] };
-  const lastQ = lastProviderId
-    ? `providerId=${encodeURIComponent(lastProviderId)}`
-    : '';
-  try {
-    [progress, last, dues] = await Promise.all([
-      api('GET', `/admin/reports/week-progress?${q}`),
-      api('GET', `/admin/reports/last-service${lastQ ? `?${lastQ}` : ''}`),
-      api('GET', `/admin/reports/due-dates?${q}`),
-    ]);
-  } catch (e) {
-    setStatus(e.message || 'Could not load reports.', 'err');
-    const progBody = document.getElementById('progBody');
-    if (progBody) {
-      progBody.innerHTML = `<tr><td colspan="8">${esc(e.message || 'Could not load reports.')}</td></tr>`;
-    }
-    if (loadBtn) {
-      loadBtn.disabled = false;
-      loadBtn.textContent = 'Load';
-    }
-    return;
-  }
-
-  const progBody = document.getElementById('progBody');
-  const lastBody = document.getElementById('lastBody');
-  const duesBody = document.getElementById('duesBody');
-  if (progBody) progBody.innerHTML = weekProgressRowsHtml(progress.rows || []);
-  if (lastBody) {
-    lastBody.innerHTML =
-      (last.rows || [])
-        .map(
-          (r) =>
-            `<tr><td>${childNameLink(r.studentId, r.name)}</td><td>${esc(r.providerName || '—')}</td><td>${esc(r.schoolName || '—')}</td><td>${esc(r.lastDos)}</td></tr>`,
-        )
-        .join('') || '<tr><td colspan="4">None</td></tr>';
-  }
-  if (duesBody) {
-    duesBody.innerHTML =
-      (dues.rows || [])
-        .map(
-          (r) =>
-            `<tr>${bulkTd('report-dues', r.id)}<td>${esc(r.schoolName || r.schoolId)}</td><td>${esc(r.kind)}</td><td>${esc(r.dueOn)}</td><td>${esc(r.status)}</td><td>${r.completedAt ? `<button class="btn" data-del-due="${esc(r.id)}">Remove</button>` : `<button class="btn" data-complete="${esc(r.id)}">Mark complete</button> <button class="btn" data-del-due="${esc(r.id)}">Remove</button>`}</td></tr>`,
-        )
-        .join('') || '<tr><td colspan="6">None</td></tr>';
-  }
-  bindBulkDelete('report-dues', {
-    noun: 'due dates',
-    deleteOne: (id) => api('DELETE', `/admin/due-dates/${id}`),
-    refresh: () => adminReports(),
-  });
-  if (loadBtn) {
-    loadBtn.disabled = false;
-    loadBtn.textContent = 'Load';
-  }
-  const bindXlsx = (id, path, name, fromId, toId) => {
-    const btn = document.getElementById(id);
-    if (!btn) return;
-    btn.onclick = async () => {
-      try {
-        const f = document.getElementById(fromId)?.value || from;
-        const t = document.getElementById(toId)?.value || to;
-        const qq = `from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
-        await downloadReportXlsx(`${path}?${qq}`, name);
-        setStatus(`Downloaded ${name}.`, 'ok');
-      } catch (e) {
-        setStatus(e.message, 'err');
-      }
+  bindReportDetailChrome();
+  const lastLoad = document.getElementById('lastLoad');
+  if (lastLoad) {
+    lastLoad.onclick = async () => {
+      state.lastServiceProviderId = document.getElementById('lastProvider')?.value || '';
+      await adminReports();
     };
-  };
-  bindXlsx('progXlsx', '/admin/reports/week-progress.xlsx', 'sessions-notes-progress.xlsx', 'progFrom', 'progTo');
-  bindXlsx('duesXlsx', '/admin/reports/due-dates.xlsx', 'due-dates.xlsx', 'dueFrom', 'dueTo');
+  }
   const lastXlsx = document.getElementById('lastXlsx');
   if (lastXlsx) {
     lastXlsx.onclick = async () => {
@@ -2838,6 +3457,130 @@ async function adminReports() {
       }
     };
   }
+  const lastQ = lastProviderId ? `providerId=${encodeURIComponent(lastProviderId)}` : '';
+  const lastBody = document.getElementById('lastBody');
+  try {
+    const last = await api('GET', `/admin/reports/last-service${lastQ ? `?${lastQ}` : ''}`);
+    if (lastBody) {
+      lastBody.innerHTML =
+        (last.rows || [])
+          .map(
+            (r) =>
+              `<tr><td>${childNameLink(r.studentId, r.name)}</td><td>${esc(r.providerName || '—')}</td><td>${esc(r.schoolName || '—')}</td><td>${esc(r.lastDos)}</td></tr>`,
+          )
+          .join('') || '<tr><td colspan="4">None</td></tr>';
+    }
+  } catch (e) {
+    if (lastBody) {
+      lastBody.innerHTML = `<tr><td colspan="4">${esc(e.message || 'Unable to load last service dates.')}</td></tr>`;
+    }
+    setStatus(e.message || 'Unable to load last service dates.', 'err');
+  }
+}
+
+async function adminReportDueDates() {
+  const { from, to } = reportDateDefaults();
+  const q = `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  view(`
+    <div class="card">
+      <button type="button" class="btn" id="backReports">← Reports</button>
+      <h2>Progress-report due dates</h2>
+      <p class="muted">School progress, annual, and reevaluation due dates in the selected range.</p>
+      <div class="row">
+        <label>From <input id="dueFrom" type="date" value="${esc(from)}" /></label>
+        <label>To <input id="dueTo" type="date" value="${esc(to)}" /></label>
+        <button type="button" class="btn-primary" id="duesLoad">Load</button>
+        <button type="button" class="btn" id="duesXlsx">Export Excel</button>
+      </div>
+      ${bulkBar('report-dues')}
+      <table><tr>${bulkTh('report-dues')}<th>School</th><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
+      <tbody id="duesBody"><tr><td colspan="6">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  `);
+  bindReportDetailChrome();
+  const fillDues = (rows) => {
+    const duesBody = document.getElementById('duesBody');
+    if (!duesBody) return;
+    duesBody.innerHTML =
+      (rows || [])
+        .map(
+          (r) =>
+            `<tr>${bulkTd('report-dues', r.id)}<td>${esc(r.schoolName || r.schoolId)}</td><td>${esc(r.kind)}</td><td>${esc(r.dueOn)}</td><td>${esc(r.status)}</td><td>${r.completedAt ? `<button class="btn" data-del-due="${esc(r.id)}">Remove</button>` : `<button class="btn" data-complete="${esc(r.id)}">Mark complete</button> <button class="btn" data-del-due="${esc(r.id)}">Remove</button>`}</td></tr>`,
+        )
+        .join('') || '<tr><td colspan="6">None</td></tr>';
+  };
+  const loadDues = async () => {
+    const f = document.getElementById('dueFrom')?.value || from;
+    const t = document.getElementById('dueTo')?.value || to;
+    state.reportFrom = f;
+    state.reportTo = t;
+    const qq = `from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
+    const duesBody = document.getElementById('duesBody');
+    if (duesBody) duesBody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
+    try {
+      const dues = await api('GET', `/admin/reports/due-dates?${qq}`);
+      fillDues(dues.rows || []);
+      setStatus('', '');
+    } catch (e) {
+      if (duesBody) {
+        duesBody.innerHTML = `<tr><td colspan="6">${esc(e.message || 'Unable to load due dates.')}</td></tr>`;
+      }
+      setStatus(e.message || 'Unable to load due dates.', 'err');
+    }
+  };
+  const duesLoad = document.getElementById('duesLoad');
+  if (duesLoad) duesLoad.onclick = () => loadDues();
+  const duesXlsx = document.getElementById('duesXlsx');
+  if (duesXlsx) {
+    duesXlsx.onclick = async () => {
+      try {
+        const f = document.getElementById('dueFrom')?.value || from;
+        const t = document.getElementById('dueTo')?.value || to;
+        const qq = `from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
+        await downloadReportXlsx(`/admin/reports/due-dates.xlsx?${qq}`, 'due-dates.xlsx');
+        setStatus('Downloaded due-dates.xlsx.', 'ok');
+      } catch (e) {
+        setStatus(e.message, 'err');
+      }
+    };
+  }
+  bindBulkDelete('report-dues', {
+    noun: 'due dates',
+    deleteOne: (id) => api('DELETE', `/admin/due-dates/${id}`),
+    refresh: () => adminReports(),
+  });
+  try {
+    const dues = await api('GET', `/admin/reports/due-dates?${q}`);
+    fillDues(dues.rows || []);
+  } catch (e) {
+    const duesBody = document.getElementById('duesBody');
+    if (duesBody) {
+      duesBody.innerHTML = `<tr><td colspan="6">${esc(e.message || 'Unable to load due dates.')}</td></tr>`;
+    }
+    setStatus(e.message || 'Unable to load due dates.', 'err');
+  }
+}
+
+async function adminReports() {
+  const id = state.reportView || '';
+  if (!id) {
+    adminReportsLanding();
+    return;
+  }
+  if (id === 'week-progress') {
+    await adminReportWeekProgress();
+    return;
+  }
+  if (id === 'last-service') {
+    await adminReportLastService();
+    return;
+  }
+  if (id === 'due-dates') {
+    await adminReportDueDates();
+    return;
+  }
+  adminReportsLanding();
 }
 
 // ---- Cognito sign-in (only when the build set a clientId) ----
@@ -2862,42 +3605,42 @@ function cognitoType(data) {
 function loginErrorMessage(data) {
   const type = cognitoType(data);
   const plain = {
-    NotAuthorizedException: 'Wrong email or password. Please try again.',
-    UserNotFoundException: 'No account with that email. Ask the office to invite you.',
-    UserNotConfirmedException: 'This account is not ready yet. Ask the office for help.',
-    PasswordResetRequiredException: 'Your password needs a reset. Use Forgot password below, or ask the office for help.',
-    InvalidPasswordException: 'That password is too simple. Use at least 8 characters with a capital letter, a small letter, and a number.',
-    TooManyRequestsException: 'Too many tries. Wait a minute and try again.',
-    LimitExceededException: 'Too many tries. Wait a minute and try again.',
-    CodeMismatchException: 'That code is wrong. Please try again.',
-    ExpiredCodeException: 'That code expired. Request a new code with Forgot password.',
-    InvalidParameterException: 'Check the email and try again.',
-    ResourceNotFoundException: 'Sign-in is misconfigured (wrong app client). Ask the office for help.',
+    NotAuthorizedException: 'Incorrect email or password. Please try again.',
+    UserNotFoundException: 'No account exists for that email. Contact the office for an invitation.',
+    UserNotConfirmedException: 'This account is not ready yet. Contact the office for assistance.',
+    PasswordResetRequiredException: 'Your password must be reset. Use Forgot password below, or contact the office for assistance.',
+    InvalidPasswordException: 'That password does not meet requirements. Use at least 8 characters with an uppercase letter, a lowercase letter, and a number.',
+    TooManyRequestsException: 'Too many attempts. Wait a minute and try again.',
+    LimitExceededException: 'Too many attempts. Wait a minute and try again.',
+    CodeMismatchException: 'Invalid confirmation code. Please try again.',
+    ExpiredCodeException: 'That code has expired. Request a new code with Forgot password.',
+    InvalidParameterException: 'Verify the email address and try again.',
+    ResourceNotFoundException: 'Sign-in is misconfigured (incorrect app client). Contact the office for assistance.',
   };
   if (plain[type]) return plain[type];
   if (data?.message) return type ? `${data.message} (${type})` : String(data.message);
-  return 'Sign in did not work. Please try again.';
+  return 'Sign-in was unsuccessful. Please try again.';
 }
 
 function changePasswordErrorMessage(data) {
   const type = cognitoType(data);
   const plain = {
-    NotAuthorizedException: 'Wrong current password. Please try again.',
-    InvalidPasswordException: 'That password is too simple. Use at least 8 characters with a capital letter, a small letter, and a number.',
-    InvalidParameterException: 'That password is too simple. Use at least 8 characters with a capital letter, a small letter, and a number.',
-    LimitExceededException: 'Too many tries. Wait a minute and try again.',
-    TooManyRequestsException: 'Too many tries. Wait a minute and try again.',
-    CodeMismatchException: 'That code is wrong. Please try again.',
-    ExpiredCodeException: 'That code expired. Request a new code with Forgot password.',
-    UserNotFoundException: 'No account with that email. Ask the office to invite you.',
+    NotAuthorizedException: 'Incorrect current password. Please try again.',
+    InvalidPasswordException: 'That password does not meet requirements. Use at least 8 characters with an uppercase letter, a lowercase letter, and a number.',
+    InvalidParameterException: 'That password does not meet requirements. Use at least 8 characters with an uppercase letter, a lowercase letter, and a number.',
+    LimitExceededException: 'Too many attempts. Wait a minute and try again.',
+    TooManyRequestsException: 'Too many attempts. Wait a minute and try again.',
+    CodeMismatchException: 'Invalid confirmation code. Please try again.',
+    ExpiredCodeException: 'That code has expired. Request a new code with Forgot password.',
+    UserNotFoundException: 'No account exists for that email. Contact the office for an invitation.',
   };
   if (plain[type]) return plain[type];
   if (data?.message) return type ? `${data.message} (${type})` : String(data.message);
-  return 'Could not change password. Please try again.';
+  return 'Unable to change password. Please try again.';
 }
 
 const COGNITO_NETFREE_HINT =
-  'Could not reach Cognito. If you use NetFree, allowlist cognito-idp.us-east-1.amazonaws.com, then try again.';
+  'Unable to reach Cognito. If you use NetFree, allowlist cognito-idp.us-east-1.amazonaws.com, then try again.';
 
 async function cognitoCall(target, body, errorFn = loginErrorMessage) {
   const url = `https://cognito-idp.${cognitoRegion()}.amazonaws.com/`;
@@ -2950,6 +3693,8 @@ function signOut(message) {
   state.idToken = '';
   state.accessToken = '';
   state.email = '';
+  state.selectedSchoolId = '';
+  sessionStorage.removeItem('tmsSchoolId');
   localStorage.removeItem('tmsIdToken');
   localStorage.removeItem('tmsAccessToken');
   showLogin(message || '');
@@ -2972,7 +3717,7 @@ function showLogin(message) {
   view(`
     <div class="card login-card">
       <h2>Sign in</h2>
-      <p>Use the email and password from your White Glove invite email.</p>
+      <p>Use the email and temporary password from your White Glove invitation.</p>
       <div id="loginErr" class="err-box" ${message ? '' : 'hidden'}>${esc(message || '')}</div>
       <label>Email <input id="loginEmail" type="email" autocomplete="username" placeholder="you@example.com" /></label>
       <label>Password <input id="loginPassword" type="password" autocomplete="current-password" /></label>
@@ -2986,7 +3731,7 @@ function showLogin(message) {
     const password = document.getElementById('loginPassword').value;
     loginError('');
     if (!email || !password) {
-      loginError('Type your email and password first.');
+      loginError('Enter your email and password.');
       return;
     }
     btn.disabled = true;
@@ -3003,7 +3748,7 @@ function showLogin(message) {
       }
       const auth = out.AuthenticationResult || {};
       const idToken = auth.IdToken;
-      if (!idToken) throw new Error('Sign in did not work. Please try again.');
+      if (!idToken) throw new Error('Sign-in was unsuccessful. Please try again.');
       applyToken(idToken, auth.AccessToken || '');
       openingAccountView();
       await showRole();
@@ -3030,10 +3775,10 @@ function showForgotPassword(prefillEmail) {
   view(`
     <div class="card login-card">
       <h2>Forgot password</h2>
-      <p>We will email you a confirmation code. Then you pick a new password.</p>
+      <p>We will email a confirmation code. Then choose a new password.</p>
       <div id="loginErr" class="err-box" hidden></div>
       <label>Email <input id="forgotEmail" type="email" autocomplete="username" placeholder="you@example.com" value="${esc(prefillEmail || '')}" /></label>
-      <button class="btn-primary big" id="forgotSendBtn">Email me a code</button>
+      <button class="btn-primary big" id="forgotSendBtn">Send reset code</button>
       <p><button type="button" class="btn" id="forgotBackBtn">Back to sign in</button></p>
     </div>
   `);
@@ -3043,7 +3788,7 @@ function showForgotPassword(prefillEmail) {
     const email = document.getElementById('forgotEmail').value.trim();
     loginError('');
     if (!email) {
-      loginError('Type your email first.');
+      loginError('Enter your email address.');
       return;
     }
     btn.disabled = true;
@@ -3057,7 +3802,7 @@ function showForgotPassword(prefillEmail) {
     } catch (e) {
       loginError(e.message);
       btn.disabled = false;
-      btn.textContent = 'Email me a code';
+      btn.textContent = 'Send reset code';
     }
   };
   document.getElementById('forgotEmail').focus();
@@ -3068,14 +3813,14 @@ function showConfirmForgotPassword(email) {
   setStatus('', '');
   view(`
     <div class="card login-card">
-      <h2>Enter the code</h2>
-      <p>Check <strong>${esc(email)}</strong> for a confirmation code, then choose a new password (at least 8 characters with a capital letter, a small letter, and a number).</p>
+      <h2>Enter confirmation code</h2>
+      <p>Check <strong>${esc(email)}</strong> for a confirmation code, then choose a new password (at least 8 characters with an uppercase letter, a lowercase letter, and a number).</p>
       <div id="loginErr" class="err-box" hidden></div>
       <label>Confirmation code <input id="forgotCode" type="text" autocomplete="one-time-code" inputmode="numeric" /></label>
       <label>New password <input id="forgotNew" type="password" autocomplete="new-password" /></label>
-      <label>Type new password again <input id="forgotNew2" type="password" autocomplete="new-password" /></label>
+      <label>Confirm new password <input id="forgotNew2" type="password" autocomplete="new-password" /></label>
       <button class="btn-primary big" id="forgotConfirmBtn">Save new password</button>
-      <p><button type="button" class="linkish" id="forgotResendBtn">Send another code</button></p>
+      <p><button type="button" class="linkish" id="forgotResendBtn">Resend code</button></p>
       <p><button type="button" class="btn" id="forgotBackBtn">Back to sign in</button></p>
     </div>
   `);
@@ -3088,11 +3833,11 @@ function showConfirmForgotPassword(email) {
     const p2 = document.getElementById('forgotNew2').value;
     loginError('');
     if (!code || !p1 || !p2) {
-      loginError('Fill in the code and both password fields.');
+      loginError('Enter the confirmation code and both password fields.');
       return;
     }
     if (p1 !== p2) {
-      loginError('The two passwords do not match.');
+      loginError('The passwords do not match.');
       return;
     }
     btn.disabled = true;
@@ -3124,10 +3869,10 @@ function showNewPassword(email, session) {
   view(`
     <div class="card login-card">
       <h2>Choose a new password</h2>
-      <p>First sign in: pick your own password. At least 8 characters with a capital letter, a small letter, and a number.</p>
+      <p>First sign-in: choose your own password. Use at least 8 characters with an uppercase letter, a lowercase letter, and a number.</p>
       <div id="loginErr" class="err-box" hidden></div>
       <label>New password <input id="newPassword" type="password" autocomplete="new-password" /></label>
-      <label>Type it again <input id="newPassword2" type="password" autocomplete="new-password" /></label>
+      <label>Confirm password <input id="newPassword2" type="password" autocomplete="new-password" /></label>
       <button class="btn-primary big" id="newPassBtn">Save password and sign in</button>
     </div>
   `);
@@ -3137,11 +3882,11 @@ function showNewPassword(email, session) {
     const p2 = document.getElementById('newPassword2').value;
     loginError('');
     if (!p1) {
-      loginError('Type a new password first.');
+      loginError('Enter a new password.');
       return;
     }
     if (p1 !== p2) {
-      loginError('The two passwords do not match.');
+      loginError('The passwords do not match.');
       return;
     }
     btn.disabled = true;
@@ -3155,7 +3900,7 @@ function showNewPassword(email, session) {
       });
       const auth = out.AuthenticationResult || {};
       const idToken = auth.IdToken;
-      if (!idToken) throw new Error('Sign in did not work. Please sign in again.');
+      if (!idToken) throw new Error('Sign-in was unsuccessful. Please sign in again.');
       applyToken(idToken, auth.AccessToken || '');
       openingAccountView();
       await showRole();
@@ -3181,14 +3926,14 @@ function changePasswordError(msg) {
 
 function showChangePassword() {
   if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
-    signOut('Your sign in ended. Please sign in again.');
+    signOut('Your session has ended. Please sign in again.');
     return;
   }
   if (!state.accessToken) {
     view(`
       <div class="card login-card">
         <h2>Change password</h2>
-        <div class="err-box">Sign out and Sign in again, then you can change your password.</div>
+        <div class="err-box">Sign out and sign in again to change your password.</div>
         <button type="button" class="btn" id="changePwCancel">Back</button>
       </div>
     `);
@@ -3198,11 +3943,11 @@ function showChangePassword() {
   view(`
     <div class="card login-card">
       <h2>Change password</h2>
-      <p>At least 8 characters with a capital letter, a small letter, and a number.</p>
+      <p>Use at least 8 characters with an uppercase letter, a lowercase letter, and a number.</p>
       <div id="changePwErr" class="err-box" hidden></div>
       <label>Current password <input id="changePwCurrent" type="password" autocomplete="current-password" /></label>
       <label>New password <input id="changePwNew" type="password" autocomplete="new-password" /></label>
-      <label>Type new password again <input id="changePwNew2" type="password" autocomplete="new-password" /></label>
+      <label>Confirm new password <input id="changePwNew2" type="password" autocomplete="new-password" /></label>
       <button class="btn-primary big" id="changePwSave">Save</button>
       <p><button type="button" class="btn" id="changePwCancel">Cancel</button></p>
     </div>
@@ -3214,15 +3959,15 @@ function showChangePassword() {
     const p2 = document.getElementById('changePwNew2').value;
     changePasswordError('');
     if (!current || !p1 || !p2) {
-      changePasswordError('Fill in all three password fields.');
+      changePasswordError('Enter all three password fields.');
       return;
     }
     if (p1 !== p2) {
-      changePasswordError('The two new passwords do not match.');
+      changePasswordError('The new passwords do not match.');
       return;
     }
     if (!state.accessToken) {
-      changePasswordError('Sign out and Sign in again, then you can change your password.');
+      changePasswordError('Sign out and sign in again to change your password.');
       return;
     }
     btn.disabled = true;
@@ -3237,7 +3982,7 @@ function showChangePassword() {
         },
         changePasswordErrorMessage,
       );
-      setStatus('Password changed. Use the new password next time you sign in.', 'ok');
+      setStatus('Password changed. Use the new password the next time you sign in.', 'ok');
       showRole();
     } catch (e) {
       changePasswordError(e.message);
@@ -3254,58 +3999,6 @@ function showChangePassword() {
 }
 
 // ---- Navigation ----
-
-function hideAppChrome() {
-  document.body.classList.add('is-auth');
-  document.body.classList.remove('is-app');
-  document.getElementById('whoBar').hidden = true;
-  document.getElementById('rolePick').hidden = true;
-  document.getElementById('adminNav').hidden = true;
-  document.getElementById('therapistNav').hidden = true;
-  document.getElementById('changePassword').hidden = true;
-  document.getElementById('signout').hidden = true;
-  document.getElementById('whoami').textContent = '';
-}
-
-async function showRole() {
-  if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
-    signOut('Your sign in ended. Please sign in again.');
-    return;
-  }
-  const admin = state.role === 'admin';
-  document.body.classList.remove('is-auth');
-  document.body.classList.add('is-app');
-  // Always show whoBar after login for both therapist and admin
-  const whoBar = document.getElementById('whoBar');
-  whoBar.hidden = false;
-  whoBar.removeAttribute('hidden');
-  // Therapists get one page — never show therapist tab nav
-  document.getElementById('therapistNav').hidden = true;
-  document.getElementById('adminNav').hidden = !admin;
-  document.getElementById('rolePick').hidden = COGNITO_MODE;
-  const label = admin ? 'Admin' : 'Therapist';
-  document.getElementById('whoami').textContent = COGNITO_MODE && state.email ? `${state.email} — ${label}` : label;
-  const changePw = document.getElementById('changePassword');
-  const signOutBtn = document.getElementById('signout');
-  if (COGNITO_MODE) {
-    changePw.hidden = false;
-    changePw.removeAttribute('hidden');
-    signOutBtn.hidden = false;
-    signOutBtn.removeAttribute('hidden');
-  } else {
-    changePw.hidden = true;
-    signOutBtn.hidden = true;
-  }
-  // Replace Sign in (or any prior) content before API calls so chrome never
-  // shows "signed in" while the login form is still stuck on Signing in…
-  openingAccountView();
-  try {
-    if (admin) await adminDash();
-    else await therapistHome();
-  } catch (e) {
-    homeLoadErrorView(e);
-  }
-}
 
 document.getElementById('role').onchange = (e) => {
   if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
@@ -3351,8 +4044,221 @@ document.getElementById('adminNav').onclick = (e) => {
   if (screen === 'mandates') adminMandates();
   if (screen === 'schools') adminSchools();
   if (screen === 'admins') adminAdmins();
-  if (screen === 'reports') adminReports();
+  if (screen === 'reports') {
+    state.reportView = '';
+    adminReports();
+  }
 };
+
+// ---- Luna support chatbot ----
+const lunaState = {
+  open: localStorage.getItem('tmsLunaOpen') === '1',
+  busy: false,
+  messages: [],
+  pendingSummary: '',
+  readyForHandoff: false,
+};
+
+function setLunaVisible(on) {
+  const root = document.getElementById('lunaRoot');
+  if (!root) return;
+  root.hidden = !on;
+  if (!on) {
+    const panel = document.getElementById('lunaPanel');
+    const fab = document.getElementById('lunaFab');
+    if (panel) panel.hidden = true;
+    if (fab) fab.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  setLunaOpen(lunaState.open);
+}
+
+function setLunaOpen(open) {
+  lunaState.open = Boolean(open);
+  localStorage.setItem('tmsLunaOpen', lunaState.open ? '1' : '0');
+  const panel = document.getElementById('lunaPanel');
+  const fab = document.getElementById('lunaFab');
+  if (panel) panel.hidden = !lunaState.open;
+  if (fab) fab.setAttribute('aria-expanded', lunaState.open ? 'true' : 'false');
+  if (lunaState.open) {
+    ensureLunaWelcome();
+    const input = document.getElementById('lunaInput');
+    if (input) input.focus();
+  }
+}
+
+function ensureLunaWelcome() {
+  if (lunaState.messages.length) return;
+  lunaState.messages.push({
+    role: 'assistant',
+    content: 'Hi, I’m Luna. Tell me what’s going wrong and I’ll help gather the details for support.',
+  });
+  renderLunaMessages();
+}
+
+function renderLunaMessages(extraTyping) {
+  const box = document.getElementById('lunaMessages');
+  if (!box) return;
+  const rows = lunaState.messages
+    .map(
+      (m) =>
+        `<div class="luna-bubble ${m.role === 'user' ? 'luna-user' : 'luna-bot'}">${esc(m.content)}</div>`,
+    )
+    .join('');
+  const typing = extraTyping
+    ? '<div class="luna-bubble luna-bot luna-typing">Luna is typing…</div>'
+    : '';
+  box.innerHTML = rows + typing;
+  box.scrollTop = box.scrollHeight;
+  const bar = document.getElementById('lunaHandoffBar');
+  if (bar) bar.hidden = !lunaState.readyForHandoff;
+}
+
+function setLunaStatus(msg) {
+  const el = document.getElementById('lunaStatus');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.hidden = !msg;
+}
+
+async function lunaChat(userText) {
+  if (lunaState.busy) return;
+  const text = String(userText || '').trim();
+  if (!text) return;
+  setLunaStatus('');
+  lunaState.readyForHandoff = false;
+  lunaState.pendingSummary = '';
+  lunaState.messages.push({ role: 'user', content: text });
+  renderLunaMessages(true);
+  lunaState.busy = true;
+  const sendBtn = document.getElementById('lunaSend');
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    const out = await api('POST', '/support/luna/chat', {
+      messages: lunaState.messages.map((m) => ({ role: m.role, content: m.content })),
+      pageUrl: typeof location !== 'undefined' ? location.href : '',
+    });
+    const reply = String(out.reply || '').trim() || 'Thanks — could you share a bit more detail?';
+    lunaState.messages.push({ role: 'assistant', content: reply });
+    if (String(out.action || '').toLowerCase() === 'handoff') {
+      lunaState.readyForHandoff = true;
+      lunaState.pendingSummary = String(out.summary || reply).trim();
+    }
+    renderLunaMessages(false);
+  } catch (e) {
+    setLunaStatus(e?.message || 'Luna is unavailable.');
+    renderLunaMessages(false);
+  } finally {
+    lunaState.busy = false;
+    if (sendBtn) sendBtn.disabled = false;
+  }
+}
+
+async function lunaHandoff() {
+  if (lunaState.busy || !lunaState.readyForHandoff) return;
+  lunaState.busy = true;
+  setLunaStatus('');
+  const btn = document.getElementById('lunaSendHandoff');
+  if (btn) btn.disabled = true;
+  renderLunaMessages(true);
+  try {
+    const out = await api('POST', '/support/luna/handoff', {
+      messages: lunaState.messages.map((m) => ({ role: m.role, content: m.content })),
+      summary: lunaState.pendingSummary,
+      pageUrl: typeof location !== 'undefined' ? location.href : '',
+    });
+    const reply =
+      String(out.reply || '').trim() ||
+      'Thanks — I sent this to support. Moshe will follow up by email.';
+    lunaState.messages.push({ role: 'assistant', content: reply });
+    lunaState.readyForHandoff = false;
+    lunaState.pendingSummary = '';
+    renderLunaMessages(false);
+  } catch (e) {
+    setLunaStatus(e?.message || 'Unable to send the support handoff.');
+    renderLunaMessages(false);
+  } finally {
+    lunaState.busy = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+function initLuna() {
+  const fab = document.getElementById('lunaFab');
+  const close = document.getElementById('lunaClose');
+  const form = document.getElementById('lunaForm');
+  const handoff = document.getElementById('lunaSendHandoff');
+  if (!fab || fab.dataset.bound === '1') return;
+  fab.dataset.bound = '1';
+  fab.onclick = () => setLunaOpen(!lunaState.open);
+  if (close) close.onclick = () => setLunaOpen(false);
+  if (handoff) handoff.onclick = () => lunaHandoff();
+  if (form) {
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const input = document.getElementById('lunaInput');
+      const text = input?.value || '';
+      if (input) input.value = '';
+      lunaChat(text);
+    };
+  }
+  setLunaOpen(lunaState.open);
+}
+
+function hideAppChrome() {
+  document.body.classList.add('is-auth');
+  document.body.classList.remove('is-app');
+  document.getElementById('whoBar').hidden = true;
+  document.getElementById('rolePick').hidden = true;
+  document.getElementById('adminNav').hidden = true;
+  document.getElementById('therapistNav').hidden = true;
+  document.getElementById('changePassword').hidden = true;
+  document.getElementById('signout').hidden = true;
+  document.getElementById('whoami').textContent = '';
+  setLunaVisible(false);
+}
+
+async function showRole() {
+  if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
+    signOut('Your session has ended. Please sign in again.');
+    return;
+  }
+  const admin = state.role === 'admin';
+  document.body.classList.remove('is-auth');
+  document.body.classList.add('is-app');
+  // Always show whoBar after login for both therapist and admin
+  const whoBar = document.getElementById('whoBar');
+  whoBar.hidden = false;
+  whoBar.removeAttribute('hidden');
+  // Therapists get one page — never show therapist tab nav
+  document.getElementById('therapistNav').hidden = true;
+  document.getElementById('adminNav').hidden = !admin;
+  document.getElementById('rolePick').hidden = COGNITO_MODE;
+  const label = admin ? 'Admin' : 'Therapist';
+  document.getElementById('whoami').textContent = COGNITO_MODE && state.email ? `${state.email} — ${label}` : label;
+  const changePw = document.getElementById('changePassword');
+  const signOutBtn = document.getElementById('signout');
+  if (COGNITO_MODE) {
+    changePw.hidden = false;
+    changePw.removeAttribute('hidden');
+    signOutBtn.hidden = false;
+    signOutBtn.removeAttribute('hidden');
+  } else {
+    changePw.hidden = true;
+    signOutBtn.hidden = true;
+  }
+  initLuna();
+  setLunaVisible(true);
+  // Replace Sign in (or any prior) content before API calls so chrome never
+  // shows "signed in" while the login form is still stuck on Signing in…
+  openingAccountView();
+  try {
+    if (admin) await adminDash();
+    else await therapistHome();
+  } catch (e) {
+    homeLoadErrorView(e);
+  }
+}
 
 if (COGNITO_MODE) {
   hideAppChrome();

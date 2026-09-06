@@ -4,4 +4,5 @@ export { transferLockedWeek } from './hha-transfer.js';
 export { buildTimesheetPdf } from './timesheet.js';
 export { screenNoteWithOptionalBedrock } from './bedrock.js';
 export { runDueNags } from './due-nags.js';
+export { runHhaErrorDigest } from './hha-error-digest.js';
 export { MemoryMailer } from './mail.js';

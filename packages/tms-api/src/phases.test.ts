@@ -23,20 +23,17 @@ describe('phase 2–3', () => {
       active: true,
       createdAt: nowIso(),
     });
-    const student = store.upsertStudent({
+    const school = store.upsertSchool({
       id: newId(),
-      schoolId: '',
-      firstName: 'Aiden',
-      lastName: 'Odne',
-      dob: '',
-      programId: '',
-      programType: '',
-      hhaPatientId: '',
+      name: 'Shaw Avenue',
+      district: '',
+      signerName: '',
+      signerEmail: '',
       createdAt: nowIso(),
     });
     store.upsertDueDate({
       id: 'd1',
-      studentId: student.id,
+      schoolId: school.id,
       kind: 'progress',
       dueOn: '2001-01-01',
       completedAt: '',
@@ -46,6 +43,7 @@ describe('phase 2–3', () => {
     const first = await runDueNags(store, mail, new Date('2026-09-01T12:00:00Z'));
     expect(first.nagged).toBe(1);
     expect(mail.sent.length).toBe(1);
+    expect(mail.sent[0]?.text).toMatch(/Shaw Avenue/);
     const second = await runDueNags(store, mail, new Date('2026-09-01T18:00:00Z'));
     expect(second.nagged).toBe(0);
   });
@@ -68,7 +66,15 @@ describe('phase 2–3', () => {
       firstName: 'Pat',
       lastName: 'Lee',
       discipline: 'PT',
-      payRate: 72,
+      payRatePerHour: 72,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
       createdAt: nowIso(),
@@ -127,5 +133,106 @@ describe('phase 2–3', () => {
     expect(pdf.slice(0, 5).toString()).toBe('%PDF-');
     const extracted = extractPdfLatinText(Buffer.from(pdf));
     expect(extracted).toMatch(/Timesheet/);
+  });
+
+  it('excludes missed sessions from the timesheet PDF but keeps attended and makeup', () => {
+    const baseSession = {
+      weekId: 'w',
+      dateOfService: '09/01/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      serviceType: 'OT Individual',
+      location: 'School',
+      notes: 'Worked on handwriting',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      aiFlags: [] as string[],
+    };
+    const pdf = buildTimesheetPdf({
+      week: {
+        id: 'w',
+        providerId: 'p',
+        weekStart: '2026-08-31',
+        status: 'submitted',
+        signerName: 'A',
+        signerEmail: 'a@b.c',
+        timesheetKey: '',
+        signedKey: '',
+        envelopeId: '',
+        hhaStatus: 'none',
+      },
+      providerLabel: 'Pat Lee',
+      signerName: 'A',
+      signerEmail: 'a@b.c',
+      rows: [
+        {
+          session: { ...baseSession, id: 'att', attendance: 'attended', studentId: 'st-ava' },
+          student: {
+            id: 'st-ava',
+            firstName: 'Ava',
+            lastName: 'Nguyen',
+            schoolId: '',
+            dob: '',
+            programId: '',
+            programType: '',
+            hhaPatientId: '',
+            createdAt: nowIso(),
+          },
+          payAmount: 42.5,
+        },
+        {
+          session: {
+            ...baseSession,
+            id: 'miss',
+            attendance: 'missed',
+            studentId: 'st-mia',
+            notes: 'Student Absent',
+            cancelReason: 'Student Absent',
+          },
+          student: {
+            id: 'st-mia',
+            firstName: 'Mia',
+            lastName: 'Patel',
+            schoolId: '',
+            dob: '',
+            programId: '',
+            programType: '',
+            hhaPatientId: '',
+            createdAt: nowIso(),
+          },
+          payAmount: null,
+        },
+        {
+          session: {
+            ...baseSession,
+            id: 'mu',
+            attendance: 'makeup',
+            studentId: 'st-noah',
+            dateOfService: '09/03/2026',
+            notes: 'Makeup session',
+          },
+          student: {
+            id: 'st-noah',
+            firstName: 'Noah',
+            lastName: 'Kim',
+            schoolId: '',
+            dob: '',
+            programId: '',
+            programType: '',
+            hhaPatientId: '',
+            createdAt: nowIso(),
+          },
+          payAmount: 38,
+        },
+      ],
+    });
+    const extracted = extractPdfLatinText(Buffer.from(pdf));
+    expect(extracted).toMatch(/Ava Nguyen/);
+    expect(extracted).toMatch(/Noah Kim/);
+    expect(extracted).toMatch(/attended/);
+    expect(extracted).toMatch(/makeup/);
+    expect(extracted).not.toMatch(/Mia Patel/);
+    expect(extracted).not.toMatch(/missed/);
+    expect(extracted).toMatch(/Powered by advancedautomations\.net/);
   });
 });

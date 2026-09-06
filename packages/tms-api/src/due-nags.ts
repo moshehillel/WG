@@ -19,8 +19,8 @@ export async function runDueNags(
   for (const due of store.data.dueDates) {
     if (!shouldNagDue(due, today)) continue;
     if (due.lastNagOn === day) continue;
-    const student = store.data.students.find((s) => s.id === due.studentId);
-    const label = student ? `${student.firstName} ${student.lastName}` : due.studentId;
+    const school = store.data.schools.find((s) => s.id === due.schoolId);
+    const label = school?.name || due.schoolId;
     const body = alertBodyForDue(due, label);
     store.addAlert({
       id: newId(),
@@ -34,13 +34,15 @@ export async function runDueNags(
     });
     store.upsertDueDate({ ...due, lastNagOn: day });
     nagged += 1;
-    const mandate = store.mandateForStudent(due.studentId);
-    const provider = mandate?.providerId
-      ? store.data.providers.find((p) => p.id === mandate.providerId)
-      : undefined;
-    const user = provider ? store.userById(provider.userId) : undefined;
+    const providerEmails = store
+      .providerIdsForSchool(due.schoolId)
+      .map((pid) => {
+        const provider = store.data.providers.find((p) => p.id === pid);
+        return provider ? store.userById(provider.userId)?.email : undefined;
+      })
+      .filter(Boolean) as string[];
     const admins = store.data.users.filter((u) => u.role === 'admin').map((u) => u.email);
-    const to = [...new Set([user?.email, ...admins].filter(Boolean) as string[])];
+    const to = [...new Set([...providerEmails, ...admins].filter(Boolean))];
     if (to.length) {
       await mail.send({
         to,
