@@ -9,6 +9,7 @@ export * from './config/service-code-aliases.js';
 export * from './config/program-types.js';
 export * from './config/contract-map.js';
 export * from './config/pay-codes.js';
+export * from './config/school-billing-codes.js';
 export * from './config/caregiver-codes.js';
 export * from './config/discharge-defaults.js';
 export * from './config/pipeline-schedule.js';

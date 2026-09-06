@@ -4,4 +4,19 @@
   command = "node build-config.mjs"
   publish = "."
 
-# SPA is static files only; API stays on White Glove AWS (Lambda Function URL).
+[build.environment]
+  # Browser calls same-origin /api (proxied below). Avoids NetFree blocking *.lambda-url.*.on.aws.
+  TMS_API_URL = "https://wgfront.netlify.app/api"
+  TMS_USER_POOL_ID = "us-east-1_nDJo2pcjL"
+  TMS_CLIENT_ID = "26mqlo51v8au2mhcg0nbmh4bu2"
+
+# Reverse-proxy API so the browser never talks to the Lambda Function URL directly.
+[[redirects]]
+  from = "/api/*"
+  to = "https://latakehjufxtl37yvnds5pfjga0bbgby.lambda-url.us-east-1.on.aws/:splat"
+  status = 200
+  force = true
+
+# CSS in styles.css hides common Netlify badge selectors.
+# If "Powered by Netlify" still shows after CSS hide, turn off Site settings → General → Netlify badge
+# (or Collaboration / Netlify Draw) in the Netlify UI.

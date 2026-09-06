@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 
-const apiUrl = process.env.TMS_API_URL || '';
+// Prefer public URL (e.g. https://wgfront.netlify.app/api) when set; else TMS_API_URL.
+const apiUrl = (process.env.TMS_API_PUBLIC_URL || process.env.TMS_API_URL || '').replace(/\/$/, '');
 const userPoolId = process.env.TMS_USER_POOL_ID || '';
 const clientId = process.env.TMS_CLIENT_ID || '';
 

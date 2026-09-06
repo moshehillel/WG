@@ -127,9 +127,75 @@ export interface MandateCheck {
   skippedWeekly?: boolean;
 }
 
+export type MandateCheckOpts = {
+  /** Child display name for clear over/under messages. */
+  studentLabel?: string;
+  /** e.g. "PT individual" when multiple mandates share a student. */
+  serviceLabel?: string;
+};
+
 /** True when the row is an eval / report / consult / meeting (not a caseload visit). */
 export function isAdditionalServiceSession(session: SessionRow): boolean {
   return Boolean(session.additionalServiceType);
+}
+
+/** Date + begin–end for error copy (uses DOS / times as stored on the row). */
+export function sessionSlotLabel(session: SessionRow): string {
+  const dos = String(session.dateOfService || '').trim() || 'unknown date';
+  const begin = String(session.beginTime || '').trim();
+  const end = String(session.endTime || '').trim();
+  if (begin && end) return `${dos} ${begin}–${end}`;
+  if (begin) return `${dos} ${begin}`;
+  return dos;
+}
+
+function sessionsCountingTowardWeekly(weekSessions: SessionRow[]): SessionRow[] {
+  return weekSessions.filter(
+    (s) =>
+      !isAdditionalServiceSession(s) &&
+      s.attendance === 'attended' &&
+      !makeupExemptFromWeeklyMandate(s),
+  );
+}
+
+function whoLabel(opts: MandateCheckOpts): string {
+  const name = String(opts.studentLabel || '').trim();
+  const service = String(opts.serviceLabel || '').trim();
+  if (name && service) return `${name} (${service})`;
+  if (name) return name;
+  if (service) return service;
+  return 'this child';
+}
+
+function overMandateMessage(
+  opts: MandateCheckOpts,
+  counted: SessionRow[],
+  used: number,
+  allowed: number,
+  kind: 'weekly' | 'makeup_auth',
+): string {
+  const who = whoLabel(opts);
+  const slots = counted.map(sessionSlotLabel).filter(Boolean).join('; ');
+  const slotBit = slots ? ` session(s) on ${slots}.` : '';
+  if (kind === 'makeup_auth') {
+    return (
+      `This exceeds the makeup authorization for ${who}:${slotBit} ` +
+      `Authorization allows ${allowed} leftover makeup session(s); this would make it ${used}.`
+    );
+  }
+  return (
+    `This exceeds the mandate for ${who}:${slotBit} ` +
+    `Mandate allows ${allowed} session(s) per week; this upload would make it ${used}.`
+  );
+}
+
+function resolveStudentLabel(
+  studentId: string,
+  names?: ReadonlyMap<string, string> | Record<string, string>,
+): string {
+  if (!names) return '';
+  if (names instanceof Map) return String(names.get(studentId) || '').trim();
+  return String((names as Record<string, string>)[studentId] || '').trim();
 }
 
 /** Attended counts toward the delivery week. Missed does not. Makeup linked to a missed session does not. */
@@ -137,6 +203,7 @@ export function checkMandate(
   mandate: Mandate | undefined,
   weekSessions: SessionRow[],
   allSessions: SessionRow[] = weekSessions,
+  opts: MandateCheckOpts = {},
 ): MandateCheck {
   if (isMakeupAuthMandate(mandate) && mandate) {
     const allowed = Number(mandate.sessionsPerPeriod ?? mandate.frequencyPerWeek) || 0;
@@ -156,19 +223,15 @@ export function checkMandate(
       over,
       under: allowed > 0 && used < allowed,
       message: over
-        ? `Over makeup authorization: ${used} of ${allowed} leftover makeup session(s).`
+        ? overMandateMessage(opts, pool, used, allowed, 'makeup_auth')
         : allowed > 0 && used < allowed
-          ? `Makeup authorization: ${used} of ${allowed} leftover makeup session(s).`
+          ? `Makeup authorization${opts.studentLabel ? ` for ${opts.studentLabel}` : ''}: ${used} of ${allowed} leftover makeup session(s).`
           : '',
     };
   }
 
-  const used = weekSessions.filter(
-    (s) =>
-      !isAdditionalServiceSession(s) &&
-      s.attendance === 'attended' &&
-      !makeupExemptFromWeeklyMandate(s),
-  ).length;
+  const counted = sessionsCountingTowardWeekly(weekSessions);
+  const used = counted.length;
 
   if (!mandate) {
     return {
@@ -176,7 +239,9 @@ export function checkMandate(
       allowed: 0,
       over: false,
       under: false,
-      message: 'No mandate on file for this student.',
+      message: opts.studentLabel
+        ? `No mandate on file for ${opts.studentLabel}.`
+        : 'No mandate on file for this student.',
     };
   }
 
@@ -184,13 +249,14 @@ export function checkMandate(
   if (allowedOrSkip === null) {
     const n = mandate.sessionsPerPeriod ?? 0;
     const days = mandate.periodSchoolDays || 6;
+    const who = opts.studentLabel ? ` for ${opts.studentLabel}` : '';
     return {
       used,
       allowed: 0,
       over: false,
       under: false,
       skippedWeekly: true,
-      message: `Cycle mandate (${n} / ${days} school days) — weekly over-check skipped.`,
+      message: `Cycle mandate${who} (${n} / ${days} school days) — weekly over-check skipped.`,
     };
   }
 
@@ -201,16 +267,19 @@ export function checkMandate(
       allowed: 0,
       over: false,
       under: false,
-      message: 'No mandate on file for this student.',
+      message: opts.studentLabel
+        ? `No mandate on file for ${opts.studentLabel}.`
+        : 'No mandate on file for this student.',
     };
   }
   const over = used > allowed;
   const under = used < allowed;
   let message = '';
   if (over) {
-    message = `Over mandate: ${used} of ${allowed} allowed this week. Upload is blocked.`;
+    message = overMandateMessage(opts, counted, used, allowed, 'weekly');
   } else if (under) {
-    message = `Under mandate: ${used} of ${allowed} this week.`;
+    const who = opts.studentLabel ? ` for ${opts.studentLabel}` : '';
+    message = `Under mandate${who}: ${used} of ${allowed} this week.`;
   }
   return { used, allowed, over, under, message };
 }
@@ -224,6 +293,7 @@ export function checkMandatesForWeek(
   mandates: Mandate[],
   sessions: SessionRow[],
   allSessions: SessionRow[] = sessions,
+  studentNameById?: ReadonlyMap<string, string> | Record<string, string>,
 ): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -235,15 +305,16 @@ export function checkMandatesForWeek(
     byStudent.set(s.studentId, list);
   }
   for (const [studentId, rows] of byStudent) {
+    const studentLabel = resolveStudentLabel(studentId, studentNameById);
     const studentMandates = mandates.filter((m) => m.studentId === studentId);
     if (!studentMandates.length) {
-      const result = checkMandate(undefined, rows, allSessions);
+      const result = checkMandate(undefined, rows, allSessions, { studentLabel });
       warnings.push(result.message);
       continue;
     }
 
     if (studentMandates.length === 1) {
-      const result = checkMandate(studentMandates[0], rows, allSessions);
+      const result = checkMandate(studentMandates[0], rows, allSessions, { studentLabel });
       if (result.skippedWeekly) warnings.push(result.message);
       else if (result.over) errors.push(result.message);
       else if (result.under) warnings.push(result.message);
@@ -261,24 +332,27 @@ export function checkMandatesForWeek(
               !s.makeupOfSessionId,
           )
         : (byMandateId.get(mandate.id) ?? []);
-      const result = checkMandate(mandate, assigned, allSessions);
-      const label = `${mandate.discipline || mandate.serviceType || 'service'}${
+      const serviceLabel = `${mandate.discipline || mandate.serviceType || 'service'}${
         mandate.ratioGroup ? ' group' : ' individual'
       }`;
+      const result = checkMandate(mandate, assigned, allSessions, { studentLabel, serviceLabel });
       if (result.skippedWeekly) {
-        warnings.push(`${label}: ${result.message}`);
+        warnings.push(result.message);
       } else if (result.over) {
-        errors.push(`${label}: ${result.message}`);
+        errors.push(result.message);
       } else if (result.under) {
-        warnings.push(`${label}: ${result.message}`);
+        warnings.push(result.message);
       }
     }
     const unmatchedUsed = unmatched.filter(
       (s) => s.attendance === 'attended' && !makeupExemptFromWeeklyMandate(s),
     );
     if (unmatchedUsed.length) {
+      const who = studentLabel || 'this child';
+      const slots = unmatchedUsed.map(sessionSlotLabel).join('; ');
       warnings.push(
-        `${unmatchedUsed.length} session(s) did not match a specific mandate ratio/discipline.`,
+        `${unmatchedUsed.length} session(s) for ${who} did not match a specific mandate ratio/discipline` +
+          (slots ? `: ${slots}.` : '.'),
       );
     }
   }

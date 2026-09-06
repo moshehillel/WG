@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=33" />
+  <link rel="stylesheet" href="styles.css?v=48" />
 </head>
 <body class="is-auth">
   <div class="app-backdrop" aria-hidden="true"></div>
@@ -17,11 +17,11 @@
       <img class="brand-mark" src="favicon.svg" width="40" height="40" alt="" />
       <div class="brand-copy">
         <h1>White Glove Therapy</h1>
-        <p class="brand-tag">Clinical timesheets &amp; caseload ops</p>
+        <p class="brand-tag">Clinical timesheets &amp; caseload operations</p>
       </div>
     </div>
     <div class="who" id="whoBar" hidden>
-      <label id="rolePick" hidden>I am
+      <label id="rolePick" hidden>Role
         <select id="role">
           <option value="therapist">Therapist</option>
           <option value="admin">Admin</option>
@@ -49,7 +49,7 @@
       <aside id="authAside" class="auth-aside" aria-hidden="true">
         <p class="auth-aside-kicker">White Glove Therapy</p>
         <p class="auth-aside-lead">Secure access for therapists and office staff.</p>
-        <p class="auth-aside-sub">Track weeks, mandates, and signatures in one calm workspace.</p>
+        <p class="auth-aside-sub">Manage weekly timesheets, mandates, and signatures in one workspace.</p>
       </aside>
       <section id="view"></section>
     </div>
@@ -57,7 +57,38 @@
   <footer id="siteFooter" class="site-footer">
     <a href="https://www.advancedautomations.net" target="_blank" rel="noopener noreferrer">Powered by Advanced Automations</a>
   </footer>
-  <script src="config.js?v=33"></script>
-  <script src="app.js?v=33"></script>
+
+  <div id="lunaRoot" class="luna-root" hidden>
+    <div id="lunaPanel" class="luna-panel" hidden role="dialog" aria-label="Luna support chat">
+      <header class="luna-head">
+        <img class="luna-avatar" src="luna-robot.webp" width="40" height="40" alt="" />
+        <div class="luna-head-copy">
+          <strong>Luna</strong>
+          <span>TMS support</span>
+        </div>
+        <button type="button" class="luna-icon-btn" id="lunaClose" aria-label="Close Luna">×</button>
+      </header>
+      <div id="lunaMessages" class="luna-messages" aria-live="polite"></div>
+      <div id="lunaHandoffBar" class="luna-handoff" hidden>
+        <p>Ready to send this to support?</p>
+        <button type="button" class="btn-primary" id="lunaSendHandoff">Send to Moshe</button>
+      </div>
+      <form id="lunaForm" class="luna-form">
+        <label class="sr-only" for="lunaInput">Message Luna</label>
+        <textarea id="lunaInput" rows="2" placeholder="Describe the issue…" maxlength="2000"></textarea>
+        <button type="submit" class="btn-primary" id="lunaSend">Send</button>
+      </form>
+      <p id="lunaStatus" class="luna-status" hidden></p>
+    </div>
+    <button type="button" id="lunaFab" class="luna-fab" aria-label="Open Luna support" aria-expanded="false" title="Luna support">
+      <span class="luna-fab-orb" aria-hidden="true">
+        <img class="luna-fab-icon" src="luna-robot.webp" width="48" height="48" alt="" />
+      </span>
+      <span class="luna-fab-label">Luna</span>
+    </button>
+  </div>
+
+  <script src="config.js?v=38"></script>
+  <script src="app.js?v=48"></script>
 </body>
 </html>

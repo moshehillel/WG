@@ -40,7 +40,7 @@ Bot **never runs daytime** — night batch only.
 | **Session triage by program** | EVV → verify clocking; no-EVV → direct entry; `program-types.ts`. |
 | **Unknown / unmatched service type** | **Error + SNS alert** — do not proceed to HHA. |
 | **Discharged To** | Default **Home**; closure reason **case termination**. |
-| **Pay codes** | Discipline + pay rate (e.g. OT72). Monday preview flags missing pay codes. |
+| **Pay codes** | Discipline + $rate (e.g. `OT $72`, `OT Group $34`). Monday preview flags missing pay codes. |
 | **Caregiver codes** | Separate PS report; lookup by Provider Name; alert if missing. |
 | **Weekly review** | Monday night dry-run; Tuesday night live sessions; other reports nightly. |
 | **Report UserReportIds** | Open **4526**, closure **4527**, discharge **4528**, API **4026**, caregiver codes **4541**. |

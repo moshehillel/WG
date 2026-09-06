@@ -6,6 +6,11 @@ export function therapistCanEdit(status: WeekStatus): boolean {
   return EDITABLE.includes(status);
 }
 
+/** Import PDFs / additional services while approval is still pending. */
+export function therapistCanImportOrAddServices(status: WeekStatus): boolean {
+  return EDITABLE.includes(status) || status === 'submitted';
+}
+
 export function afterSubmit(status: WeekStatus): WeekStatus {
   if (status === 'reopened' || status === 'draft') return 'submitted';
   return status;

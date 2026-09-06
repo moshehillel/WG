@@ -11,9 +11,9 @@ import type { Mandate, SessionRow } from './types.js';
 import { DEFAULT_ADMIN_NOTE_TAGS } from './types.js';
 import type { MemoryStore } from './memory-store.js';
 
-/** Same bar as missing-notes: short / empty notes do not count as posted. */
+/** Same bar as missing-notes: empty notes do not count as posted; short notes do. */
 export function sessionHasPostedNote(notes: string | undefined): boolean {
-  return String(notes || '').trim().length >= 12;
+  return String(notes || '').trim().length > 0;
 }
 
 function isProvidedSession(s: SessionRow): boolean {
@@ -82,7 +82,7 @@ export function missingNotes(
         reason:
           s.attendance === 'missed'
             ? 'Missed session — follow up if a note is still needed'
-            : 'Session note missing or too short',
+            : 'Session note missing',
       };
     });
 }
@@ -90,7 +90,7 @@ export function missingNotes(
 /**
  * Admin pay-tracking rows: child + mandate + week.
  * - Sessions provided = attended + makeup (missed excluded).
- * - Notes posted = provided sessions with a real note (≥12 chars).
+ * - Notes posted = provided sessions with a non-empty note.
  * - Progress: 0% none · 50% provided · 100% notes posted for all provided.
  */
 export function weekProgressReport(
@@ -214,9 +214,24 @@ export function weekProgressReport(
   return rows;
 }
 
+export function enrichWeekHhaError(store: MemoryStore, w: {
+  id: string;
+  hhaStatus: string;
+  hhaError?: string;
+}) {
+  const transferErrors = (store.data.hhaTransfers || [])
+    .filter((t) => t.weekId === w.id && t.status === 'failed' && t.lastError)
+    .map((t) => t.lastError);
+  const hhaError =
+    (w.hhaError || '').trim() ||
+    (transferErrors.length ? [...new Set(transferErrors)].join('\n') : '');
+  return { ...w, hhaError };
+}
+
 export function adminWeeksList(store: MemoryStore) {
-  return store.data.weeks.map((w) => {
-    const provider = store.data.providers.find((p) => p.id === w.providerId);
+  return (store.data.weeks || []).map((w) => {
+    const provider = (store.data.providers || []).find((p) => p.id === w.providerId);
+    const enriched = enrichWeekHhaError(store, w);
     return {
       id: w.id,
       weekStart: w.weekStart,
@@ -224,6 +239,7 @@ export function adminWeeksList(store: MemoryStore) {
       signerName: w.signerName,
       signerEmail: w.signerEmail,
       hhaStatus: w.hhaStatus,
+      hhaError: enriched.hhaError,
       providerId: w.providerId,
       providerName: provider
         ? `${provider.firstName} ${provider.lastName}`.trim() || '—'
@@ -317,10 +333,11 @@ export function dueDateReport(store: MemoryStore, today = new Date(), opts: { fr
 }
 
 export function dashboard(store: MemoryStore) {
-  const weeks = store.data.weeks;
+  const weeks = store.data.weeks || [];
+  const transfers = store.data.hhaTransfers || [];
   const count = (status: string) => weeks.filter((w) => w.status === status).length;
-  const hhaFail = store.data.hhaTransfers.filter((t) => t.status === 'failed').length;
-  const hhaPending = store.data.hhaTransfers.filter((t) => t.status === 'pending' || t.status === 'sent').length;
+  const hhaFail = transfers.filter((t) => t.status === 'failed').length;
+  const hhaPending = transfers.filter((t) => t.status === 'pending' || t.status === 'sent').length;
   return {
     timesheet: {
       draft: count('draft') + count('reopened'),
@@ -331,7 +348,7 @@ export function dashboard(store: MemoryStore) {
     hha: {
       pending: hhaPending,
       failed: hhaFail,
-      confirmed: store.data.hhaTransfers.filter((t) => t.status === 'confirmed').length,
+      confirmed: transfers.filter((t) => t.status === 'confirmed').length,
     },
     missingNotes: missingNotes(store).length,
     openAlerts: store.openAlerts().length,
@@ -362,20 +379,35 @@ export function adminStudentsList(store: MemoryStore) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function resolveMandateProvider(store: MemoryStore, providerId: string) {
+  const rawId = String(providerId || '').trim();
+  if (!rawId) return undefined;
+  const raw = store.data.providers.find((p) => p.id === rawId);
+  if (!raw) return undefined;
+  const nameKey = providerDisplayNameKey(raw);
+  const sameName = nameKey
+    ? store.data.providers.filter((p) => providerDisplayNameKey(p) === nameKey)
+    : [raw];
+  return preferCanonicalProvider(sameName) || raw;
+}
+
 export function adminStudentDetail(store: MemoryStore, studentId: string) {
   const student = store.data.students.find((s) => s.id === studentId);
   if (!student) return null;
   const school = store.data.schools.find((s) => s.id === student.schoolId);
   const mandates = store.mandatesForStudent(student.id).map((m) => {
-    const provider = store.data.providers.find((p) => p.id === m.providerId);
+    const provider = resolveMandateProvider(store, m.providerId);
     const kind = mandateFrequencyKind(m);
     const sessionsPerPeriod = m.sessionsPerPeriod ?? m.frequencyPerWeek ?? 0;
     const periodSchoolDays = m.periodSchoolDays ?? (kind === 'school_day_cycle' ? 6 : 0);
     return {
       ...m,
+      // Link/display the canonical (linked) profile when duplicates share a name.
+      providerId: provider?.id || '',
+      // Never show a provider name without a resolvable providerId.
       providerName: provider
-        ? `${provider.firstName} ${provider.lastName}`.trim() || m.providerId || '—'
-        : m.providerId || '—',
+        ? `${provider.firstName} ${provider.lastName}`.trim() || provider.id
+        : '—',
       freqDisplay: formatFreqDisplay(kind, sessionsPerPeriod, periodSchoolDays),
       ratioLabel: m.ratioGroup ? 'Group' : 'Individual',
     };
@@ -386,7 +418,7 @@ export function adminStudentDetail(store: MemoryStore, studentId: string) {
     if (!id || providerMap.has(id)) continue;
     providerMap.set(id, {
       id,
-      name: m.providerName || id,
+      name: m.providerName && m.providerName !== '—' ? m.providerName : id,
     });
   }
   const assignedProviders = [...providerMap.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -401,7 +433,9 @@ export function adminStudentDetail(store: MemoryStore, studentId: string) {
       };
     });
   const weekIds = [...new Set(sessions.map((s) => s.weekId))];
-  const weeks = store.data.weeks.filter((w) => weekIds.includes(w.id));
+  const weeks = store.data.weeks
+    .filter((w) => weekIds.includes(w.id))
+    .map((w) => enrichWeekHhaError(store, w));
   const dueDates = dueDateReport(store).filter((d) => d.schoolId === student.schoolId);
   const files = store.filesForStudent(student.id);
   const schoolCalendar = store.schoolCalendarForSchool(student.schoolId);
@@ -469,7 +503,9 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
         studentName: student ? `${student.firstName} ${student.lastName}`.trim() : m.studentId,
       };
     });
-  const weeks = store.data.weeks.filter((w) => aliasIds.has(w.providerId) || w.providerId === provider.id);
+  const weeks = store.data.weeks
+    .filter((w) => aliasIds.has(w.providerId) || w.providerId === provider.id)
+    .map((w) => enrichWeekHhaError(store, w));
   const files = store.filesForProvider(provider.id);
   const extraTags = [...new Set(notes.flatMap((n) => n.tags || []))];
   return {

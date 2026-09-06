@@ -12,6 +12,7 @@ import {
   parseCaseloadCsv,
   parseCaseloadUpload,
   parseCaseloadWorkbook,
+  parseDurationMinutes,
   providerDisplayNameKey,
   purgeOrphanProviders,
   splitCsvLine,
@@ -165,6 +166,7 @@ Shaw Avenue,Ok,Good,1,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Push
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: 'WGC-1',
       active: true,
@@ -196,7 +198,7 @@ Shaw Avenue,Ok,Good,1,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Push
     expect(cycle.periodSchoolDays).toBe(6);
   });
 
-  it('unmatched RS Provider is a hard error — no empty-provider mandate', () => {
+  it('unmatched RS Provider is a hard error â€” no empty-provider mandate', () => {
     const store = new MemoryStore();
     store.upsertProvider({
       id: 'p-pat',
@@ -211,6 +213,7 @@ Shaw Avenue,Ok,Good,1,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,Push
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -259,6 +262,7 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Individual,2,6 day cy
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: 'WGC-1',
       active: true,
@@ -313,6 +317,7 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Individual,2,6 day cy
       frequencyKind: 'weekly',
       frequencyPerWeek: 1,
       providerName: 'White, Glove',
+      programId: '1',
     });
     expect(parsed.rows[1]).toMatchObject({
       frequencyKind: 'school_day_cycle',
@@ -321,6 +326,7 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Individual,2,6 day cy
       frequencyPerWeek: 0,
       ratioGroup: true,
       providerName: 'White Glove',
+      programId: '2',
     });
   });
 });
@@ -342,7 +348,7 @@ describe('multi-mandate weekly check', () => {
       sess({ id: 'b', serviceType: 'PT School Individual' }),
       sess({ id: 'c', serviceType: 'PT School Group' }),
     ]);
-    expect(over.errors.some((e) => /Over mandate/i.test(e))).toBe(true);
+    expect(over.errors.some((e) => /exceeds the mandate/i.test(e))).toBe(true);
   });
 
   it('skips weekly over-check for 6-day cycle mandates', () => {
@@ -381,7 +387,7 @@ const KU_HEADERS = [
   'RS Provider',
 ];
 
-/** Final KU “Related Service by serviceschool (WG)” Listing Results headers. */
+/** Final KU â€œRelated Service by serviceschool (WG)â€ Listing Results headers. */
 const WG_HEADERS = [
   'Student Gen Ed ID#',
   'CR Recommended School',
@@ -530,6 +536,7 @@ describe('caseload Excel parser', () => {
       startOn: '2026-09-02',
       endOn: '2027-06-25',
       freqDisplay: '2 / week',
+      programId: '922522794',
     });
 
     const sincere = parsed.rows.find((r) => r.lastName === 'Fox');
@@ -537,6 +544,7 @@ describe('caseload Excel parser', () => {
     expect(sincere?.durationMinutes).toBe(30);
     expect(sincere?.groupSize).toBe(1);
     expect(sincere?.providerName).toBe('White, Glove');
+    expect(sincere?.programId).toBe('111055897');
 
     const elmer = parsed.rows.find((r) => r.lastName === 'Diaz');
     expect(elmer?.frequencyKind).toBe('school_day_cycle');
@@ -549,6 +557,32 @@ describe('caseload Excel parser', () => {
     expect(elmer?.groupSize).toBeNull();
     expect(elmer?.discipline).toBe('OT');
     expect(elmer?.providerName).toBe('White Glove');
+    expect(elmer?.programId).toBe('909062464');
+  });
+
+  it('persists Student Gen Ed ID# as student.programId on WG import', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-james',
+      userId: '',
+      firstName: 'James',
+      lastName: 'Vasaturo',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    applyCaseloadImport(store, parseCaseloadWorkbook(writeWgBook('xls')));
+    expect(store.findStudentByName('Omar', 'Abedin')?.programId).toBe('922522794');
   });
 
   it('maps RS Duration and derives group size from Ratio / Group Size column', () => {
@@ -576,6 +610,26 @@ Fox,Sincere,PT,2:1,1,Weekly,42,,Pat Lee
     });
   });
 
+  it('warns when RS Duration column is missing (older KU headers)', () => {
+    const csv = `Last Name,First Name,Related Service,Ratio,Freq,Period,Location,RS Provider
+Haris,Ahmad,PT,Individual,1,Weekly,School,Pat Lee
+`;
+    const parsed = parseCaseloadCsv(csv);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows[0]?.durationMinutes).toBeNull();
+    expect(parsed.warnings.some((w) => /RS Duration/i.test(w.field || '') || /RS Duration/i.test(w.problem))).toBe(
+      true,
+    );
+  });
+
+  it('parses Excel time-fraction and clock-style RS Duration values', () => {
+    expect(parseDurationMinutes(String(30 / 1440))).toBe(30);
+    expect(parseDurationMinutes(String(42 / 1440))).toBe(42);
+    expect(parseDurationMinutes('0:30')).toBe(30);
+    expect(parseDurationMinutes('0:45:00')).toBe(45);
+    expect(parseDurationMinutes('30')).toBe(30);
+  });
+
   it('treats White Glove as agency and hard-errors unmatched providers (no default)', () => {
     const store = new MemoryStore();
     store.upsertProvider({
@@ -591,6 +645,7 @@ Fox,Sincere,PT,2:1,1,Weekly,42,,Pat Lee
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: 'FD-1',
       active: true,
@@ -609,6 +664,7 @@ Fox,Sincere,PT,2:1,1,Weekly,42,,Pat Lee
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: 'JV-1',
       active: true,
@@ -652,6 +708,7 @@ Shaw Avenue,Fox,Sincere,2,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -670,13 +727,14 @@ Shaw Avenue,Fox,Sincere,2,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
       createdAt: nowIso(),
     });
     const applied = applyCaseloadImport(store, parseCaseloadCsv(csv), {
-      // @ts-expect-error defaultProviderId removed — must be ignored if passed
+      // @ts-expect-error defaultProviderId removed â€” must be ignored if passed
       defaultProviderId: 'p-default',
     });
     const ahmad = applied.rows.find((r) => r.lastName === 'Haris');
@@ -706,6 +764,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: 'WGC-1',
       active: true,
@@ -740,6 +799,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -766,6 +826,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -784,6 +845,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -820,6 +882,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -838,6 +901,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -878,6 +942,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -896,6 +961,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -934,6 +1000,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -952,6 +1019,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -1011,6 +1079,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -1059,6 +1128,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -1077,6 +1147,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,
@@ -1095,6 +1166,7 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
       payRateGroup30Min: null,
       payRateGroup42Min: null,
       payRateGroup45Min: null,
+      payRateEval: null,
       payRateAdditionalHourly: null,
       hhaCaregiverCode: '',
       active: true,

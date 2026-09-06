@@ -41,7 +41,10 @@ export class WhiteGloveStack extends cdk.Stack {
       this.node.tryGetContext('alertFromEmailFallback') ?? 'moshe@advancedautomations.net',
     );
     const alertFromDomain = this.node.tryGetContext('alertFromDomain') as string | undefined;
-    /** Verified SES sender until domain DKIM is live; avoids unverified alerts@ default. */
+    /**
+     * Optional SES From for HTML/CSV alerts. SNS (AWS Notifications) is the primary
+     * reliable path — WG domain/DKIM is not required for staff to get alerts.
+     */
     const alertFromEmail = String(
       this.node.tryGetContext('alertFromEmail') ??
         (alertFromDomain?.trim()
@@ -196,7 +199,11 @@ export class WhiteGloveStack extends cdk.Stack {
       displayName: 'White-glove pipeline exceptions',
       masterKey: dataKey,
     });
-    /** HTML alerts go via SES; SNS topic is plain-text fallback if SES fails. */
+    /**
+     * Primary: SNS email → Amazon-managed "AWS Notifications" From (no WG domain/DKIM).
+     * Optional: SES HTML+CSV when From identity is verified. ALERT_ALWAYS_SNS always
+     * publishes SNS so quarantined SES mail does not leave staff without alerts.
+     */
     for (const email of alertEmails) {
       exceptionTopic.addSubscription(new subscriptions.EmailSubscription(email));
     }
@@ -249,6 +256,8 @@ export class WhiteGloveStack extends cdk.Stack {
       ALERT_FROM_NAME: alertFromName,
       ALERT_REPLY_TO: alertReplyTo,
       ALERT_EMAILS: alertEmails.join(','),
+      /** Dual-channel: SNS plain text on every alert, even when SES accepts the send. */
+      ALERT_ALWAYS_SNS: 'true',
       HHA_USE_MOCK: hhaUseMock ? 'true' : 'false',
       HHA_PRODUCTION_BASE_URL: hhaProductionUrl,
       /** Pipeline uses production HHA SOAP (writes still gated by dryRun). */
@@ -972,11 +981,17 @@ export class WhiteGloveStack extends cdk.Stack {
     });
     new cdk.CfnOutput(this, 'AlertFromEmail', {
       value: alertFromEmail,
-      description: 'SES FROM address for HTML pipeline alerts',
+      description:
+        'Optional SES FROM for HTML/CSV (not Amazon no-reply). Primary alerts use SNS AWS Notifications.',
     });
     new cdk.CfnOutput(this, 'AlertReplyTo', {
       value: alertReplyTo,
-      description: 'Reply-To for pipeline alerts (human-monitored inbox)',
+      description: 'Reply-To for SES HTML alerts when that channel is used',
+    });
+    new cdk.CfnOutput(this, 'ExceptionTopicArn', {
+      value: exceptionTopic.topicArn,
+      description:
+        'Primary alert path: SNS email → AWS Notifications (Amazon-managed From). No WG domain/DKIM required.',
     });
     new cdk.CfnOutput(this, 'HhaProductionSoapUrl', {
       value: sharedEnv.HHA_PRODUCTION_BASE_URL!,
@@ -986,7 +1001,6 @@ export class WhiteGloveStack extends cdk.Stack {
       value: pipelineConsoleUrl,
       description: 'Manual run: open link → Start execution → use {"runId":"manual-YYYY-MM-DD"}',
     });
-    new cdk.CfnOutput(this, 'ExceptionTopicArn', { value: exceptionTopic.topicArn });
     new cdk.CfnOutput(this, 'DataEncryptionKeyArn', {
       value: dataKey.keyArn,
       description: 'CMK used for S3/DynamoDB/Secrets/SNS/SFN logs (alias/white-glove-data)',
@@ -1038,10 +1052,16 @@ export class WhiteGloveStack extends cdk.Stack {
       addTherapyManagement(this, {
         reportsBucket,
         hhaSecret,
+        encryptionKey: dataKey,
         fromEmail: alertFromEmail,
         bedrockModelId: String(this.node.tryGetContext('tmsBedrockModelId') ?? ''),
         spaOrigin: String(this.node.tryGetContext('tmsSpaOrigin') ?? ''),
         internalKey: String(this.node.tryGetContext('tmsInternalKey') ?? ''),
+        openaiApiKey: String(this.node.tryGetContext('openaiApiKey') ?? ''),
+        lunaSupportEmail: String(
+          this.node.tryGetContext('lunaSupportEmail') ?? 'moshe@advancedautomations.net',
+        ),
+        openaiModel: String(this.node.tryGetContext('openaiModel') ?? 'gpt-4o-mini'),
       });
     }
   }

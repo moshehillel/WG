@@ -12,8 +12,9 @@ export function screenServiceNote(input: {
   const notes = String(input.notes || '').trim();
   const needsServiceNote = input.attendance === 'attended' || input.attendance === 'makeup';
 
-  if (needsServiceNote && notes.length < 20) {
-    blockFlags.push('Note looks incomplete (very short).');
+  // Empty notes block; brevity alone is allowed (1–few words OK).
+  if (needsServiceNote && !notes) {
+    blockFlags.push('Service note is required.');
   }
   if (input.attendance === 'attended' && !input.beginTime && !input.endTime) {
     blockFlags.push('Attended session is missing time in / time out.');
