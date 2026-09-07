@@ -629,6 +629,33 @@ body.is-app .auth-aside {
   color: #475569;
   border-color: #e2e8f0;
 }
+.status-clear-btn {
+  align-self: center;
+  padding: 0.22rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft);
+  background: #fff;
+  color: #475569;
+  cursor: pointer;
+}
+.status-clear-btn:hover {
+  background: #f8fafc;
+  color: #0f172a;
+}
+.dismissible-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.15rem;
+}
+.err-box.status-banner .status-clear-btn,
+.warn-box.status-banner .status-clear-btn,
+.ok-box.status-banner .status-clear-btn,
+.caseload-issues .status-clear-btn {
+  margin-top: 0.55rem;
+}
 
 /* ——— Cards / sections ——— */
 .card {
@@ -1066,7 +1093,7 @@ tr.hard { background: #fef2f2; }
   transform: translateX(-50%);
   z-index: 120;
   max-width: min(32rem, calc(100vw - 1.5rem));
-  padding: 0.7rem 1rem;
+  padding: 0.7rem 2.2rem 0.7rem 1rem;
   border-radius: 10px;
   border: 1px solid transparent;
   font-weight: 600;
@@ -1096,6 +1123,25 @@ tr.hard { background: #fef2f2; }
   background: #f3f9ff;
   color: var(--ink);
   border-color: #c5d8ea;
+}
+.action-toast-dismiss {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.3rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.65;
+  font-size: 1.2rem;
+  line-height: 1;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.action-toast-dismiss:hover {
+  opacity: 1;
+  background: rgba(15, 23, 42, 0.06);
 }
 /* Keep Send timesheet / footer actions clear of the Luna FAB */
 body.is-app main {
@@ -1427,11 +1473,13 @@ body.is-app main {
   padding: 0.48rem 0.85rem;
 }
 .luna-status {
+  position: relative;
   margin: 0;
-  padding: 0 0.8rem 0.65rem;
+  padding: 0.35rem 2rem 0.65rem 0.8rem;
   font-size: 0.78rem;
   color: var(--err);
 }
+.luna-status[hidden] { display: none !important; }
 body.is-auth .luna-root { display: none !important; }
 
 @media (max-width: 720px) {
