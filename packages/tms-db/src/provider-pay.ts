@@ -64,7 +64,9 @@ export function clockToMinutes(raw: string): number | null {
 }
 
 /**
+ * Map authorized mandate duration to a pay bucket.
  * Nearest of 30/42/45 within 3 minutes; otherwise hourly.
+ * Callers must pass **mandate** minutes — never Frontline/PDF clock length.
  * Same thresholds as shared `nearestSchoolDurationBucket` (hour ↔ billing 60).
  */
 export function closestDurationBucket(minutes: number): 30 | 42 | 45 | 'hour' {
@@ -78,13 +80,18 @@ export function closestDurationBucket(minutes: number): 30 | 42 | 45 | 'hour' {
   return 'hour';
 }
 
-/** Optional peer context for solo-group → individual rate. */
+/** Optional peer + mandate context for pay / pay-code selection. */
 export type SessionGroupPayOpts = {
   /**
    * Other attended/makeup children in the same group↔group clock window (same provider/day).
    * Missed/absent do not count. When omitted, treated as 0 (solo → individual).
    */
   presentGroupPeerCount?: number;
+  /**
+   * Authorized duration from the matching mandate (caseload RS Duration).
+   * Drives 30/42/45 (or hourly) bucket — not Frontline begin/end rounding.
+   */
+  mandateDurationMinutes?: number | null;
 };
 
 /**
@@ -125,6 +132,7 @@ export function sessionBillingKind(
 
 /**
  * Catalog rate used for HHA pay-code name (e.g. OT $62.5 / OT Group $34).
+ * School duration bucket comes from mandate authorized minutes (not Frontline clock).
  * Uses flat duration rates when bucketed; does not prorate hourly sessions.
  * Eval uses `payRateEval` (not additional hourly).
  */
@@ -140,12 +148,12 @@ export function sessionPayCodeRate(
   if (billingKind === 'additional' || session.additionalServiceType) {
     return provider.payRateAdditionalHourly;
   }
-  const minutes = sessionDurationMinutes(session.beginTime, session.endTime);
+  const mandateMinutes = opts?.mandateDurationMinutes;
   const group = sessionUsesGroupPayRate(session, opts);
-  if (minutes == null) {
+  if (mandateMinutes == null || !Number.isFinite(mandateMinutes)) {
     return provider.payRatePerHour;
   }
-  const bucket = closestDurationBucket(minutes);
+  const bucket = closestDurationBucket(mandateMinutes);
   if (group) {
     if (bucket === 30) return provider.payRateGroup30Min ?? provider.payRatePerHour;
     if (bucket === 42) return provider.payRateGroup42Min ?? provider.payRatePerHour;
@@ -164,7 +172,7 @@ export function sessionPayAmount(
   session: SessionRow,
   opts?: SessionGroupPayOpts,
 ): number | null {
-  const minutes = sessionDurationMinutes(session.beginTime, session.endTime);
+  const clockMinutes = sessionDurationMinutes(session.beginTime, session.endTime);
   const billingKind = sessionBillingKind(session);
   if (billingKind === 'eval') {
     return provider.payRateEval;
@@ -172,27 +180,30 @@ export function sessionPayAmount(
   if (billingKind === 'additional' || session.additionalServiceType) {
     const hourly = provider.payRateAdditionalHourly;
     if (hourly == null) return null;
-    const mins = minutes ?? 0;
+    const mins = clockMinutes ?? 0;
     return Math.round(((mins / 60) * hourly + Number.EPSILON) * 100) / 100;
   }
   const group = sessionUsesGroupPayRate(session, opts);
-  if (minutes == null) {
+  const mandateMinutes = opts?.mandateDurationMinutes;
+  if (mandateMinutes == null || !Number.isFinite(mandateMinutes)) {
     return provider.payRatePerHour;
   }
-  const bucket = closestDurationBucket(minutes);
+  const bucket = closestDurationBucket(mandateMinutes);
   if (group) {
     if (bucket === 30) return provider.payRateGroup30Min ?? provider.payRatePerHour;
     if (bucket === 42) return provider.payRateGroup42Min ?? provider.payRatePerHour;
     if (bucket === 45) return provider.payRateGroup45Min ?? provider.payRatePerHour;
     return provider.payRatePerHour != null
-      ? Math.round(((minutes / 60) * provider.payRatePerHour + Number.EPSILON) * 100) / 100
+      ? Math.round((((clockMinutes ?? mandateMinutes) / 60) * provider.payRatePerHour + Number.EPSILON) * 100) /
+          100
       : null;
   }
   if (bucket === 30) return provider.payRate30Min ?? provider.payRatePerHour;
   if (bucket === 42) return provider.payRate42Min ?? provider.payRatePerHour;
   if (bucket === 45) return provider.payRate45Min ?? provider.payRatePerHour;
   return provider.payRatePerHour != null
-    ? Math.round(((minutes / 60) * provider.payRatePerHour + Number.EPSILON) * 100) / 100
+    ? Math.round((((clockMinutes ?? mandateMinutes) / 60) * provider.payRatePerHour + Number.EPSILON) * 100) /
+        100
     : null;
 }
 

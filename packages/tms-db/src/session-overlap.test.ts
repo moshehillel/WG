@@ -7,6 +7,7 @@ import {
   childHasGroupMandate,
   childGroupSizeCap,
   presentGroupPeerCount,
+  notesMentionNoPeerAvailable,
   soloGroupMandateNoteWarning,
 } from './session-overlap.js';
 import { sessionPayAmount, sessionUsesGroupPayRate, blankProviderPay } from './provider-pay.js';
@@ -310,8 +311,8 @@ describe('groupSize cluster cap', () => {
       studentNameById: names,
       mandates,
     });
-    expect(err).toMatch(/Group mandate allows 3/i);
-    expect(err).toMatch(/4 overlapping children/i);
+    expect(err).toMatch(/Group locker: mandate allows 3/i);
+    expect(err).toMatch(/this slot has 4/i);
   });
 
   it('enforces groupSize on group-tagged clusters; individual-tagged group-mandate no longer shares', () => {
@@ -349,8 +350,8 @@ describe('groupSize cluster cap', () => {
       studentNameById: names,
       mandates,
     });
-    expect(err).toMatch(/Group mandate allows 2/i);
-    expect(err).toMatch(/3 overlapping children/i);
+    expect(err).toMatch(/Group locker: mandate allows 2/i);
+    expect(err).toMatch(/this slot has 3/i);
   });
 
   it('Small Group with null size caps at 2 (fewer than 3)', () => {
@@ -369,7 +370,7 @@ describe('groupSize cluster cap', () => {
       studentNameById: names,
       mandates,
     });
-    expect(err).toMatch(/Group mandate allows 2/i);
+    expect(err).toMatch(/Group locker: mandate allows 2/i);
   });
 });
 
@@ -394,9 +395,11 @@ describe('group-mandate seen individually → individual pay', () => {
     expect(sessionUsesGroupPayRate(individualVisit)).toBe(false);
     expect(sessionUsesGroupPayRate(groupVisit)).toBe(false); // solo / no peers → individual
     expect(sessionUsesGroupPayRate(groupVisit, { presentGroupPeerCount: 1 })).toBe(true);
-    expect(sessionPayAmount(provider, individualVisit)).toBe(40);
-    expect(sessionPayAmount(provider, groupVisit)).toBe(40);
-    expect(sessionPayAmount(provider, groupVisit, { presentGroupPeerCount: 1 })).toBe(25);
+    expect(sessionPayAmount(provider, individualVisit, { mandateDurationMinutes: 30 })).toBe(40);
+    expect(sessionPayAmount(provider, groupVisit, { mandateDurationMinutes: 30 })).toBe(40);
+    expect(
+      sessionPayAmount(provider, groupVisit, { presentGroupPeerCount: 1, mandateDurationMinutes: 30 }),
+    ).toBe(25);
   });
 });
 
@@ -449,10 +452,10 @@ describe('solo group → individual pay (absent peers)', () => {
     const peerCount = presentGroupPeerCount({ candidate, peers: [missed] });
     expect(peerCount).toBe(0);
     expect(sessionUsesGroupPayRate(candidate, { presentGroupPeerCount: peerCount })).toBe(false);
-    expect(sessionPayAmount(provider, candidate, { presentGroupPeerCount: peerCount })).toBe(40);
+    expect(sessionPayAmount(provider, candidate, { presentGroupPeerCount: peerCount, mandateDurationMinutes: 30 })).toBe(40);
   });
 
-  it('warns when group-mandate individual visit note omits no-peer language', () => {
+  it('blocks when group-mandate individual visit note omits no-peer language', () => {
     const mandates = [mandate({ studentId: 'st1', ratioGroup: true })];
     expect(
       soloGroupMandateNoteWarning({
@@ -462,10 +465,37 @@ describe('solo group → individual pay (absent peers)', () => {
         attendance: 'attended',
         mandates,
       }),
-    ).toMatch(/no peer was available/i);
+    ).toMatch(/no peer was available|no partner available/i);
     expect(
       soloGroupMandateNoteWarning({
         notes: 'No peer available; worked on grasp',
+        serviceType: 'PT School',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+      }),
+    ).toBeNull();
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Seen alone — no partner available today',
+        serviceType: 'PT School',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+      }),
+    ).toBeNull();
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Peer not available; 1:1 session',
+        serviceType: 'PT School',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+      }),
+    ).toBeNull();
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'No peer was available for group',
         serviceType: 'PT School',
         studentId: 'st1',
         attendance: 'attended',
@@ -501,6 +531,23 @@ describe('solo group → individual pay (absent peers)', () => {
         mandates,
         presentGroupPeerCount: 0,
       }),
-    ).toMatch(/no peer was available/i);
+    ).toMatch(/blocked|no peer was available|no partner available/i);
+  });
+
+  it('accepts common no-peer synonym phrasings', () => {
+    const ok = [
+      'no partner available',
+      'No peer available',
+      'no peer was available',
+      'peer not available',
+      'partners were unavailable',
+      'no other child',
+      'other peer was absent',
+      'classmate not available',
+    ];
+    for (const phrase of ok) {
+      expect(notesMentionNoPeerAvailable(`Service Provided: ${phrase}`)).toBe(true);
+    }
+    expect(notesMentionNoPeerAvailable('Service Provided: fine motor only')).toBe(false);
   });
 });

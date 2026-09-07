@@ -865,11 +865,17 @@ function letterTabsHtml(active, letters) {
     .join('')}</div>`;
 }
 
+/** Full A–Z (+ # when needed) so long admin lists are scannable without scrolling. */
+function alphabetLettersForRows(rows, getName) {
+  const present = new Set(rows.map((row) => alphaLetterFromName(getName(row))));
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').filter((L) => present.has(L));
+  if (present.has('#')) letters.push('#');
+  return letters.length ? letters : ['A'];
+}
+
 function bindLetterTabs(getRows, getName) {
   const rows = [...getRows()];
-  const letters = [
-    ...new Set(rows.map((row) => alphaLetterFromName(getName(row)))),
-  ].sort((a, b) => (a === '#' ? 1 : b === '#' ? -1 : a.localeCompare(b)));
+  const letters = alphabetLettersForRows(rows, getName);
   if (!letters.includes(state.listTabLetter)) state.listTabLetter = letters[0] || 'A';
   const host = document.getElementById('listLetterTabs');
   if (host) host.innerHTML = letterTabsHtml(state.listTabLetter, letters);
@@ -976,13 +982,15 @@ async function therapistHome(statusFlash) {
   }
 
   const status = week?.status || 'draft';
-  const fullyLocked = status === 'signed' || status === 'locked';
+  const processed = status === 'signed' || status === 'locked';
   const pending = status === 'submitted';
-  const canImport = !fullyLocked;
+  // Import / add new sessions even on signed/locked weeks; existing processed rows stay view-only.
+  const canImport = true;
+  const canMutateExisting = !processed && (status === 'draft' || status === 'reopened');
   const sendBlockReason = timesheetSendBlockReason({
     week,
     sessions,
-    locked: pending || fullyLocked,
+    locked: pending || processed,
     errors,
     signerEmail,
   });
@@ -1055,6 +1063,7 @@ async function therapistHome(statusFlash) {
         </label>
       </div>
       <label>Notes <textarea id="notes" rows="3"></textarea></label>
+      <p class="muted">If a group-mandate child is seen alone (or as individual), the note must say no peer/partner was available.</p>
       <button type="button" class="btn big" id="add">Save session</button>
     </div>`;
 
@@ -1067,7 +1076,7 @@ async function therapistHome(statusFlash) {
       </div>
       ${isPriorPane ? `
       <h2>Previously processed sessions</h2>
-      <p class="muted">View-only history. Open a week to review sessions and timesheets. Admins can reopen if edits are needed.</p>
+      <p class="muted">Open a prior week to review timesheets. Existing processed sessions are view-only for providers; you can still import or add new sessions if the date of service is within 14 days (unless an admin unlocks). Admins can edit processed rows when needed.</p>
       <div class="table-wrap"><table>
         <tr><th>Week</th><th>Status</th><th>Sessions</th><th></th></tr>
         ${priorWeeks.map((w) => `<tr>
@@ -1081,7 +1090,7 @@ async function therapistHome(statusFlash) {
       <h2>My week</h2>
       ${banner}
       ${week ? approvalBanner(status) : '<div class="warn-box">Contact the office to complete your therapist profile setup.</div>'}
-      <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${fullyLocked ? ' · view only' : ''}</p>
+      <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${processed ? ' · processed (existing sessions locked; you can still import new ones)' : ''}</p>
       <div class="row">
         ${schools.length > 1 ? `<button type="button" class="btn" id="changeSchool">Change school</button>` : ''}
         <button class="btn" id="refreshHome">Reload week</button>
@@ -1090,10 +1099,10 @@ async function therapistHome(statusFlash) {
       `}
       ${!isPriorPane && errors.length ? `<div class="err-box"><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}</div>` : ''}
       ${!isPriorPane && warnings.length ? `<div class="warn-box"><strong>Warnings (submission is still allowed).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}</div>` : ''}
-      ${!isPriorPane ? `<p class="muted">Red indicates a blocking issue (over-mandate or note review). Yellow indicates under-mandate or soft warnings only.</p>
+      ${!isPriorPane ? `<p class="muted">Red indicates a blocking issue (no mandate on file, over-mandate, or note review). Yellow indicates under-mandate or soft warnings only.</p>
       <div class="table-wrap">
       <table>
-        <tr><th>Date</th><th>Child</th><th>Service</th><th>CPT</th><th>Time</th><th>Attendance</th><th>Notes</th>${canImport ? '<th></th>' : ''}</tr>
+        <tr><th>Date</th><th>Child</th><th>Service</th><th>CPT</th><th>Time</th><th>Attendance</th><th>Notes</th><th></th></tr>
         ${sessions.map((s) => {
           const name = studentName(students, s.studentId);
           const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ');
@@ -1102,8 +1111,11 @@ async function therapistHome(statusFlash) {
           const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
           const serviceLabel = additionalServiceLabel(s.additionalServiceType) || s.serviceType || '—';
           const cpt = s.cptLabel || (s.cptCodes || []).join(', ') || '—';
-          const canEditAddl = canImport && Boolean(s.additionalServiceType);
-          const canRemove = canImport && (!pending || Boolean(s.additionalServiceType));
+          const canEditAddl =
+            Boolean(s.additionalServiceType) && (canMutateExisting || pending);
+          const canRemove =
+            (canMutateExisting && !pending) ||
+            (pending && Boolean(s.additionalServiceType));
           const payload = {
             id: s.id,
             studentId: s.studentId,
@@ -1116,28 +1128,22 @@ async function therapistHome(statusFlash) {
             cptLabel: s.cptLabel || '',
             makeupOfSessionId: s.makeupOfSessionId || '',
           };
-          const actions = canImport
-            ? `<td class="row-actions">
+          const actions = `<td class="row-actions">
                 ${canEditAddl ? `<button type="button" class="icon-btn" data-edit-session="${esc(s.id)}" title="Edit" aria-label="Edit">${pencilIcon()}</button>` : ''}
                 ${canRemove ? `<button type="button" class="btn" data-remove-session="${esc(s.id)}">Remove</button>` : ''}
-              </td>`
-            : '';
+              </td>`;
           return `<tr class="${rowClass}" data-session-json="${esc(JSON.stringify(payload))}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${esc(serviceLabel)}</td><td>${esc(cpt)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${esc(s.notes || '')}</td>${actions}</tr>`;
-        }).join('') || `<tr><td colspan="${canImport ? 8 : 7}">No sessions recorded yet.</td></tr>`}
+        }).join('') || `<tr><td colspan="8">No sessions recorded yet.</td></tr>`}
       </table>
     </div>` : ''}
     </div>
 
-    ${!isPriorPane && fullyLocked ? `
-    <div class="card">
-      <p>This week is ${esc(weekApprovalLabel(status).title.toLowerCase())} and cannot be edited.</p>
-      <button type="button" class="btn" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
-    </div>
-    ` : !isPriorPane ? `
+    ${!isPriorPane ? `
+    ${processed ? `<div class="warn-box">This week is already processed. Existing sessions cannot be edited or removed (admins can still edit). You can still import new session notes within the 14-day locker (duplicates are skipped) and add additional services. Overlap with existing sessions is still checked.</div>` : ''}
     ${pending ? `<div class="warn-box">Approval is pending. You can still import session notes and edit additional services, or cancel the approval request to return to draft.</div>` : ''}
     <div class="card sec-card">
       <h2 class="sec"><span class="sec-num">1</span> Import weekly notes</h2>
-      <p>Select a Frontline Related Service Session Notes PDF or a Therapist Activity Output PDF (text-based, not a scan). Children and schools must already exist from caseload import; this upload will not create them. Import is all-or-nothing — any error or yellow warning blocks the whole file.</p>
+      <p>Select a Frontline Related Service Session Notes PDF or a Therapist Activity Output PDF (text-based, not a scan). Children and schools must already exist from caseload import; this upload will not create them. Import is all-or-nothing — any error or yellow warning blocks the whole file. Already-imported sessions are skipped; new sessions may be added even on a processed week.</p>
       <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
       <button class="btn-primary big" id="upload">Import</button>
       <p class="muted" id="uploadHint">Accepts Frontline session-notes or Therapist Activity Output PDFs. Import caseloads under Mandates. Scanned PDFs are not supported.</p>
@@ -1147,7 +1153,7 @@ async function therapistHome(statusFlash) {
 
     ${addlForm}
 
-    ${pending ? `
+    ${pending || processed ? `
     <div class="card sec-card">
       <h2 class="sec"><span class="sec-num">3</span> Timesheet</h2>
       <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
@@ -1912,10 +1918,13 @@ async function adminChildDetail(studentId, opts = {}) {
         <tr>${bulkTh('child-mandates')}<th>Discipline / service</th><th>Ratio</th><th>Group size</th><th>Duration</th><th>Frequency</th><th>Dates</th><th>Provider</th><th></th></tr>
         ${mandates.map((m) => {
           const service = [m.discipline, m.serviceType].filter(Boolean).join(' · ') || '—';
+          const billing = m.billingServiceName
+            ? `<div class="muted" style="font-size:0.85rem">${esc(m.billingServiceName)}</div>`
+            : '';
           const dates = [m.startOn, m.endOn].filter(Boolean).join(' → ') || '—';
           return `<tr>
           ${bulkTd('child-mandates', m.id)}
-          <td>${esc(service)}</td>
+          <td>${esc(service)}${billing}</td>
           <td>${esc(m.ratioLabel || (m.ratioGroup ? 'Group' : 'Individual'))}</td>
           <td>${esc(mandateGroupSizeLabel(m))}</td>
           <td>${esc(mandateDurationLabel(m))}</td>
@@ -2164,15 +2173,20 @@ async function adminProviderDetail(providerId) {
       ${bulkBar('prov-mandates')}
       <table>
         <tr>${bulkTh('prov-mandates')}<th>Child</th><th>Service</th><th>Group size</th><th>Duration</th><th>Freq</th><th></th></tr>
-        ${mandates.map((m) => `<tr>
+        ${mandates.map((m) => {
+          const billing = m.billingServiceName
+            ? `<div class="muted" style="font-size:0.85rem">${esc(m.billingServiceName)}</div>`
+            : '';
+          return `<tr>
           ${bulkTd('prov-mandates', m.id)}
           <td>${childNameLink(m.studentId, m.studentName || '—')}</td>
-          <td>${esc(m.serviceType || '—')}</td>
+          <td>${esc(m.serviceType || '—')}${billing}</td>
           <td>${esc(mandateGroupSizeLabel(m))}</td>
           <td>${esc(mandateDurationLabel(m))}</td>
           <td>${esc(mandateFreqLabel(m))}</td>
           <td><button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete mandate</button></td>
-        </tr>`).join('') || '<tr><td colspan="7">No mandates assigned.</td></tr>'}
+        </tr>`;
+        }).join('') || '<tr><td colspan="7">No mandates assigned.</td></tr>'}
       </table>
     </div>
     <div class="card">
@@ -2188,6 +2202,16 @@ async function adminProviderDetail(providerId) {
           <td><button type="button" class="btn" data-del-week="${esc(w.id)}" data-week-status="${esc(w.status || '')}">Remove</button></td>
         </tr>`).join('') || '<tr><td colspan="5">No weeks yet.</td></tr>'}
       </table>
+    </div>
+    <div class="card">
+      <h3>Import Frontline / Therapist Activity sessions</h3>
+      <p class="muted">Same import as the therapist workspace: Frontline Related Service Session Notes or Therapist Activity Output PDF (text-based, not a scan). Children and schools must already exist from caseload import. Import is all-or-nothing — any error blocks the whole file. Already-imported sessions are skipped.</p>
+      <div class="row">
+        <label>Week start (Monday) <input id="pSessionWeekStart" type="date" value="${esc(mondayIso())}" /></label>
+      </div>
+      <input id="pSessionPdf" type="file" accept="application/pdf,.pdf" />
+      <button type="button" class="btn-primary" id="pUploadSessions">Import sessions</button>
+      <div id="pUploadIssues" class="upload-issues" hidden></div>
     </div>
     <div class="card">
       <h3>Generate timesheet</h3>
@@ -2361,6 +2385,84 @@ async function adminProviderDetail(providerId) {
       setStatus('Report uploaded.', 'ok');
       await adminProviderDetail(providerId);
     } catch (e) { setStatus(e.message, 'err'); }
+  };
+  document.getElementById('pUploadSessions').onclick = async () => {
+    const btn = document.getElementById('pUploadSessions');
+    const issuesHost = document.getElementById('pUploadIssues');
+    try {
+      const file = document.getElementById('pSessionPdf').files[0];
+      if (!file) throw new Error('Select a Frontline or Therapist Activity PDF first.');
+      const weekStart = document.getElementById('pSessionWeekStart').value;
+      if (!weekStart) throw new Error('Select a week start date.');
+      btn.disabled = true;
+      btn.textContent = 'Importing…';
+      if (issuesHost) {
+        issuesHost.hidden = true;
+        issuesHost.innerHTML = '';
+      }
+      setStatus('Importing PDF…', '');
+      const pdfBase64 = await fileToBase64(file);
+      const out = await api('POST', '/week/upload-sessions', {
+        weekStart,
+        providerId,
+        pdfBase64,
+      });
+      const warnList = Array.isArray(out.warnings) ? out.warnings : [];
+      const failedList = Array.isArray(out.failed)
+        ? out.failed.map((f) => (typeof f === 'string' ? f : f.error || JSON.stringify(f)))
+        : Array.isArray(out.errors)
+          ? out.errors
+          : [];
+      const savedList = Array.isArray(out.saved)
+        ? out.saved.map((s) => {
+            if (typeof s === 'string') return s;
+            const who = s.studentName || s.studentId || 'session';
+            const when = [s.dateOfService, s.beginTime, s.endTime].filter(Boolean).join(' ');
+            return when ? `${who} — ${when}` : who;
+          })
+        : [];
+      const skippedN = Array.isArray(out.skipped) ? out.skipped.length : out.skippedCount || 0;
+      if (issuesHost && (failedList.length || warnList.length || savedList.length)) {
+        const parts = [];
+        if (savedList.length) {
+          parts.push(
+            `<div class="ok-box upload-issue-block"><strong>Saved</strong>${savedList
+              .map((s) => `<div class="upload-issue-line">${esc(s)}</div>`)
+              .join('')}</div>`,
+          );
+        }
+        if (failedList.length) {
+          parts.push(
+            `<div class="err-box upload-issue-block"><strong>${savedList.length ? 'Failed sessions' : 'Upload issues'}</strong>${failedList
+              .map((e) => `<div class="upload-issue-line">${esc(e)}</div>`)
+              .join('')}</div>`,
+          );
+        }
+        if (warnList.length) {
+          parts.push(
+            `<div class="warn-box upload-issue-block"><strong>Warnings</strong>${warnList
+              .map((w) => `<div class="upload-issue-line">${esc(w)}</div>`)
+              .join('')}</div>`,
+          );
+        }
+        issuesHost.innerHTML = parts.join('');
+        issuesHost.hidden = false;
+      }
+      if (failedList.length || out.ok === false) {
+        setStatus(out.error || failedList[0] || 'Import blocked.', 'error');
+      } else {
+        const skipBit = skippedN ? ` (${skippedN} already imported skipped)` : '';
+        setStatus(`Imported ${savedList.length || out.imported || 0} session(s)${skipBit}.`, 'ok');
+        await adminProviderDetail(providerId);
+      }
+    } catch (e) {
+      setStatus(e.message || 'Import failed.', 'err');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Import sessions';
+      }
+    }
   };
   document.getElementById('pGenTimesheet').onclick = async () => {
     try {
@@ -3054,7 +3156,11 @@ async function adminMandates() {
               <td>${esc(String(r.rowNumber || ''))}</td>
               <td>${esc(r.firstName)} ${esc(r.lastName)}${r.grade ? ` <span class="muted">(gr ${esc(r.grade)})</span>` : ''}</td>
               <td>${esc(r.schoolName || '')}</td>
-              <td>${esc(r.serviceType || r.discipline || '')}</td>
+              <td>${esc(r.serviceType || r.discipline || '')}${
+                r.billingServiceName
+                  ? `<div class="muted" style="font-size:0.85rem">${esc(r.billingServiceName)}</div>`
+                  : ''
+              }</td>
               <td>${r.ratioGroup ? 'Group' : 'Individual'}</td>
               <td>${esc(r.freqDisplay || '')}</td>
               <td>${esc(r.providerName || '—')}${badRow ? ' <span class="err-inline">(see Errors)</span>' : ''}</td>
@@ -4110,8 +4216,47 @@ function renderLunaMessages(extraTyping) {
     : '';
   box.innerHTML = rows + typing;
   box.scrollTop = box.scrollHeight;
+  syncLunaHandoffBar();
+}
+
+function lunaContactDefaults() {
+  const payload = state.idToken ? decodeJwtPayload(state.idToken) || {} : {};
+  const given = String(payload.given_name || '').trim();
+  const family = String(payload.family_name || '').trim();
+  const full = [given, family].filter(Boolean).join(' ');
+  const name = String(payload.name || full || payload['cognito:username'] || '').trim();
+  const email = String(state.email || payload.email || '').trim();
+  return { name, email };
+}
+
+function readLunaContact() {
+  const nameEl = document.getElementById('lunaContactName');
+  const emailEl = document.getElementById('lunaContactEmail');
+  return {
+    contactName: String(nameEl?.value || '').trim(),
+    contactEmail: String(emailEl?.value || '').trim(),
+  };
+}
+
+function lunaEmailLooksOk(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+function syncLunaHandoffBar() {
   const bar = document.getElementById('lunaHandoffBar');
-  if (bar) bar.hidden = !lunaState.readyForHandoff;
+  const btn = document.getElementById('lunaSendHandoff');
+  if (!bar) return;
+  const show = Boolean(lunaState.readyForHandoff);
+  bar.hidden = !show;
+  if (show) {
+    const nameEl = document.getElementById('lunaContactName');
+    const emailEl = document.getElementById('lunaContactEmail');
+    const defaults = lunaContactDefaults();
+    if (nameEl && !String(nameEl.value || '').trim() && defaults.name) nameEl.value = defaults.name;
+    if (emailEl && !String(emailEl.value || '').trim() && defaults.email) emailEl.value = defaults.email;
+  }
+  const { contactName, contactEmail } = readLunaContact();
+  if (btn) btn.disabled = lunaState.busy || !show || !contactName || !lunaEmailLooksOk(contactEmail);
 }
 
 function setLunaStatus(msg) {
@@ -4133,6 +4278,7 @@ async function lunaChat(userText) {
   lunaState.busy = true;
   const sendBtn = document.getElementById('lunaSend');
   if (sendBtn) sendBtn.disabled = true;
+  syncLunaHandoffBar();
   try {
     const out = await api('POST', '/support/luna/chat', {
       messages: lunaState.messages.map((m) => ({ role: m.role, content: m.content })),
@@ -4151,11 +4297,25 @@ async function lunaChat(userText) {
   } finally {
     lunaState.busy = false;
     if (sendBtn) sendBtn.disabled = false;
+    syncLunaHandoffBar();
   }
 }
 
 async function lunaHandoff() {
   if (lunaState.busy || !lunaState.readyForHandoff) return;
+  const { contactName, contactEmail } = readLunaContact();
+  if (!contactName) {
+    setLunaStatus('Enter your name before sending to Moshe.');
+    document.getElementById('lunaContactName')?.focus();
+    syncLunaHandoffBar();
+    return;
+  }
+  if (!lunaEmailLooksOk(contactEmail)) {
+    setLunaStatus('Enter a valid email before sending to Moshe.');
+    document.getElementById('lunaContactEmail')?.focus();
+    syncLunaHandoffBar();
+    return;
+  }
   lunaState.busy = true;
   setLunaStatus('');
   const btn = document.getElementById('lunaSendHandoff');
@@ -4166,6 +4326,8 @@ async function lunaHandoff() {
       messages: lunaState.messages.map((m) => ({ role: m.role, content: m.content })),
       summary: lunaState.pendingSummary,
       pageUrl: typeof location !== 'undefined' ? location.href : '',
+      contactName,
+      contactEmail,
     });
     const reply =
       String(out.reply || '').trim() ||
@@ -4180,6 +4342,7 @@ async function lunaHandoff() {
   } finally {
     lunaState.busy = false;
     if (btn) btn.disabled = false;
+    syncLunaHandoffBar();
   }
 }
 
@@ -4188,11 +4351,19 @@ function initLuna() {
   const close = document.getElementById('lunaClose');
   const form = document.getElementById('lunaForm');
   const handoff = document.getElementById('lunaSendHandoff');
+  const nameEl = document.getElementById('lunaContactName');
+  const emailEl = document.getElementById('lunaContactEmail');
   if (!fab || fab.dataset.bound === '1') return;
   fab.dataset.bound = '1';
   fab.onclick = () => setLunaOpen(!lunaState.open);
   if (close) close.onclick = () => setLunaOpen(false);
   if (handoff) handoff.onclick = () => lunaHandoff();
+  const onContactEdit = () => {
+    setLunaStatus('');
+    syncLunaHandoffBar();
+  };
+  if (nameEl) nameEl.addEventListener('input', onContactEdit);
+  if (emailEl) emailEl.addEventListener('input', onContactEdit);
   if (form) {
     form.onsubmit = (e) => {
       e.preventDefault();

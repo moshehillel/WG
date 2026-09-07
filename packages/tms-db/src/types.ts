@@ -114,6 +114,12 @@ export interface Mandate {
   ratioGroup: boolean;
   /** Session length in minutes from caseload RS Duration (e.g. 30, 42, 45). */
   durationMinutes?: number | null;
+  /**
+   * HHA school billing ServiceCodeName set at caseload import
+   * (e.g. `PT school 30`). Related Service (`serviceType`) stays for therapists.
+   * Eval / additional are not caseload mandates — leave unset.
+   */
+  billingServiceName?: string;
   /** Group mandate size; Individual imports as 1, Small Group may be null (overlap treats null Small Group as cap 2 = fewer than 3). */
   groupSize?: number | null;
   /** Session location from caseload (e.g. Push-In / Pull-Out). */

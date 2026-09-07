@@ -97,6 +97,28 @@ export function parseLunaModelJson(raw: string): LunaChatResult {
   return { reply, action, summary: action === 'handoff' ? summary || reply : '' };
 }
 
+const LIGHT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Require contact name + lightly-validated email before handoff email is sent. */
+export function normalizeHandoffContact(input: {
+  contactName?: unknown;
+  contactEmail?: unknown;
+}): { contactName: string; contactEmail: string } {
+  const contactName = String(input.contactName || '').trim().slice(0, 200);
+  const contactEmail = String(input.contactEmail || '').trim().toLowerCase().slice(0, 320);
+  if (!contactName) {
+    const err = new Error('Name is required before sending to support.');
+    (err as Error & { status?: number }).status = 400;
+    throw err;
+  }
+  if (!contactEmail || !LIGHT_EMAIL_RE.test(contactEmail)) {
+    const err = new Error('A valid email is required before sending to support.');
+    (err as Error & { status?: number }).status = 400;
+    throw err;
+  }
+  return { contactName, contactEmail };
+}
+
 function normalizeMessages(messages: unknown): LunaChatMessage[] {
   if (!Array.isArray(messages)) return [];
   const out: LunaChatMessage[] = [];
@@ -178,6 +200,8 @@ export function buildHandoffEmail(input: {
   summary?: string;
   pageUrl?: string;
   timestamp?: string;
+  contactName: string;
+  contactEmail: string;
 }): { subject: string; text: string } {
   const messages = normalizeMessages(input.messages);
   const when = input.timestamp || new Date().toISOString();
@@ -187,12 +211,21 @@ export function buildHandoffEmail(input: {
   const summary =
     String(input.summary || '').trim() ||
     'User requested support handoff from Luna (no model summary provided).';
+  const contact = normalizeHandoffContact({
+    contactName: input.contactName,
+    contactEmail: input.contactEmail,
+  });
   const text = [
     'Luna support handoff — White Glove TMS',
     '',
+    '=== CONTACT (reply here) ===',
+    `Name: ${contact.contactName}`,
+    `Email: ${contact.contactEmail}`,
+    '===========================',
+    '',
     `Timestamp: ${when}`,
-    `User name: ${input.user.displayName || '(none)'}`,
-    `User email: ${input.user.email}`,
+    `Signed-in account name: ${input.user.displayName || '(none)'}`,
+    `Signed-in account email: ${input.user.email}`,
     `User role: ${input.user.role}`,
     `Page URL: ${input.pageUrl || '(unknown)'}`,
     '',
@@ -203,7 +236,7 @@ export function buildHandoffEmail(input: {
     transcript || '(empty)',
   ].join('\n');
   return {
-    subject: `[Luna] TMS support — ${input.user.email}`,
+    subject: `[Luna] TMS support — ${contact.contactName} <${contact.contactEmail}>`,
     text,
   };
 }
@@ -214,9 +247,15 @@ export async function sendLunaHandoff(input: {
   messages: unknown;
   summary?: string;
   pageUrl?: string;
-}): Promise<{ ok: boolean; id: string; to: string }> {
+  contactName?: unknown;
+  contactEmail?: unknown;
+}): Promise<{ ok: boolean; id: string; to: string; contactName: string; contactEmail: string }> {
+  const contact = normalizeHandoffContact({
+    contactName: input.contactName,
+    contactEmail: input.contactEmail,
+  });
   const to = lunaSupportEmail();
-  const { subject, text } = buildHandoffEmail(input);
+  const { subject, text } = buildHandoffEmail({ ...input, ...contact });
   const out = await input.mail.send({ to: [to], subject, text });
-  return { ok: out.ok, id: out.id, to };
+  return { ok: out.ok, id: out.id, to, ...contact };
 }

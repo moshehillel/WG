@@ -61,26 +61,25 @@ export function childHasGroupMandate(studentId: string, mandates?: Mandate[]): b
 
 /**
  * Strictest positive groupSize among the child's group mandates.
- * Small Group with no numeric size → 2 (client: small group = fewer than 3).
- * Other group mandates with null size → no numeric cap.
+ * Unspecified / Small Group (fewer than 3) → max 2.
  */
 export function childGroupSizeCap(studentId: string, mandates?: Mandate[]): number | null {
   if (!studentId || !mandates?.length) return null;
   let cap: number | null = null;
-  let smallGroupDefault = false;
+  let unspecifiedGroup = false;
   for (const m of mandates) {
     if (m.studentId !== studentId || !mandateLooksGroup(m)) continue;
     const n = m.groupSize == null ? NaN : Number(m.groupSize);
     if (!Number.isFinite(n) || n <= 0) {
-      if (/\bsmall\s*group\b/i.test(m.serviceType || '')) smallGroupDefault = true;
+      unspecifiedGroup = true;
       continue;
     }
     const rounded = Math.round(n);
     cap = cap == null ? rounded : Math.min(cap, rounded);
   }
   if (cap != null) return cap;
-  // Small Group = fewer than 3 → allow at most 2 present children.
-  return smallGroupDefault ? 2 : null;
+  // Client: small group = fewer than 3 → allow at most 2 present children.
+  return unspecifiedGroup ? 2 : null;
 }
 
 /**
@@ -110,11 +109,35 @@ function sessionIsIndividualForPay(s: Pick<OverlapSession, 'serviceType'>): bool
 }
 
 /**
- * Soft guidance when a group-mandate child is documented individually / alone:
- * note should say no peer was available.
+ * True when notes clearly say no peer/partner was available (or clear synonym).
+ * Used by the solo-group / group-mandate→individual hard locker.
+ */
+export function notesMentionNoPeerAvailable(notes: string): boolean {
+  const n = String(notes || '');
+  if (!n.trim()) return false;
+  // peer | partner | classmate | groupmate (optional plural)
+  const who = 'peers?|partners?|classmates?|groupmates?';
+  const otherWho = 'student|child|peer|partner|member|participant';
+  if (
+    new RegExp(
+      `\\bno\\s+(?:other\\s+)?(?:${who})\\b` +
+        `|\\b(?:${who})\\s+(?:were\\s+|was\\s+)?(?:not\\s+|un)?available\\b` +
+        `|\\bno\\s+other\\s+(?:${otherWho})s?\\b` +
+        `|\\bother\\s+(?:${otherWho}).{0,24}(?:absent|unavailable|missing)\\b`,
+      'i',
+    ).test(n)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Hard locker when a group-mandate child is documented individually / alone:
+ * note must say no peer/partner was available (or clear equivalent).
  * Covers individual/1:1 tags and group-tagged sessions with no present peers.
  */
-export function soloGroupMandateNoteWarning(opts: {
+export function soloGroupMandateNoteError(opts: {
   notes: string;
   serviceType: string;
   studentId: string;
@@ -129,17 +152,18 @@ export function soloGroupMandateNoteWarning(opts: {
   // Group with other present peers → no special note.
   if (looksGroup && peers >= 1) return null;
   // Individual / unknown / solo-group → require peer note.
-  const notes = String(opts.notes || '');
-  if (
-    /\bno\s+peer\b|\bpeers?\s+(?:were\s+|was\s+)?(?:not\s+|un)?available\b|\bno\s+other\s+(?:student|child|peer|member|participant)s?\b|\bother\s+(?:student|child|peer).{0,20}(?:absent|unavailable|missing)\b/i.test(
-      notes,
-    )
-  ) {
-    return null;
-  }
+  if (notesMentionNoPeerAvailable(opts.notes)) return null;
   return (
-    'Group-mandate child seen individually — note should reflect that no peer was available.'
+    'Group-mandate child seen individually — note must say no peer was available ' +
+    '(or no partner available / equivalent). This session is blocked until the note is clear.'
   );
+}
+
+/** @deprecated Use soloGroupMandateNoteError — now a hard locker. */
+export function soloGroupMandateNoteWarning(
+  opts: Parameters<typeof soloGroupMandateNoteError>[0],
+): string | null {
+  return soloGroupMandateNoteError(opts);
 }
 
 function childLabel(
@@ -196,7 +220,7 @@ function groupClusterSizeError(opts: SessionOverlapCheckOpts): string | null {
     const cap = childGroupSizeCap(studentId, opts.mandates);
     if (cap != null && n > cap) {
       return (
-        `Group mandate allows ${cap}; this slot has ${n} overlapping children for this provider.`
+        `Group locker: mandate allows ${cap} overlapping children; this slot has ${n} for this provider.`
       );
     }
   }

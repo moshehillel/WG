@@ -58,7 +58,7 @@ Legacy 06:00 UTC daily: `-c enableDailySchedule=true`
 - Service code catalog: meaning, existing in HHA?, create-if-missing?, relation to contracts/auths/visits/billing
 - Exact session triage rules (auto-approve vs clocking verify vs never send)
 - Preferred schedule timezone (currently 06:00 UTC)
-- SNS alert emails (configured: elefkowitz@whiteglovecare.net, moshe@advancedautomations.net)
+- Pipeline alerts: dual-channel (SNS Amazon Notifications + optional SES HTML). Domain/DKIM not required — reliable delivery is SNS (`AWS Notifications`)
 
 ## Service codes
 

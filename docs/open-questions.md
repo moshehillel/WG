@@ -10,7 +10,13 @@ See **[client-decisions.md](./client-decisions.md)** for answered rules (EVV pro
 
 3. **Unmatched Service Types (13 SI/ABA variants)** — Not found in HHA billing codes; rows using these **error** until mapped. See `UNMATCHED_SERVICE_TYPES` in `service-codes.ts`.
 
-4. **HHA clock → visit linking** — Pending HHA response on `ConfirmVisitsEVV` / REST API path.
+4. **HHA clock → visit linking** — **Partial.** ProviderSoft verified-sessions pipeline already implements `findPendingCall` → `linkClockToVisit` (`ConfirmVisitsEVV`) → clock compare → approve. Live sandbox still needs usable ReasonCode/ActionCode pairs (`GetVisitEditReasonActionTaken` often `-9` on sandbox unless `HHA_REASON_LOOKUP_URL` / visit id is configured). TMS school-week HHA transfer is schedule + `approveVisit` (school programs are typically no-EVV). Not blocked on missing API surface — blocked on sandbox reason/action authorization (or a known sandbox VisitID for reason lookup).
+
+5. **Provider & Student Selection (admin portal)** — **Blocked on client call only.** Client said to call for explanations before building; we will not invent the product. (A–Z letter tabs on Providers/Children lists are separate and already shipped.)
+
+## School calendar → mandate over-checks (done)
+
+Admin school calendar (first/last day + off days) is now passed into every live `checkMandatesForWeek` path (week GET, import/upload, session save, week submit). Cycle / school-day windows use Mon–Fri minus off days; weekends never count; densest N school-day window over-check hard-blocks.
 
 ## Schedule (confirmed for implementation)
 

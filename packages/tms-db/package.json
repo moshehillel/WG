@@ -21,6 +21,7 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
+    "@white-glove/shared": "*",
     "xlsx": "^0.18.5"
   }
 }

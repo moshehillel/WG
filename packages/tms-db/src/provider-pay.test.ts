@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MemoryStore } from './memory-store.js';
 import {
   blankProviderPay,
+  closestDurationBucket,
   migrateProvider,
   migrateProviders,
   sessionBillingKind,
@@ -125,8 +126,16 @@ describe('provider pay rates', () => {
       active: true,
       createdAt: '',
     };
-    expect(sessionPayAmount(provider, sess({ beginTime: '9:00 am', endTime: '9:30 am' }))).toBe(40);
-    expect(sessionPayAmount(provider, sess({ beginTime: '9:00 am', endTime: '9:42 am' }))).toBe(56);
+    expect(
+      sessionPayAmount(provider, sess({ beginTime: '9:00 am', endTime: '9:30 am' }), {
+        mandateDurationMinutes: 30,
+      }),
+    ).toBe(40);
+    expect(
+      sessionPayAmount(provider, sess({ beginTime: '9:00 am', endTime: '9:42 am' }), {
+        mandateDurationMinutes: 42,
+      }),
+    ).toBe(56);
     expect(
       sessionPayAmount(
         provider,
@@ -149,6 +158,29 @@ describe('provider pay rates', () => {
     ).toBe(15);
   });
 
+  it('uses mandate duration bucket — not Frontline clock nearest (40 min clock + 30 mandate → 30 rate)', () => {
+    const provider = {
+      id: 'p',
+      userId: '',
+      firstName: 'A',
+      lastName: 'B',
+      discipline: 'PT' as const,
+      ...blankProviderPay(),
+      payRate30Min: 40,
+      payRate42Min: 56,
+      payRatePerHour: 80,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    };
+    // 40 min clock is nearer to 42 than 30 — old nearest-clock rule would pick 42.
+    expect(closestDurationBucket(40)).toBe(42);
+    const longClock = sess({ beginTime: '9:00 am', endTime: '9:40 am' });
+    expect(sessionPayAmount(provider, longClock, { mandateDurationMinutes: 30 })).toBe(40);
+    expect(sessionPayCodeRate(provider, longClock, { mandateDurationMinutes: 30 })).toBe(40);
+    expect(sessionPayAmount(provider, longClock, { mandateDurationMinutes: 42 })).toBe(56);
+  });
+
   it('sessionPayCodeRate uses flat duration / group / eval / additional catalog rates', () => {
     const provider = {
       id: 'p',
@@ -166,19 +198,23 @@ describe('provider pay rates', () => {
       active: true,
       createdAt: '',
     };
-    expect(sessionPayCodeRate(provider, sess({ beginTime: '9:00 am', endTime: '9:30 am' }))).toBe(62.5);
+    expect(
+      sessionPayCodeRate(provider, sess({ beginTime: '9:00 am', endTime: '9:30 am' }), {
+        mandateDurationMinutes: 30,
+      }),
+    ).toBe(62.5);
     expect(
       sessionPayCodeRate(
         provider,
         sess({ serviceType: 'OT School Group', beginTime: '9:00 am', endTime: '9:30 am' }),
-        { presentGroupPeerCount: 1 },
+        { presentGroupPeerCount: 1, mandateDurationMinutes: 30 },
       ),
     ).toBe(34);
     expect(
       sessionPayCodeRate(
         provider,
         sess({ serviceType: 'OT School Group', beginTime: '9:00 am', endTime: '9:30 am' }),
-        { presentGroupPeerCount: 0 },
+        { presentGroupPeerCount: 0, mandateDurationMinutes: 30 },
       ),
     ).toBe(62.5);
     expect(
@@ -208,9 +244,13 @@ describe('provider pay rates', () => {
       createdAt: '',
     };
     const soloGroup = sess({ serviceType: 'OT School Group', beginTime: '9:00 am', endTime: '9:30 am' });
-    expect(sessionPayAmount(provider, soloGroup)).toBe(62.5);
-    expect(sessionPayAmount(provider, soloGroup, { presentGroupPeerCount: 0 })).toBe(62.5);
-    expect(sessionPayAmount(provider, soloGroup, { presentGroupPeerCount: 1 })).toBe(34);
+    expect(sessionPayAmount(provider, soloGroup, { mandateDurationMinutes: 30 })).toBe(62.5);
+    expect(
+      sessionPayAmount(provider, soloGroup, { presentGroupPeerCount: 0, mandateDurationMinutes: 30 }),
+    ).toBe(62.5);
+    expect(
+      sessionPayAmount(provider, soloGroup, { presentGroupPeerCount: 1, mandateDurationMinutes: 30 }),
+    ).toBe(34);
   });
 
   it('sessionBillingKind maps eval / additional / school', () => {

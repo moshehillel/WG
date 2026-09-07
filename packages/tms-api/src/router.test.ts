@@ -98,6 +98,14 @@ describe('TMS API weekly loop', () => {
       programId: student.programId || '1012074',
       programType: student.programType || 'Baldwin UFSD',
     });
+    // Caseload RS Duration → mandate duration + billingServiceName (PDF parse alone has neither).
+    const mandate = store.data.mandates.find((m) => m.studentId === studentId);
+    expect(mandate).toBeTruthy();
+    store.upsertMandate({
+      ...mandate!,
+      durationMinutes: 30,
+      billingServiceName: 'PT school 30',
+    });
     hha.payCodes.set('PT $72', 'pay-pt72');
     hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
 
@@ -217,7 +225,40 @@ describe('TMS API weekly loop', () => {
     expect(hha.calls.includes('locateOrScheduleVisit')).toBe(true);
     expect(hha.calls.includes('approveVisit')).toBe(true);
 
-    const lockedEdit = await handleTmsRequest(store, {
+    const existingAttended = store.data.sessions.find(
+      (s) => s.weekId === weekId && s.attendance === 'attended',
+    );
+    expect(existingAttended).toBeTruthy();
+    // Processed session rows are view-only for therapists.
+    const lockedEditExisting = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        id: existingAttended!.id,
+        weekId,
+        studentId,
+        dateOfService: existingAttended!.dateOfService,
+        attendance: 'attended',
+        notes: 'cannot overwrite processed',
+        serviceType: 'PT School',
+      },
+    });
+    expect(lockedEditExisting.status).toBe(409);
+    expect((lockedEditExisting.body as { error: string }).error).toMatch(/already processed/i);
+
+    // Resync (Send to HHA) remains available on processed weeks.
+    const hhaOut = await handleTmsRequest(
+      store,
+      { method: 'POST', path: `/weeks/${weekId}/hha`, headers: adminH, query: {}, body: {} },
+      { hha },
+    );
+    expect(hhaOut.status).toBe(200);
+    expect((hhaOut.body as { ok: boolean }).ok).toBe(true);
+
+    // New sessions on a processed week are allowed (14-day locker + mandate still apply).
+    const lockedAddNew = await handleTmsRequest(store, {
       method: 'POST',
       path: '/week/sessions',
       headers: thH,
@@ -226,21 +267,35 @@ describe('TMS API weekly loop', () => {
         weekId,
         studentId,
         dateOfService: '09/04/2026',
+        beginTime: '10:00 am',
+        endTime: '10:30 am',
         attendance: 'attended',
-        notes: 'too late',
+        notes: 'late add after lock',
+        serviceType: 'PT School',
+        additionalServiceType: 'consultation',
+      },
+    });
+    expect(lockedAddNew.status).toBe(200);
+
+    // Admin may still edit a processed session.
+    const adminEdit = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: adminH,
+      query: {},
+      body: {
+        id: existingAttended!.id,
+        weekId,
+        studentId,
+        dateOfService: existingAttended!.dateOfService,
+        beginTime: existingAttended!.beginTime,
+        endTime: existingAttended!.endTime,
+        attendance: 'attended',
+        notes: 'admin correction on processed session',
         serviceType: 'PT School',
       },
     });
-    expect(lockedEdit.status).toBe(409);
-
-    // Resync (Send to HHA) remains available; already-confirmed sessions are skipped.
-    const hhaOut = await handleTmsRequest(
-      store,
-      { method: 'POST', path: `/weeks/${weekId}/hha`, headers: adminH, query: {}, body: {} },
-      { hha },
-    );
-    expect(hhaOut.status).toBe(200);
-    expect((hhaOut.body as { ok: boolean }).ok).toBe(true);
+    expect(adminEdit.status).toBe(200);
   });
 
   it('persists additionalServiceType and skips mandate for eval/consult', async () => {
@@ -1082,6 +1137,22 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
       hhaPatientId: '',
       createdAt: nowIso(),
     });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      frequencyKind: 'weekly',
+      sessionsPerPeriod: 2,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
 
     const added = await handleTmsRequest(store, {
       method: 'POST',
@@ -1406,6 +1477,84 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     const byId = (list.body as { calendarsBySchoolId: Record<string, { yearStart: string }> })
       .calendarsBySchoolId;
     expect(byId[school.id]?.yearStart).toBe('2025-09-02');
+  });
+
+  it('upload cycle over-check uses school calendar off-days', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.data.schools[0]!;
+    store.upsertSchoolCalendar({
+      schoolId: school.id,
+      yearStart: '2026-08-01',
+      yearEnd: '2027-06-25',
+      offDays: ['2026-09-02'], // Wed — stretches densest 3-day window
+    });
+
+    const student = store.upsertStudent({
+      id: newId(),
+      firstName: 'Elmer',
+      lastName: 'Cycle',
+      schoolId: school.id,
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      frequencyPerWeek: 0,
+      frequencyKind: 'school_day_cycle',
+      sessionsPerPeriod: 2,
+      periodSchoolDays: 3,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+
+    // Mon + Tue + Thu with Wed off → densest 3 school-day window has 3 sessions → block
+    const pdfText = [
+      'Student Name: Cycle, Elmer',
+      'Service Provider: Pat Lee',
+      'Service: PT School',
+      '08/31/2026 9:00 am 9:30 am',
+      'Service Provided: balance work in gym',
+      '97110x2',
+      signedBlock('Aug 31 2026 9:35AM'),
+      '09/01/2026 10:00 am 10:30 am',
+      'Service Provided: gait training session',
+      '97110x2',
+      signedBlock('Sep 1 2026 10:35AM'),
+      '09/03/2026 11:00 am 11:30 am',
+      'Service Provided: strength work in gym',
+      '97110x2',
+      signedBlock('Sep 3 2026 11:35AM'),
+    ].join('\n');
+
+    const blocked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-08-31', pdfText },
+    });
+    expect(blocked.status).toBe(200);
+    const body = blocked.body as {
+      ok: boolean;
+      saved: unknown[];
+      failed: Array<{ error: string }>;
+      errors: string[];
+    };
+    expect(body.ok).toBe(false);
+    expect(body.saved).toHaveLength(0);
+    expect(body.errors.some((e) => /exceeds the cycle mandate/i.test(e))).toBe(true);
+    expect(store.data.sessions).toHaveLength(0);
   });
 });
 
@@ -1855,7 +2004,7 @@ describe('TMS upload-sessions errors', () => {
           'Service Provider: Pat Lee',
           'Service: PT School',
           '09/03/2026 10:00 am 10:30 am',
-          'Service Provided: seen individually this visit',
+          'Service Provided: seen individually — no peer available',
           '97110x2',
           signedBlock('Sep 3 2026 10:35AM'),
         ].join('\n'),
@@ -1924,6 +2073,11 @@ describe('TMS upload-sessions errors', () => {
       ...(body.failed || []).map((f) => f.error),
     ];
     expect(msgs.some((e) => /not found/i.test(e) && /caseload/i.test(e))).toBe(true);
+    expect(
+      msgs.some((e) =>
+        /Not found\. Please reach out to your administrator to import the caseload first\./i.test(e),
+      ),
+    ).toBe(true);
     expect(store.data.students).toHaveLength(beforeStudents);
     expect(store.data.sessions).toHaveLength(0);
   });
@@ -2362,5 +2516,224 @@ describe('TMS upload-sessions errors', () => {
     expect(submit.status).toBe(503);
     expect((submit.body as { error: string }).error).toMatch(/mgluck@whiteglovecare\.net|SES|sandbox/i);
     expect(store.data.weeks.find((w) => w.id === weekId)?.status).toBe('draft');
+  });
+});
+
+describe('TMS solo-group / group-mandate note locker', () => {
+  async function seedGroupMandateChild() {
+    const { store, provider } = storeWithTherapist();
+    store.upsertProvider({
+      ...provider,
+      payRate30Min: 62.5,
+      payRateGroup30Min: 34,
+    });
+    const parsed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School Group\nMandate frequency: 2x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    expect(parsed.status).toBe(200);
+    const studentId = (parsed.body as { student: { id: string } }).student.id;
+    for (const m of store.data.mandates.filter((x) => x.studentId === studentId)) {
+      store.upsertMandate({ ...m, durationMinutes: 30 });
+    }
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-08-31' },
+    });
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+    return { store, provider, studentId, weekId };
+  }
+
+  it('rejects PDF import without no-peer reason; accepts with reason and uses individual pay', async () => {
+    const { store, provider, weekId } = await seedGroupMandateChild();
+
+    const blocked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-08-31',
+        pdfText: [
+          'Student Name: Odne, Aiden',
+          'Service Provider: Pat Lee',
+          'Service: PT School',
+          '09/01/2026 9:00 am 9:30 am',
+          'Service Provided: gait training alone',
+          '97110x2',
+          signedBlock('Sep 1 2026 9:35AM'),
+        ].join('\n'),
+      },
+    });
+    expect(blocked.status).toBe(200);
+    const blockedBody = blocked.body as { ok: boolean; failed: Array<{ error: string }>; saved: unknown[] };
+    expect(blockedBody.ok).toBe(false);
+    expect(blockedBody.saved).toHaveLength(0);
+    expect(blockedBody.failed.some((f) => /no (?:other )?peer was available|no partner available|seen individually/i.test(f.error))).toBe(
+      true,
+    );
+
+    const ok = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-08-31',
+        pdfText: [
+          'Student Name: Odne, Aiden',
+          'Service Provider: Pat Lee',
+          'Service: PT School',
+          '09/01/2026 9:00 am 9:30 am',
+          'Service Provided: seen individually — no partner available',
+          '97110x2',
+          signedBlock('Sep 1 2026 9:35AM'),
+        ].join('\n'),
+      },
+    });
+    expect(ok.status).toBe(200);
+    expect((ok.body as { ok: boolean; saved: unknown[] }).ok).toBe(true);
+    expect((ok.body as { saved: unknown[] }).saved).toHaveLength(1);
+
+    const week = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/week',
+      headers: thH,
+      query: { weekId },
+      body: {},
+    });
+    expect(week.status).toBe(200);
+    const sessions = (week.body as { sessions: Array<{ payAmount: number | null; serviceType: string }> })
+      .sessions;
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.payAmount).toBe(62.5);
+  });
+
+  it('rejects manual add without reason; accepts edit with reason; blocks submit if missing', async () => {
+    const { store, provider, studentId, weekId } = await seedGroupMandateChild();
+
+    const bad = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/01/2026',
+        beginTime: '10:00 am',
+        endTime: '10:30 am',
+        attendance: 'attended',
+        notes: 'Service Provided: fine motor',
+        serviceType: 'PT School',
+      },
+    });
+    expect(bad.status).toBe(400);
+    expect((bad.body as { error: string }).error).toMatch(/no (?:other )?peer was available|no partner available|seen individually/i);
+
+    const good = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/01/2026',
+        beginTime: '10:00 am',
+        endTime: '10:30 am',
+        attendance: 'attended',
+        notes: 'Service Provided: peer not available; worked 1:1',
+        serviceType: 'PT School',
+      },
+    });
+    expect(good.status).toBe(200);
+    const sessionId = (good.body as { session: { id: string } }).session.id;
+
+    // Strip the reason via direct store write to prove submit still hard-blocks.
+    const row = store.data.sessions.find((s) => s.id === sessionId)!;
+    store.upsertSession({ ...row, notes: 'Service Provided: fine motor only' });
+
+    const submit = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/weeks/${weekId}/submit`,
+      headers: thH,
+      query: {},
+      body: { signerEmail: 'principal@school.test', signerName: 'Principal' },
+    });
+    expect(submit.status).toBe(400);
+    expect((submit.body as { error: string }).error).toMatch(/no (?:other )?peer was available|no partner available|seen individually/i);
+    expect(store.data.weeks.find((w) => w.id === weekId)?.status).toBe('draft');
+
+    // Restore reason and confirm individual overlap treatment (second child same slot blocked).
+    store.upsertSession({ ...row, notes: 'Service Provided: no peer was available' });
+    const peerParsed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Sam Testkid\nService Type: PT School Group\nMandate frequency: 2x/week\nDOB: 01/01/2018`,
+        providerId: provider.id,
+      },
+    });
+    expect(peerParsed.status).toBe(200);
+    const peerStudentId = (peerParsed.body as { student: { id: string } }).student.id;
+    const peerAdd = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId: peerStudentId,
+        dateOfService: '09/01/2026',
+        beginTime: '10:00 am',
+        endTime: '10:30 am',
+        attendance: 'attended',
+        notes: 'Service Provided: try join after individual',
+        serviceType: 'PT School Group',
+      },
+    });
+    expect(peerAdd.status).toBe(400);
+    expect((peerAdd.body as { error: string }).error).toMatch(/individual rate|overlaps|mix group/i);
+  });
+
+  it('rejects solo group-tagged import without no-peer note', async () => {
+    const { store, provider } = await seedGroupMandateChild();
+    const blocked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-08-31',
+        pdfText: [
+          'Student Name: Odne, Aiden',
+          'Service Provider: Pat Lee',
+          'Service: PT School Group',
+          '09/02/2026 11:00 am 11:30 am',
+          'Service Provided: group activities alone',
+          '97110x2',
+          signedBlock('Sep 2 2026 11:35AM'),
+        ].join('\n'),
+      },
+    });
+    expect(blocked.status).toBe(200);
+    const body = blocked.body as { ok: boolean; failed: Array<{ error: string }> };
+    expect(body.ok).toBe(false);
+    expect(body.failed.some((f) => /no (?:other )?peer was available|no partner available|seen individually/i.test(f.error))).toBe(true);
   });
 });

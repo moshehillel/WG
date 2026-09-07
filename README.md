@@ -64,7 +64,7 @@ npm run cdk -w @white-glove/infra -- bootstrap   # once per account/region
 npm run cdk -w @white-glove/infra -- deploy
 ```
 
-Until HHA sandbox is ready, processors use `HHA_USE_MOCK=true`. Set `HHA_USE_MOCK=false` and populate the HHA secret when API access arrives.
+Pipeline processors and TMS API default to **real** HHA (`HHA_USE_MOCK=false`) and load SOAP creds from `HHA_SECRET_ARN`. Keep `HHA_USE_MOCK=true` (or `TMS_HHA_MOCK=1` on TMS) for local/tests only.
 
 For pipeline dry-runs without a real ProviderSoft UI, set the download Lambda env `PROVIDERSOFT_USE_STUBS=true`.
 
