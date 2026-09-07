@@ -4,8 +4,8 @@ export type WeekStatus = 'draft' | 'submitted' | 'signed' | 'locked' | 'reopened
 export type Attendance = 'attended' | 'missed' | 'makeup';
 export type HhaTransferStatus = 'none' | 'pending' | 'sent' | 'confirmed' | 'failed';
 export type DueKind = 'progress' | 'annual' | 'reeval';
-/** Weekly = Freq per calendar week. school_day_cycle = Freq per N school days (e.g. 6). */
-export type FrequencyKind = 'weekly' | 'school_day_cycle';
+/** Weekly = Freq per calendar week. school_day_cycle = Freq per N school days (e.g. 6). monthly = Freq per calendar month. */
+export type FrequencyKind = 'weekly' | 'school_day_cycle' | 'monthly';
 
 export interface AppUser {
   id: string;
@@ -24,6 +24,11 @@ export interface School {
   district: string;
   signerName: string;
   signerEmail: string;
+  /** Optional school street address — used as HHA CreatePatient Address1. */
+  address1?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
   createdAt: string;
 }
 
@@ -103,7 +108,7 @@ export interface Mandate {
    */
   frequencyPerWeek: number;
   /**
-   * weekly (default) | school_day_cycle (e.g. Freq per 6 school days).
+   * weekly (default) | school_day_cycle (e.g. Freq per 6 school days) | monthly.
    * Omitted on legacy rows → treated as weekly.
    */
   frequencyKind?: FrequencyKind;

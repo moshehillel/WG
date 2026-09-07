@@ -339,6 +339,9 @@ export function formatFreqDisplay(
   if (kind === 'school_day_cycle') {
     return `${sessionsPerPeriod} / ${periodSchoolDays || 6} school days`;
   }
+  if (kind === 'monthly') {
+    return `${sessionsPerPeriod} / month`;
+  }
   return `${sessionsPerPeriod} / week`;
 }
 

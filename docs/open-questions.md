@@ -10,9 +10,9 @@ See **[client-decisions.md](./client-decisions.md)** for answered rules (EVV pro
 
 3. **Unmatched Service Types (13 SI/ABA variants)** — Not found in HHA billing codes; rows using these **error** until mapped. See `UNMATCHED_SERVICE_TYPES` in `service-codes.ts`.
 
-4. **HHA clock → visit linking** — **Partial.** ProviderSoft verified-sessions pipeline already implements `findPendingCall` → `linkClockToVisit` (`ConfirmVisitsEVV`) → clock compare → approve. Live sandbox still needs usable ReasonCode/ActionCode pairs (`GetVisitEditReasonActionTaken` often `-9` on sandbox unless `HHA_REASON_LOOKUP_URL` / visit id is configured). TMS school-week HHA transfer is schedule + `approveVisit` (school programs are typically no-EVV). Not blocked on missing API surface — blocked on sandbox reason/action authorization (or a known sandbox VisitID for reason lookup).
+4. **HHA clock → visit linking** — **Partial (pipeline only).** ProviderSoft verified-sessions pipeline already implements `findPendingCall` → `linkClockToVisit` (`ConfirmVisitsEVV`) → clock compare → approve. Live sandbox still needs usable ReasonCode/ActionCode pairs (`GetVisitEditReasonActionTaken` often `-9` on sandbox unless `HHA_REASON_LOOKUP_URL` / visit id is configured). Not a TMS product gap.
 
-5. **Provider & Student Selection (admin portal)** — **Blocked on client call only.** Client said to call for explanations before building; we will not invent the product. (A–Z letter tabs on Providers/Children lists are separate and already shipped.)
+5. **Caseload DOB sample (TMS → HHA CreatePatient)** — Moshe will provide a sample caseload export that includes DOB. Until then: document intent only; do **not** build DOB mapping. School address → patient address is wired (admin school fields); DOB still waits on the sample.
 
 ## School calendar → mandate over-checks (done)
 
@@ -42,6 +42,9 @@ Bot **never runs daytime** — night batch only.
 
 | Item | Decision |
 |------|----------|
+| **Provider & Student Selection** | Multi-school picker is required after provider sign-in. Providers/Children remain separate nav lists (A–Z letter layout removed). **Madison will call** re: preferred separate-tab UX — wait for that call. |
+| **CPSE session import** | **Done (Sep 2026, Moshe).** CPSE portal session reports **are** Therapist Activity Output PDFs (`Therapist_Activity_Output…` sample/fixture — already imported). Same `/week/upload-sessions` as Frontline. Do **not** say “need a different CPSE sample” or “CPSE not built.” |
+| **AI activity + student response** | **Done (Sep 2026, Moshe).** Covered by duplicate-note blocking (notes must be unique per child; copy-paste blocked) plus existing AI / required-note lockers. No separate unfinished feature. |
 | **Early Intervention** | Skip all rows — never send to HHA. |
 | **Session triage by program** | EVV → verify clocking; no-EVV → direct entry; `program-types.ts`. |
 | **Unknown / unmatched service type** | **Error + SNS alert** — do not proceed to HHA. |

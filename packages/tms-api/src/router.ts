@@ -138,8 +138,25 @@ function calendarByStudentId(store: MemoryStore): Map<string, SchoolCalendar | n
   return map;
 }
 
-function mandateWeekOpts(store: MemoryStore): { calendarByStudentId: Map<string, SchoolCalendar | null> } {
-  return { calendarByStudentId: calendarByStudentId(store) };
+/** Child id → school display name for calendar fallback warnings. */
+function schoolNameByStudentId(store: MemoryStore): Map<string, string> {
+  const schoolName = new Map(store.data.schools.map((s) => [s.id, String(s.name || '').trim()]));
+  const map = new Map<string, string>();
+  for (const s of store.data.students) {
+    const schoolId = String(s.schoolId || '').trim();
+    map.set(s.id, schoolId ? schoolName.get(schoolId) || schoolId : '');
+  }
+  return map;
+}
+
+function mandateWeekOpts(store: MemoryStore): {
+  calendarByStudentId: Map<string, SchoolCalendar | null>;
+  schoolNameByStudentId: Map<string, string>;
+} {
+  return {
+    calendarByStudentId: calendarByStudentId(store),
+    schoolNameByStudentId: schoolNameByStudentId(store),
+  };
 }
 
 function overMandateSummary(errors: string[]): string {
@@ -874,6 +891,10 @@ export async function handleTmsRequest(
         district: String(b.district ?? existing?.district ?? ''),
         signerName: String(b.signerName ?? existing?.signerName ?? ''),
         signerEmail: String(b.signerEmail ?? existing?.signerEmail ?? ''),
+        address1: String(b.address1 ?? existing?.address1 ?? '').trim() || undefined,
+        city: String(b.city ?? existing?.city ?? '').trim() || undefined,
+        state: String(b.state ?? existing?.state ?? '').trim() || undefined,
+        zipCode: String(b.zipCode ?? existing?.zipCode ?? '').trim() || undefined,
         createdAt: existing?.createdAt || nowIso(),
       });
       return json(existing ? 200 : 201, { school });
@@ -1309,7 +1330,9 @@ export async function handleTmsRequest(
       if (!student) return json(404, { error: 'Child not found.' });
       const frequencyKind = (String(b.frequencyKind || 'weekly') === 'school_day_cycle'
         ? 'school_day_cycle'
-        : 'weekly') as FrequencyKind;
+        : String(b.frequencyKind || '') === 'monthly'
+          ? 'monthly'
+          : 'weekly') as FrequencyKind;
       const mandateKind = parseMandateKind(b.mandateKind);
       const freq = Number(b.frequencyPerWeek ?? b.sessionsPerPeriod ?? 0);
       const sessionsPerPeriod = Number(b.sessionsPerPeriod ?? b.frequencyPerWeek ?? freq);
@@ -1350,7 +1373,7 @@ export async function handleTmsRequest(
     });
   }
 
-  if (req.method === 'POST' && /^\/admin\/mandates\/[^/]+$/.test(path)) {
+  if ((req.method === 'POST' || req.method === 'PATCH') && /^\/admin\/mandates\/[^/]+$/.test(path)) {
     return adminUser(() => {
       const id = path.split('/')[3];
       const existing = store.data.mandates.find((m) => m.id === id);
@@ -1362,10 +1385,14 @@ export async function handleTmsRequest(
         ? existing.frequencyPerWeek
         : Number(b.frequencyPerWeek);
       const kindRaw = b.frequencyKind != null ? String(b.frequencyKind) : existing.frequencyKind || 'weekly';
-      const frequencyKind = (kindRaw === 'school_day_cycle' ? 'school_day_cycle' : 'weekly') as FrequencyKind;
+      const frequencyKind = (kindRaw === 'school_day_cycle'
+        ? 'school_day_cycle'
+        : kindRaw === 'monthly'
+          ? 'monthly'
+          : 'weekly') as FrequencyKind;
       const sessionsPerPeriod =
         b.sessionsPerPeriod == null || b.sessionsPerPeriod === ''
-          ? existing.sessionsPerPeriod ?? (frequencyKind === 'weekly' ? (Number.isFinite(freq) ? freq : existing.frequencyPerWeek) : existing.sessionsPerPeriod)
+          ? existing.sessionsPerPeriod ?? (frequencyKind === 'weekly' || frequencyKind === 'monthly' ? (Number.isFinite(freq) ? freq : existing.frequencyPerWeek) : existing.sessionsPerPeriod)
           : Number(b.sessionsPerPeriod);
       const periodSchoolDays =
         b.periodSchoolDays == null || b.periodSchoolDays === ''
@@ -1385,6 +1412,7 @@ export async function handleTmsRequest(
       const mandate = store.upsertMandate({
         ...existing,
         mandateKind,
+        studentId: pickStr(b.studentId, existing.studentId),
         frequencyPerWeek: mandateKind === 'makeup_auth'
           ? 0
           : frequencyKind === 'school_day_cycle'
@@ -1407,7 +1435,7 @@ export async function handleTmsRequest(
         groupSize,
       });
       store.audit(ctx.user.id, 'update_mandate', `mandate:${id}`, existing, mandate);
-      return json(200, { mandate });
+      return json(200, { mandate, message: 'Mandate updated.' });
     });
   }
 
@@ -1774,28 +1802,38 @@ export async function handleTmsRequest(
       }
     }
 
-    const weekStart = String(b.weekStart || (parsed[0] ? weekStartFromDos(parsed[0].dateOfService) : ''));
-    let week = store.weekByProviderStart(providerId, weekStart);
+    // Attach each session to the Monday week of its date of service (no calendar picker required).
+    const weekCache = new Map<string, (typeof store.data.weeks)[number]>();
+    const ensureWeek = (weekStart: string) => {
+      let w = weekCache.get(weekStart) || store.weekByProviderStart(providerId, weekStart);
+      if (!w) {
+        const school = store.data.schools[0];
+        w = store.upsertWeek({
+          id: newId(),
+          providerId,
+          weekStart,
+          status: 'draft',
+          signerName: String(b.signerName || school?.signerName || ''),
+          signerEmail: String(b.signerEmail || school?.signerEmail || ''),
+          timesheetKey: '',
+          signedKey: '',
+          envelopeId: '',
+          hhaStatus: 'none',
+          hhaError: '',
+        });
+      }
+      weekCache.set(weekStart, w);
+      return w;
+    };
+    const fallbackWeekStart = String(
+      b.weekStart || (parsed[0] ? weekStartFromDos(parsed[0].dateOfService) : ''),
+    );
+    let week = fallbackWeekStart ? ensureWeek(fallbackWeekStart) : undefined;
     if (!week) {
-      const school = store.data.schools[0];
-      week = store.upsertWeek({
-        id: newId(),
-        providerId,
-        weekStart,
-        status: 'draft',
-        signerName: String(b.signerName || school?.signerName || ''),
-        signerEmail: String(b.signerEmail || school?.signerEmail || ''),
-        timesheetKey: '',
-        signedKey: '',
-        envelopeId: '',
-        hhaStatus: 'none',
-        hhaError: '',
+      return json(400, {
+        error: 'Could not determine a week for this upload (missing dates of service).',
+        errors: ['Could not determine a week for this upload (missing dates of service).'],
       });
-    }
-    // Signed/locked weeks may still receive NEW sessions; duplicates are skipped below.
-    if (!therapistCanImportOrAddServices(week.status) && ctx.user.role !== 'admin') {
-      const error = 'This week cannot accept imports. Ask an admin to reopen it.';
-      return json(409, { error, errors: [error] });
     }
 
     type UploadFail = {
@@ -1820,8 +1858,11 @@ export async function handleTmsRequest(
     const names = studentNameById(store);
     const settings = getAppSettings(store);
     const existingKeys = new Map<string, SessionRow>();
-    for (const s of store.sessionsForWeek(week.id)) {
-      existingKeys.set(uploadSessionKey(s), s);
+    for (const s of store.data.sessions) {
+      const sw = store.data.weeks.find((w) => w.id === s.weekId);
+      if (sw && sw.providerId === providerId) {
+        existingKeys.set(uploadSessionKey(s), s);
+      }
     }
 
     const resolveStudent = (studentName: string) => {
@@ -1862,10 +1903,30 @@ export async function handleTmsRequest(
       const studentName =
         `${student.firstName} ${student.lastName}`.trim() || display;
 
+      const rowWeekStart = weekStartFromDos(row.dateOfService) || fallbackWeekStart;
+      const targetWeek = ensureWeek(rowWeekStart);
+      week = targetWeek;
+      if (!therapistCanImportOrAddServices(targetWeek.status) && ctx.user.role !== 'admin') {
+        const lockMsg =
+          targetWeek.status === 'submitted'
+            ? 'Week is awaiting signature — cancel approval before importing.'
+            : weekIsProcessed(targetWeek.status)
+              ? 'Week is signed/locked — ask an admin to reopen before importing.'
+              : 'This week cannot accept imports.';
+        failed.push({
+          studentName,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: ${lockMsg}`,
+        });
+        continue;
+      }
+
       const ageErr = sessionImportAgeError(row.dateOfService, {
         settings,
         providerId,
-        weekId: week.id,
+        weekId: targetWeek.id,
         isAdmin: ctx.user.role === 'admin',
       });
       if (ageErr) {
@@ -1936,7 +1997,7 @@ export async function handleTmsRequest(
       const cptProcedures = row.cptProcedures || [];
       let session: SessionRow = {
         id: newId(),
-        weekId: week.id,
+        weekId: targetWeek.id,
         studentId: student.id,
         dateOfService: row.dateOfService,
         beginTime: row.beginTime,
@@ -1956,13 +2017,14 @@ export async function handleTmsRequest(
       };
 
       const projectedSessions = [
-        ...store.sessionsForWeek(week.id),
-        ...pending.map((p) => p.session),
+        ...store.sessionsForWeek(targetWeek.id),
+        ...pending.filter((p) => p.session.weekId === targetWeek.id).map((p) => p.session),
         session,
       ];
       const allSessionsProjected = [
-        ...store.data.sessions.filter((s) => s.weekId !== week.id),
+        ...store.data.sessions.filter((s) => s.weekId !== targetWeek.id),
         ...projectedSessions,
+        ...pending.filter((p) => p.session.weekId !== targetWeek.id).map((p) => p.session),
       ];
 
       if (session.attendance === 'makeup') {
@@ -2058,7 +2120,7 @@ export async function handleTmsRequest(
             dateOfService: p.session.dateOfService,
           })),
           ...store
-            .sessionsForWeek(week.id)
+            .sessionsForWeek(targetWeek.id)
             .filter((s) => s.studentId !== student.id)
             .map((s) => ({
               studentId: s.studentId,
@@ -2233,32 +2295,24 @@ export async function handleTmsRequest(
     const b = obj(req);
     const week = store.data.weeks.find((w) => w.id === String(b.weekId || ''));
     if (!week) return json(404, { error: 'Week not found.' });
-    if (!therapistCanImportOrAddServices(week.status) && ctx.user.role !== 'admin') {
-      return json(409, {
-        error: 'This week cannot accept new sessions. Ask an admin to reopen it.',
-      });
-    }
     const existing = store.data.sessions.find((s) => s.id === String(b.id || ''));
-    // Processed (signed/locked) sessions are immutable for therapists — new rows only.
-    if (
-      existing &&
-      !therapistCanMutateExistingSession(week.status, { isAdmin: ctx.user.role === 'admin' })
-    ) {
+    if (existing) {
+      if (!therapistCanMutateExistingSession(week.status, { isAdmin: ctx.user.role === 'admin' })) {
+        return json(409, {
+          error:
+            week.status === 'submitted'
+              ? 'Approval is pending. Cancel the signature request before editing sessions.'
+              : 'This session was already processed and cannot be edited. Ask an admin if a change is required.',
+        });
+      }
+    } else if (!therapistCanImportOrAddServices(week.status) && ctx.user.role !== 'admin') {
       return json(409, {
         error:
-          'This session was already processed and cannot be edited. You can still add or import new sessions (within the 14-day locker). Ask an admin if a change is required.',
-      });
-    }
-    // While pending approval, therapists may only add/edit additional services (not PDF caseload rows).
-    if (
-      week.status === 'submitted' &&
-      ctx.user.role !== 'admin' &&
-      existing &&
-      !existing.additionalServiceType &&
-      !b.additionalServiceType
-    ) {
-      return json(409, {
-        error: 'While approval is pending, you can import notes or edit additional services only.',
+          week.status === 'submitted'
+            ? 'This week is awaiting signature. Cancel the approval request before adding or editing sessions.'
+            : weekIsProcessed(week.status)
+              ? 'This week is signed/locked. Ask an admin to reopen it before adding sessions.'
+              : 'This week cannot accept new sessions. Ask an admin to reopen it.',
       });
     }
     const attendance =
@@ -2277,11 +2331,6 @@ export async function handleTmsRequest(
     } else {
       return json(400, {
         error: 'Pick a valid additional service: Eval, Progress report, Consultation, Meetings, or Paid absence.',
-      });
-    }
-    if (week.status === 'submitted' && ctx.user.role !== 'admin' && !additionalServiceType) {
-      return json(409, {
-        error: 'While approval is pending, add additional services only (or import a PDF).',
       });
     }
     const serviceTypeFromAdditional = additionalServiceType
@@ -2655,18 +2704,11 @@ export async function handleTmsRequest(
     ) {
       return json(409, {
         error:
-          weekIsProcessed(week.status)
-            ? 'This session was already processed and cannot be removed.'
-            : 'This week is locked. Ask an admin to reopen it.',
-      });
-    }
-    if (
-      week.status === 'submitted' &&
-      ctx.user.role !== 'admin' &&
-      !session.additionalServiceType
-    ) {
-      return json(409, {
-        error: 'While approval is pending, remove additional services only (or cancel approval first).',
+          week.status === 'submitted'
+            ? 'Approval is pending. Cancel the signature request before removing sessions.'
+            : weekIsProcessed(week.status)
+              ? 'This session was already processed and cannot be removed.'
+              : 'This week is locked. Ask an admin to reopen it.',
       });
     }
     if (ctx.user.role !== 'admin') {

@@ -825,6 +825,8 @@ input:focus, select:focus, textarea:focus {
   border-bottom: 1px solid var(--line-soft);
 }
 .cal-saved-view { margin: 0.75rem 0 1rem; }
+.cal-fallback-banner { margin: 0.75rem 0 1rem; }
+.cal-fallback-banner p { margin: 0.35rem 0 0; }
 .cal-saved {
   background: #f3f9ff;
   border: 1px solid var(--line);

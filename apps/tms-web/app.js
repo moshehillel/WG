@@ -23,11 +23,15 @@ const state = {
   childDetailBack: 'children',
   focusSchoolId: '',
   selectedSchoolId: sessionStorage.getItem('tmsSchoolId') || '',
+  schoolConfirmed: sessionStorage.getItem('tmsSchoolConfirmed') === '1',
   lastServiceProviderId: '',
   childSessionFrom: '',
   childSessionTo: '',
+  providerSessionFrom: '',
+  providerSessionTo: '',
   therapistPane: sessionStorage.getItem('tmsTherapistPane') || 'current',
   listTabLetter: 'A',
+  editingMandateId: '',
 };
 
 const REPORT_LIST = [
@@ -603,7 +607,7 @@ function formatCalendarSummary(calendar) {
 function renderCalendarSavedHtml(calendar, schoolName) {
   const name = schoolName ? ` for ${esc(schoolName)}` : '';
   if (!calendar?.yearStart && !calendar?.yearEnd && !(calendar?.offDays || []).length) {
-    return `<div class="cal-saved muted"><p>No calendar on file yet${name}. Enter the first day, last day, and off days below, then save the calendar.</p></div>`;
+    return `<div class="cal-saved muted"><p>No calendar saved yet${name}. Enter the first day, last day, and off days below, then save.</p></div>`;
   }
   const offs = [...(calendar.offDays || [])].sort();
   const offList = offs.length
@@ -648,11 +652,124 @@ function providerNameLink(providerId, label) {
 
 function mandateFreqLabel(m) {
   if (m?.freqDisplay) return m.freqDisplay;
-  const kind = m?.frequencyKind === 'school_day_cycle' ? 'school_day_cycle' : 'weekly';
+  const kind =
+    m?.frequencyKind === 'school_day_cycle'
+      ? 'school_day_cycle'
+      : m?.frequencyKind === 'monthly'
+        ? 'monthly'
+        : 'weekly';
   const n = m?.sessionsPerPeriod ?? m?.frequencyPerWeek;
   if (n == null || n === '') return '—';
   if (kind === 'school_day_cycle') return `${n} / ${m?.periodSchoolDays || 6} school days`;
+  if (kind === 'monthly') return `${n} / month`;
   return `${n} / week`;
+}
+
+function mandatePeriodOptions(selected) {
+  const cur = String(selected || 'weekly');
+  return [
+    ['weekly', 'Weekly'],
+    ['school_day_cycle', '6-Day Cycle'],
+    ['monthly', 'Monthly'],
+  ]
+    .map(([v, label]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${label}</option>`)
+    .join('');
+}
+
+function bindMandateEditor(opts) {
+  const { mandates, providers, students, onSaved, panelId = 'editMandatePanel' } = opts;
+  document.querySelectorAll('[data-edit-mandate]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-edit-mandate');
+      const m = (mandates || []).find((x) => x.id === id);
+      const panel = document.getElementById(panelId);
+      if (!m || !panel) return;
+      const kind = m.mandateKind === 'makeup_auth' ? 'makeup_auth' : 'regular';
+      const period = m.frequencyKind === 'school_day_cycle'
+        ? 'school_day_cycle'
+        : m.frequencyKind === 'monthly'
+          ? 'monthly'
+          : 'weekly';
+      panel.hidden = false;
+      panel.innerHTML = `
+        <h3>Edit mandate</h3>
+        <div class="row">
+          <label>Student
+            <select id="emStudent">${studentOptions(students || [], m.studentId)}</select>
+          </label>
+          <label>Provider
+            <select id="emProvider">${providerOptions(providers || [], m.providerId)}</select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Service type <input id="emService" value="${esc(m.serviceType || '')}" /></label>
+          <label>Kind
+            <select id="emKind">
+              <option value="regular"${kind === 'regular' ? ' selected' : ''}>Weekly</option>
+              <option value="makeup_auth"${kind === 'makeup_auth' ? ' selected' : ''}>Makeup auth</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Ratio
+            <select id="emRatio">
+              <option value="individual"${!m.ratioGroup ? ' selected' : ''}>Individual</option>
+              <option value="group"${m.ratioGroup ? ' selected' : ''}>Group</option>
+            </select>
+          </label>
+          <label>Group size <input id="emGroupSize" type="number" min="1" step="1" value="${esc(m.groupSize ?? '')}" /></label>
+        </div>
+        <div class="row">
+          <label>Duration (minutes) <input id="emDuration" type="number" min="1" step="1" value="${esc(m.durationMinutes ?? '')}" /></label>
+          <label>Freq / count <input id="emFreq" type="number" min="0" step="1" value="${esc(m.sessionsPerPeriod ?? m.frequencyPerWeek ?? '')}" /></label>
+        </div>
+        <div class="row">
+          <label>Period
+            <select id="emPeriod">${mandatePeriodOptions(period)}</select>
+          </label>
+          <label>Start / end
+            <div class="row">
+              <input id="emStart" type="date" value="${esc(m.startOn || '')}" />
+              <input id="emEnd" type="date" value="${esc(m.endOn || '')}" />
+            </div>
+          </label>
+        </div>
+        <div class="entry-form-actions">
+          <button type="button" class="btn-primary" id="emSave">Save changes</button>
+          <button type="button" class="btn" id="emCancel">Cancel</button>
+        </div>
+      `;
+      document.getElementById('emCancel').onclick = () => {
+        panel.hidden = true;
+        panel.innerHTML = '';
+      };
+      document.getElementById('emSave').onclick = async () => {
+        try {
+          const freq = Number(document.getElementById('emFreq').value);
+          const durationRaw = document.getElementById('emDuration').value;
+          const groupSizeRaw = document.getElementById('emGroupSize').value;
+          const frequencyKind = document.getElementById('emPeriod').value;
+          await api('PATCH', `/admin/mandates/${id}`, {
+            studentId: document.getElementById('emStudent').value,
+            providerId: document.getElementById('emProvider').value,
+            serviceType: document.getElementById('emService').value,
+            mandateKind: document.getElementById('emKind').value,
+            ratioGroup: document.getElementById('emRatio').value === 'group',
+            durationMinutes: durationRaw === '' ? null : Number(durationRaw),
+            groupSize: groupSizeRaw === '' ? null : Number(groupSizeRaw),
+            frequencyKind,
+            frequencyPerWeek: freq,
+            sessionsPerPeriod: freq,
+            periodSchoolDays: frequencyKind === 'school_day_cycle' ? 6 : undefined,
+            startOn: document.getElementById('emStart').value,
+            endOn: document.getElementById('emEnd').value,
+          });
+          setStatus('Mandate updated.', 'ok');
+          await onSaved();
+        } catch (e) { setStatus(e.message, 'err'); }
+      };
+    });
+  });
 }
 
 function mandateDurationLabel(m) {
@@ -964,13 +1081,15 @@ async function therapistHome(statusFlash) {
     const me = await api('GET', '/me');
     providerId = me.provider?.id || '';
     schools = me.schools || [];
-    if (schools.length === 1 && !state.selectedSchoolId) {
+    if (schools.length === 1) {
       state.selectedSchoolId = schools[0].id;
+      state.schoolConfirmed = true;
       sessionStorage.setItem('tmsSchoolId', state.selectedSchoolId);
-    }
-    if (schools.length > 1) {
+      sessionStorage.setItem('tmsSchoolConfirmed', '1');
+    } else if (schools.length > 1) {
       const stillValid = schools.some((s) => s.id === state.selectedSchoolId);
-      if (!stillValid) {
+      // Multi-school providers must pick a school on the dashboard before the homepage.
+      if (!state.schoolConfirmed || !stillValid) {
         await showSchoolPicker(schools);
         return;
       }
@@ -1032,9 +1151,9 @@ async function therapistHome(statusFlash) {
   const status = week?.status || 'draft';
   const processed = status === 'signed' || status === 'locked';
   const pending = status === 'submitted';
-  // Import / add new sessions even on signed/locked weeks; existing processed rows stay view-only.
-  const canImport = true;
-  const canMutateExisting = !processed && (status === 'draft' || status === 'reopened');
+  // Madison: while awaiting signature or already signed/locked, providers cannot mutate sessions.
+  const canImport = !pending && !processed && (status === 'draft' || status === 'reopened');
+  const canMutateExisting = canImport;
   const sendBlockReason = timesheetSendBlockReason({
     week,
     sessions,
@@ -1119,12 +1238,12 @@ async function therapistHome(statusFlash) {
     <div class="hero-strip" aria-hidden="true"></div>
     <div class="card">
       <div class="pane-tabs" id="therapistPaneTabs" role="tablist">
-        <button type="button" class="pane-tab${pane === 'current' ? ' on' : ''}" data-therapist-pane="current" role="tab">This week</button>
-        <button type="button" class="pane-tab${pane === 'prior' ? ' on' : ''}" data-therapist-pane="prior" role="tab">Prior weeks</button>
+        <button type="button" class="pane-tab${pane === 'current' ? ' on' : ''}" data-therapist-pane="current" role="tab">Pending Sessions</button>
+        <button type="button" class="pane-tab${pane === 'prior' ? ' on' : ''}" data-therapist-pane="prior" role="tab">Processed Sessions</button>
       </div>
       ${isPriorPane ? `
-      <h2>Previously processed sessions</h2>
-      <p class="muted">Open a prior week to review timesheets. Existing processed sessions are view-only for providers; you can still import or add new sessions if the date of service is within 14 days (unless an admin unlocks). Admins can edit processed rows when needed.</p>
+      <h2>Processed sessions</h2>
+      <p class="muted">Open a prior week to review timesheets. Sessions on signed or locked weeks are view-only for providers. Cancel a pending signature request (or ask an admin to reopen) before editing.</p>
       <div class="table-wrap"><table>
         <tr><th>Week</th><th>Status</th><th>Sessions</th><th></th></tr>
         ${priorWeeks.map((w) => `<tr>
@@ -1132,13 +1251,13 @@ async function therapistHome(statusFlash) {
           <td>${esc(w.status)}</td>
           <td>${esc(String(w.sessionCount ?? 0))}</td>
           <td><button type="button" class="btn" data-open-prior-week="${esc(w.weekStart)}">Open</button></td>
-        </tr>`).join('') || '<tr><td colspan="4">No prior weeks yet.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="4">No processed sessions yet.</td></tr>'}
       </table></div>
       ` : `
-      <h2>My week</h2>
+      <h2>Pending sessions</h2>
       ${banner}
       ${week ? approvalBanner(status) : '<div class="warn-box">Contact the office to complete your therapist profile setup.</div>'}
-      <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${processed ? ' · processed (existing sessions locked; you can still import new ones)' : ''}</p>
+      <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${pending ? ' · awaiting signature (sessions locked)' : ''}${processed ? ' · signed/locked (sessions locked)' : ''}</p>
       <div class="row">
         ${schools.length > 1 ? `<button type="button" class="btn" id="changeSchool">Change school</button>` : ''}
         <button class="btn" id="refreshHome">Reload week</button>
@@ -1159,11 +1278,9 @@ async function therapistHome(statusFlash) {
           const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
           const serviceLabel = additionalServiceLabel(s.additionalServiceType) || s.serviceType || '—';
           const cpt = s.cptLabel || (s.cptCodes || []).join(', ') || '—';
-          const canEditAddl =
-            Boolean(s.additionalServiceType) && (canMutateExisting || pending);
-          const canRemove =
-            (canMutateExisting && !pending) ||
-            (pending && Boolean(s.additionalServiceType));
+          const canEditAddl = Boolean(s.additionalServiceType) && canMutateExisting;
+          const canRemove = canMutateExisting;
+          const canEditRow = canMutateExisting;
           const payload = {
             id: s.id,
             studentId: s.studentId,
@@ -1177,7 +1294,7 @@ async function therapistHome(statusFlash) {
             makeupOfSessionId: s.makeupOfSessionId || '',
           };
           const actions = `<td class="row-actions">
-                ${canEditAddl ? `<button type="button" class="icon-btn" data-edit-session="${esc(s.id)}" title="Edit" aria-label="Edit">${pencilIcon()}</button>` : ''}
+                ${canEditRow ? `<button type="button" class="icon-btn" data-edit-session="${esc(s.id)}" title="Edit" aria-label="Edit">${pencilIcon()}</button>` : ''}
                 ${canRemove ? `<button type="button" class="btn" data-remove-session="${esc(s.id)}">Remove</button>` : ''}
               </td>`;
           return `<tr class="${rowClass}" data-session-json="${esc(JSON.stringify(payload))}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${esc(serviceLabel)}</td><td>${esc(cpt)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${esc(s.notes || '')}</td>${actions}</tr>`;
@@ -1187,11 +1304,12 @@ async function therapistHome(statusFlash) {
     </div>
 
     ${!isPriorPane ? `
-    ${processed ? `<div class="warn-box">This week is already processed. Existing sessions cannot be edited or removed (admins can still edit). You can still import new session notes within the 14-day locker (duplicates are skipped) and add additional services. Overlap with existing sessions is still checked.</div>` : ''}
-    ${pending ? `<div class="warn-box">Approval is pending. You can still import session notes and edit additional services, or cancel the approval request to return to draft.</div>` : ''}
+    ${processed ? `<div class="warn-box">This week is signed and locked. Sessions cannot be edited, removed, or added. Ask an admin to reopen the week if a change is required.</div>` : ''}
+    ${pending ? `<div class="warn-box">Approval is pending. Sessions are locked until you cancel the approval request (returns the week to draft) or the timesheet is signed.</div>` : ''}
+    ${canImport ? `
     <div class="card sec-card">
-      <h2 class="sec"><span class="sec-num">1</span> Import weekly notes</h2>
-      <p>Select a Frontline Related Service Session Notes PDF or a Therapist Activity Output PDF (text-based, not a scan). Children and schools must already exist from caseload import; this upload will not create them. Import is all-or-nothing — any error or yellow warning blocks the whole file. Already-imported sessions are skipped; new sessions may be added even on a processed week.</p>
+      <h2 class="sec"><span class="sec-num">1</span> Import session notes</h2>
+      <p>Select a Frontline Related Service Session Notes PDF or a Therapist Activity Output PDF (text-based, not a scan). Children and schools must already exist from caseload import; this upload will not create them. Import is all-or-nothing — any error or yellow warning blocks the whole file. Already-imported sessions are skipped. Sessions attach to the week of each date of service (within the 14-day locker).</p>
       <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
       <button class="btn-primary big" id="upload">Import</button>
       <p class="muted" id="uploadHint">Accepts Frontline session-notes or Therapist Activity Output PDFs. Import caseloads under Mandates. Scanned PDFs are not supported.</p>
@@ -1200,6 +1318,9 @@ async function therapistHome(statusFlash) {
     <div id="uploadIssues" class="upload-issues" hidden></div>
 
     ${addlForm}
+    ` : `
+    <div id="uploadIssues" class="upload-issues" hidden></div>
+    `}
 
     ${pending || processed ? `
     <div class="card sec-card">
@@ -1536,7 +1657,7 @@ async function showSchoolPicker(schools, opts = {}) {
     <div class="hero-strip" aria-hidden="true"></div>
     <div class="card school-picker-card">
       <h2>Select your school</h2>
-      <p class="muted">Choose the school for this session. Your caseload and timesheet will be filtered to that school.</p>
+      <p class="muted">Choose the school for this session before continuing to your homepage. Your caseload and timesheet will be filtered to that school.</p>
       <div class="school-picker-grid">
         ${(schools || []).map((s) => `
           <button type="button" class="school-pick-btn" data-school-id="${esc(s.id)}">
@@ -1551,11 +1672,17 @@ async function showSchoolPicker(schools, opts = {}) {
   document.querySelectorAll('[data-school-id]').forEach((btn) => {
     btn.onclick = async () => {
       state.selectedSchoolId = btn.getAttribute('data-school-id') || '';
+      state.schoolConfirmed = true;
       sessionStorage.setItem('tmsSchoolId', state.selectedSchoolId);
+      sessionStorage.setItem('tmsSchoolConfirmed', '1');
       await therapistHome();
     };
   });
-  document.getElementById('keepSchool')?.addEventListener('click', () => therapistHome());
+  document.getElementById('keepSchool')?.addEventListener('click', () => {
+    state.schoolConfirmed = true;
+    sessionStorage.setItem('tmsSchoolConfirmed', '1');
+    therapistHome();
+  });
 }
 
 
@@ -1839,7 +1966,6 @@ async function adminChildren() {
     <div class="card">
       <h2>Children</h2>
       <p class="muted">All students on the caseload. Open a record to edit details, review mandates and sessions, or remove.</p>
-      <div id="listLetterTabs" class="letter-tabs-host"></div>
       <label>Search
         <input id="childSearch" type="search" placeholder="First, last, school, program type, ID, grade…" autocomplete="off" />
       </label>
@@ -1873,19 +1999,13 @@ async function adminChildren() {
     let shown = 0;
     document.querySelectorAll('[data-child-row]').forEach((row) => {
       const hay = row.getAttribute('data-search') || '';
-      const okSearch = !q || hay.includes(q) || q.split(/\s+/).every((t) => hay.includes(t));
-      const okLetter = !q && alphaLetterFromName(hay) === state.listTabLetter;
-      const ok = okSearch && (q ? true : okLetter);
+      const ok = !q || hay.includes(q) || q.split(/\s+/).every((t) => hay.includes(t));
       row.hidden = !ok;
       if (ok) shown += 1;
     });
     if (filterEmpty) filterEmpty.hidden = shown > 0 || !q;
   };
   if (searchEl) searchEl.addEventListener('input', applyChildFilter);
-  bindLetterTabs(
-    () => document.querySelectorAll('[data-child-row]'),
-    (row) => row.getAttribute('data-search') || '',
-  );
   bindOpenChildLinks();
   bindBulkDelete('children', {
     noun: 'children',
@@ -1998,10 +2118,14 @@ async function adminChildDetail(studentId, opts = {}) {
           <td>${esc(mandateFreqLabel(m))}</td>
           <td>${esc(dates)}</td>
           <td>${providerNameLink(m.providerId, m.providerName || '—')}</td>
-          <td><button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete</button></td>
+          <td>
+            <button type="button" class="btn" data-edit-mandate="${esc(m.id)}">Edit</button>
+            <button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete</button>
+          </td>
         </tr>`;
         }).join('') || '<tr><td colspan="9">No mandates on file.</td></tr>'}
       </table>
+      <div id="editMandatePanel" class="entry-card" hidden style="margin-top:1rem"></div>
     </div>
     <div class="card">
       <h3>Sessions</h3>
@@ -2146,6 +2270,24 @@ async function adminChildDetail(studentId, opts = {}) {
       } catch (e) { setStatus(e.message, 'err'); }
     });
   });
+  (async () => {
+    try {
+      const [providersOut] = await Promise.all([api('GET', '/admin/providers')]);
+      bindMandateEditor({
+        mandates,
+        providers: providersOut.providers || [],
+        students: [{ id: studentId, firstName: s.firstName, lastName: s.lastName }],
+        onSaved: () => adminChildDetail(studentId, { backTo: state.childDetailBack }),
+      });
+    } catch {
+      bindMandateEditor({
+        mandates,
+        providers: [],
+        students: [{ id: studentId, firstName: s.firstName, lastName: s.lastName }],
+        onSaved: () => adminChildDetail(studentId, { backTo: state.childDetailBack }),
+      });
+    }
+  })();
   document.querySelectorAll('[data-del-session]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
@@ -2201,8 +2343,17 @@ async function adminProviderDetail(providerId) {
   const notes = detail.notes || [];
   const mandates = detail.mandates || [];
   const weeks = detail.weeks || [];
+  const sessions = detail.sessions || [];
   // Keep URL/state on the canonical linked id when duplicates were merged server-side.
   if (p?.id && String(p.id) !== String(providerId)) providerId = p.id;
+  const sessFrom = state.providerSessionFrom || '';
+  const sessTo = state.providerSessionTo || '';
+  const filteredSessions = sessions.filter((x) => {
+    const d = String(x.dateOfService || '');
+    if (sessFrom && d < sessFrom) return false;
+    if (sessTo && d > sessTo) return false;
+    return true;
+  });
   view(`
     <div class="card">
       <button type="button" class="btn" id="backProviders">← Providers</button>
@@ -2251,31 +2402,42 @@ async function adminProviderDetail(providerId) {
           <td>${esc(mandateGroupSizeLabel(m))}</td>
           <td>${esc(mandateDurationLabel(m))}</td>
           <td>${esc(mandateFreqLabel(m))}</td>
-          <td><button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete mandate</button></td>
+          <td>
+            <button type="button" class="btn" data-edit-mandate="${esc(m.id)}">Edit</button>
+            <button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete mandate</button>
+          </td>
         </tr>`;
         }).join('') || '<tr><td colspan="7">No mandates assigned.</td></tr>'}
       </table>
+      <div id="editMandatePanel" class="entry-card" hidden style="margin-top:1rem"></div>
     </div>
     <div class="card">
-      <h3>Weeks</h3>
-      ${bulkBar('prov-weeks')}
+      <h3>Sessions</h3>
+      <p class="muted">All sessions for this provider (newest first). Filter by date of service as needed.</p>
+      <div class="row">
+        <label>From <input id="pSessFrom" type="date" value="${esc(sessFrom)}" /></label>
+        <label>To <input id="pSessTo" type="date" value="${esc(sessTo)}" /></label>
+        <button type="button" class="btn" id="pSessFilter">Filter</button>
+        <button type="button" class="btn" id="pSessClear">Clear</button>
+      </div>
+      ${bulkBar('prov-sessions')}
       <table>
-        <tr>${bulkTh('prov-weeks')}<th>Week</th><th>Status</th><th>HHA</th><th></th></tr>
-        ${weeks.map((w) => `<tr>
-          ${bulkTd('prov-weeks', w.id)}
-          <td>${esc(w.weekStart)}</td>
-          <td>${esc(w.status)}</td>
-          <td>${hhaStatusCell(w)}</td>
-          <td><button type="button" class="btn" data-del-week="${esc(w.id)}" data-week-status="${esc(w.status || '')}">Remove</button></td>
-        </tr>`).join('') || '<tr><td colspan="5">No weeks yet.</td></tr>'}
+        <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Child</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
+        ${filteredSessions.map((x) => `<tr>
+          ${bulkTd('prov-sessions', x.id)}
+          <td>${esc(x.dateOfService)}</td>
+          <td>${childNameLink(x.studentId, x.studentName || '—')}</td>
+          <td>${esc(x.weekStart || '—')}</td>
+          <td>${esc(x.weekStatus || '—')}</td>
+          <td>${esc(x.attendance)}</td>
+          <td>${esc(x.notes || '')}</td>
+          <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
+        </tr>`).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
       </table>
     </div>
     <div class="card">
       <h3>Import Frontline / Therapist Activity sessions</h3>
-      <p class="muted">Same import as the therapist workspace: Frontline Related Service Session Notes or Therapist Activity Output PDF (text-based, not a scan). Children and schools must already exist from caseload import. Import is all-or-nothing — any error blocks the whole file. Already-imported sessions are skipped.</p>
-      <div class="row">
-        <label>Week start (Monday) <input id="pSessionWeekStart" type="date" value="${esc(mondayIso())}" /></label>
-      </div>
+      <p class="muted">Same as the therapist workspace: upload a Frontline or Therapist Activity PDF (text-based). No week selection needed — each session attaches to the week of its date of service (within the 14-day locker). Children and schools must already exist. Import is all-or-nothing.</p>
       <input id="pSessionPdf" type="file" accept="application/pdf,.pdf" />
       <button type="button" class="btn-primary" id="pUploadSessions">Import sessions</button>
       <div id="pUploadIssues" class="upload-issues" hidden></div>
@@ -2369,9 +2531,9 @@ async function adminProviderDetail(providerId) {
     deleteOne: (id) => api('DELETE', `/admin/mandates/${id}`),
     refresh: refreshProvider,
   });
-  bindBulkDelete('prov-weeks', {
-    noun: 'weeks',
-    deleteOne: (id) => api('DELETE', `/admin/weeks/${id}`),
+  bindBulkDelete('prov-sessions', {
+    noun: 'sessions',
+    deleteOne: (id) => api('DELETE', `/sessions/${id}`),
     refresh: refreshProvider,
   });
   bindBulkDelete('prov-files', {
@@ -2380,6 +2542,36 @@ async function adminProviderDetail(providerId) {
     refresh: refreshProvider,
   });
   bindOpenChildLinks();
+  bindMandateEditor({
+    mandates,
+    providers: [p],
+    students: mandates.map((m) => ({
+      id: m.studentId,
+      firstName: String(m.studentName || '').split(/\s+/)[0] || '',
+      lastName: String(m.studentName || '').split(/\s+/).slice(1).join(' ') || m.studentName || '',
+    })),
+    onSaved: refreshProvider,
+  });
+  document.getElementById('pSessFilter')?.addEventListener('click', () => {
+    state.providerSessionFrom = document.getElementById('pSessFrom')?.value || '';
+    state.providerSessionTo = document.getElementById('pSessTo')?.value || '';
+    refreshProvider();
+  });
+  document.getElementById('pSessClear')?.addEventListener('click', () => {
+    state.providerSessionFrom = '';
+    state.providerSessionTo = '';
+    refreshProvider();
+  });
+  document.querySelectorAll('[data-del-session]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        if (!confirm('Remove this session? This cannot be undone.')) return;
+        await api('DELETE', `/sessions/${btn.getAttribute('data-del-session')}`);
+        setStatus('Session removed.', 'ok');
+        await refreshProvider();
+      } catch (e) { setStatus(e.message, 'err'); }
+    });
+  });
   document.getElementById('backProviders').onclick = () => adminProviders();
   document.getElementById('saveProvider').onclick = async () => {
     try {
@@ -2459,8 +2651,6 @@ async function adminProviderDetail(providerId) {
     try {
       const file = document.getElementById('pSessionPdf').files[0];
       if (!file) throw new Error('Select a Frontline or Therapist Activity PDF first.');
-      const weekStart = document.getElementById('pSessionWeekStart').value;
-      if (!weekStart) throw new Error('Select a week start date.');
       btn.disabled = true;
       btn.textContent = 'Importing…';
       if (issuesHost) {
@@ -2470,7 +2660,6 @@ async function adminProviderDetail(providerId) {
       setStatus('Importing PDF…', '');
       const pdfBase64 = await fileToBase64(file);
       const out = await api('POST', '/week/upload-sessions', {
-        weekStart,
         providerId,
         pdfBase64,
       });
@@ -2646,6 +2835,13 @@ async function adminSchoolDetail(schoolId) {
   const cal = detail.calendar;
   const dueDates = (duesOut.rows || []).filter((d) => d.schoolId === schoolId);
   const calSummary = detail.schoolCalendarSummary || formatCalendarSummary(cal);
+  const calendarEmpty =
+    !cal?.yearStart && !cal?.yearEnd && !(cal?.offDays || []).length;
+  const calFallbackWarn =
+    detail.calendarFallbackWarning ||
+    (calendarEmpty
+      ? `No school calendar for ${school.name || 'this school'} — falling back to Mon–Fri (weekends excluded; no holiday off-days).`
+      : '');
   view(`
     <div class="card">
       <button type="button" class="btn" id="backSchools">← Schools</button>
@@ -2659,12 +2855,26 @@ async function adminSchoolDetail(schoolId) {
         <label>Signer name <input id="signerName" value="${esc(school.signerName || '')}" /></label>
         <label>Signer email <input id="signerEmail" value="${esc(school.signerEmail || '')}" /></label>
       </div>
+      <p class="muted">School address is used when TMS creates an HHA patient (CreatePatient).</p>
+      <div class="row">
+        <label>Address <input id="saddress1" value="${esc(school.address1 || '')}" placeholder="Street" /></label>
+        <label>City <input id="scity" value="${esc(school.city || '')}" /></label>
+      </div>
+      <div class="row">
+        <label>State <input id="sstate" value="${esc(school.state || '')}" placeholder="NY" maxlength="2" /></label>
+        <label>Zip <input id="szip" value="${esc(school.zipCode || '')}" placeholder="11514" /></label>
+      </div>
       <button type="button" class="btn-primary" id="saveSchool">Save school</button>
       <button type="button" class="btn" id="deleteSchool">Remove school</button>
     </div>
     <div class="card" id="schoolCalendarSection">
       <h3>School calendar</h3>
       <p class="muted">School year dates and closed days (holidays and breaks). Used for school-day mandate tracking.</p>
+      ${
+        calFallbackWarn
+          ? `<div class="warn-box cal-fallback-banner" id="calFallbackBanner"><strong>${esc(calFallbackWarn)}</strong><p>Cycle mandates currently use Mon–Fri until first day, last day, and off days are set.</p></div>`
+          : ''
+      }
       <div id="calSavedView" class="cal-saved-view">${renderCalendarSavedHtml(cal, school.name)}</div>
       <div class="row">
         <label>First day (YYYY-MM-DD) <input id="calYearStart" type="date" value="${esc(cal?.yearStart || '')}" /></label>
@@ -2752,6 +2962,10 @@ async function adminSchoolDetail(schoolId) {
         district: document.getElementById('sdistrict').value,
         signerName: document.getElementById('signerName').value,
         signerEmail: document.getElementById('signerEmail').value,
+        address1: document.getElementById('saddress1').value,
+        city: document.getElementById('scity').value,
+        state: document.getElementById('sstate').value,
+        zipCode: document.getElementById('szip').value,
       });
       setStatus('School saved.', 'ok');
       await adminSchoolDetail(schoolId);
@@ -2860,7 +3074,6 @@ async function adminProviders() {
     </div>
     <div class="card">
       <h2>Providers</h2>
-      <div id="listLetterTabs" class="letter-tabs-host"></div>
       ${bulkBar('providers')}
       <table>
         <tr>${bulkTh('providers')}<th>Name</th><th>Email</th><th>Provider id</th><th>Discipline</th><th></th></tr>
@@ -2888,10 +3101,6 @@ async function adminProviders() {
     </div>
   `);
 
-  bindLetterTabs(
-    () => document.querySelectorAll('[data-provider-row]'),
-    (row) => row.getAttribute('data-provider-name') || '',
-  );
   bindBulkDelete('providers', {
     noun: 'providers',
     deleteOne: (id, el) => {
@@ -3256,7 +3465,7 @@ async function adminMandates() {
       </div>
       <div id="addMandateForm" hidden>
         <h2>Add mandate manually</h2>
-        <p class="muted">Kind: <strong>Weekly</strong> (standard frequency) or <strong>Makeup auth</strong> (remaining session pool, e.g. 12). Unlinked makeups use Makeup auth; miss-linked makeups do not.</p>
+        <p class="muted">Kind: <strong>Weekly</strong> (standard frequency), <strong>6-Day Cycle</strong>, <strong>Monthly</strong>, or <strong>Makeup auth</strong> (remaining session pool). Unlinked makeups use Makeup auth; miss-linked makeups do not.</p>
         <div class="row">
           <label>Student
             <select id="manStudent">${studentOptions(students)}</select>
@@ -3291,7 +3500,8 @@ async function adminMandates() {
           <label>Period
             <select id="manPeriod">
               <option value="weekly">Weekly</option>
-              <option value="school_day_cycle">School-day cycle</option>
+              <option value="school_day_cycle">6-Day Cycle</option>
+              <option value="monthly">Monthly</option>
             </select>
           </label>
           <label>Start / end
@@ -3412,6 +3622,7 @@ async function adminMandates() {
         frequencyKind: document.getElementById('manPeriod').value,
         frequencyPerWeek: freq,
         sessionsPerPeriod: freq,
+        periodSchoolDays: document.getElementById('manPeriod').value === 'school_day_cycle' ? 6 : undefined,
         startOn: document.getElementById('manStart').value,
         endOn: document.getElementById('manEnd').value,
       });
@@ -3892,7 +4103,9 @@ function signOut(message) {
   state.accessToken = '';
   state.email = '';
   state.selectedSchoolId = '';
+  state.schoolConfirmed = false;
   sessionStorage.removeItem('tmsSchoolId');
+  sessionStorage.removeItem('tmsSchoolConfirmed');
   localStorage.removeItem('tmsIdToken');
   localStorage.removeItem('tmsAccessToken');
   showLogin(message || '');
@@ -3948,6 +4161,9 @@ function showLogin(message) {
       const idToken = auth.IdToken;
       if (!idToken) throw new Error('Sign-in was unsuccessful. Please try again.');
       applyToken(idToken, auth.AccessToken || '');
+      // Force school picker after each sign-in when the provider has multiple schools.
+      state.schoolConfirmed = false;
+      sessionStorage.removeItem('tmsSchoolConfirmed');
       openingAccountView();
       await showRole();
     } catch (e) {
@@ -4100,6 +4316,8 @@ function showNewPassword(email, session) {
       const idToken = auth.IdToken;
       if (!idToken) throw new Error('Sign-in was unsuccessful. Please sign in again.');
       applyToken(idToken, auth.AccessToken || '');
+      state.schoolConfirmed = false;
+      sessionStorage.removeItem('tmsSchoolConfirmed');
       openingAccountView();
       await showRole();
     } catch (e) {

@@ -196,6 +196,39 @@ describe('school_day_cycle calendar windows', () => {
     );
     expect(over.errors.some((e) => /exceeds the cycle mandate for Elmer/i.test(e))).toBe(true);
   });
+
+  it('warns when cycle check falls back to Mon–Fri with no school calendar', () => {
+    const mandates = [cycleMandate()];
+    const rows = [sess({ id: 'a', dateOfService: '09/01/2026' })];
+    const empty = checkMandatesForWeek(
+      mandates,
+      rows,
+      rows,
+      new Map([['st1', 'Elmer']]),
+      {
+        calendarByStudentId: new Map([['st1', null]]),
+        schoolNameByStudentId: new Map([['st1', 'PS 118']]),
+      },
+    );
+    expect(
+      empty.warnings.some((w) =>
+        /No school calendar for PS 118 — falling back to Mon–Fri/i.test(w),
+      ),
+    ).toBe(true);
+    expect(empty.errors).toHaveLength(0);
+
+    const withCal = checkMandatesForWeek(
+      mandates,
+      rows,
+      rows,
+      new Map([['st1', 'Elmer']]),
+      {
+        calendarByStudentId: new Map([['st1', yearCal()]]),
+        schoolNameByStudentId: new Map([['st1', 'PS 118']]),
+      },
+    );
+    expect(withCal.warnings.some((w) => /falling back to Mon–Fri/i.test(w))).toBe(false);
+  });
 });
 
 describe('makeup', () => {
@@ -357,9 +390,12 @@ describe('week lock', () => {
 
   it('allows import/add on processed weeks but not mutate existing', () => {
     expect(weekIsProcessed('locked')).toBe(true);
-    expect(therapistCanImportOrAddServices('locked')).toBe(true);
-    expect(therapistCanImportOrAddServices('signed')).toBe(true);
+    expect(therapistCanImportOrAddServices('locked')).toBe(false);
+    expect(therapistCanImportOrAddServices('signed')).toBe(false);
+    expect(therapistCanImportOrAddServices('submitted')).toBe(false);
+    expect(therapistCanImportOrAddServices('draft')).toBe(true);
     expect(therapistCanMutateExistingSession('locked')).toBe(false);
+    expect(therapistCanMutateExistingSession('submitted')).toBe(false);
     expect(therapistCanMutateExistingSession('signed', { isAdmin: true })).toBe(true);
   });
 });

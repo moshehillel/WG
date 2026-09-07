@@ -6,7 +6,7 @@ import {
 import { dueDateStatus } from './due-dates.js';
 import { assignSessionsToMandates, mandateFrequencyKind } from './mandate.js';
 import { isoDate, parseDos } from './ids.js';
-import { schoolCalendarSummary } from './school-calendar.js';
+import { schoolCalendarSummary, hasConfiguredSchoolCalendar, schoolCalendarMonFriFallbackWarning } from './school-calendar.js';
 import type { Mandate, SessionRow } from './types.js';
 import { DEFAULT_ADMIN_NOTE_TAGS } from './types.js';
 import type { MemoryStore } from './memory-store.js';
@@ -214,11 +214,10 @@ export function weekProgressReport(
   return rows;
 }
 
-export function enrichWeekHhaError(store: MemoryStore, w: {
-  id: string;
-  hhaStatus: string;
-  hhaError?: string;
-}) {
+export function enrichWeekHhaError<T extends { id: string; hhaStatus: string; hhaError?: string }>(
+  store: MemoryStore,
+  w: T,
+): T & { hhaError: string } {
   const transferErrors = (store.data.hhaTransfers || [])
     .filter((t) => t.weekId === w.id && t.status === 'failed' && t.lastError)
     .map((t) => t.lastError);
@@ -460,10 +459,15 @@ export function adminSchoolDetail(store: MemoryStore, schoolId: string) {
   const calendar = store.schoolCalendarForSchool(schoolId) ?? null;
   const dueDates = dueDateReport(store).filter((d) => d.schoolId === schoolId);
   const students = store.data.students.filter((s) => s.schoolId === schoolId);
+  const configured = hasConfiguredSchoolCalendar(calendar);
   return {
     school,
     calendar,
     schoolCalendarSummary: schoolCalendarSummary(calendar || undefined),
+    calendarConfigured: configured,
+    calendarFallbackWarning: configured
+      ? ''
+      : schoolCalendarMonFriFallbackWarning(school.name),
     dueDates,
     studentCount: students.length,
   };
@@ -506,6 +510,27 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
   const weeks = store.data.weeks
     .filter((w) => aliasIds.has(w.providerId) || w.providerId === provider.id)
     .map((w) => enrichWeekHhaError(store, w));
+  const weekById = new Map(weeks.map((w) => [w.id, w]));
+  const sessions = store.data.sessions
+    .filter((s) => weekById.has(s.weekId))
+    .map((s) => {
+      const w = weekById.get(s.weekId);
+      const student = store.data.students.find((st) => st.id === s.studentId);
+      return {
+        ...s,
+        weekStart: w?.weekStart || '',
+        weekStatus: w?.status || '',
+        studentName: student
+          ? `${student.firstName} ${student.lastName}`.trim()
+          : s.studentId,
+      };
+    })
+    .sort((a, b) => {
+      const da = String(a.dateOfService || '');
+      const db = String(b.dateOfService || '');
+      if (da !== db) return db.localeCompare(da);
+      return String(b.beginTime || '').localeCompare(String(a.beginTime || ''));
+    });
   const files = store.filesForProvider(provider.id);
   const extraTags = [...new Set(notes.flatMap((n) => n.tags || []))];
   return {
@@ -514,6 +539,7 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
     notes,
     mandates,
     weeks,
+    sessions,
     files,
     noteTagOptions: [...new Set([...DEFAULT_ADMIN_NOTE_TAGS, ...extraTags])],
     caseloadCount: new Set(mandates.map((m) => m.studentId)).size,

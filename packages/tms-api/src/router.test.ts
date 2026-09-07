@@ -257,7 +257,7 @@ describe('TMS API weekly loop', () => {
     expect(hhaOut.status).toBe(200);
     expect((hhaOut.body as { ok: boolean }).ok).toBe(true);
 
-    // New sessions on a processed week are allowed (14-day locker + mandate still apply).
+    // New sessions on a processed week are blocked for therapists (Madison: cancel/reopen first).
     const lockedAddNew = await handleTmsRequest(store, {
       method: 'POST',
       path: '/week/sessions',
@@ -275,7 +275,8 @@ describe('TMS API weekly loop', () => {
         additionalServiceType: 'consultation',
       },
     });
-    expect(lockedAddNew.status).toBe(200);
+    expect(lockedAddNew.status).toBe(409);
+    expect((lockedAddNew.body as { error: string }).error).toMatch(/signed\/locked|reopen/i);
 
     // Admin may still edit a processed session.
     const adminEdit = await handleTmsRequest(store, {
@@ -1440,6 +1441,10 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     });
     expect(detail.status).toBe(200);
     expect((detail.body as { school: { id: string } }).school.id).toBe(school.id);
+    expect((detail.body as { calendarConfigured: boolean }).calendarConfigured).toBe(false);
+    expect((detail.body as { calendarFallbackWarning: string }).calendarFallbackWarning).toMatch(
+      /falling back to Mon–Fri/i,
+    );
 
     const empty = await handleTmsRequest(store, {
       method: 'GET',
@@ -1465,6 +1470,18 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     expect(saved.status).toBe(200);
     const calendar = (saved.body as { calendar: { offDays: string[] } }).calendar;
     expect(calendar.offDays).toEqual(['2025-11-27', '2025-12-25']);
+
+    const detailAfter = await handleTmsRequest(store, {
+      method: 'GET',
+      path: `/admin/schools/${school.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect((detailAfter.body as { calendarConfigured: boolean }).calendarConfigured).toBe(true);
+    expect((detailAfter.body as { calendarFallbackWarning: string }).calendarFallbackWarning).toBe(
+      '',
+    );
 
     const list = await handleTmsRequest(store, {
       method: 'GET',
@@ -1555,6 +1572,77 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     expect(body.saved).toHaveLength(0);
     expect(body.errors.some((e) => /exceeds the cycle mandate/i.test(e))).toBe(true);
     expect(store.data.sessions).toHaveLength(0);
+  });
+
+  it('upload cycle with no school calendar warns Mon–Fri fallback but still imports', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.data.schools[0]!;
+    // Intentionally no upsertSchoolCalendar — weekday-only fallback.
+
+    const student = store.upsertStudent({
+      id: newId(),
+      firstName: 'Nora',
+      lastName: 'Fallback',
+      schoolId: school.id,
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      frequencyPerWeek: 0,
+      frequencyKind: 'school_day_cycle',
+      sessionsPerPeriod: 2,
+      periodSchoolDays: 3,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+
+    const pdfText = [
+      'Student Name: Fallback, Nora',
+      'Service Provider: Pat Lee',
+      'Service: PT School',
+      '09/01/2026 9:00 am 9:30 am',
+      'Service Provided: balance work in gym',
+      '97110x2',
+      signedBlock('Sep 1 2026 9:35AM'),
+    ].join('\n');
+
+    const out = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-08-31', pdfText },
+    });
+    expect(out.status).toBe(200);
+    const body = out.body as {
+      ok: boolean;
+      saved: unknown[];
+      warnings: string[];
+      errors: string[];
+    };
+    expect(body.ok).toBe(true);
+    expect(body.saved.length).toBeGreaterThanOrEqual(1);
+    expect(body.errors).toHaveLength(0);
+    expect(
+      body.warnings.some((w) =>
+        new RegExp(
+          `No school calendar for ${school.name || 'this school'} — falling back to Mon–Fri`,
+          'i',
+        ).test(w),
+      ),
+    ).toBe(true);
   });
 });
 
