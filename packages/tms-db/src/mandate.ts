@@ -1,6 +1,10 @@
 import { buildSchoolBillingServiceName } from '@white-glove/shared';
 import { isoDate, parseDos } from './ids.js';
-import { isSchoolDay } from './school-calendar.js';
+import {
+  hasConfiguredSchoolCalendar,
+  isSchoolDay,
+  schoolCalendarMonFriFallbackWarning,
+} from './school-calendar.js';
 import type { Discipline, FrequencyKind, Mandate, MandateKind, SchoolCalendar, SessionRow } from './types.js';
 
 /**
@@ -47,12 +51,25 @@ export function mandateFrequencyKind(mandate: Mandate | undefined): FrequencyKin
 
 /**
  * Weekly over-check allowance.
- * Returns null for school_day_cycle — those use cycleAllowedSessions / cycle window check.
+ * Returns null for school_day_cycle / monthly — those use their own window checks.
  */
 export function weeklyAllowedSessions(mandate: Mandate | undefined): number | null {
   if (!mandate) return 0;
-  if (mandateFrequencyKind(mandate) === 'school_day_cycle') return null;
-  return Number(mandate.frequencyPerWeek) || 0;
+  const kind = mandateFrequencyKind(mandate);
+  if (kind === 'school_day_cycle' || kind === 'monthly') return null;
+  return Number(mandate.frequencyPerWeek) || Number(mandate.sessionsPerPeriod) || 0;
+}
+
+/** Sessions allowed per calendar month when frequencyKind is monthly. */
+export function monthlyAllowedSessions(mandate: Mandate | undefined): number {
+  if (!mandate || mandateFrequencyKind(mandate) !== 'monthly') return 0;
+  return Number(mandate.sessionsPerPeriod) || Number(mandate.frequencyPerWeek) || 0;
+}
+
+/** YYYY-MM key for a DOS string (empty when unparseable). */
+export function dosMonthKey(dos: string): string {
+  const iso = dosToIso(dos);
+  return iso ? iso.slice(0, 7) : '';
 }
 
 /** Sessions allowed per school-day cycle (e.g. 2 per 6 school days). */
@@ -298,7 +315,7 @@ function overMandateMessage(
   counted: SessionRow[],
   used: number,
   allowed: number,
-  kind: 'weekly' | 'makeup_auth' | 'school_day_cycle',
+  kind: 'weekly' | 'makeup_auth' | 'school_day_cycle' | 'monthly',
 ): string {
   const who = whoLabel(opts);
   const slots = counted.map(sessionSlotLabel).filter(Boolean).join('; ');
@@ -313,6 +330,12 @@ function overMandateMessage(
     return (
       `This exceeds the cycle mandate for ${who}:${slotBit} ` +
       `Mandate allows ${allowed} session(s) per cycle; densest window would make it ${used}.`
+    );
+  }
+  if (kind === 'monthly') {
+    return (
+      `This exceeds the monthly mandate for ${who}:${slotBit} ` +
+      `Mandate allows ${allowed} session(s) per month; this upload would make it ${used}.`
     );
   }
   return (
@@ -380,10 +403,51 @@ export function checkMandate(
 
   const allowedOrSkip = weeklyAllowedSessions(mandate);
   if (allowedOrSkip === null) {
+    const who = opts.studentLabel ? ` for ${opts.studentLabel}` : '';
+    if (mandateFrequencyKind(mandate) === 'monthly') {
+      const allowed = monthlyAllowedSessions(mandate);
+      if (allowed <= 0) {
+        return {
+          used,
+          allowed: 0,
+          over: true,
+          under: false,
+          missingMandate: true,
+          message: opts.studentLabel
+            ? `No mandate on file for ${opts.studentLabel} — import blocked.`
+            : 'No mandate on file for this student — import blocked.',
+        };
+      }
+      // Anchor month from the newest week session (or any counted DOS).
+      const anchorDos =
+        counted.map((s) => s.dateOfService).sort().slice(-1)[0] ||
+        weekSessions.map((s) => s.dateOfService).filter(Boolean).sort().slice(-1)[0] ||
+        '';
+      const monthKey = dosMonthKey(anchorDos);
+      const pool = sessionsCountingTowardWeekly(
+        allSessions.filter((s) => s.studentId === mandate.studentId),
+      );
+      const matched = pool.filter((s) => sessionMatchesMandate(s, mandate));
+      const monthPool = (matched.length ? matched : pool).filter(
+        (s) => !monthKey || dosMonthKey(s.dateOfService) === monthKey,
+      );
+      const monthUsed = monthPool.length;
+      const over = monthUsed > allowed;
+      return {
+        used: monthUsed,
+        allowed,
+        over,
+        under: !over && monthUsed < allowed,
+        message: over
+          ? overMandateMessage(opts, monthPool, monthUsed, allowed, 'monthly')
+          : monthUsed < allowed
+            ? `Under monthly mandate${who}: ${monthUsed} of ${allowed} this month.`
+            : '',
+      };
+    }
     // school_day_cycle: enforce densest sliding school-day window (Mon–Fri / calendar).
     const allowed = cycleAllowedSessions(mandate);
     const days = cyclePeriodSchoolDays(mandate);
-    const who = opts.studentLabel ? ` for ${opts.studentLabel}` : '';
     if (allowed <= 0) {
       return {
         used,
@@ -453,6 +517,10 @@ export type MandateWeekCheckOpts = {
   calendarByStudentId?:
     | ReadonlyMap<string, SchoolCalendar | null | undefined>
     | Record<string, SchoolCalendar | null | undefined>;
+  /** School display name per child (for Mon–Fri fallback warnings). */
+  schoolNameByStudentId?:
+    | ReadonlyMap<string, string>
+    | Record<string, string>;
 };
 
 function resolveCalendarForStudent(
@@ -471,6 +539,16 @@ function resolveCalendarForStudent(
   return opts?.calendar;
 }
 
+function resolveSchoolNameForStudent(
+  studentId: string,
+  opts?: MandateWeekCheckOpts,
+): string {
+  const byId = opts?.schoolNameByStudentId;
+  if (!byId) return '';
+  if (byId instanceof Map) return String(byId.get(studentId) || '').trim();
+  return String((byId as Record<string, string>)[studentId] || '').trim();
+}
+
 /**
  * Check all active mandates for students with sessions this week.
  * Multiple mandates per student (e.g. individual + group) are each checked
@@ -478,6 +556,7 @@ function resolveCalendarForStudent(
  * No mandate on file → error (import blocked). Under-mandate → warning only.
  * school_day_cycle → densest school-day window over-check (not a silent skip).
  * Pass calendarByStudentId (or calendar) so off-days / year bounds apply.
+ * Empty / missing school calendar → Mon–Fri still used, plus an explicit warning.
  */
 export function checkMandatesForWeek(
   mandates: Mandate[],
@@ -488,6 +567,7 @@ export function checkMandatesForWeek(
 ): { errors: string[]; warnings: string[] } {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const calendarFallbackWarned = new Set<string>();
   const byStudent = new Map<string, SessionRow[]>();
   for (const s of sessions) {
     if (isAdditionalServiceSession(s)) continue;
@@ -499,6 +579,17 @@ export function checkMandatesForWeek(
     const studentLabel = resolveStudentLabel(studentId, studentNameById);
     const calendar = resolveCalendarForStudent(studentId, opts);
     const studentMandates = mandates.filter((m) => m.studentId === studentId);
+    const usesCycle = studentMandates.some(
+      (m) => mandateFrequencyKind(m) === 'school_day_cycle',
+    );
+    if (usesCycle && !hasConfiguredSchoolCalendar(calendar)) {
+      const schoolName = resolveSchoolNameForStudent(studentId, opts);
+      const warnKey = schoolName || studentId;
+      if (!calendarFallbackWarned.has(warnKey)) {
+        calendarFallbackWarned.add(warnKey);
+        warnings.push(schoolCalendarMonFriFallbackWarning(schoolName));
+      }
+    }
     if (!studentMandates.length) {
       const result = checkMandate(undefined, rows, allSessions, {
         studentLabel,

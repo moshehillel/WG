@@ -207,6 +207,19 @@ In the UI these are labeled **Progress report due dates** (kinds remain progress
 
 DOB on the student record is **optional for now** but **recommended for HHA** (session/patient transfer). Caseload Excel/CSV imports Program ID / Program Type / Date of Birth when those columns exist; the current WG “Related Service by serviceschool” export does not include them — leave blank and no import block. Admins can enter DOB on the child detail screen.
 
+**HHA CreatePatient DOB (Sep 2026 — Moshe):** Intent is DOB from **caseload**. Moshe will share a **sample caseload export with DOB** later. **Do not** invent or hard-map DOB until that sample arrives. Until then, transfer only passes `student.dob` when already present (manual entry / optional import column); CreatePatient may still fail missing DOB if blank.
+
+## HHA patient create from TMS (school address)
+
+When TMS creates an HHA patient (`resolveHhaPatientId` → `upsertPatient` / CreatePatient last resort):
+
+| Field | Source |
+|-------|--------|
+| **Address / City / State / Zip** | **School** address (admin school detail — optional fields) |
+| **DOB** | Caseload / student record — **pending Moshe’s sample** (see above); no fake DOB |
+
+Admins enter school address on the school screen. CreatePatient still requires address + DOB when the child is not already in HHA; missing school address → same missing-field failure as before until the school is filled in.
+
 ## Caseload RS Provider (TMS)
 
 RS Provider on caseload import **must match an existing TMS therapist** (First Last / Last, First). Agency labels (“White Glove”, “White, Glove”) and unmatched names are **hard errors** — that row is skipped; do **not** save a mandate with an empty provider and do **not** invent providers. Schools/students still create from valid rows. There is **no Default provider** on import.
@@ -221,28 +234,35 @@ RS Provider on caseload import **must match an existing TMS therapist** (First L
 | **Group-tagged with ≥1 present peer** | Group pay rate / `OT Group $rate` |
 | **Solo group (0 present peers) or individual tag on group-mandate child** | Individual pay; **hard locker** — note must say **no peer was available** (or clear equivalent); treated as **individual for overlap** (later same-time note → overlap error) |
 
-## Processed weeks & 14-day locker (Sep 2026)
+## Processed weeks & 14-day locker (Sep 2026; Madison review update)
 
 | Rule | Behavior |
 |------|----------|
 | **Prior processed sessions** | View-only for providers; **admins can still edit** |
-| **New sessions on a prior week** | Providers may **add/import** when DOS is within **14 days** (admin can unlock); overlap vs existing processed sessions still checked |
+| **Awaiting signature (submitted)** | Provider sessions fully locked — cancel approval to return to draft before any edit/import/add |
+| **Signed / locked** | Provider sessions fully locked — admin reopen required before edits |
+| **New sessions while locked** | Providers may **not** add/import until cancel (submitted) or admin reopen (signed/locked). Admins may still override. Age locker (14 days) still applies when unlocked. |
 | **Makeup** | Requires unused miss on that date **or** leftover makeup-auth capacity; **no mandate → hard block** |
 | **Cycle / school-day mandates** | Skip **weekly** over-check; enforce densest **N school-day** window instead (calendar off-days when set; else Mon–Fri) |
+| **Monthly mandates** | Manual period option; over-check uses calendar month |
 
 ## Admin portal (TMS web)
 
 | Item | Status |
 |------|--------|
-| **Frontline / Therapist Activity PDF → sessions** | On provider detail (same `/week/upload-sessions` as therapists) |
+| **Frontline / Therapist Activity / CPSE-portal PDF → sessions** | **Done.** CPSE portal session reports **are** Therapist Activity Output PDFs (e.g. `Therapist_Activity_Output…` — already imported). Same `/week/upload-sessions` as Frontline. Do **not** say CPSE is missing or ask for a different sample. |
+| **Admin Frontline upload** | No week/calendar picker — sessions attach by DOS (14-day locker). |
 | **Generate timesheet** | On provider detail |
 | **Additional services** | On provider detail |
-| **A–Z letter tabs** | Providers list + Children list |
-| **Provider & Student Selection** (product feature) | **Blocked — client call only.** Do not build until Moshe/client walk through requirements. A–Z tabs are not this feature. |
+| **Providers / Children lists** | Separate nav items; A–Z letter-tab layout removed per Madison (Sep 2026). **Madison will call** to explain preferred separate-tab UX further — do not invent a new tab system until then. |
+| **Provider detail sessions** | Session list (not Weeks picker) |
+| **Mandate edit** | Admin can edit uploaded mandates (PATCH `/admin/mandates/:id`) |
+| **Provider school selection** | Required picker after sign-in when provider has multiple schools |
+| **AI activity + student response** | **Done (Sep 2026, Moshe).** Satisfied by unique-per-child notes (copy-paste blocked) + existing AI / required-note lockers — no separate open gap. |
 
 ## School calendar (TMS)
 
-Admins enter per school: **first day**, **last day**, and **off days** (holidays/breaks). **Wired into live mandate over-checks** (import / save / submit / week view): `checkMandatesForWeek` resolves each child’s school calendar. Cycle windows = Mon–Fri within year bounds, excluding admin off days; weekends never count; densest N school-day window **hard-blocks** when over Freq. Empty calendar → weekday-only default.
+Admins enter per school: **first day**, **last day**, and **off days** (holidays/breaks). **Wired into live mandate over-checks** (import / save / submit / week view): `checkMandatesForWeek` resolves each child’s school calendar. Cycle windows = Mon–Fri within year bounds, excluding admin off days; weekends never count; densest N school-day window **hard-blocks** when over Freq. Empty calendar → weekday-only default **with an explicit warning** (week/import/save/admin): `No school calendar for [School] — falling back to Mon–Fri (weekends excluded; no holiday off-days).`
 
 ## HHA clock → visit linking
 
@@ -252,9 +272,11 @@ Admins enter per school: **first day**, **last day**, and **off days** (holidays
 | Sandbox reason/action codes | **Partial blocker:** `GetVisitEditReasonActionTaken` often unauthorized (`-9`); needs enablement or `HHA_REASON_LOOKUP_URL` + known VisitID |
 | TMS week transfer (school billing) | Schedule + `approveVisit` — school/no-EVV programs do not require clock link |
 
-## Frontline weekly PDF upload (TMS)
+## Frontline / Therapist Activity / CPSE weekly PDF upload (TMS)
 
-`POST /week/upload-sessions` requires entities to **already exist**:
+Supported sources on `POST /week/upload-sessions`: **Frontline** RS Session Notes and **Therapist Activity Output** PDFs. Moshe (Sep 2026): **CPSE portal session reports are Therapist Activity Output** (fixture/sample: `Therapist_Activity_Output…`) — CPSE session import is **done**; do **not** ask for another CPSE sample or call it unbuilt.
+
+Requires entities to **already exist**:
 - PDF Service Provider must match the logged-in therapist’s provider profile (when present on the PDF).
 - Child must already exist (from caseload) — unknown child → error; **no auto-create**.
 - PDF school must match the child’s school when both are known (clear mismatch → error).
