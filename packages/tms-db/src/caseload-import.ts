@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { disciplineFromServiceType } from './mandate.js';
+import { disciplineFromServiceType, schoolBillingServiceNameForMandate } from './mandate.js';
 import type { MemoryStore } from './memory-store.js';
 import { newId, nowIso } from './ids.js';
 import type {
@@ -76,6 +76,8 @@ export interface CaseloadImportRow {
   ratioGroup: boolean;
   /** Minutes from RS Duration when present. */
   durationMinutes: number | null;
+  /** HHA school billing name derived at parse (e.g. `PT school 30`). */
+  billingServiceName?: string;
   /** From group-size column, or derived from RS Ratio (Individual → 1). */
   groupSize: number | null;
   frequencyKind: FrequencyKind;
@@ -112,6 +114,8 @@ export interface CaseloadPreviewMandate {
   discipline: Discipline | '';
   ratioGroup: boolean;
   durationMinutes: number | null;
+  /** HHA school billing name (e.g. `PT school 30`) when discipline + duration map cleanly. */
+  billingServiceName?: string;
   groupSize: number | null;
   freqDisplay: string;
   frequencyKind: FrequencyKind;
@@ -602,6 +606,10 @@ export function parseCaseloadGrid(
     const frequencyPerWeek = kind === 'weekly' ? freqNum! : 0;
     const sessionsPerPeriod = freqNum!;
     const days = kind === 'school_day_cycle' ? periodSchoolDays || 6 : 0;
+    const billingServiceName = schoolBillingServiceNameForMandate({
+      discipline,
+      durationMinutes,
+    });
 
     rows.push({
       rowNumber: row,
@@ -616,6 +624,7 @@ export function parseCaseloadGrid(
       discipline,
       ratioGroup,
       durationMinutes,
+      billingServiceName,
       groupSize,
       frequencyKind: kind,
       sessionsPerPeriod,
@@ -1301,6 +1310,13 @@ export function applyCaseloadImport(
     const matchKey = mandateMatchKey(row);
     const existing = existingList.find((m) => mandateMatchKey(m) === matchKey);
 
+    const billingServiceName =
+      row.billingServiceName ||
+      schoolBillingServiceNameForMandate({
+        discipline: row.discipline,
+        durationMinutes: row.durationMinutes,
+      });
+
     const mandate: Mandate = {
       id: existing?.id || newId(),
       studentId: student.id,
@@ -1316,6 +1332,7 @@ export function applyCaseloadImport(
           : row.periodSchoolDays || undefined,
       ratioGroup: row.ratioGroup,
       durationMinutes: row.durationMinutes,
+      billingServiceName: billingServiceName || undefined,
       groupSize: row.groupSize,
       location: row.location || existing?.location || undefined,
       sourcePdfKey: existing?.sourcePdfKey || 'caseload-csv',
@@ -1351,6 +1368,7 @@ export function applyCaseloadImport(
       discipline: row.discipline,
       ratioGroup: row.ratioGroup,
       durationMinutes: row.durationMinutes,
+      billingServiceName: billingServiceName || undefined,
       groupSize: row.groupSize,
       freqDisplay: row.freqDisplay,
       frequencyKind: row.frequencyKind,

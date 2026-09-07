@@ -31,6 +31,8 @@ UI: floating ball in apps/tms-web (index.html #lunaRoot + styles.css + app.js).
 API (auth required):
   POST /support/luna/chat
   POST /support/luna/handoff
+    Body requires contactName + contactEmail (light email format check).
+    Prefill from Cognito in the UI; both fields remain editable and mandatory.
 
 OpenAI key (NEVER in the frontend / Netlify env):
   Live (preferred): AWS Secrets Manager → secret created by CDK as TmsLunaOpenAiSecret

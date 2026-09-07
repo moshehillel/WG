@@ -351,7 +351,7 @@ describe('multi-mandate weekly check', () => {
     expect(over.errors.some((e) => /exceeds the mandate/i.test(e))).toBe(true);
   });
 
-  it('skips weekly over-check for 6-day cycle mandates', () => {
+  it('enforces school-day cycle over-check (not a silent weekly skip)', () => {
     const mandates = [
       mandate({
         id: 'm-cycle',
@@ -361,13 +361,30 @@ describe('multi-mandate weekly check', () => {
         periodSchoolDays: 6,
       }),
     ];
-    const r = checkMandatesForWeek(mandates, [
-      sess({ id: 'a' }),
-      sess({ id: 'b' }),
-      sess({ id: 'c' }),
+    const ok = checkMandatesForWeek(mandates, [
+      sess({ id: 'a', dateOfService: '09/01/2026' }),
+      sess({ id: 'b', dateOfService: '09/02/2026' }),
     ]);
-    expect(r.errors).toEqual([]);
-    expect(r.warnings.some((w) => /weekly over-check skipped/i.test(w))).toBe(true);
+    expect(ok.errors).toEqual([]);
+
+    const over = checkMandatesForWeek(mandates, [
+      sess({ id: 'a', dateOfService: '09/01/2026' }),
+      sess({ id: 'b', dateOfService: '09/02/2026' }),
+      sess({ id: 'c', dateOfService: '09/03/2026' }),
+    ]);
+    expect(over.errors.some((e) => /exceeds the cycle mandate/i.test(e))).toBe(true);
+    expect(over.warnings.some((w) => /weekly over-check skipped/i.test(w))).toBe(false);
+  });
+
+  it('blocks when no mandate is on file', () => {
+    const r = checkMandatesForWeek(
+      [],
+      [sess({ id: 'a' })],
+      [sess({ id: 'a' })],
+      new Map([['st1', 'Aiden Odne']]),
+    );
+    expect(r.errors.some((e) => /No mandate on file for Aiden Odne/i.test(e))).toBe(true);
+    expect(r.warnings).toEqual([]);
   });
 });
 
@@ -607,6 +624,51 @@ Fox,Sincere,PT,2:1,1,Weekly,42,,Pat Lee
       durationMinutes: 42,
       groupSize: 2,
       ratioGroup: true,
+    });
+  });
+
+  it('names Ana-like PT 30 mandate with HHA school billing code at import (keeps Related Service)', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-pat',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,RS Duration,Location,RS Provider
+Shaw Avenue,Binaj,Ana,3,Classified,2026-09-02,2027-06-25,Physical Therapy,Individual,2,Weekly,30,School,Pat Lee
+`;
+    const parsed = parseCaseloadCsv(csv);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows[0]).toMatchObject({
+      firstName: 'Ana',
+      lastName: 'Binaj',
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      durationMinutes: 30,
+      billingServiceName: 'PT school 30',
+    });
+    const applied = applyCaseloadImport(store, parsed);
+    expect(applied.errors).toEqual([]);
+    const mandate = store.data.mandates.find((m) => m.studentId === store.findStudentByName('Ana', 'Binaj')?.id);
+    expect(mandate).toMatchObject({
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      durationMinutes: 30,
+      billingServiceName: 'PT school 30',
     });
   });
 

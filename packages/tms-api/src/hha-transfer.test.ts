@@ -3,6 +3,27 @@ import { MockHhaClient } from '@white-glove/hha-client';
 import { MemoryStore, newId, nowIso } from '@white-glove/tms-db';
 import { resolveHhaPatientId, transferLockedWeek } from './hha-transfer.js';
 
+function seedSchoolMandate(
+  store: MemoryStore,
+  opts: { studentId: string; providerId: string; durationMinutes: number; serviceType?: string },
+) {
+  store.upsertMandate({
+    id: newId(),
+    studentId: opts.studentId,
+    providerId: opts.providerId,
+    serviceType: opts.serviceType || 'PT School',
+    discipline: 'PT',
+    frequencyPerWeek: 1,
+    ratioGroup: false,
+    durationMinutes: opts.durationMinutes,
+    sourcePdfKey: '',
+    parsedAt: nowIso(),
+    startOn: '',
+    endOn: '',
+    createdAt: nowIso(),
+  });
+}
+
 describe('resolveHhaPatientId', () => {
   it('uses trusted hhaPatientId without calling find', async () => {
     const hha = new MockHhaClient();
@@ -126,6 +147,12 @@ describe('transferLockedWeek Program Id', () => {
       notes: 'ok',
       aiFlags: [],
     });
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+      serviceType: 'PT School',
+    });
 
     const hha = new MockHhaClient();
     hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
@@ -148,6 +175,198 @@ describe('transferLockedWeek Program Id', () => {
     expect(store.data.students.find((s) => s.id === student.id)?.hhaPatientId).toBe(existing.id);
     expect(hha.calls).toContain('resolvePayCodeId');
     expect(hha.calls).toContain('resolveServiceCodeId');
+  });
+
+  it('uses mandate duration for pay/billing — not Frontline nearest (40 min clock + 30 mandate)', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'OT',
+      payRatePerHour: 80,
+      payRate30Min: 62.5,
+      payRate42Min: 70,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Kid',
+      lastName: 'One',
+      dob: '',
+      programId: '1',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    // 40-min Frontline clock is nearer to 42 — must still use 30-min mandate rate.
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:40',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'OT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'OT School',
+      discipline: 'OT',
+      frequencyPerWeek: 1,
+      ratioGroup: false,
+      durationMinutes: 30,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('OT SCHOOL 30', 'sc-ot-30');
+    hha.payCodes.set('OT $62.5', 'pay-ot-625');
+    // If nearest-clock wrongly picked 42, transfer would be OT $70 — ensure that is not used.
+    hha.payCodes.set('OT $70', 'pay-ot-70');
+    hha.serviceCodesByName.set('OT SCHOOL 42', 'sc-ot-42');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.transferred).toBe(1);
+    const visit = [...hha.visits.values()][0];
+    expect(visit?.payCodeId).toBe('pay-ot-625'); // OT $62.5 (30-min), not pay-ot-70 (42)
+    expect(visit?.serviceCode).toBe('OT school 30');
+    expect(visit?.payRate).toBe('62.5');
+  });
+
+  it('prefers mandate.billingServiceName stored at import over recompute', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Ana',
+      lastName: 'Binaj',
+      dob: '',
+      programId: '1012074',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    // Duration alone would bucket to school 60; stored import name must win.
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      ratioGroup: false,
+      durationMinutes: 58,
+      billingServiceName: 'PT school 30',
+      sourcePdfKey: 'caseload-csv',
+      parsedAt: nowIso(),
+      startOn: '2026-09-02',
+      endOn: '2027-06-25',
+      createdAt: nowIso(),
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-30');
+    hha.serviceCodesByName.set('PT SCHOOL 60', 'sc-pt-60');
+    hha.payCodes.set('PT $70', 'pay-pt-70');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    const visit = [...hha.visits.values()][0];
+    expect(visit?.serviceCode).toBe('PT school 30');
   });
 
   it('hard-fails session when pay code missing in HHA', async () => {
@@ -208,6 +427,21 @@ describe('transferLockedWeek Program Id', () => {
       location: 'School',
       notes: 'ok',
       aiFlags: [],
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'OT School',
+      discipline: 'OT',
+      frequencyPerWeek: 1,
+      ratioGroup: false,
+      durationMinutes: 30,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
     });
 
     const hha = new MockHhaClient();
@@ -283,6 +517,21 @@ describe('transferLockedWeek Program Id', () => {
       location: 'School',
       notes: 'ok',
       aiFlags: [],
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'OT School',
+      discipline: 'OT',
+      frequencyPerWeek: 1,
+      ratioGroup: false,
+      durationMinutes: 30,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
     });
 
     const hha = new MockHhaClient();

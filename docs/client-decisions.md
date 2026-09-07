@@ -18,7 +18,9 @@ Program type list source: client email Jul 2026 (EVV vs “no evv” suffix on e
 
 HHA pay codes are titled **discipline + $rate**, or **discipline + Group + $rate** for group visits.
 
-**Solo group rule:** Group-tagged session with no other attended/makeup peers in the same caregiver clock window → bill **individual** rate / pay code (`OT $62.5`), not group.
+**Duration for pay (mandate, not Frontline):** School 30/42/45 (and hourly) buckets come from the **matching mandate’s authorized duration** (caseload RS Duration). Do **not** round Frontline/PDF begin–end minutes to the nearest pay bucket. Example: clock ran **40 minutes** but mandate is **30** → use **30-min rate** (not 42).
+
+**Solo group rule:** Group-tagged session with no other attended/makeup peers in the same caregiver clock window → bill **individual** rate / pay code (`OT $62.5`), not group — still using the mandate’s duration bucket.
 
 ### Group size / overlap (Sep 2026)
 
@@ -57,9 +59,11 @@ Create these **exact** ServiceCode names under each school contract (lookup is c
 | ~60 min / other | `{Disc} school 60` | `OT school 60`, … |
 | Additional | `{Disc} additional services` | `OT additional services`, … |
 
-**Duration bucket:** nearest of 30 / 42 / 45 within **3 minutes**; otherwise **60** (same rule as TMS provider pay).
+**Duration bucket:** from the **matching mandate’s authorized duration** (same as TMS provider pay) — nearest of 30 / 42 / 45 within **3 minutes** of that mandate length; otherwise **60**. Do **not** derive the bucket from Frontline session clock length.
 
 **Kind detection:** `additionalServiceType=eval` or “eval” in Service Type → School eval; other additional kinds (progress report, consultation, meetings, paid absence) → additional services; else school + duration.
+
+**Caseload import naming (Sep 2026):** On mandate upsert from caseload, store `billingServiceName` = `{Disc} school {bucket}` from discipline + RS Duration (same buckets). Keep Related Service (`serviceType`) for therapist display. HHA week transfer prefers the stored name; falls back to compute-from-mandate for older rows. Eval / additional are not caseload mandates.
 
 Implementation: `packages/shared/src/config/school-billing-codes.ts`. Missing service code → **hard-fail that session**.
 
@@ -189,7 +193,7 @@ Use when the child already exists in ProviderSoft/HHA but a **new Service Type**
 1. **Program Type → HHA ContractID**
 2. **Service Type → HHA ServiceCodeID** catalog
 3. **Schedule confirmation** — open/close frequency, timezone, Monday preview hour, Tuesday noon ET
-4. **HHA clock → visit linking** — pending HHA response
+4. **HHA clock → visit linking** — partial: pipeline code exists (`ConfirmVisitsEVV`); sandbox needs reason/action codes (see open-questions)
 
 ## Due dates (school-scoped)
 
@@ -213,9 +217,40 @@ RS Provider on caseload import **must match an existing TMS therapist** (First L
 |------|----------|
 | **Small group** | Fewer than 3 students (caseload “Small Group” with no numeric size → cap **2**) |
 | **Fewer than mandate groupSize** | Always allowed |
-| **More than mandate groupSize** | Blocked on import |
+| **More than mandate groupSize** | Blocked on import / save |
 | **Group-tagged with ≥1 present peer** | Group pay rate / `OT Group $rate` |
-| **Solo group (0 present peers) or individual tag on group-mandate child** | Individual pay; soft note warning to say **no peer was available**; treated as **individual for overlap** (later same-time note → overlap error) |
+| **Solo group (0 present peers) or individual tag on group-mandate child** | Individual pay; **hard locker** — note must say **no peer was available** (or clear equivalent); treated as **individual for overlap** (later same-time note → overlap error) |
+
+## Processed weeks & 14-day locker (Sep 2026)
+
+| Rule | Behavior |
+|------|----------|
+| **Prior processed sessions** | View-only for providers; **admins can still edit** |
+| **New sessions on a prior week** | Providers may **add/import** when DOS is within **14 days** (admin can unlock); overlap vs existing processed sessions still checked |
+| **Makeup** | Requires unused miss on that date **or** leftover makeup-auth capacity; **no mandate → hard block** |
+| **Cycle / school-day mandates** | Skip **weekly** over-check; enforce densest **N school-day** window instead (calendar off-days when set; else Mon–Fri) |
+
+## Admin portal (TMS web)
+
+| Item | Status |
+|------|--------|
+| **Frontline / Therapist Activity PDF → sessions** | On provider detail (same `/week/upload-sessions` as therapists) |
+| **Generate timesheet** | On provider detail |
+| **Additional services** | On provider detail |
+| **A–Z letter tabs** | Providers list + Children list |
+| **Provider & Student Selection** (product feature) | **Blocked — client call only.** Do not build until Moshe/client walk through requirements. A–Z tabs are not this feature. |
+
+## School calendar (TMS)
+
+Admins enter per school: **first day**, **last day**, and **off days** (holidays/breaks). **Wired into live mandate over-checks** (import / save / submit / week view): `checkMandatesForWeek` resolves each child’s school calendar. Cycle windows = Mon–Fri within year bounds, excluding admin off days; weekends never count; densest N school-day window **hard-blocks** when over Freq. Empty calendar → weekday-only default.
+
+## HHA clock → visit linking
+
+| Path | Status |
+|------|--------|
+| ProviderSoft verified sessions (`process-sessions`) | **Implemented:** pending Call Dashboard clock → `linkClockToVisit` (`ConfirmVisitsEVV`) → EVV time match → approve |
+| Sandbox reason/action codes | **Partial blocker:** `GetVisitEditReasonActionTaken` often unauthorized (`-9`); needs enablement or `HHA_REASON_LOOKUP_URL` + known VisitID |
+| TMS week transfer (school billing) | Schedule + `approveVisit` — school/no-EVV programs do not require clock link |
 
 ## Frontline weekly PDF upload (TMS)
 

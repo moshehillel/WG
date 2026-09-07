@@ -7,16 +7,16 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=48" />
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css?v=50" />
 </head>
 <body class="is-auth">
   <div class="app-backdrop" aria-hidden="true"></div>
   <header class="app-header">
     <div class="brand">
-      <img class="brand-mark" src="favicon.svg" width="40" height="40" alt="" />
+      <img class="brand-logo" src="wg-logo.png" width="220" height="50" alt="White Glove Therapy &amp; Education" />
       <div class="brand-copy">
-        <h1>White Glove Therapy</h1>
+        <h1>Provider portal</h1>
         <p class="brand-tag">Clinical timesheets &amp; caseload operations</p>
       </div>
     </div>
@@ -70,8 +70,16 @@
       </header>
       <div id="lunaMessages" class="luna-messages" aria-live="polite"></div>
       <div id="lunaHandoffBar" class="luna-handoff" hidden>
-        <p>Ready to send this to support?</p>
-        <button type="button" class="btn-primary" id="lunaSendHandoff">Send to Moshe</button>
+        <p>Ready to send this to Moshe? Name and email are required.</p>
+        <div class="luna-handoff-fields">
+          <label for="lunaContactName">Name
+            <input id="lunaContactName" type="text" maxlength="200" autocomplete="name" required placeholder="Your name" />
+          </label>
+          <label for="lunaContactEmail">Email
+            <input id="lunaContactEmail" type="email" maxlength="320" autocomplete="email" required placeholder="you@example.com" />
+          </label>
+        </div>
+        <button type="button" class="btn-primary" id="lunaSendHandoff" disabled>Send to Moshe</button>
       </div>
       <form id="lunaForm" class="luna-form">
         <label class="sr-only" for="lunaInput">Message Luna</label>
@@ -89,6 +97,6 @@
   </div>
 
   <script src="config.js?v=38"></script>
-  <script src="app.js?v=48"></script>
+  <script src="app.js?v=50"></script>
 </body>
 </html>

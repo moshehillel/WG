@@ -6,8 +6,10 @@ import {
   extractDisciplineFromServiceType,
 } from '@white-glove/shared';
 import {
+  mandateDurationMinutesForSession,
   newId,
   nowIso,
+  preferredMandateForSession,
   presentGroupPeerCount,
   providerDaySessions,
   sessionBillingKind,
@@ -117,16 +119,25 @@ export async function transferLockedWeek(options: {
       }
 
       const discipline = sessionDiscipline(session, provider.discipline);
-      const durationMinutes = sessionDurationMinutes(session.beginTime, session.endTime);
+      const clockMinutes = sessionDurationMinutes(session.beginTime, session.endTime);
+      const matchedMandate = preferredMandateForSession(session, store.data.mandates);
+      const mandateMinutes = mandateDurationMinutesForSession(session, store.data.mandates);
       const billingKind = sessionBillingKind(session);
-      const billingServiceName = buildSchoolBillingServiceName({
-        discipline,
-        kind: billingKind,
-        durationMinutes,
-      });
+      // School billing duration bucket from mandate (not Frontline clock rounding).
+      const billingDurationMinutes = billingKind === 'school' ? mandateMinutes : clockMinutes;
+      // Prefer name stored at caseload import; fall back for legacy mandates.
+      const storedBillingName =
+        billingKind === 'school' ? matchedMandate?.billingServiceName?.trim() : '';
+      const billingServiceName =
+        storedBillingName ||
+        buildSchoolBillingServiceName({
+          discipline,
+          kind: billingKind,
+          durationMinutes: billingDurationMinutes,
+        });
       if (!billingServiceName) {
         throw new Error(
-          `Cannot build HHA billing service name (discipline=${discipline ?? '(missing)'}, kind=${billingKind}, duration=${durationMinutes ?? '(missing)'})`,
+          `Cannot build HHA billing service name (discipline=${discipline ?? '(missing)'}, kind=${billingKind}, duration=${billingDurationMinutes ?? '(missing)'})`,
         );
       }
 
@@ -161,6 +172,7 @@ export async function transferLockedWeek(options: {
           peers: ratePeers,
           mandates: store.data.mandates,
         }),
+        mandateDurationMinutes: mandateMinutes,
       };
       const rate = sessionPayCodeRate(provider, session, payOpts);
       const pay = buildPayCodeName(discipline, rate, {
@@ -201,7 +213,8 @@ export async function transferLockedWeek(options: {
         programType: student?.programType,
         providerName: `${provider.firstName} ${provider.lastName}`,
         payRate: String(rate),
-        durationMinutes: durationMinutes ?? undefined,
+        // Visit clock length stays Frontline begin/end; pay/billing buckets use mandate above.
+        durationMinutes: clockMinutes ?? undefined,
       });
       await hha.approveVisit(result.id);
       store.upsertTransfer({

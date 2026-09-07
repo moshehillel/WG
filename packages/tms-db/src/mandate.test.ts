@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { screenServiceNote } from './ai-screen.js';
 import { dueDateStatus, migrateDueDatesToSchools, shouldNagDue } from './due-dates.js';
 import { weekStartFromDos } from './ids.js';
-import { checkMandate, isMakeupAuthMandate, parseFrequencyPerWeek } from './mandate.js';
+import { checkMandate, checkMandatesForWeek, isMakeupAuthMandate, maxSessionsInSchoolDayCycle, parseFrequencyPerWeek, schoolDayWindowStart } from './mandate.js';
 import { parseMandatePdfText } from './mandate-parse.js';
 import { unusedMissedForStudent, validateMakeup, resolveMakeupOfSessionId } from './makeup.js';
 import { MemoryStore } from './memory-store.js';
@@ -14,8 +14,8 @@ import {
   weekProgressReport,
 } from './reports.js';
 import { attendanceFromNotes, parseWeeklySessionText } from './session-parse.js';
-import type { Mandate, SessionRow } from './types.js';
-import { afterLock, afterReopen, therapistCanEdit } from './week-state.js';
+import type { Mandate, SchoolCalendar, SessionRow } from './types.js';
+import { afterLock, afterReopen, therapistCanEdit, therapistCanImportOrAddServices, therapistCanMutateExistingSession, weekIsProcessed } from './week-state.js';
 
 function mandate(over: Partial<Mandate> = {}): Mandate {
   return {
@@ -99,6 +99,102 @@ describe('mandate math', () => {
     ]);
     expect(r.used).toBe(1);
     expect(r.under).toBe(true);
+  });
+});
+
+describe('school_day_cycle calendar windows', () => {
+  const cycleMandate = (): Mandate =>
+    mandate({
+      frequencyKind: 'school_day_cycle',
+      frequencyPerWeek: 0,
+      sessionsPerPeriod: 2,
+      periodSchoolDays: 6,
+    });
+
+  const yearCal = (offDays: string[] = []): SchoolCalendar => ({
+    schoolId: 'sch-1',
+    yearStart: '2026-08-01',
+    yearEnd: '2027-06-25',
+    offDays,
+  });
+
+  it('excludes weekends from school-day windows (Mon–Fri only)', () => {
+    // Fri 09/04 → back 6 school days: Fri Thu Wed Tue Mon Fri(prev) = start Mon 08/31
+    // Weekend 09/05–06 are not school days.
+    expect(schoolDayWindowStart('09/04/2026', 6)).toBe('2026-08-28');
+    const densest = maxSessionsInSchoolDayCycle(
+      [
+        sess({ id: 'a', dateOfService: '08/28/2026' }),
+        sess({ id: 'b', dateOfService: '09/01/2026' }),
+        sess({ id: 'c', dateOfService: '09/04/2026' }),
+      ],
+      6,
+    );
+    expect(densest.used).toBe(3);
+    expect(densest.windowStart).toBe('2026-08-28');
+  });
+
+  it('excludes admin off-days from the densest N school-day window', () => {
+    // Without off day: window of 3 ending Thu 09/03 = Tue Wed Thu → sessions Tue+Thu = 2
+    // With Wed off: window ending Thu = Mon Tue Thu → sessions Mon+Tue+Thu = 3
+    const cal = yearCal(['2026-09-02']); // Wed
+    const rows = [
+      sess({ id: 'mon', dateOfService: '08/31/2026' }),
+      sess({ id: 'tue', dateOfService: '09/01/2026' }),
+      sess({ id: 'thu', dateOfService: '09/03/2026' }),
+    ];
+    expect(maxSessionsInSchoolDayCycle(rows, 3).used).toBe(2);
+    expect(maxSessionsInSchoolDayCycle(rows, 3, cal).used).toBe(3);
+    expect(schoolDayWindowStart('09/03/2026', 3, cal)).toBe('2026-08-31');
+  });
+
+  it('hard-blocks when densest school-day window exceeds cycle Freq', () => {
+    const cal = yearCal(['2026-09-07']); // Labor Day Mon
+    // 3 attended in a 6-school-day window with allowed=2 → over
+    const rows = [
+      sess({ id: 'a', dateOfService: '09/01/2026' }),
+      sess({ id: 'b', dateOfService: '09/02/2026' }),
+      sess({ id: 'c', dateOfService: '09/03/2026' }),
+    ];
+    const r = checkMandate(cycleMandate(), rows, rows, {
+      studentLabel: 'Elmer',
+      calendar: cal,
+    });
+    expect(r.cycleCheck).toBe(true);
+    expect(r.over).toBe(true);
+    expect(r.used).toBe(3);
+    expect(r.allowed).toBe(2);
+    expect(r.message).toMatch(/exceeds the cycle mandate for Elmer/i);
+  });
+
+  it('allows 2-of-2 when off-days stretch the window but densest stays within Freq', () => {
+    const cal = yearCal(['2026-09-07', '2026-09-08']);
+    const rows = [
+      sess({ id: 'a', dateOfService: '09/01/2026' }),
+      sess({ id: 'b', dateOfService: '09/03/2026' }),
+    ];
+    const r = checkMandate(cycleMandate(), rows, rows, { calendar: cal });
+    expect(r.over).toBe(false);
+    expect(r.used).toBe(2);
+    expect(r.allowed).toBe(2);
+  });
+
+  it('checkMandatesForWeek uses per-student calendar for cycle over-check', () => {
+    const mandates = [cycleMandate()];
+    const rows = [
+      sess({ id: 'a', dateOfService: '09/01/2026' }),
+      sess({ id: 'b', dateOfService: '09/02/2026' }),
+      sess({ id: 'c', dateOfService: '09/03/2026' }),
+    ];
+    const cal = yearCal(['2026-11-27']);
+    const over = checkMandatesForWeek(
+      mandates,
+      rows,
+      rows,
+      new Map([['st1', 'Elmer']]),
+      { calendarByStudentId: new Map([['st1', cal]]) },
+    );
+    expect(over.errors.some((e) => /exceeds the cycle mandate for Elmer/i.test(e))).toBe(true);
   });
 });
 
@@ -251,12 +347,20 @@ describe('makeup', () => {
 });
 
 describe('week lock', () => {
-  it('locks after sign and blocks therapist edits', () => {
+  it('locks after sign and blocks therapist edits of existing sessions', () => {
     expect(therapistCanEdit('draft')).toBe(true);
     expect(therapistCanEdit('locked')).toBe(false);
     expect(afterLock('signed')).toBe('locked');
     expect(afterReopen('locked')).toBe('reopened');
     expect(therapistCanEdit('reopened')).toBe(true);
+  });
+
+  it('allows import/add on processed weeks but not mutate existing', () => {
+    expect(weekIsProcessed('locked')).toBe(true);
+    expect(therapistCanImportOrAddServices('locked')).toBe(true);
+    expect(therapistCanImportOrAddServices('signed')).toBe(true);
+    expect(therapistCanMutateExistingSession('locked')).toBe(false);
+    expect(therapistCanMutateExistingSession('signed', { isAdmin: true })).toBe(true);
   });
 });
 

@@ -6,7 +6,18 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const src = path.join(root, 'apps/tms-web');
 const dest = path.join(root, '..', 'white-glove-tms-web');
 
-const files = ['index.html', 'app.js', 'styles.css', 'build-config.mjs', 'netlify.toml', 'favicon.svg', 'luna-robot.webp', 'tms-atmosphere-therapy.webp', 'tms-atmosphere-school.webp'];
+const files = [
+  'index.html',
+  'app.js',
+  'styles.css',
+  'build-config.mjs',
+  'netlify.toml',
+  'favicon.svg',
+  'wg-logo.png',
+  'luna-robot.webp',
+  'tms-atmosphere-therapy.webp',
+  'tms-atmosphere-school.webp',
+];
 
 if (!existsSync(dest)) {
   console.error(`Frontend repo not found: ${dest}`);

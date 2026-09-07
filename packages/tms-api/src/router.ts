@@ -33,10 +33,13 @@ import {
   sessionOverlapError,
   providerDaySessions,
   presentGroupPeerCount,
-  soloGroupMandateNoteWarning,
+  mandateDurationMinutesForSession,
+  soloGroupMandateNoteError,
   splitPersonName,
   therapistCanEdit,
   therapistCanImportOrAddServices,
+  therapistCanMutateExistingSession,
+  weekIsProcessed,
   resolveMakeupOfSessionId,
   unusedMissedForStudent,
   validateMakeup,
@@ -54,6 +57,7 @@ import {
   appSettingsFromStore,
   sessionImportAgeError,
   defaultAppSettings,
+  schoolBillingServiceNameForMandate,
   type AppSettings,
   type AppUser,
   type Discipline,
@@ -122,6 +126,20 @@ function studentNameById(store: MemoryStore): Map<string, string> {
     map.set(s.id, name || s.id);
   }
   return map;
+}
+
+/** Child id → school calendar for school-day / cycle mandate windows. */
+function calendarByStudentId(store: MemoryStore): Map<string, SchoolCalendar | null> {
+  const map = new Map<string, SchoolCalendar | null>();
+  for (const s of store.data.students) {
+    const schoolId = String(s.schoolId || '').trim();
+    map.set(s.id, schoolId ? store.schoolCalendarForSchool(schoolId) ?? null : null);
+  }
+  return map;
+}
+
+function mandateWeekOpts(store: MemoryStore): { calendarByStudentId: Map<string, SchoolCalendar | null> } {
+  return { calendarByStudentId: calendarByStudentId(store) };
 }
 
 function overMandateSummary(errors: string[]): string {
@@ -1299,6 +1317,11 @@ export async function handleTmsRequest(
       const discipline = (['OT', 'PT', 'SLP'].includes(disciplineRaw) ? disciplineRaw : '') as Discipline | '';
       const durationMinutes = parseNullableNumber(b.durationMinutes);
       const groupSize = parseNullableNumber(b.groupSize);
+      const billingServiceName = schoolBillingServiceNameForMandate({
+        discipline,
+        durationMinutes,
+        mandateKind,
+      });
       const mandate = store.upsertMandate({
         id: newId(),
         studentId,
@@ -1313,6 +1336,7 @@ export async function handleTmsRequest(
           frequencyKind === 'school_day_cycle' ? Number(b.periodSchoolDays || 6) : undefined,
         ratioGroup: Boolean(b.ratioGroup),
         durationMinutes,
+        billingServiceName,
         groupSize: groupSize ?? (Boolean(b.ratioGroup) ? null : 1),
         location: String(b.location || ''),
         sourcePdfKey: 'manual',
@@ -1353,6 +1377,11 @@ export async function handleTmsRequest(
         b.durationMinutes === undefined ? existing.durationMinutes ?? null : parseNullableNumber(b.durationMinutes);
       const groupSize =
         b.groupSize === undefined ? existing.groupSize ?? null : parseNullableNumber(b.groupSize);
+      const billingServiceName = schoolBillingServiceNameForMandate({
+        discipline,
+        durationMinutes,
+        mandateKind,
+      });
       const mandate = store.upsertMandate({
         ...existing,
         mandateKind,
@@ -1374,6 +1403,7 @@ export async function handleTmsRequest(
         location: b.location != null ? String(b.location) : existing.location,
         ratioGroup,
         durationMinutes,
+        billingServiceName,
         groupSize,
       });
       store.audit(ctx.user.id, 'update_mandate', `mandate:${id}`, existing, mandate);
@@ -1598,6 +1628,7 @@ export async function handleTmsRequest(
           sessions,
           store.data.sessions,
           studentNameById(store),
+          mandateWeekOpts(store),
         )
       : { errors: [] as string[], warnings: [] as string[] };
     const ai = week ? collectHeuristicAiIssues(sessions) : { errors: [] as string[], warnings: [] as string[] };
@@ -1605,7 +1636,7 @@ export async function handleTmsRequest(
     const payProvider =
       store.data.providers.find((p) => p.id === (week?.providerId || providerId)) || provider;
     const payProviderId = week?.providerId || providerId;
-    const soloNoteWarnings: string[] = [];
+    const soloNoteErrors: string[] = [];
     const sessionsOut = sessions.map((s) => {
       const local = screenServiceNote(s);
       const flags = [...new Set([...(s.aiFlags || []), ...local.flags])];
@@ -1618,8 +1649,9 @@ export async function handleTmsRequest(
           peers: dayPeers,
           mandates: store.data.mandates,
         }),
+        mandateDurationMinutes: mandateDurationMinutesForSession(s, store.data.mandates),
       };
-      const soloNote = soloGroupMandateNoteWarning({
+      const soloNote = soloGroupMandateNoteError({
         notes: s.notes,
         serviceType: s.serviceType,
         studentId: s.studentId,
@@ -1629,7 +1661,7 @@ export async function handleTmsRequest(
       });
       if (soloNote) {
         const who = studentNameById(store).get(s.studentId) || s.studentId;
-        soloNoteWarnings.push(`${s.dateOfService} ${who}: ${soloNote}`);
+        soloNoteErrors.push(`${s.dateOfService} ${who}: ${soloNote}`);
       }
       return {
         ...s,
@@ -1647,8 +1679,8 @@ export async function handleTmsRequest(
       students,
       schoolDistrict,
       mandates: store.data.mandates.filter((m) => students.some((s) => s.id === m.studentId) || ctx.user.role === 'admin'),
-      warnings: [...new Set([...check.warnings, ...ai.warnings, ...soloNoteWarnings])],
-      errors: [...new Set([...check.errors, ...ai.errors])],
+      warnings: [...new Set([...check.warnings, ...ai.warnings])],
+      errors: [...new Set([...check.errors, ...ai.errors, ...soloNoteErrors])],
     });
   }
 
@@ -1696,8 +1728,21 @@ export async function handleTmsRequest(
     const provider = providerFor(store, ctx.user);
     const b = obj(req);
     const providerId = String(b.providerId || provider?.id || '');
+    if (!providerId) {
+      const error =
+        ctx.user.role === 'admin'
+          ? 'providerId is required to import sessions for a provider.'
+          : 'Your provider profile is not linked yet. Ask the office for help.';
+      return json(400, { error, errors: [error] });
+    }
+    if (ctx.user.role !== 'admin' && provider?.id !== providerId) {
+      return json(403, { error: 'You can only import sessions for your own provider profile.' });
+    }
     const accountProvider =
       (providerId ? store.data.providers.find((p) => p.id === providerId) : undefined) || provider;
+    if (!accountProvider) {
+      return json(404, { error: 'Provider not found.' });
+    }
     const text = pdfTextFromBody(b) || textBody(req) || String(b.pdfText || '');
     if (!String(text).trim()) {
       const error = bodyHasPdfBytes(b)
@@ -1720,12 +1765,11 @@ export async function handleTmsRequest(
     // Provider mismatch is whole-file — cannot attribute rows to this account safely.
     const pdfProviderName = parsed.map((r) => r.providerName).find((n) => String(n || '').trim()) || '';
     if (pdfProviderName) {
-      if (!accountProvider) {
-        const error = 'Your provider profile is not linked yet. Ask the office for help.';
-        return json(400, { error, errors: [error], saved: [], failed: [], skipped: [] });
-      }
       if (!findProviderByName([accountProvider], pdfProviderName)) {
-        const error = `Provider in PDF does not match your account (PDF: "${pdfProviderName}").`;
+        const error =
+          ctx.user.role === 'admin'
+            ? `Provider in PDF does not match this provider profile (PDF: "${pdfProviderName}").`
+            : `Provider in PDF does not match your account (PDF: "${pdfProviderName}").`;
         return json(400, { error, errors: [error], saved: [], failed: [], skipped: [] });
       }
     }
@@ -1748,8 +1792,9 @@ export async function handleTmsRequest(
         hhaError: '',
       });
     }
+    // Signed/locked weeks may still receive NEW sessions; duplicates are skipped below.
     if (!therapistCanImportOrAddServices(week.status) && ctx.user.role !== 'admin') {
-      const error = 'This week is locked. Ask an admin to reopen it.';
+      const error = 'This week cannot accept imports. Ask an admin to reopen it.';
       return json(409, { error, errors: [error] });
     }
 
@@ -1873,6 +1918,7 @@ export async function handleTmsRequest(
       });
       const already = existingKeys.get(key);
       if (already) {
+        // Exact duplicate of an already-saved (including processed) session → skip, never overwrite.
         skipped.push({
           id: already.id,
           studentId: already.studentId,
@@ -2058,6 +2104,7 @@ export async function handleTmsRequest(
         projectedSessions,
         allSessionsProjected,
         names,
+        mandateWeekOpts(store),
       );
       if (check.errors.length) {
         const detail =
@@ -2076,6 +2123,50 @@ export async function handleTmsRequest(
 
       existingKeys.set(key, session);
       pending.push({ session, studentName });
+    }
+
+    // Solo-group note locker after the full batch is known so same-slot peers count.
+    if (!failed.length) {
+      for (const item of pending) {
+        const dayPeers = [
+          ...providerDaySessions(
+            store.data.sessions,
+            store.data.weeks,
+            providerId,
+            item.session.dateOfService,
+            item.session.id,
+          ),
+          ...pending
+            .map((p) => p.session)
+            .filter((s) => s.id !== item.session.id && s.dateOfService === item.session.dateOfService),
+        ];
+        const soloNoteErr = soloGroupMandateNoteError({
+          notes: item.session.notes,
+          serviceType: item.session.serviceType,
+          studentId: item.session.studentId,
+          attendance: item.session.attendance,
+          mandates: store.data.mandates,
+          presentGroupPeerCount: presentGroupPeerCount({
+            candidate: item.session,
+            peers: dayPeers,
+            mandates: store.data.mandates,
+          }),
+        });
+        if (soloNoteErr) {
+          failed.push({
+            studentName: item.studentName,
+            dateOfService: item.session.dateOfService,
+            beginTime: item.session.beginTime,
+            endTime: item.session.endTime,
+            error: `${formatUploadRowLabel({
+              studentName: item.studentName,
+              dateOfService: item.session.dateOfService,
+              beginTime: item.session.beginTime,
+              endTime: item.session.endTime,
+            })}: ${soloNoteErr}`,
+          });
+        }
+      }
     }
 
     // Any issue → save nothing.
@@ -2119,6 +2210,7 @@ export async function handleTmsRequest(
       store.sessionsForWeek(week.id),
       store.data.sessions,
       names,
+      mandateWeekOpts(store),
     );
 
     return json(200, {
@@ -2142,9 +2234,21 @@ export async function handleTmsRequest(
     const week = store.data.weeks.find((w) => w.id === String(b.weekId || ''));
     if (!week) return json(404, { error: 'Week not found.' });
     if (!therapistCanImportOrAddServices(week.status) && ctx.user.role !== 'admin') {
-      return json(409, { error: 'This week is locked. Ask an admin to reopen it.' });
+      return json(409, {
+        error: 'This week cannot accept new sessions. Ask an admin to reopen it.',
+      });
     }
     const existing = store.data.sessions.find((s) => s.id === String(b.id || ''));
+    // Processed (signed/locked) sessions are immutable for therapists — new rows only.
+    if (
+      existing &&
+      !therapistCanMutateExistingSession(week.status, { isAdmin: ctx.user.role === 'admin' })
+    ) {
+      return json(409, {
+        error:
+          'This session was already processed and cannot be edited. You can still add or import new sessions (within the 14-day locker). Ask an admin if a change is required.',
+      });
+    }
     // While pending approval, therapists may only add/edit additional services (not PDF caseload rows).
     if (
       week.status === 'submitted' &&
@@ -2243,6 +2347,35 @@ export async function handleTmsRequest(
       store.data.mandates,
     );
     if (makeupErr) return json(400, { error: makeupErr });
+    if (!isAdditionalServiceType(session.additionalServiceType || '')) {
+      const dayPeers = providerDaySessions(
+        store.data.sessions.filter((s) => s.id !== session.id),
+        store.data.weeks,
+        week.providerId,
+        session.dateOfService,
+        session.id,
+      );
+      const overlapErr = sessionOverlapError({
+        candidate: session,
+        peers: dayPeers,
+        studentNameById: studentNameById(store),
+        mandates: store.data.mandates,
+      });
+      if (overlapErr) return json(400, { error: overlapErr, errors: [overlapErr] });
+      const soloNoteErr = soloGroupMandateNoteError({
+        notes: session.notes,
+        serviceType: session.serviceType,
+        studentId: session.studentId,
+        attendance: session.attendance,
+        mandates: store.data.mandates,
+        presentGroupPeerCount: presentGroupPeerCount({
+          candidate: session,
+          peers: dayPeers,
+          mandates: store.data.mandates,
+        }),
+      });
+      if (soloNoteErr) return json(400, { error: soloNoteErr, errors: [soloNoteErr] });
+    }
     const screenedLocal = screenServiceNote(session);
     session.aiFlags = screenedLocal.flags;
     session.aiBlock = screenedLocal.block;
@@ -2252,6 +2385,7 @@ export async function handleTmsRequest(
       store.sessionsForWeek(week.id),
       store.data.sessions,
       studentNameById(store),
+      mandateWeekOpts(store),
     );
     if (check.errors.length) {
       store.removeSession(session.id);
@@ -2293,11 +2427,45 @@ export async function handleTmsRequest(
       sessions,
       store.data.sessions,
       studentNameById(store),
+      mandateWeekOpts(store),
     );
     if (check.errors.length) {
       return json(400, {
         error: overMandateSummary(check.errors),
         errors: check.errors,
+      });
+    }
+    const soloNoteErrors: string[] = [];
+    for (const s of sessions) {
+      if (isAdditionalServiceType(s.additionalServiceType || '')) continue;
+      const dayPeers = providerDaySessions(
+        store.data.sessions,
+        store.data.weeks,
+        week.providerId,
+        s.dateOfService,
+        s.id,
+      );
+      const soloNoteErr = soloGroupMandateNoteError({
+        notes: s.notes,
+        serviceType: s.serviceType,
+        studentId: s.studentId,
+        attendance: s.attendance,
+        mandates: store.data.mandates,
+        presentGroupPeerCount: presentGroupPeerCount({
+          candidate: s,
+          peers: dayPeers,
+          mandates: store.data.mandates,
+        }),
+      });
+      if (soloNoteErr) {
+        const who = studentNameById(store).get(s.studentId) || s.studentId;
+        soloNoteErrors.push(`${s.dateOfService} ${who}: ${soloNoteErr}`);
+      }
+    }
+    if (soloNoteErrors.length) {
+      return json(400, {
+        error: soloNoteErrors[0],
+        errors: soloNoteErrors,
       });
     }
     const aiErrors: string[] = [];
@@ -2358,6 +2526,7 @@ export async function handleTmsRequest(
             peers: dayPeers,
             mandates: store.data.mandates,
           }),
+          mandateDurationMinutes: mandateDurationMinutesForSession(session, store.data.mandates),
         };
         return {
           session,
@@ -2426,6 +2595,7 @@ export async function handleTmsRequest(
             peers: dayPeers,
             mandates: store.data.mandates,
           }),
+          mandateDurationMinutes: mandateDurationMinutesForSession(session, store.data.mandates),
         };
         return {
           session,
@@ -2480,8 +2650,15 @@ export async function handleTmsRequest(
     if (!session) return json(404, { error: 'Session not found.' });
     const week = store.data.weeks.find((w) => w.id === session.weekId);
     if (!week) return json(404, { error: 'Week not found.' });
-    if (!therapistCanImportOrAddServices(week.status) && ctx.user.role !== 'admin') {
-      return json(409, { error: 'This week is locked. Ask an admin to reopen it.' });
+    if (
+      !therapistCanMutateExistingSession(week.status, { isAdmin: ctx.user.role === 'admin' })
+    ) {
+      return json(409, {
+        error:
+          weekIsProcessed(week.status)
+            ? 'This session was already processed and cannot be removed.'
+            : 'This week is locked. Ask an admin to reopen it.',
+      });
     }
     if (
       week.status === 'submitted' &&
@@ -2582,19 +2759,24 @@ export async function handleTmsRequest(
         messages: b.messages,
         summary: String(b.summary || '').trim(),
         pageUrl: String(b.pageUrl || '').trim(),
+        contactName: b.contactName,
+        contactEmail: b.contactEmail,
       });
       store.audit(ctx.user.id, 'luna_handoff', `user:${ctx.user.id}`, null, {
         to: out.to,
         mailId: out.id,
+        contactName: out.contactName,
+        contactEmail: out.contactEmail,
       });
       return json(200, {
         ok: true,
         to: out.to,
         id: out.id,
-        reply: `Thanks — I sent this to ${out.to}. Moshe will follow up by email.`,
+        reply: `Thanks — I sent this to ${out.to}. Moshe will follow up at ${out.contactEmail}.`,
       });
     } catch (err) {
-      return json(502, {
+      const status = Number((err as { status?: number })?.status) || 502;
+      return json(status, {
         error: err instanceof Error ? err.message : 'Unable to send the support handoff.',
       });
     }

@@ -6,9 +6,31 @@ export function therapistCanEdit(status: WeekStatus): boolean {
   return EDITABLE.includes(status);
 }
 
-/** Import PDFs / additional services while approval is still pending. */
+/** Signed / locked weeks — existing sessions are immutable; new rows may still be added. */
+export function weekIsProcessed(status: WeekStatus): boolean {
+  return status === 'signed' || status === 'locked';
+}
+
+/**
+ * Import PDFs / add new sessions (including on signed/locked weeks).
+ * Existing processed sessions stay immutable — use therapistCanMutateExistingSession.
+ */
 export function therapistCanImportOrAddServices(status: WeekStatus): boolean {
-  return EDITABLE.includes(status) || status === 'submitted';
+  return EDITABLE.includes(status) || status === 'submitted' || weekIsProcessed(status);
+}
+
+/**
+ * Edit or delete an existing session row.
+ * Draft/reopened: yes. Submitted: additional-services only (enforced in router).
+ * Signed/locked: therapists cannot touch existing rows (admins may).
+ */
+export function therapistCanMutateExistingSession(
+  status: WeekStatus,
+  opts?: { isAdmin?: boolean },
+): boolean {
+  if (opts?.isAdmin) return true;
+  if (weekIsProcessed(status)) return false;
+  return therapistCanEdit(status) || status === 'submitted';
 }
 
 export function afterSubmit(status: WeekStatus): WeekStatus {

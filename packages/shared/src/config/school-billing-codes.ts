@@ -10,8 +10,9 @@
  *   - `{Disc} school 60`
  *   - `{Disc} additional services`
  *
- * Duration rule (same as TMS provider pay): nearest of 30 / 42 / 45 within
- * 3 minutes; otherwise bucket 60 (`school 60`).
+ * Duration rule (same as TMS provider pay): pass **mandate** authorized
+ * minutes; nearest of 30 / 42 / 45 within 3 minutes; otherwise bucket 60
+ * (`school 60`). Do not pass Frontline clock length for school buckets.
  */
 
 export type SchoolBillingDiscipline = 'OT' | 'PT' | 'SLP';
