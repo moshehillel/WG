@@ -168,6 +168,19 @@ async function api(method, path, body, opts = {}) {
   return data;
 }
 
+function clearUploadIssues() {
+  const el = document.getElementById('uploadIssues');
+  if (el) {
+    el.hidden = true;
+    el.innerHTML = '';
+  }
+  const adminEl = document.getElementById('pUploadIssues');
+  if (adminEl) {
+    adminEl.hidden = true;
+    adminEl.innerHTML = '';
+  }
+}
+
 function setUploadIssues(errors, warnings, successes) {
   const el = document.getElementById('uploadIssues');
   if (!el) return;
@@ -181,24 +194,33 @@ function setUploadIssues(errors, warnings, successes) {
   }
   el.hidden = false;
   el.innerHTML = [
+    `<div class="dismissible-toolbar">
+      <button type="button" class="btn status-clear-btn" data-clear-upload-issues>Clear</button>
+    </div>`,
     oks.length
-      ? `<div class="ok-box upload-issue-block"><strong>Saved</strong>${oks
+      ? `<div class="ok-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-upload-issues aria-label="Clear upload results">×</button><strong>Saved</strong>${oks
           .map((s) => `<div class="upload-issue-line">${esc(s)}</div>`)
           .join('')}</div>`
       : '',
     errs.length
-      ? `<div class="err-box upload-issue-block"><strong>${oks.length ? 'Failed sessions' : 'Upload issues'}</strong>${errs
+      ? `<div class="err-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-upload-issues aria-label="Clear upload issues">×</button><strong>${oks.length ? 'Failed sessions' : 'Upload issues'}</strong>${errs
           .map((e) => `<div class="upload-issue-line">${esc(e)}</div>`)
           .join('')}</div>`
       : '',
     warns.length
-      ? `<div class="warn-box upload-issue-block"><strong>Warnings</strong>${warns
+      ? `<div class="warn-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-upload-issues aria-label="Clear warnings">×</button><strong>Warnings</strong>${warns
           .map((w) => `<div class="upload-issue-line">${esc(w)}</div>`)
           .join('')}</div>`
       : '',
   ]
     .filter(Boolean)
     .join('');
+  el.querySelectorAll('[data-clear-upload-issues]').forEach((btn) => {
+    btn.onclick = () => {
+      clearUploadIssues();
+      clearStatus();
+    };
+  });
 }
 
 function openingAccountView() {
@@ -229,6 +251,13 @@ function normalizeStatusKind(kind) {
   if (k === 'err' || k === 'error') return 'error';
   if (k === 'warn' || k === 'warning') return 'warn';
   return '';
+}
+
+function clearStatus() {
+  const el = document.getElementById('status');
+  if (!el) return;
+  el.textContent = '';
+  el.className = '';
 }
 
 /** Top status: green success / red error / yellow warn chips. */
@@ -266,14 +295,15 @@ function setStatus(msgOrItems, kind) {
   }
 
   if (!items.length) {
-    el.textContent = '';
-    el.className = '';
+    clearStatus();
     return;
   }
   el.className = 'status-stack';
-  el.innerHTML = items
+  el.innerHTML = `${items
     .map((it) => `<span class="status-chip ${it.kind || 'neutral'}">${esc(it.text)}</span>`)
-    .join('');
+    .join('')}
+    <button type="button" class="status-clear-btn" id="clearStatusBtn" aria-label="Clear status messages">Clear</button>`;
+  document.getElementById('clearStatusBtn')?.addEventListener('click', () => clearStatus());
 }
 
 /** Week top summary: optional flash successes + red errors + yellow warnings. */
@@ -288,6 +318,23 @@ function revealStatus() {
 }
 
 let actionToastTimer = 0;
+function clearActionToast() {
+  const el = document.getElementById('actionToast');
+  if (actionToastTimer) clearTimeout(actionToastTimer);
+  actionToastTimer = 0;
+  if (!el) return;
+  el.hidden = true;
+  el.textContent = '';
+  el.className = 'action-toast';
+}
+
+/** Transient UI (import banners, toasts, top chips) — not server-side week validation. */
+function clearTransientErrors() {
+  clearStatus();
+  clearActionToast();
+  clearUploadIssues();
+}
+
 /** Fixed toast so Send feedback is visible without scrolling to the top status bar. */
 function showActionToast(message, kind = 'neutral', { sticky = false } = {}) {
   let el = document.getElementById('actionToast');
@@ -300,19 +347,18 @@ function showActionToast(message, kind = 'neutral', { sticky = false } = {}) {
   }
   const text = String(message || '').trim();
   if (!text) {
-    el.hidden = true;
-    el.textContent = '';
-    el.className = 'action-toast';
+    clearActionToast();
     return;
   }
   el.hidden = false;
   el.className = `action-toast ${normalizeStatusKind(kind) || 'neutral'}`;
-  el.textContent = text;
+  el.innerHTML = `<span class="action-toast-text">${esc(text)}</span><button type="button" class="action-toast-dismiss" aria-label="Dismiss">×</button>`;
+  el.querySelector('.action-toast-dismiss')?.addEventListener('click', () => clearActionToast());
   if (actionToastTimer) clearTimeout(actionToastTimer);
   actionToastTimer = 0;
   if (!sticky) {
     actionToastTimer = setTimeout(() => {
-      el.hidden = true;
+      clearActionToast();
     }, kind === 'error' || kind === 'err' ? 10000 : 7000);
   }
 }
@@ -899,6 +945,8 @@ function bindLetterTabs(getRows, getName) {
 }
 
 async function therapistHome(statusFlash) {
+  clearActionToast();
+  clearUploadIssues();
   let banner = '';
   let week = null;
   let sessions = [];
@@ -1097,8 +1145,8 @@ async function therapistHome(statusFlash) {
         ${pending ? `<button type="button" class="btn" id="cancelApproval">Cancel approval request</button>` : ''}
       </div>
       `}
-      ${!isPriorPane && errors.length ? `<div class="err-box"><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}</div>` : ''}
-      ${!isPriorPane && warnings.length ? `<div class="warn-box"><strong>Warnings (submission is still allowed).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}</div>` : ''}
+      ${!isPriorPane && errors.length ? `<div class="err-box status-banner" id="weekErrorsBox" data-week-issue="errors"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss errors">×</button><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
+      ${!isPriorPane && warnings.length ? `<div class="warn-box status-banner" id="weekWarningsBox" data-week-issue="warnings"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss warnings">×</button><strong>Warnings (submission is still allowed).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
       ${!isPriorPane ? `<p class="muted">Red indicates a blocking issue (no mandate on file, over-mandate, or note review). Yellow indicates under-mandate or soft warnings only.</p>
       <div class="table-wrap">
       <table>
@@ -1173,6 +1221,7 @@ async function therapistHome(statusFlash) {
 
   document.querySelectorAll('[data-therapist-pane]').forEach((btn) => {
     btn.onclick = () => {
+      clearTransientErrors();
       state.therapistPane = btn.getAttribute('data-therapist-pane') || 'current';
       sessionStorage.setItem('tmsTherapistPane', state.therapistPane);
       if (state.therapistPane === 'current') state.weekStart = mondayIso();
@@ -1181,20 +1230,26 @@ async function therapistHome(statusFlash) {
   });
   document.querySelectorAll('[data-open-prior-week]').forEach((btn) => {
     btn.onclick = () => {
+      clearTransientErrors();
       state.weekStart = btn.getAttribute('data-open-prior-week') || mondayIso();
       state.therapistPane = 'current';
       sessionStorage.setItem('tmsTherapistPane', 'current');
       therapistHome();
     };
   });
-  document.getElementById('refreshHome')?.addEventListener('click', () => therapistHome());
+  document.getElementById('refreshHome')?.addEventListener('click', () => {
+    clearTransientErrors();
+    therapistHome();
+  });
   document.getElementById('changeSchool')?.addEventListener('click', async () => {
+    clearTransientErrors();
     await showSchoolPicker(schools, { allowKeep: true });
   });
   document.getElementById('cancelApproval')?.addEventListener('click', async () => {
     if (!state.weekId) return;
     if (!confirm('Cancel the pending approval request? This voids the DocuSign envelope (if any) and returns the week to draft.')) return;
     try {
+      clearTransientErrors();
       const out = await api('POST', `/weeks/${state.weekId}/cancel-approval`);
       await therapistHome({ success: [out.message || 'Approval cancelled. Week is draft again.'] });
     } catch (err) {
@@ -1211,6 +1266,15 @@ async function therapistHome(statusFlash) {
       if (bannerEl) bannerEl.remove();
     };
   }
+
+  document.querySelectorAll('[data-dismiss-week-issue]').forEach((btn) => {
+    btn.onclick = () => {
+      const box = btn.closest('[data-week-issue]');
+      if (box) box.remove();
+      // UI only — next week GET still shows blockers if still invalid.
+      clearStatus();
+    };
+  });
 
   const viewTimesheetBtn = document.getElementById('viewTimesheet');
   if (viewTimesheetBtn) {
@@ -1286,7 +1350,7 @@ async function therapistHome(statusFlash) {
       }
       btn.disabled = true;
       btn.textContent = 'Importing…';
-      setUploadIssues([], [], []);
+      clearTransientErrors();
       setStatus('Importing PDF…', '');
       const pdfBase64 = await fileToBase64(file);
       const out = await api('POST', '/week/upload-sessions', {
@@ -1366,6 +1430,8 @@ async function therapistHome(statusFlash) {
       if (!dateOfService) throw new Error('Enter the date of service.');
       btn.disabled = true;
       btn.textContent = 'Saving…';
+      clearTransientErrors();
+      setStatus('Saving session…', '');
       await api('POST', '/week/sessions', {
         id: editId || undefined,
         weekId: state.weekId,
@@ -1417,6 +1483,7 @@ async function therapistHome(statusFlash) {
         if (!signerEmail) throw new Error('No school signer is on file. Contact the office to assign a signer.');
         submitBtn.disabled = true;
         submitBtn.textContent = 'Sending…';
+        clearUploadIssues();
         if (hint) {
           hint.hidden = false;
           hint.className = 'muted';
@@ -2423,30 +2490,39 @@ async function adminProviderDetail(providerId) {
         : [];
       const skippedN = Array.isArray(out.skipped) ? out.skipped.length : out.skippedCount || 0;
       if (issuesHost && (failedList.length || warnList.length || savedList.length)) {
-        const parts = [];
+        const parts = [
+          `<div class="dismissible-toolbar"><button type="button" class="btn status-clear-btn" data-clear-p-upload>Clear</button></div>`,
+        ];
         if (savedList.length) {
           parts.push(
-            `<div class="ok-box upload-issue-block"><strong>Saved</strong>${savedList
+            `<div class="ok-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-p-upload aria-label="Clear">×</button><strong>Saved</strong>${savedList
               .map((s) => `<div class="upload-issue-line">${esc(s)}</div>`)
               .join('')}</div>`,
           );
         }
         if (failedList.length) {
           parts.push(
-            `<div class="err-box upload-issue-block"><strong>${savedList.length ? 'Failed sessions' : 'Upload issues'}</strong>${failedList
+            `<div class="err-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-p-upload aria-label="Clear">×</button><strong>${savedList.length ? 'Failed sessions' : 'Upload issues'}</strong>${failedList
               .map((e) => `<div class="upload-issue-line">${esc(e)}</div>`)
               .join('')}</div>`,
           );
         }
         if (warnList.length) {
           parts.push(
-            `<div class="warn-box upload-issue-block"><strong>Warnings</strong>${warnList
+            `<div class="warn-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-p-upload aria-label="Clear">×</button><strong>Warnings</strong>${warnList
               .map((w) => `<div class="upload-issue-line">${esc(w)}</div>`)
               .join('')}</div>`,
           );
         }
         issuesHost.innerHTML = parts.join('');
         issuesHost.hidden = false;
+        issuesHost.querySelectorAll('[data-clear-p-upload]').forEach((b) => {
+          b.onclick = () => {
+            issuesHost.hidden = true;
+            issuesHost.innerHTML = '';
+            clearStatus();
+          };
+        });
       }
       if (failedList.length || out.ok === false) {
         setStatus(out.error || failedList[0] || 'Import blocked.', 'error');
@@ -3094,7 +3170,8 @@ async function adminMandates() {
       ${preview ? `
       <p style="margin-top:0.8rem">${previewRows.length} mandate row(s) · ${preview.createdStudents || 0} new students · ${preview.updatedStudents || 0} updated students · ${preview.createdSchools || 0} new schools · ${preview.createdMandates || 0} new mandates · ${preview.updatedMandates || 0} updated mandates</p>
       ${previewErrors.length ? `
-      <div class="err-box caseload-issues">
+      <div class="err-box caseload-issues status-banner" id="caseloadErrorsBox">
+        <button type="button" class="status-banner-dismiss" data-clear-caseload-issues aria-label="Dismiss errors">×</button>
         <strong>Errors (${previewErrors.length})</strong>
         <p class="muted" style="margin:0.35rem 0 0.5rem">One issue per row. Correct these in the spreadsheet, then import again. Valid rows in the table below can still be imported.</p>
         <table class="issue-table">
@@ -3113,9 +3190,11 @@ async function adminMandates() {
             </tr>`;
           }).join('')}
         </table>
+        <button type="button" class="btn status-clear-btn" data-clear-caseload-issues>Clear</button>
       </div>` : ''}
       ${previewWarnings.length ? `
-      <div class="warn-box caseload-issues">
+      <div class="warn-box caseload-issues status-banner" id="caseloadWarningsBox">
+        <button type="button" class="status-banner-dismiss" data-clear-caseload-issues aria-label="Dismiss warnings">×</button>
         <strong>Warnings (${previewWarnings.length})</strong>
         <table class="issue-table">
           <tr><th>Row #</th><th>Field</th><th>Issue</th><th>Resolution</th></tr>
@@ -3133,6 +3212,7 @@ async function adminMandates() {
             </tr>`;
           }).join('')}
         </table>
+        <button type="button" class="btn status-clear-btn" data-clear-caseload-issues>Clear</button>
       </div>` : ''}
       <table>
         <tr><th>Row</th><th>Student</th><th>School</th><th>Service</th><th>Ratio</th><th>Freq</th><th>RS Provider</th><th>Assigned to</th></tr>
@@ -3246,6 +3326,10 @@ async function adminMandates() {
 
   document.getElementById('caseloadImportBtn').onclick = async () => {
     try {
+      clearStatus();
+      document.querySelectorAll('[data-clear-caseload-issues]').forEach((b) => {
+        b.closest('.caseload-issues')?.remove();
+      });
       const payload = await readCaseloadFile();
       const out = await api('POST', '/admin/caseloads/import', payload);
       state.caseloadPreview = out;
@@ -3272,6 +3356,14 @@ async function adminMandates() {
       }
     } catch (e) { setStatus(e.message, 'err'); }
   };
+
+  document.querySelectorAll('[data-clear-caseload-issues]').forEach((btn) => {
+    btn.onclick = () => {
+      const box = btn.closest('.caseload-issues');
+      if (box) box.remove();
+      clearStatus();
+    };
+  });
 
   const completeBtn = document.getElementById('caseloadCompleteBtn');
   if (completeBtn) {
@@ -4142,6 +4234,7 @@ document.getElementById('adminNav').onclick = (e) => {
   }
   const btn = e.target.closest('[data-admin]');
   if (!btn) return;
+  clearTransientErrors();
   document.querySelectorAll('#adminNav .nav').forEach((b) => b.classList.toggle('on', b === btn));
   const screen = btn.getAttribute('data-admin');
   if (screen === 'dash') adminDash();
@@ -4262,8 +4355,16 @@ function syncLunaHandoffBar() {
 function setLunaStatus(msg) {
   const el = document.getElementById('lunaStatus');
   if (!el) return;
-  el.textContent = msg || '';
-  el.hidden = !msg;
+  const text = String(msg || '').trim();
+  if (!text) {
+    el.textContent = '';
+    el.hidden = true;
+    return;
+  }
+  el.hidden = false;
+  el.className = 'luna-status status-banner';
+  el.innerHTML = `<span>${esc(text)}</span><button type="button" class="status-banner-dismiss" aria-label="Dismiss">×</button>`;
+  el.querySelector('.status-banner-dismiss')?.addEventListener('click', () => setLunaStatus(''));
 }
 
 async function lunaChat(userText) {
