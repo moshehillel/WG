@@ -12,6 +12,14 @@ The download step runs a **Docker image** from ECR (`white-glove/providersoft-bo
 
 **When you turn schedules back on, you do not need another bot update** if today’s fixed image is already on the download Lambda (`npm run bot:check-fresh` passes). You only need a bot rebuild if someone redeployed an older image or shipped bot source without `deploy:aws:live`.
 
+### Guard: live DownloadFn must never stub
+
+- CDK refuses `providerSoftLiveBot=true` + `providerSoftUseStubs=true`.
+- Docker download handler throws if stubs would run (never uploads fixtures on live path).
+- Zip stub entry throws on `dryRun=false` runs (so an accidental stub-zip DownloadFn cannot silently feed NightlyCaseReports).
+- `bot:check-fresh` / `deploy:aws:live` verify PackageType=Image and `PROVIDERSOFT_USE_STUBS` is not true.
+- Sandbox fixtures stay on `SandboxFixtureDownloadFn` only.
+
 That Aug 21 vs Aug 24 gap happened because `bot:deploy:aws` was a **separate manual step** from normal CDK deploys.
 
 ## Standard live deploy (use this)
@@ -41,9 +49,15 @@ npm run bot:check-fresh
 
 ```powershell
 npm run schedules:enable
+# Cases only (no Tuesday API Report):
+npm run schedules:enable -- --cases-only
+# API/sessions only:
+npm run schedules:enable -- --sessions-only
 ```
 
 Runs `bot:check-fresh` first; **fails** if local bot/shared sources do not match the ECR `src-*` tag. Does not rebuild the image — it only flips EventBridge on when the image is current.
+
+Prefer the AA dashboard **Live cases schedule** / **API / sessions schedule** toggles (independent; double-confirm each). Do not enable schedules unless explicitly requested.
 
 ## Do not rely on plain CDK for bot code
 

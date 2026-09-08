@@ -175,6 +175,28 @@ function forceUpdateDownloadFn(ecrUri) {
   console.log(`Forced Lambda ${fn} to pull ${imageUri} (also tagged ${botTag} when hash was passed)`);
 }
 
+/** Hard-fail if live DownloadFn is zip or has PROVIDERSOFT_USE_STUBS=true. */
+function assertLiveDownloadFnNotStubbing() {
+  const fnName = awsJson(
+    `cloudformation describe-stack-resources --stack-name ${stackName} --query "StackResources[?LogicalResourceId=='ProviderSoftDownloadFn4EFDACE3'].PhysicalResourceId | [0]"`,
+  );
+  if (!fnName) throw new Error('ProviderSoftDownloadFn not found in stack');
+  const fn = awsJson(`lambda get-function --function-name ${fnName}`);
+  const packageType = fn.Configuration?.PackageType ?? '';
+  const stubsEnv = fn.Configuration?.Environment?.Variables?.PROVIDERSOFT_USE_STUBS ?? '';
+  if (packageType !== 'Image') {
+    throw new Error(
+      `Live download guard: DownloadFn PackageType=${packageType} (expected Image). Stub zip must not serve live nightly.`,
+    );
+  }
+  if (stubsEnv === 'true' || stubsEnv === '1') {
+    throw new Error(
+      `Live download guard: DownloadFn PROVIDERSOFT_USE_STUBS=${stubsEnv}. Redeploy with providerSoftUseStubs=false.`,
+    );
+  }
+  console.log(`Live download guard OK: PackageType=Image, PROVIDERSOFT_USE_STUBS=${stubsEnv || 'false'}`);
+}
+
 async function cdkDeployLive() {
   console.log('\nDeploying CDK (buildspec/bootstrap + live bot flags; schedules stay OFF)...');
   const infraDir = path.join(repoRoot, 'infra');
@@ -199,7 +221,7 @@ async function cdkDeployLive() {
       '-c',
       'enableGuardDuty=false',
       '-c',
-      `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net'}`,
+      `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net,ggreenfeld@whiteglovecare.net,alowy@whiteglovecare.net,gfriedman@whiteglovecare.net'}`,
       '-c',
       'hhaSecretArn=arn:aws:secretsmanager:us-east-1:065194293782:secret:HhaSecret3062EA85-CsJnQwEGJqwN-7DaLQY',
       // Do not pass an empty sandboxApiKey — the stack persists one in Secrets Manager.
@@ -258,6 +280,7 @@ async function main() {
 
   console.log(`\nImage ready: ${ecrUri}:latest (+ ${botTag} when hash passed)`);
   forceUpdateDownloadFn(ecrUri);
+  assertLiveDownloadFnNotStubbing();
 
   console.log('\nDone. Live bot deployed. Nightly schedules stay off unless you run: npm run schedules:enable');
   console.log('Verify: npm run bot:check-fresh');

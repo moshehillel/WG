@@ -38,8 +38,33 @@ function main() {
   if (!fnResource) throw new Error('ProviderSoftDownloadFn not found');
 
   const fn = awsJson(`lambda get-function --function-name ${fnResource}`);
+  const packageType = fn.Configuration?.PackageType ?? '';
+  const stubsEnv = fn.Configuration?.Environment?.Variables?.PROVIDERSOFT_USE_STUBS ?? '';
   const imageUri = fn.Code?.ImageUri ?? '';
   const resolved = fn.Code?.ResolvedImageUri ?? '';
+
+  console.log(`Lambda PackageType: ${packageType}`);
+  console.log(`Lambda PROVIDERSOFT_USE_STUBS: ${stubsEnv || '(unset)'}`);
+
+  if (packageType !== 'Image') {
+    console.error(`
+LIVE DOWNLOAD GUARD FAILED
+  DownloadFn PackageType=${packageType || '(missing)'} — expected Image (Docker live bot).
+  Stub zip must never serve NightlyCaseReports. Redeploy:
+
+    npm run deploy:aws:live
+`);
+    process.exit(1);
+  }
+
+  if (stubsEnv === 'true' || stubsEnv === '1') {
+    console.error(`
+LIVE DOWNLOAD GUARD FAILED
+  DownloadFn has PROVIDERSOFT_USE_STUBS=${stubsEnv}. Live path must never stub.
+  Redeploy with -c providerSoftUseStubs=false (npm run deploy:aws:live).
+`);
+    process.exit(1);
+  }
 
   const images = awsJson(
     `ecr describe-images --repository-name ${repoName} --image-ids imageTag=latest`,
