@@ -274,6 +274,13 @@ export class WhiteGloveStack extends cdk.Stack {
       String(this.node.tryGetContext('providerSoftLiveBot') ?? 'false') === 'true';
     const providerSoftUseStubs =
       String(this.node.tryGetContext('providerSoftUseStubs') ?? 'true') === 'true';
+    if (providerSoftLiveBot && providerSoftUseStubs) {
+      throw new Error(
+        'Refusing CDK synth: providerSoftLiveBot=true cannot combine with providerSoftUseStubs=true. ' +
+          'Live DownloadFn must never run stubs (fixtures are SandboxFixtureDownloadFn only). ' +
+          'Pass -c providerSoftUseStubs=false (deploy:aws:live already does).',
+      );
+    }
     const hhaEntLiveBot =
       String(this.node.tryGetContext('hhaEntLiveBot') ?? 'false') === 'true';
 
