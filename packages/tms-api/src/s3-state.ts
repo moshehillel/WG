@@ -61,3 +61,15 @@ export async function getPdfFromS3(key: string): Promise<Buffer | null> {
     return null;
   }
 }
+
+export async function deletePdfFromS3(key: string): Promise<void> {
+  const bucket = process.env.REPORTS_BUCKET;
+  if (!bucket || !key) return;
+  const { DeleteObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
+  const s3 = new S3Client({});
+  try {
+    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  } catch {
+    /* best-effort — metadata delete still proceeds */
+  }
+}

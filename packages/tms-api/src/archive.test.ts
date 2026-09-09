@@ -57,5 +57,8 @@ describe('archive helpers', () => {
     expect(canAccessArchive(a, { role: 'therapist', userId: 'u1' })).toBe(true);
     expect(canAccessArchive(a, { role: 'therapist', userId: 'x', providerId: 'p1' })).toBe(true);
     expect(canAccessArchive(a, { role: 'therapist', userId: 'x', providerId: 'p2' })).toBe(false);
+    expect(
+      canAccessArchive(a, { role: 'therapist', userId: 'x', providerId: 'p2', providerIds: ['p2', 'p1'] }),
+    ).toBe(true);
   });
 });

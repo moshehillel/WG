@@ -134,10 +134,29 @@ export function markTimesheetArchivesStatus(
 
 export function canAccessArchive(
   row: ArchiveRecord,
-  opts: { role: string; userId: string; providerId?: string },
+  opts: {
+    role: string;
+    userId: string;
+    providerId?: string;
+    /** Same-name / orphan twin provider ids (therapist login may differ from archive row). */
+    providerIds?: string[];
+  },
 ): boolean {
   if (opts.role === 'admin') return true;
   if (row.userId && row.userId === opts.userId) return true;
-  if (opts.providerId && row.providerId === opts.providerId) return true;
+  const ids = new Set(
+    [...(opts.providerIds || []), opts.providerId || ''].map((x) => String(x || '').trim()).filter(Boolean),
+  );
+  if (ids.size && ids.has(String(row.providerId || '').trim())) return true;
   return false;
+}
+
+/** Archives for this provider id plus any alias twin ids. */
+export function archivesForProviderIds(
+  rows: ArchiveRecord[],
+  providerIds: string[],
+): ArchiveRecord[] {
+  const ids = new Set(providerIds.map((x) => String(x || '').trim()).filter(Boolean));
+  if (!ids.size) return [];
+  return rows.filter((a) => ids.has(String(a.providerId || '').trim()));
 }
