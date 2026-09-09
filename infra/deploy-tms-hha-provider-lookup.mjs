@@ -39,8 +39,30 @@ await esbuild.build({
 console.log('bundled', outfile);
 
 if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-execSync(
-  `powershell -NoProfile -Command "Compress-Archive -Path '${outfile.replace(/'/g, "''")}'${fs.existsSync(outfile + '.map') ? `, '${(outfile + '.map').replace(/'/g, "''")}'` : ''} -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force"`,
+// Prefer Node zlib zip to avoid PowerShell Compress-Archive file locks on Windows.
+const { execFileSync } = await import('node:child_process');
+execFileSync(
+  process.execPath,
+  [
+    '-e',
+    `
+const fs=require('fs'); const zlib=require('zlib'); const path=require('path');
+const outfile=${JSON.stringify(outfile)};
+const zipPath=${JSON.stringify(zipPath)};
+const name=path.basename(outfile);
+const data=fs.readFileSync(outfile);
+const crcTable=(function(){let c,table=[];for(let n=0;n<256;n++){c=n;for(let k=0;k<8;k++)c=c&1?0xedb88320^(c>>>1):c>>>1;table[n]=c>>>0;}return table;})();
+function crc32(buf){let c=0xffffffff;for(let i=0;i<buf.length;i++)c=crcTable[(c^buf[i])&0xff]^(c>>>8);return (c^0xffffffff)>>>0;}
+const crc=crc32(data); const comp=zlib.deflateRawSync(data);
+function u16(n){const b=Buffer.alloc(2);b.writeUInt16LE(n,0);return b;}
+function u32(n){const b=Buffer.alloc(4);b.writeUInt32LE(n>>>0,0);return b;}
+const nameBuf=Buffer.from(name);
+const local=Buffer.concat([Buffer.from([0x50,0x4b,0x03,0x04]),u16(20),u16(0),u16(8),u16(0),u16(0),u32(crc),u32(comp.length),u32(data.length),u16(nameBuf.length),u16(0),nameBuf,comp]);
+const central=Buffer.concat([Buffer.from([0x50,0x4b,0x01,0x02]),u16(20),u16(20),u16(0),u16(8),u16(0),u16(0),u32(crc),u32(comp.length),u32(data.length),u16(nameBuf.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(0),nameBuf]);
+const end=Buffer.concat([Buffer.from([0x50,0x4b,0x05,0x06]),u16(0),u16(0),u16(1),u16(1),u32(central.length),u32(local.length),u16(0)]);
+fs.writeFileSync(zipPath, Buffer.concat([local,central,end]));
+`,
+  ],
   { stdio: 'inherit' },
 );
 console.log('zipped', zipPath, fs.statSync(zipPath).size);
