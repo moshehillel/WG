@@ -144,7 +144,38 @@ body {
 }
 .icon-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
 .row-actions { white-space: nowrap; display: flex; gap: 0.35rem; align-items: center; }
-.timesheet-pdf-panel { width: min(1100px, 96vw); max-height: 92vh; display: flex; flex-direction: column; }
+.timesheet-pdf-panel {
+  width: min(1100px, 96vw);
+  max-height: 94vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.timesheet-pdf-meta { margin: 0.35rem 0 0.15rem; }
+.timesheet-pdf-hint { margin: 0 0 0.55rem; font-size: 0.92rem; }
+.timesheet-pdf-loading { margin: 0.35rem 0 0.75rem; }
+.timesheet-pdf-pages {
+  flex: 1;
+  min-height: 62vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 0.35rem 0.15rem 0.75rem;
+  background:
+    linear-gradient(180deg, #e8f1ee 0%, #f4f8f6 40%, #eef4f2 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.timesheet-pdf-page {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 0 auto;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+  border-radius: 2px;
+}
 .timesheet-pdf-frame {
   flex: 1;
   width: 100%;
@@ -152,6 +183,16 @@ body {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: #fff;
+}
+.timesheet-print-frame {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 header.app-header,
@@ -230,6 +271,17 @@ body.is-app .brand-tag {
 }
 
 /* ——— Session bar ——— */
+.header-actions {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.65rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+.header-actions .header-lang {
+  flex: 0 0 auto;
+}
 .who {
   margin: 0;
   display: flex;
@@ -242,6 +294,8 @@ body.is-app .brand-tag {
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(8px);
+  flex: 1 1 auto;
+  min-width: min(100%, 16rem);
 }
 .who #whoami {
   font-weight: 600;
@@ -754,6 +808,97 @@ body.is-auth .app-header {
   margin: 0.85rem 0 0;
   text-align: center;
 }
+.trust-device {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.85rem 0 0.35rem;
+  font-weight: 500;
+}
+.trust-device input {
+  width: auto;
+  margin: 0;
+}
+.lang-switch {
+  display: inline-flex;
+  gap: 0.2rem;
+  margin: 0 0 0.85rem;
+  padding: 0.15rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+.lang-switch--compact {
+  margin: 0;
+}
+.lang-btn {
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.28rem 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.lang-btn.on {
+  background: var(--surface);
+  color: var(--accent-deep);
+  box-shadow: var(--shadow-sm);
+}
+.header-lang {
+  display: inline-flex;
+  align-items: center;
+}
+.mfa-advanced-details {
+  margin-top: 1.1rem;
+  padding-top: 0.65rem;
+  border-top: 1px dashed var(--line-soft);
+}
+.mfa-advanced-summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  list-style: none;
+}
+.mfa-advanced-summary::-webkit-details-marker { display: none; }
+.mfa-adv-h {
+  font-size: 0.95rem;
+  margin: 0.85rem 0 0.35rem;
+}
+.mfa-advanced-panel {
+  margin-top: 0.5rem;
+}
+.mfa-adv-sep {
+  border: 0;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+  margin: 1rem 0;
+}
+.mfa-qr {
+  display: block;
+  margin: 0.75rem auto;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.35rem;
+}
+.mfa-secret code {
+  word-break: break-all;
+  font-size: 0.92rem;
+}
+.mfa-status-list {
+  margin: 0.75rem 0 1rem;
+  padding-left: 1.1rem;
+}
+.mfa-setup-card .mfa-sms-note {
+  margin-top: 0.65rem;
+}
+#mfaEnrollPanel {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
 
 .entry-card .entry-collapsed {
   display: flex;
@@ -824,9 +969,52 @@ input:focus, select:focus, textarea:focus {
   padding: 0.4rem 0;
   border-bottom: 1px solid var(--line-soft);
 }
+.cal-pdf-upload {
+  margin: 1rem 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+.cal-pdf-upload h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  font-family: var(--font-display);
+}
+.cal-pdf-preview {
+  margin: 0.75rem 0 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius-sm);
+}
+.cal-pdf-preview p { margin: 0.35rem 0 0; }
 .cal-saved-view { margin: 0.75rem 0 1rem; }
 .cal-fallback-banner { margin: 0.75rem 0 1rem; }
 .cal-fallback-banner p { margin: 0.35rem 0 0; }
+.school-setup-banner { margin: 0.75rem 0 1rem; }
+.school-setup-banner ul { margin: 0.4rem 0 0; padding-left: 1.2rem; }
+.school-setup-banner li { margin: 0.15rem 0; }
+.school-row-incomplete td { background: #fef2f2; }
+.school-name-incomplete,
+button.linkish.school-name-incomplete {
+  color: #b91c1c !important;
+  font-weight: 600;
+}
+.school-setup-flag {
+  color: #b91c1c;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.nav-alert-badge {
+  display: inline-block;
+  min-width: 1.15rem;
+  margin-left: 0.3rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: #b91c1c;
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1.2;
+  vertical-align: text-top;
+}
 .cal-saved {
   background: #f3f9ff;
   border: 1px solid var(--line);
@@ -1147,7 +1335,7 @@ tr.hard { background: #fef2f2; }
 }
 /* Keep Send timesheet / footer actions clear of the Luna FAB */
 body.is-app main {
-  padding-bottom: 6.25rem;
+  padding-bottom: 7.25rem;
 }
 .modal-backdrop {
   position: fixed;
@@ -1216,41 +1404,91 @@ body.is-app main {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 0.55rem;
-  min-height: 3.85rem;
-  padding: 0.45rem 1.15rem 0.45rem 0.5rem;
-  border: 2px solid var(--accent-deep);
+  gap: 0.65rem;
+  min-height: 4.35rem;
+  padding: 0.5rem 1.35rem 0.5rem 0.55rem;
+  border: 2.5px solid rgba(255, 255, 255, 0.55);
   border-radius: 999px;
-  background: linear-gradient(160deg, var(--sky) 0%, var(--accent) 48%, var(--accent-deep) 100%);
-  color: #f3f9ff;
+  background:
+    radial-gradient(120% 140% at 12% 18%, rgba(255, 255, 255, 0.38) 0%, transparent 46%),
+    linear-gradient(125deg, #2fb0e8 0%, var(--accent) 38%, var(--accent-deep) 72%, #1a4478 100%);
+  color: #f7fbff;
   box-shadow:
-    0 0 0 3px rgba(243, 249, 255, 0.92),
-    0 2px 4px rgba(18, 40, 72, 0.12),
-    0 12px 28px rgba(29, 91, 158, 0.38);
+    0 0 0 4px rgba(243, 249, 255, 0.96),
+    0 0 0 6px rgba(242, 108, 86, 0.28),
+    0 2px 0 rgba(255, 255, 255, 0.35) inset,
+    0 4px 12px rgba(18, 40, 72, 0.16),
+    0 16px 36px rgba(29, 91, 158, 0.42),
+    0 0 28px rgba(31, 164, 221, 0.35);
   cursor: pointer;
   isolation: isolate;
-  transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease), filter 0.18s var(--ease);
-  animation: luna-fab-bob 3.2s var(--ease) infinite;
+  transition: transform 0.22s var(--ease), box-shadow 0.22s var(--ease), filter 0.22s var(--ease), border-color 0.22s var(--ease);
+  animation: luna-fab-pulse 2.8s var(--ease) infinite;
 }
 .luna-fab::before {
   content: "";
   position: absolute;
-  inset: -6px;
+  inset: -8px;
   border-radius: inherit;
-  border: 2px solid rgba(29, 91, 158, 0.45);
+  border: 2px solid rgba(242, 108, 86, 0.55);
+  box-shadow: 0 0 0 1px rgba(29, 91, 158, 0.2);
   pointer-events: none;
   z-index: -1;
-  animation: luna-fab-ring 2.6s var(--ease) infinite;
+  animation: luna-fab-ring 2.4s var(--ease) infinite;
 }
-.luna-fab:hover {
-  filter: brightness(1.05);
+.luna-fab::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.85rem);
+  width: max-content;
+  max-width: min(16.5rem, calc(100vw - 2.4rem));
+  padding: 0.55rem 0.8rem;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
   box-shadow:
-    0 0 0 3px rgba(243, 249, 255, 0.98),
-    0 4px 10px rgba(18, 40, 72, 0.14),
-    0 16px 34px rgba(29, 91, 158, 0.42);
+    var(--shadow-sm),
+    0 10px 24px rgba(18, 40, 72, 0.14),
+    0 0 0 1px rgba(242, 108, 86, 0.12);
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-shadow: none;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6px);
+  pointer-events: none;
+  transition: opacity 0.18s var(--ease), transform 0.18s var(--ease), visibility 0.18s;
+  z-index: 2;
+}
+.luna-fab:hover,
+.luna-fab:focus-visible {
+  animation: none;
+  filter: brightness(1.08) saturate(1.06);
+  border-color: rgba(255, 255, 255, 0.85);
+  transform: translateY(-5px) scale(1.055);
+  box-shadow:
+    0 0 0 4px rgba(243, 249, 255, 1),
+    0 0 0 7px rgba(242, 108, 86, 0.4),
+    0 2px 0 rgba(255, 255, 255, 0.45) inset,
+    0 10px 22px rgba(18, 40, 72, 0.18),
+    0 22px 48px rgba(29, 91, 158, 0.5),
+    0 0 40px rgba(31, 164, 221, 0.45),
+    0 0 22px rgba(242, 108, 86, 0.28);
+}
+.luna-fab:hover::after,
+.luna-fab:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
 }
 .luna-fab:active {
-  transform: translateY(1px) scale(0.98);
+  transform: translateY(1px) scale(0.985);
   animation: none;
 }
 .luna-fab[aria-expanded="true"] {
@@ -1258,19 +1496,28 @@ body.is-app main {
 }
 .luna-fab[aria-expanded="true"]::before {
   animation: none;
-  opacity: 0.35;
+  opacity: 0.4;
+}
+.luna-fab[aria-expanded="true"]::after {
+  opacity: 0;
+  visibility: hidden;
 }
 .luna-fab-orb {
   display: grid;
   place-items: center;
-  width: 2.85rem;
-  height: 2.85rem;
+  width: 3.25rem;
+  height: 3.25rem;
   flex: 0 0 auto;
   border-radius: 50%;
   overflow: hidden;
-  background: #fff;
-  border: 1.5px solid rgba(236, 253, 248, 0.85);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+  background:
+    radial-gradient(circle at 35% 30%, #ffffff 0%, #eef5fb 70%, #e3eef8 100%);
+  border: 2px solid #fff;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 0 0 2px rgba(242, 108, 86, 0.55),
+    0 0 14px rgba(242, 108, 86, 0.35),
+    0 4px 10px rgba(18, 40, 72, 0.18);
 }
 .luna-fab-icon {
   width: 100%;
@@ -1278,27 +1525,57 @@ body.is-app main {
   display: block;
   object-fit: cover;
   object-position: center 42%;
+  transform: scale(1.04);
 }
 .luna-fab-label {
   font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 1.05rem;
-  letter-spacing: 0.02em;
-  text-shadow: 0 1px 0 rgba(22, 74, 130, 0.35);
+  font-weight: 700;
+  font-size: 1.14rem;
+  letter-spacing: 0.03em;
+  text-shadow:
+    0 1px 0 rgba(22, 74, 130, 0.45),
+    0 0 12px rgba(255, 255, 255, 0.25);
 }
-@keyframes luna-fab-bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3px); }
+@keyframes luna-fab-pulse {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+    box-shadow:
+      0 0 0 4px rgba(243, 249, 255, 0.96),
+      0 0 0 6px rgba(242, 108, 86, 0.28),
+      0 2px 0 rgba(255, 255, 255, 0.35) inset,
+      0 4px 12px rgba(18, 40, 72, 0.16),
+      0 16px 36px rgba(29, 91, 158, 0.42),
+      0 0 28px rgba(31, 164, 221, 0.35);
+  }
+  50% {
+    transform: translateY(-5px) scale(1.03);
+    box-shadow:
+      0 0 0 4px rgba(243, 249, 255, 0.98),
+      0 0 0 7px rgba(242, 108, 86, 0.38),
+      0 2px 0 rgba(255, 255, 255, 0.4) inset,
+      0 8px 18px rgba(18, 40, 72, 0.18),
+      0 20px 42px rgba(29, 91, 158, 0.48),
+      0 0 36px rgba(31, 164, 221, 0.48);
+  }
 }
 @keyframes luna-fab-ring {
-  0% { transform: scale(1); opacity: 0.7; }
-  70% { transform: scale(1.12); opacity: 0; }
-  100% { transform: scale(1.12); opacity: 0; }
+  0% { transform: scale(1); opacity: 0.85; }
+  65% { transform: scale(1.18); opacity: 0; }
+  100% { transform: scale(1.18); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .luna-fab,
   .luna-fab::before {
     animation: none;
+  }
+  .luna-fab::after {
+    transition: none;
+  }
+}
+@media (max-width: 420px) {
+  .luna-fab::after {
+    white-space: normal;
+    text-align: right;
   }
 }
 .luna-panel {
@@ -1309,7 +1586,10 @@ body.is-app main {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  box-shadow:
+    var(--shadow),
+    0 18px 40px rgba(29, 91, 158, 0.14),
+    0 0 0 1px rgba(242, 108, 86, 0.08);
   overflow: hidden;
   animation: luna-rise 0.22s var(--ease);
 }
@@ -1320,20 +1600,27 @@ body.is-app main {
 .luna-head {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
-  padding: 0.7rem 0.8rem;
-  background: linear-gradient(180deg, #f7fbff 0%, #eef5fb 100%);
+  gap: 0.65rem;
+  padding: 0.8rem 0.9rem;
+  background:
+    linear-gradient(135deg, rgba(242, 108, 86, 0.08) 0%, transparent 42%),
+    linear-gradient(180deg, #f7fbff 0%, #e8f1fa 100%);
   border-bottom: 1px solid var(--line-soft);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.7);
 }
 .luna-avatar {
-  width: 2.35rem;
-  height: 2.35rem;
+  width: 2.55rem;
+  height: 2.55rem;
   flex: 0 0 auto;
   border-radius: 50%;
   object-fit: cover;
   object-position: center 42%;
   background: #fff;
-  border: 1px solid var(--line-soft);
+  border: 2px solid #fff;
+  box-shadow:
+    0 0 0 2px rgba(29, 91, 158, 0.35),
+    0 0 10px rgba(242, 108, 86, 0.28),
+    0 2px 6px rgba(18, 40, 72, 0.12);
 }
 .luna-head-copy {
   display: flex;
@@ -1344,8 +1631,9 @@ body.is-app main {
 }
 .luna-head-copy strong {
   font-family: var(--font-display);
-  font-size: 1rem;
-  color: var(--ink);
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--accent-deep);
 }
 .luna-head-copy span {
   font-size: 0.75rem;
@@ -1482,20 +1770,19 @@ body.is-app main {
   color: var(--err);
 }
 .luna-status[hidden] { display: none !important; }
-body.is-auth .luna-root { display: none !important; }
 
 @media (max-width: 720px) {
   .luna-root { right: 0.7rem; bottom: 0.85rem; }
   .luna-panel { max-height: min(70vh, calc(100vh - 6rem)); }
   .luna-fab {
-    min-height: 3.55rem;
-    padding-right: 1rem;
+    min-height: 4rem;
+    padding: 0.45rem 1.15rem 0.45rem 0.5rem;
   }
   .luna-fab-orb {
-    width: 2.6rem;
-    height: 2.6rem;
+    width: 2.95rem;
+    height: 2.95rem;
   }
-  .luna-fab-label { font-size: 0.98rem; }
+  .luna-fab-label { font-size: 1.05rem; }
 }
 
 @media (max-width: 720px) {
@@ -1575,5 +1862,11 @@ div[style*="netlify"] a[href*="netlify.com"] {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+}
+.detail-pane {
+  margin-top: 0.35rem;
+}
+.detail-pane[hidden] {
+  display: none !important;
 }
 .letter-tabs-host { margin-bottom: 0.75rem; }

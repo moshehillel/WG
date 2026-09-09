@@ -269,6 +269,21 @@ export async function loadSnapshotFromDynamo(
   return store.snapshot();
 }
 
+/**
+ * Fresh read of the global app-settings entity (not the in-memory snapshot).
+ * Used so concurrent /admin/settings writers cannot clobber requireMfa with a stale merge.
+ */
+export async function readLiveAppSettingsEntity(
+  docStore?: TmsDocStore,
+): Promise<Record<string, unknown> | null> {
+  const doc = getTmsDocStore(docStore);
+  if (!doc) return null;
+  const item = await doc.get(dynamoPk('settings'), dynamoSk('global'));
+  const entity = item?.entity;
+  if (!entity || typeof entity !== 'object') return null;
+  return entity as Record<string, unknown>;
+}
+
 export async function saveSnapshotDiffToDynamo(
   before: TmsSnapshot,
   after: TmsSnapshot,

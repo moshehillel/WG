@@ -119,6 +119,15 @@ export function normalizeHandoffContact(input: {
   return { contactName, contactEmail };
 }
 
+/** User-facing handoff confirmation — never mention the internal support inbox. */
+export function buildHandoffConfirmationReply(contactEmail: string): string {
+  const email = String(contactEmail || '').trim();
+  if (!email) {
+    return 'Thanks — I’ve sent this to our team. We’ll follow up at the email you provided.';
+  }
+  return `Thanks — I’ve sent this to our team. We’ll follow up with you at ${email}.`;
+}
+
 function normalizeMessages(messages: unknown): LunaChatMessage[] {
   if (!Array.isArray(messages)) return [];
   const out: LunaChatMessage[] = [];
@@ -131,6 +140,60 @@ function normalizeMessages(messages: unknown): LunaChatMessage[] {
     out.push({ role, content: content.slice(0, 4000) });
   }
   return out.slice(-24);
+}
+
+/** Synthetic user for pre-login Luna chat (no Cognito). */
+export const LUNA_GUEST_USER: AppUser = {
+  id: 'guest',
+  cognitoSub: 'guest',
+  email: 'guest@unauthenticated.local',
+  role: 'therapist',
+  displayName: '(not signed in)',
+  providerId: '',
+  active: true,
+  createdAt: '1970-01-01T00:00:00.000Z',
+};
+
+export function isLunaGuestUser(user: AppUser | undefined | null): boolean {
+  return Boolean(user && user.id === LUNA_GUEST_USER.id);
+}
+
+type GuestRateBucket = { n: number; resetAt: number };
+const guestRateBuckets = new Map<string, GuestRateBucket>();
+
+/** In-memory per-key rate limit (Lambda instance). Returns error message when blocked. */
+export function checkLunaGuestRateLimit(
+  key: string,
+  limit: number,
+  windowMs: number,
+  now = Date.now(),
+): string | null {
+  const k = String(key || 'unknown').slice(0, 200);
+  let row = guestRateBuckets.get(k);
+  if (!row || now >= row.resetAt) {
+    row = { n: 0, resetAt: now + windowMs };
+    guestRateBuckets.set(k, row);
+  }
+  row.n += 1;
+  if (row.n > limit) {
+    return 'Too many Luna requests. Please wait a few minutes and try again.';
+  }
+  return null;
+}
+
+/** Test helper — clear guest rate buckets. */
+export function resetLunaGuestRateLimits(): void {
+  guestRateBuckets.clear();
+}
+
+export function lunaClientIp(headers: Record<string, string | undefined>): string {
+  const h = Object.fromEntries(
+    Object.entries(headers || {}).map(([k, v]) => [k.toLowerCase(), v]),
+  );
+  const xff = String(h['x-forwarded-for'] || '')
+    .split(',')[0]
+    .trim();
+  return xff || String(h['x-real-ip'] || '').trim() || 'unknown';
 }
 
 export async function runLunaChat(input: {
@@ -152,9 +215,12 @@ export async function runLunaChat(input: {
       summary: '',
     };
   }
+  const guest = isLunaGuestUser(input.user);
   const contextNote = [
-    `Signed-in user: ${input.user.displayName || input.user.email} <${input.user.email}>`,
-    `Role: ${input.user.role}`,
+    guest
+      ? 'Caller: guest (not signed in)'
+      : `Signed-in user: ${input.user.displayName || input.user.email} <${input.user.email}>`,
+    guest ? 'Role: (unknown — pre-login)' : `Role: ${input.user.role}`,
     input.pageUrl ? `Page URL: ${input.pageUrl}` : null,
   ]
     .filter(Boolean)
@@ -215,6 +281,7 @@ export function buildHandoffEmail(input: {
     contactName: input.contactName,
     contactEmail: input.contactEmail,
   });
+  const guest = isLunaGuestUser(input.user);
   const text = [
     'Luna support handoff — White Glove TMS',
     '',
@@ -224,9 +291,10 @@ export function buildHandoffEmail(input: {
     '===========================',
     '',
     `Timestamp: ${when}`,
-    `Signed-in account name: ${input.user.displayName || '(none)'}`,
-    `Signed-in account email: ${input.user.email}`,
-    `User role: ${input.user.role}`,
+    guest ? 'Signed-in account: (not signed in — guest / login screen)' : null,
+    guest ? null : `Signed-in account name: ${input.user.displayName || '(none)'}`,
+    guest ? null : `Signed-in account email: ${input.user.email}`,
+    guest ? 'User role: (unknown — pre-login)' : `User role: ${input.user.role}`,
     `Page URL: ${input.pageUrl || '(unknown)'}`,
     '',
     'Summary:',
@@ -234,7 +302,9 @@ export function buildHandoffEmail(input: {
     '',
     'Transcript:',
     transcript || '(empty)',
-  ].join('\n');
+  ]
+    .filter((line) => line !== null)
+    .join('\n');
   return {
     subject: `[Luna] TMS support — ${contact.contactName} <${contact.contactEmail}>`,
     text,

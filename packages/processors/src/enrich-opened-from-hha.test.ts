@@ -71,7 +71,7 @@ describe('enrichOpenedRowFromHha', () => {
     expect(hha.calls).not.toContain('getPatientDemographicsFields');
   });
 
-  it('does not look up HHA gender for Gluck open rows', async () => {
+  it('does not look up HHA for Gluck rows that already have address demographics', async () => {
     const hha = new MockHhaClient();
     await hha.upsertPatient({
       caseId: '66976',
@@ -79,14 +79,76 @@ describe('enrichOpenedRowFromHha', () => {
       firstName: 'Pat',
       lastName: 'Two',
       gender: 'Female',
+      address1: '1 Main',
+      city: 'Brooklyn',
+      state: 'NY',
+      zipCode: '11201',
     });
     const { row: enriched, patientFound } = await enrichOpenedRowFromHha(
-      { caseId: '66976', firstName: 'Pat', lastName: 'Two', sourceReport: 'opened_cases' },
+      {
+        caseId: '66976',
+        firstName: 'Pat',
+        lastName: 'Two',
+        gender: 'Male',
+        address1: '1 Main',
+        city: 'Brooklyn',
+        state: 'NY',
+        zipCode: '11201',
+        sourceReport: 'opened_cases',
+      },
       hha,
     );
     expect(patientFound).toBeUndefined();
-    expect(enriched.gender).toBeUndefined();
+    expect(enriched.gender).toBe('Male');
     expect(hha.calls).not.toContain('findPatient');
+  });
+
+  it('backfills blank Gluck address from HHA when patient already exists', async () => {
+    const hha = new MockHhaClient();
+    await hha.upsertPatient({
+      caseId: '66976',
+      externalId: '66976',
+      firstName: 'Pat',
+      lastName: 'Two',
+      gender: 'Female',
+      address1: '10 Main St',
+      city: 'Brooklyn',
+      state: 'NY',
+      zipCode: '11201',
+    });
+    const { row: enriched, patientFound } = await enrichOpenedRowFromHha(
+      {
+        caseId: '66976',
+        firstName: 'Pat',
+        lastName: 'Two',
+        gender: 'Female',
+        sourceReport: 'opened_cases',
+      },
+      hha,
+    );
+    expect(patientFound).toBe(true);
+    expect(enriched.address1).toBe('10 Main St');
+    expect(enriched.city).toBe('Brooklyn');
+    expect(enriched.state).toBe('NY');
+    expect(enriched.zipCode).toBe('11201');
+  });
+
+  it('leaves Gluck blanks when patient is not in HHA (true new intake)', async () => {
+    const hha = new MockHhaClient();
+    const { row: enriched, patientFound } = await enrichOpenedRowFromHha(
+      {
+        caseId: 'new-intake',
+        firstName: 'Pat',
+        lastName: 'New',
+        gender: 'Female',
+        sourceReport: 'opened_cases',
+      },
+      hha,
+    );
+    expect(patientFound).toBe(false);
+    expect(enriched.city).toBeUndefined();
+    expect(hha.calls).toContain('findPatient');
+    expect(hha.calls).not.toContain('getPatientDemographicsFields');
   });
 
   it('fills city/state/zip from HHA when PS row omits them', async () => {

@@ -46,3 +46,18 @@ export async function putLockerPdf(key: string, body: Buffer): Promise<void> {
     }),
   );
 }
+
+export async function getPdfFromS3(key: string): Promise<Buffer | null> {
+  const bucket = process.env.REPORTS_BUCKET;
+  if (!bucket || !key) return null;
+  const { GetObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
+  const s3 = new S3Client({});
+  try {
+    const out = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+    const bytes = await out.Body?.transformToByteArray();
+    if (!bytes) return null;
+    return Buffer.from(bytes);
+  } catch {
+    return null;
+  }
+}

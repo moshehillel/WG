@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as XLSX from 'xlsx';
 import {
   applyCaseloadImport,
@@ -404,8 +407,29 @@ const KU_HEADERS = [
   'RS Provider',
 ];
 
-/** Final KU â€œRelated Service by serviceschool (WG)â€ Listing Results headers. */
+/** Final KU “Related Service Details by School (WG)” Listing Results headers (Sep 2026). */
 const WG_HEADERS = [
+  'Student Gen Ed ID#',
+  'Recommended School',
+  'Last Name',
+  'First Name',
+  'Student BirthDate',
+  'Grade',
+  'Decision',
+  'Related Service',
+  'RS Start',
+  'RS End',
+  'Ratio',
+  'Freq',
+  'Period',
+  'Min',
+  'Location',
+  'Provider',
+  'Program Type',
+];
+
+/** Older “Related Service by serviceschool (WG)” headers (still supported). */
+const WG_HEADERS_LEGACY = [
   'Student Gen Ed ID#',
   'CR Recommended School',
   'Student Last Name',
@@ -441,6 +465,7 @@ function wgAoa(): (string | number)[][] {
       'Alden Terrace School',
       'Abedin',
       'Omar',
+      '3/15/2018',
       '04',
       'Classified',
       'Physical Therapy',
@@ -452,12 +477,14 @@ function wgAoa(): (string | number)[][] {
       '30',
       'School',
       'Vasaturo, James',
+      'Island Park UFSD',
     ],
     [
       '111055897',
       'Alden Terrace School',
       'Fox',
       'Sincere',
+      '11/26/2018',
       '06',
       'Classified',
       'Physical Therapy',
@@ -469,12 +496,14 @@ function wgAoa(): (string | number)[][] {
       '30',
       'Therapy Room',
       'White, Glove',
+      'Island Park UFSD',
     ],
     [
       '909062464',
       'Shaw Avenue',
       'Diaz',
       'Elmer',
+      '4/12/2017',
       '04',
       'Classified',
       'Occupational Therapy',
@@ -486,6 +515,30 @@ function wgAoa(): (string | number)[][] {
       '30',
       'School',
       'White Glove',
+      'Elmont UFSD',
+    ],
+  ];
+}
+
+function wgLegacyAoa(): (string | number)[][] {
+  return [
+    WG_HEADERS_LEGACY,
+    [
+      '922522794',
+      'Alden Terrace School',
+      'Abedin',
+      'Omar',
+      '04',
+      'Classified',
+      'Physical Therapy',
+      '9/2/2026',
+      '6/25/2027',
+      'Individual',
+      '2',
+      'Weekly',
+      '30',
+      'School',
+      'Vasaturo, James',
     ],
   ];
 }
@@ -502,6 +555,13 @@ function writeWgBook(bookType: 'xlsx' | 'xls' = 'xls'): Buffer {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Listing Results');
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([]), 'Sheet2');
+  return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType }) as Buffer);
+}
+
+function writeWgLegacyBook(bookType: 'xlsx' | 'xls' = 'xls'): Buffer {
+  const ws = XLSX.utils.aoa_to_sheet(wgLegacyAoa());
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Listing Results');
   return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType }) as Buffer);
 }
 
@@ -529,7 +589,7 @@ describe('caseload Excel parser', () => {
     expect(parsed.rows.map((r) => r.lastName).sort()).toEqual(['Diaz', 'Haris']);
   });
 
-  it('parses final Related Service by serviceschool (WG) layout', () => {
+  it('parses final Related Service Details by School (WG) layout', () => {
     const parsed = parseCaseloadWorkbook(writeWgBook('xls'));
     expect(parsed.errors).toEqual([]);
     expect(parsed.rows).toHaveLength(3);
@@ -554,6 +614,8 @@ describe('caseload Excel parser', () => {
       endOn: '2027-06-25',
       freqDisplay: '2 / week',
       programId: '922522794',
+      programType: 'Island Park UFSD',
+      dob: '2018-03-15',
     });
 
     const sincere = parsed.rows.find((r) => r.lastName === 'Fox');
@@ -562,6 +624,7 @@ describe('caseload Excel parser', () => {
     expect(sincere?.groupSize).toBe(1);
     expect(sincere?.providerName).toBe('White, Glove');
     expect(sincere?.programId).toBe('111055897');
+    expect(sincere?.dob).toBe('2018-11-26');
 
     const elmer = parsed.rows.find((r) => r.lastName === 'Diaz');
     expect(elmer?.frequencyKind).toBe('school_day_cycle');
@@ -571,13 +634,27 @@ describe('caseload Excel parser', () => {
     expect(elmer?.freqDisplay).toBe('2 / 6 school days');
     expect(elmer?.ratioGroup).toBe(true);
     expect(elmer?.durationMinutes).toBe(30);
-    expect(elmer?.groupSize).toBeNull();
+    expect(elmer?.groupSize).toBe(2);
     expect(elmer?.discipline).toBe('OT');
     expect(elmer?.providerName).toBe('White Glove');
     expect(elmer?.programId).toBe('909062464');
+    expect(elmer?.dob).toBe('2017-04-12');
   });
 
-  it('persists Student Gen Ed ID# as student.programId on WG import', () => {
+  it('still parses legacy Related Service by serviceschool (WG) headers', () => {
+    const parsed = parseCaseloadWorkbook(writeWgLegacyBook('xls'));
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0]).toMatchObject({
+      lastName: 'Abedin',
+      durationMinutes: 30,
+      programId: '922522794',
+      providerName: 'Vasaturo, James',
+      dob: '',
+    });
+  });
+
+  it('persists Student Gen Ed ID# and Student BirthDate on WG import', () => {
     const store = new MemoryStore();
     store.upsertProvider({
       id: 'p-james',
@@ -599,7 +676,10 @@ describe('caseload Excel parser', () => {
       createdAt: nowIso(),
     });
     applyCaseloadImport(store, parseCaseloadWorkbook(writeWgBook('xls')));
-    expect(store.findStudentByName('Omar', 'Abedin')?.programId).toBe('922522794');
+    const omar = store.findStudentByName('Omar', 'Abedin');
+    expect(omar?.programId).toBe('922522794');
+    expect(omar?.dob).toBe('2018-03-15');
+    expect(omar?.programType).toBe('Island Park UFSD');
   });
 
   it('maps RS Duration and derives group size from Ratio / Group Size column', () => {
@@ -607,6 +687,7 @@ describe('caseload Excel parser', () => {
 Haris,Ahmad,PT,Individual,1,Weekly,45,,Pat Lee
 Diaz,Elmer,OT,Small Group,2,Weekly,30,3,Pat Lee
 Fox,Sincere,PT,2:1,1,Weekly,42,,Pat Lee
+Lee,Ana,PT,Group,1,Weekly,30,,Pat Lee
 `;
     const parsed = parseCaseloadCsv(csv);
     expect(parsed.errors).toEqual([]);
@@ -624,6 +705,24 @@ Fox,Sincere,PT,2:1,1,Weekly,42,,Pat Lee
       durationMinutes: 42,
       groupSize: 2,
       ratioGroup: true,
+    });
+    expect(parsed.rows.find((r) => r.lastName === 'Lee')).toMatchObject({
+      durationMinutes: 30,
+      groupSize: 2,
+      ratioGroup: true,
+    });
+  });
+
+  it('treats Small Group in Related Service as group size 2 when Ratio is blank', () => {
+    const csv = `Student Last Name,Student First Name,Related Service,RS Ratio,RS Frequency,RS Period,RS Duration,RS Provider
+Cardona,Erick,PT Small Group,,1,Weekly,30,Pat Lee
+`;
+    const parsed = parseCaseloadCsv(csv);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows[0]).toMatchObject({
+      ratioGroup: true,
+      groupSize: 2,
+      serviceType: 'PT Small Group',
     });
   });
 
@@ -669,6 +768,52 @@ Shaw Avenue,Binaj,Ana,3,Classified,2026-09-02,2027-06-25,Physical Therapy,Indivi
       discipline: 'PT',
       durationMinutes: 30,
       billingServiceName: 'PT school 30',
+    });
+  });
+
+  it('stamps group mandates as PT school group 30 (not PT school 30)', () => {
+    const store = new MemoryStore();
+    store.upsertSchool({
+      id: 'sch1',
+      name: 'Shaw Avenue',
+      district: '',
+      address: '',
+      createdAt: nowIso(),
+    });
+    store.upsertProvider({
+      id: 'p1',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      email: 'pat@example.com',
+      discipline: 'PT',
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,RS Duration,Location,RS Provider
+Shaw Avenue,Binaj,Ana,3,Classified,2026-09-02,2027-06-25,Physical Therapy,2:1,2,Weekly,30,School,Pat Lee
+`;
+    const parsed = parseCaseloadCsv(csv);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows[0]).toMatchObject({
+      ratioGroup: true,
+      durationMinutes: 30,
+      billingServiceName: 'PT school group 30',
+    });
+    const applied = applyCaseloadImport(store, parsed);
+    expect(applied.errors).toEqual([]);
+    const mandate = store.data.mandates.find((m) => m.studentId === store.findStudentByName('Ana', 'Binaj')?.id);
+    expect(mandate).toMatchObject({
+      ratioGroup: true,
+      billingServiceName: 'PT school group 30',
     });
   });
 
@@ -1261,5 +1406,24 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
     });
     expect(parsed.rows).toHaveLength(3);
     expect(parsed.rows[0].schoolName).toBe('Alden Terrace School');
+  });
+
+  it('parses anonymized final WG fixture under packages/tms-db/fixtures', () => {
+    const fixturePath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../fixtures/related-service-details-by-school-wg-final.xls',
+    );
+    const parsed = parseCaseloadWorkbook(fs.readFileSync(fixturePath));
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows).toHaveLength(3);
+    expect(parsed.rows[0]).toMatchObject({
+      firstName: 'Ada',
+      lastName: 'Alpha',
+      dob: '2021-02-22',
+      durationMinutes: 30,
+      programId: '21000001',
+      programType: 'Island Park UFSD',
+      providerName: 'Vasaturo, James',
+    });
   });
 });

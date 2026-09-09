@@ -28,7 +28,7 @@ HHA pay codes are titled **discipline + $rate**, or **discipline + Group + $rate
 |------|----------|
 | **Fewer than mandate groupSize** | Always allowed (e.g. 2 of 3 OK) |
 | **More than mandate groupSize** | Blocked |
-| **Small Group** (no numeric size) | Cap **2** (client: small group = fewer than 3) |
+| **Small Group / Group** (no numeric size) | Stored **groupSize = 2** (client: small group = fewer than 3); overlap still caps legacy null at 2 |
 | **Group-mandate seen individually** | Individual pay; note should say **no peer available**; treated as **individual for overlap** (later peer in same window blocked) |
 | **Group↔group share window** | Only when both sessions are **group-tagged** (Group / 2:1 / 3:1 / 4:1) |
 
@@ -53,17 +53,21 @@ Create these **exact** ServiceCode names under each school contract (lookup is c
 | Kind | Exact name pattern | Examples |
 |------|--------------------|----------|
 | Eval | `{Disc} School eval` | `OT School eval`, `PT School eval`, `SLP School eval` |
-| ~30 min | `{Disc} school 30` | `OT school 30`, … |
-| ~42 min | `{Disc} school 42` | `OT school 42`, … |
-| ~45 min | `{Disc} school 45` | `OT school 45`, … |
-| ~60 min / other | `{Disc} school 60` | `OT school 60`, … |
+| ~30 min individual | `{Disc} school 30` | `OT school 30`, … |
+| ~42 min individual | `{Disc} school 42` | `OT school 42`, … |
+| ~45 min individual | `{Disc} school 45` | `OT school 45`, … |
+| ~60 min / other individual | `{Disc} school 60` | `OT school 60`, … |
+| ~30 min group | `{Disc} school group 30` | `OT school group 30`, … |
+| ~42 min group | `{Disc} school group 42` | `OT school group 42`, … |
+| ~45 min group | `{Disc} school group 45` | `OT school group 45`, … |
+| ~60 min / other group | `{Disc} school group 60` | `OT school group 60`, … |
 | Additional | `{Disc} additional services` | `OT additional services`, … |
 
 **Duration bucket:** from the **matching mandate’s authorized duration** (same as TMS provider pay) — nearest of 30 / 42 / 45 within **3 minutes** of that mandate length; otherwise **60**. Do **not** derive the bucket from Frontline session clock length.
 
-**Kind detection:** `additionalServiceType=eval` or “eval” in Service Type → School eval; other additional kinds (progress report, consultation, meetings, paid absence) → additional services; else school + duration.
+**Kind detection:** `additionalServiceType=eval` or “eval” in Service Type → School eval; other additional kinds (progress report, consultation, meetings, paid absence) → additional services; else school + duration. **Group vs individual** comes from the mandate (`ratioGroup` / group size), not from whether the session had present peers (solo-group pay may still use individual rates).
 
-**Caseload import naming (Sep 2026):** On mandate upsert from caseload, store `billingServiceName` = `{Disc} school {bucket}` from discipline + RS Duration (same buckets). Keep Related Service (`serviceType`) for therapist display. HHA week transfer prefers the stored name; falls back to compute-from-mandate for older rows. Eval / additional are not caseload mandates.
+**Caseload import naming (Sep 2026):** On mandate upsert from caseload, store `billingServiceName` = `{Disc} school {bucket}` (individual) or `{Disc} school group {bucket}` (group) from discipline + RS Duration + ratio. Keep Related Service (`serviceType`) for therapist display. HHA week transfer prefers the stored name; falls back to compute-from-mandate for older rows (and rewrites legacy group rows that were stamped without “group”). Eval / additional are not caseload mandates.
 
 Implementation: `packages/shared/src/config/school-billing-codes.ts`. Missing service code → **hard-fail that session**.
 
@@ -197,17 +201,17 @@ Use when the child already exists in ProviderSoft/HHA but a **new Service Type**
 
 ## Due dates (school-scoped)
 
-Progress / annual / reeval due dates belong on the **school**, not each child. One due date (per kind) applies to that school’s caseload. Nags email providers with mandates at the school plus admins.
+Progress / annual / reeval due dates belong on the **school**, not each child. Each school can have an **array of assignments** (`kind` / Type, `dueOn`, optional `notes`). Notes cover school-wide context or a specific child (e.g. “only for child X”). Nags email providers with mandates at the school plus admins.
 
-In the UI these are labeled **Progress report due dates** (kinds remain progress / annual / reeval).
+In the UI these are labeled **Progress report due dates** (Type: Progress / Annual / Reevaluation; Due Date; Notes).
 
-**Migration:** legacy per-student due dates lift to the student’s school when unambiguous (same school + kind + dueOn). Rows with no school, or conflicting dueOn values for the same school+kind, are dropped — we do not invent dates.
+**Migration:** legacy per-student due dates lift to the student’s school when unambiguous (same school + kind + dueOn). Rows with no school, or conflicting dueOn values for the same school+kind from legacy student rows, are dropped — we do not invent dates. Modern school-scoped rows (already `schoolId`) are preserved as multiple assignments.
 
 ## Student DOB (TMS caseload)
 
-DOB on the student record is **optional for now** but **recommended for HHA** (session/patient transfer). Caseload Excel/CSV imports Program ID / Program Type / Date of Birth when those columns exist; the current WG “Related Service by serviceschool” export does not include them — leave blank and no import block. Admins can enter DOB on the child detail screen.
+DOB on the student record is imported from caseload when present and recommended for HHA (session/patient transfer). Final WG export **Related Service Details by School (WG)** includes **Student BirthDate** — mapped onto `student.dob` and passed into HHA CreatePatient. Admins can still edit DOB on the child detail screen.
 
-**HHA CreatePatient DOB (Sep 2026 — Moshe):** Intent is DOB from **caseload**. Moshe will share a **sample caseload export with DOB** later. **Do not** invent or hard-map DOB until that sample arrives. Until then, transfer only passes `student.dob` when already present (manual entry / optional import column); CreatePatient may still fail missing DOB if blank.
+**HHA CreatePatient DOB (Sep 2026 — Moshe):** **Done.** Caseload column `Student BirthDate` → student → CreatePatient `dateOfBirth`. No fake DOB; blank DOB still fails CreatePatient until filled.
 
 ## HHA patient create from TMS (school address)
 
@@ -215,10 +219,19 @@ When TMS creates an HHA patient (`resolveHhaPatientId` → `upsertPatient` / Cre
 
 | Field | Source |
 |-------|--------|
-| **Address / City / State / Zip** | **School** address (admin school detail — optional fields) |
-| **DOB** | Caseload / student record — **pending Moshe’s sample** (see above); no fake DOB |
+| **Address / City / State / Zip** | **School** address (admin school detail) |
+| **DOB** | Caseload **Student BirthDate** / student record — no fake DOB |
 
-Admins enter school address on the school screen. CreatePatient still requires address + DOB when the child is not already in HHA; missing school address → same missing-field failure as before until the school is filled in.
+Admins enter school address on the school screen. CreatePatient still requires address + DOB when the child is not already in HHA.
+
+## School setup incomplete (calendar + address)
+
+A school is **incomplete** (shown **red** in admin Schools list + detail, with a banner / Schools nav badge) until **both**:
+
+1. **Calendar** is saved (first day, last day, and/or off days), and  
+2. **Full address** is filled (street, city, state, zip) for HHA CreatePatient.
+
+Message examples: needs calendar and address; needs calendar; needs address.
 
 ## Caseload RS Provider (TMS)
 
@@ -228,7 +241,7 @@ RS Provider on caseload import **must match an existing TMS therapist** (First L
 
 | Rule | Behavior |
 |------|----------|
-| **Small group** | Fewer than 3 students (caseload “Small Group” with no numeric size → cap **2**) |
+| **Small group** | Fewer than 3 students (caseload “Group” / “Small Group” with no numeric size → **groupSize 2**) |
 | **Fewer than mandate groupSize** | Always allowed |
 | **More than mandate groupSize** | Blocked on import / save |
 | **Group-tagged with ≥1 present peer** | Group pay rate / `OT Group $rate` |
@@ -238,7 +251,8 @@ RS Provider on caseload import **must match an existing TMS therapist** (First L
 
 | Rule | Behavior |
 |------|----------|
-| **Prior processed sessions** | View-only for providers; **admins can still edit** |
+| **Processed Sessions (provider)** | Signed/locked (paid) sessions only — Session date, Attended status, Start/End time, Pay rate. No week wording. |
+| **Pending Sessions (provider)** | Draft / reopened / submitted workbench; reload control says **Reload sessions**. |
 | **Awaiting signature (submitted)** | Provider sessions fully locked — cancel approval to return to draft before any edit/import/add |
 | **Signed / locked** | Provider sessions fully locked — admin reopen required before edits |
 | **New sessions while locked** | Providers may **not** add/import until cancel (submitted) or admin reopen (signed/locked). Admins may still override. Age locker (14 days) still applies when unlocked. |
@@ -254,7 +268,12 @@ RS Provider on caseload import **must match an existing TMS therapist** (First L
 | **Admin Frontline upload** | No week/calendar picker — sessions attach by DOS (14-day locker). |
 | **Generate timesheet** | On provider detail |
 | **Additional services** | On provider detail |
-| **Providers / Children lists** | Separate nav items; A–Z letter-tab layout removed per Madison (Sep 2026). **Madison will call** to explain preferred separate-tab UX further — do not invent a new tab system until then. |
+| **Providers / Children lists** | Separate nav items; A–Z letter-tab layout removed per Madison (Sep 2026). |
+| **Child detail tabs** | ProviderSoft-style: Basic info (default) · Mandates (+ progress-report dues) · Sessions · Timesheet · Student files |
+| **Provider detail tabs** | Basic info · Pay rates · Caseload · Sessions (import / timesheet / additional services) · Upload reports · Internal notes |
+| **Yellow import block toggle** | Admin setting `yellowWarningsBlockImport` (default **ON**). When OFF, yellow/warn note flags do not fail the whole PDF import; red/hard still all-or-nothing. |
+| **Provider Processed Sessions** | Signed/locked (paid) sessions only — columns: Session date, Attended status, Start/End time, Pay rate. No week wording. |
+| **Provider Pending Sessions** | Draft / reopened / submitted workbench; **Reload sessions** (not “reload week”). |
 | **Provider detail sessions** | Session list (not Weeks picker) |
 | **Mandate edit** | Admin can edit uploaded mandates (PATCH `/admin/mandates/:id`) |
 | **Provider school selection** | Required picker after sign-in when provider has multiple schools |
@@ -263,6 +282,8 @@ RS Provider on caseload import **must match an existing TMS therapist** (First L
 ## School calendar (TMS)
 
 Admins enter per school: **first day**, **last day**, and **off days** (holidays/breaks). **Wired into live mandate over-checks** (import / save / submit / week view): `checkMandatesForWeek` resolves each child’s school calendar. Cycle windows = Mon–Fri within year bounds, excluding admin off days; weekends never count; densest N school-day window **hard-blocks** when over Freq. Empty calendar → weekday-only default **with an explicit warning** (week/import/save/admin): `No school calendar for [School] — falling back to Mon–Fri (weekends excluded; no holiday off-days).`
+
+**PDF upload (Sep 2026):** Admin can upload a text-based school calendar PDF; the system extracts closed/holiday dates (and first/last day when labeled) into the calendar form for review, then save. Scanned image-only PDFs are not supported (same text-layer limit as session PDFs). Best with district calendars that list holidays in text (e.g. “Thanksgiving Recess Nov 27–28, 2025”).
 
 ## HHA clock → visit linking
 
@@ -280,6 +301,24 @@ Requires entities to **already exist**:
 - PDF Service Provider must match the logged-in therapist’s provider profile (when present on the PDF).
 - Child must already exist (from caseload) — unknown child → error; **no auto-create**.
 - PDF school must match the child’s school when both are known (clear mismatch → error).
+
+## Cognito MFA (TMS) — Sep 2026
+
+| Item | Decision |
+|------|----------|
+| **Who** | **All Cognito logins** — therapists (providers) and admins. Same enroll-on-login + challenge path. |
+| **Pool MFA** | **OPTIONAL** (not REQUIRED) so admins can turn enforcement off without a Cognito lock-in |
+| **Require MFA** | App setting `requireMfa` (**default ON**). Users without TOTP / email MFA / passkey must enroll before entering the app |
+| **Allow SMS MFA** | **OFF** (Moshe decision). `allowSmsMfa` default false; SPA enroll UI does not offer SMS or phone capture |
+| **Primary method** | Authenticator app (TOTP) — always available; **no per-message fee** |
+| **Email OTP MFA** | Cognito native `EMAIL_OTP` via SES (`advancedautomations.net` / TMS From). Cognito emails the code on login challenge after enroll |
+| **Passkeys / Windows Hello** | Cognito WebAuthn with user verification. Enroll after sign-in; login via **USER_AUTH + WEB_AUTHN** (passwordless first factor that satisfies MFA). Not a second factor after password |
+| **Trust this device** | Cognito device tracking + remembered device after MFA; checkbox on MFA challenge |
+| **Turn MFA off (org)** | Discreet admin control only: long-press site footer → Advanced security, or Security (MFA) → Advanced (admins). Not a dashboard toggle. Saving **Require MFA OFF** also clears Cognito `PreferredMfaSetting` / MFA enrollments pool-wide so login is password-only (OPTIONAL pool still challenges enrolled users otherwise). |
+| **Turn MFA off (user)** | Security (MFA) → Advanced → turn off own MFA only when org does not require it (clears TOTP / email OTP; deletes passkeys separately) |
+| **UI language** | English ↔ Español toggle (login + app); preference in `localStorage` `tmsLang` |
+
+Implementation: `infra/lib/tms.ts` (pool), `packages/tms-db` settings, `packages/tms-api` `/admin/settings` + `/me`, `apps/tms-web` login/enroll UX + i18n.
 
 ## TMS HHA environment (sandbox until go-live)
 

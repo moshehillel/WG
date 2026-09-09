@@ -26,9 +26,8 @@ export function screenServiceNote(input: {
   if (/lorem ipsum|asdf|test test/i.test(notes)) {
     blockFlags.push('Note may be placeholder text.');
   }
-  if (input.attendance === 'missed' && !/absent|not available|cancel|not in school/i.test(notes)) {
-    warnFlags.push('Missed session note may be missing a cancellation reason.');
-  }
+  // Missed sessions only need date + time (+ missed status) for later makeup linking.
+  // Empty notes are allowed — do not warn or block when there is no service note.
 
   const flags = [...blockFlags, ...warnFlags];
   return { flags, blockFlags, warnFlags, block: blockFlags.length > 0 };

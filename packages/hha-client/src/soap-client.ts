@@ -291,6 +291,10 @@ export class HhaSoapClient {
     return this.call('GetCaregiverPayCodes', '');
   }
 
+  getPayRateCodes(): Promise<SoapCallResult> {
+    return this.call('GetPayRateCodes', '');
+  }
+
   createSchedule(innerBody: string): Promise<SoapCallResult> {
     return this.call('CreateSchedule', innerBody);
   }

@@ -121,11 +121,12 @@ export interface Mandate {
   durationMinutes?: number | null;
   /**
    * HHA school billing ServiceCodeName set at caseload import
-   * (e.g. `PT school 30`). Related Service (`serviceType`) stays for therapists.
+   * (e.g. `PT school 30`, group → `PT school group 30`).
+   * Related Service (`serviceType`) stays for therapists.
    * Eval / additional are not caseload mandates — leave unset.
    */
   billingServiceName?: string;
-  /** Group mandate size; Individual imports as 1, Small Group may be null (overlap treats null Small Group as cap 2 = fewer than 3). */
+  /** Group mandate size; Individual → 1, N:1 → N, bare Group/Small Group → 2. Legacy null + group still caps at 2 in overlap. */
   groupSize?: number | null;
   /** Session location from caseload (e.g. Push-In / Pull-Out). */
   location?: string;
@@ -213,6 +214,22 @@ export interface AppSettings {
   sessionImportAgeLockEnabled: boolean;
   /** Max age in days for provider session import (default 14). */
   sessionImportMaxAgeDays: number;
+  /**
+   * When true (default), yellow AI/note warnings fail the whole PDF import (all-or-nothing).
+   * When false, only red/hard blocks fail the import; yellow flags are returned as warnings.
+   */
+  yellowWarningsBlockImport: boolean;
+  /**
+   * When true (default), Cognito MFA is required for every login (therapist + admin):
+   * users without TOTP/SMS must enroll before using the app.
+   * Pool MFA stays OPTIONAL so admins can turn enforcement off without a Cognito REQUIRED lock-in.
+   */
+  requireMfa: boolean;
+  /**
+   * When true, SPA offers SMS OTP enrollment (needs verified phone + SNS SMS working on the account).
+   * TOTP authenticator app remains always available and is the recommended path.
+   */
+  allowSmsMfa: boolean;
   /** Week ids exempt from the age lock. */
   unlockedWeekIds: string[];
   /** Provider ids exempt from the age lock. */
@@ -224,6 +241,9 @@ export function defaultAppSettings(): AppSettings {
     id: 'global',
     sessionImportAgeLockEnabled: true,
     sessionImportMaxAgeDays: 14,
+    yellowWarningsBlockImport: true,
+    requireMfa: true,
+    allowSmsMfa: false,
     unlockedWeekIds: [],
     unlockedProviderIds: [],
   };
@@ -240,12 +260,41 @@ export interface StoredFile {
   createdAt: string;
 }
 
+/** Durable archive of uploaded session reports and generated timesheet PDFs. */
+export type ArchiveSourceType =
+  | 'frontline'
+  | 'therapist_activity'
+  | 'upload_other'
+  | 'timesheet'
+  | 'timesheet_signed';
+
+export type ArchiveKind = 'upload' | 'timesheet';
+
+export interface ArchiveRecord {
+  id: string;
+  kind: ArchiveKind;
+  sourceType: ArchiveSourceType;
+  userId: string;
+  providerId: string;
+  schoolId: string;
+  weekId: string;
+  weekStart: string;
+  filename: string;
+  s3Key: string;
+  /** For timesheets: draft | submitted | signed | locked (mirrors week when known). */
+  status: string;
+  createdAt: string;
+}
+
 export interface DueDate {
   id: string;
   /** Progress / annual / reeval deadlines apply to the whole school caseload. */
   schoolId: string;
+  /** Report type: progress | annual | reeval (UI label: Type). */
   kind: DueKind;
   dueOn: string;
+  /** Optional note — school-wide context or a specific child name. */
+  notes?: string;
   completedAt: string;
   lastNagOn: string;
 }
@@ -294,6 +343,7 @@ export interface TmsSnapshot {
   weeks: WeeklyPeriod[];
   sessions: SessionRow[];
   files: StoredFile[];
+  archives: ArchiveRecord[];
   dueDates: DueDate[];
   alerts: AlertRow[];
   hhaTransfers: HhaTransfer[];
@@ -313,6 +363,7 @@ export function emptySnapshot(): TmsSnapshot {
     weeks: [],
     sessions: [],
     files: [],
+    archives: [],
     dueDates: [],
     alerts: [],
     hhaTransfers: [],

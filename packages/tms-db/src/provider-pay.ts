@@ -52,12 +52,13 @@ export function sessionDurationMinutes(beginTime: string, endTime: string): numb
 
 export function clockToMinutes(raw: string): number | null {
   const s = String(raw || '').trim();
-  const m = s.match(/^(\d{1,2}):(\d{2})\s*(am|pm)?$/i);
+  // Accept "9:00 am", "9:00am", "9:00 a.m.", "9:00 A.M."
+  const m = s.match(/^(\d{1,2}):(\d{2})\s*(a\.?m\.?|p\.?m\.?)?$/i);
   if (!m) return null;
   let hour = Number(m[1]);
   const min = Number(m[2]);
   if (!Number.isFinite(hour) || !Number.isFinite(min)) return null;
-  const ap = (m[3] || '').toLowerCase();
+  const ap = (m[3] || '').toLowerCase().replace(/\./g, '');
   if (ap === 'pm' && hour < 12) hour += 12;
   if (ap === 'am' && hour === 12) hour = 0;
   return hour * 60 + min;

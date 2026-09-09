@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   emptySchoolCalendar,
+  hasConfiguredSchoolCalendar,
+  hasSchoolAddressForPatient,
   isSchoolDay,
   parseOffDaysCsv,
+  schoolCalendarMonFriFallbackWarning,
   schoolCalendarSummary,
   schoolDaysBetween,
+  schoolSetupIncomplete,
 } from './school-calendar.js';
 
 const cal = {
@@ -60,5 +64,68 @@ describe('school calendar helpers', () => {
       }),
     ).toBe('Sep 2 – Jun 25, 2 off days');
     expect(schoolCalendarSummary(emptySchoolCalendar('s1'))).toBe('');
+  });
+
+  it('hasConfiguredSchoolCalendar detects empty vs saved calendars', () => {
+    expect(hasConfiguredSchoolCalendar(null)).toBe(false);
+    expect(hasConfiguredSchoolCalendar(emptySchoolCalendar('s1'))).toBe(false);
+    expect(
+      hasConfiguredSchoolCalendar({
+        schoolId: 's1',
+        yearStart: '2026-09-01',
+        yearEnd: '',
+        offDays: [],
+      }),
+    ).toBe(true);
+    expect(
+      hasConfiguredSchoolCalendar({
+        schoolId: 's1',
+        yearStart: '',
+        yearEnd: '',
+        offDays: ['2026-11-27'],
+      }),
+    ).toBe(true);
+  });
+
+  it('schoolCalendarMonFriFallbackWarning names the school', () => {
+    expect(schoolCalendarMonFriFallbackWarning('PS 118')).toBe(
+      'No school calendar for PS 118 — falling back to Mon–Fri (weekends excluded; no holiday off-days).',
+    );
+    expect(schoolCalendarMonFriFallbackWarning('')).toMatch(/this school/);
+  });
+
+  it('schoolSetupIncomplete requires calendar and full address', () => {
+    const school = {
+      name: 'Hegarty',
+      address1: '1 Main St',
+      city: 'Island Park',
+      state: 'NY',
+      zipCode: '11558',
+    };
+    expect(hasSchoolAddressForPatient(school)).toBe(true);
+    expect(hasSchoolAddressForPatient({ ...school, zipCode: '' })).toBe(false);
+
+    const missingBoth = schoolSetupIncomplete(
+      { name: 'Hegarty' },
+      emptySchoolCalendar('s1'),
+    );
+    expect(missingBoth.incomplete).toBe(true);
+    expect(missingBoth.missingCalendar).toBe(true);
+    expect(missingBoth.missingAddress).toBe(true);
+    expect(missingBoth.message).toMatch(/calendar and address/i);
+
+    const missingCal = schoolSetupIncomplete(school, emptySchoolCalendar('s1'));
+    expect(missingCal.missingCalendar).toBe(true);
+    expect(missingCal.missingAddress).toBe(false);
+    expect(missingCal.message).toMatch(/calendar/i);
+
+    const complete = schoolSetupIncomplete(school, {
+      schoolId: 's1',
+      yearStart: '2026-09-02',
+      yearEnd: '2027-06-25',
+      offDays: [],
+    });
+    expect(complete.incomplete).toBe(false);
+    expect(complete.message).toBe('');
   });
 });

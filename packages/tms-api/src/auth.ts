@@ -94,12 +94,18 @@ export async function authenticate(
   const email = String(payload.email || payload['cognito:username'] || '');
   const groups = payload['cognito:groups'];
   const groupList = Array.isArray(groups) ? groups.map(String) : [];
-  const role: Role = groupList.includes('Admin') || groupList.includes('admin') ? 'admin' : 'therapist';
+  const cognitoAdmin = groupList.includes('Admin') || groupList.includes('admin');
   const sub = String(payload.sub || '');
   if (!email) return { error: 'Token missing email.', status: 401 };
-  const user = ensureUser(store, email, role, sub, email);
-  if (user.role !== 'admin' && role === 'admin') {
-    store.upsertUser({ ...user, role: 'admin' });
+  // Prefer explicit Dynamo admin OR Cognito Admin group — never demote Dynamo admin
+  // when the token is missing the group (stale invite / UsernameExists race).
+  const user = ensureUser(store, email, cognitoAdmin ? 'admin' : 'therapist', sub, email);
+  const isAdmin = cognitoAdmin || user.role === 'admin';
+  if (isAdmin && user.role !== 'admin') {
+    store.upsertUser({ ...user, role: 'admin', providerId: '' });
+  } else if (isAdmin && user.providerId) {
+    // Admins must not keep therapist provider linkage for chrome /me.
+    store.upsertUser({ ...user, role: 'admin', providerId: '' });
   }
   const resolved = store.userByEmail(email)!;
   if (resolved.active === false) {

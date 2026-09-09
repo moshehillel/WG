@@ -20,6 +20,12 @@ export const OpenedCaseRowSchema = z.object({
   endDate: z.string().optional(),
   /** ProviderSoft "Provider Name" on Gluck open / new service (therapist for this service line). */
   providerName: z.string().optional(),
+  /**
+   * ProviderSoft "Pay Rate" when present on the export (EVV new_services CreateSchedule:
+   * Service Type + Pay Rate → e.g. OT + 72 → OT $72). Blank is allowed for the
+   * placeholder visit — falls back to first HHA catalog rate for the discipline.
+   */
+  payRate: z.string().optional(),
   intakeDate: z.string().optional(),
   address1: z.string().optional(),
   city: z.string().optional(),

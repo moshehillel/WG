@@ -1,13 +1,13 @@
 import type { Handler } from 'aws-lambda';
 import { applyHhaSecretFromArn, createHhaClient } from '@white-glove/hha-client';
 import type { ClosedCaseRow, ParseResult, ProcessorResult } from '@white-glove/shared';
-import { getEnv } from '@white-glove/shared';
+import { getEnv, processorBranchResultKey } from '@white-glove/shared';
 import { createIdempotencyStore } from '../idempotency.js';
 import { createReferenceMappingStore } from '../reference-mapping.js';
 import { processClosedCases } from '../process-closed.js';
 import { processDischargeService, type DischargeServiceRow } from '../process-discharge.js';
 import { runProcessorBranchSafely } from '../safe-handler.js';
-import { getObjectText } from '../s3.js';
+import { getObjectText, putJson } from '../s3.js';
 
 export interface ClosedEvent {
   parse: ParseResult;
@@ -15,6 +15,11 @@ export interface ClosedEvent {
   dryRun?: boolean;
 }
 
+/**
+ * Gluck closure + discharge service run in one Lambda (same Pattern as OpenedFn
+ * for Gluck open + new_services). Results are written to separate S3 branch keys
+ * so Validate/email/CSV label them independently — SFN return is closed-only.
+ */
 export const handler: Handler<ClosedEvent, ProcessorResult> = async (event) => {
   const env = await applyHhaSecretFromArn(getEnv());
   const bucket = event.bucket || env.REPORTS_BUCKET;
@@ -37,6 +42,7 @@ export const handler: Handler<ClosedEvent, ProcessorResult> = async (event) => {
       store,
       dryRun,
     });
+    await putJson(bucket, processorBranchResultKey(event.parse.runId, 'closed'), closedResult);
 
     if (!event.parse.artifactKeys.discharge_service) {
       return closedResult;
@@ -51,15 +57,13 @@ export const handler: Handler<ClosedEvent, ProcessorResult> = async (event) => {
       store,
       dryRun,
     });
+    await putJson(
+      bucket,
+      processorBranchResultKey(event.parse.runId, 'discharge'),
+      dischargeResult,
+    );
 
-    return {
-      runId: event.parse.runId,
-      reportKind: 'closed_cases',
-      processed: closedResult.processed + dischargeResult.processed,
-      succeeded: closedResult.succeeded + dischargeResult.succeeded,
-      skipped: closedResult.skipped + dischargeResult.skipped,
-      failed: closedResult.failed + dischargeResult.failed,
-      exceptions: [...closedResult.exceptions, ...dischargeResult.exceptions],
-    };
+    // Do not merge into closed_cases — Validate loads discharge from S3 separately.
+    return closedResult;
   });
 };

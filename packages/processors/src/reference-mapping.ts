@@ -8,6 +8,7 @@ import {
   InMemoryHhaReferenceCache,
   type HhaReferenceCache,
 } from '@white-glove/hha-client';
+import { normalizeMappingKey } from '@white-glove/shared';
 
 function normalizeRefKey(value: string): string {
   return value.trim().toLowerCase();
@@ -19,6 +20,17 @@ function contractKeys(programType: string): { pk: string; sk: string } {
 
 function serviceKeys(serviceType: string): { pk: string; sk: string } {
   return { pk: 'ref#service', sk: normalizeRefKey(serviceType) };
+}
+
+function payCodeKeys(psPayCodeName: string): { pk: string; sk: string } {
+  return { pk: 'ref#paycode', sk: normalizeRefKey(psPayCodeName) };
+}
+
+function programServiceKeys(programType: string, serviceType: string): { pk: string; sk: string } {
+  return {
+    pk: 'ref#program-service',
+    sk: `${normalizeMappingKey(programType)}\0${normalizeMappingKey(serviceType)}`,
+  };
 }
 
 export class DynamoHhaReferenceCache implements HhaReferenceCache {
@@ -74,6 +86,71 @@ export class DynamoHhaReferenceCache implements HhaReferenceCache {
           sk,
           serviceType: serviceType.trim(),
           hhaCodeId,
+          updatedAt: new Date().toISOString(),
+        },
+      }),
+    );
+  }
+
+  async getPayCodeId(psPayCodeName: string): Promise<string | undefined> {
+    const { pk, sk } = payCodeKeys(psPayCodeName);
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.tableName, Key: { pk, sk } }),
+    );
+    const id = res.Item?.payCodeId;
+    return id != null ? String(id) : undefined;
+  }
+
+  async putPayCodeId(
+    psPayCodeName: string,
+    payCodeId: string,
+    meta?: { hhaPayCodeName?: string },
+  ): Promise<void> {
+    const { pk, sk } = payCodeKeys(psPayCodeName);
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: {
+          pk,
+          sk,
+          psPayCodeName: psPayCodeName.trim().toUpperCase(),
+          payCodeId,
+          ...(meta?.hhaPayCodeName ? { hhaPayCodeName: meta.hhaPayCodeName } : {}),
+          updatedAt: new Date().toISOString(),
+        },
+      }),
+    );
+  }
+
+  async getProgramServiceCodeId(
+    programType: string,
+    serviceType: string,
+  ): Promise<string | undefined> {
+    const { pk, sk } = programServiceKeys(programType, serviceType);
+    const res = await this.doc.send(
+      new GetCommand({ TableName: this.tableName, Key: { pk, sk } }),
+    );
+    const id = res.Item?.hhaCodeId;
+    return id != null ? String(id) : undefined;
+  }
+
+  async putProgramServiceCodeId(
+    programType: string,
+    serviceType: string,
+    hhaCodeId: string,
+    meta?: { hhaServiceName?: string },
+  ): Promise<void> {
+    const { pk, sk } = programServiceKeys(programType, serviceType);
+    await this.doc.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: {
+          pk,
+          sk,
+          programType: programType.trim(),
+          serviceType: serviceType.trim(),
+          hhaCodeId,
+          ...(meta?.hhaServiceName ? { hhaServiceName: meta.hhaServiceName } : {}),
           updatedAt: new Date().toISOString(),
         },
       }),

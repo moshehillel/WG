@@ -146,6 +146,11 @@ export function cleanExceptionMessage(message: string): string {
       /^\[(opened_cases|closed_cases|verified_sessions|discharge_service|new_services|caregiver_codes)\]\s*/i,
       '',
     )
+    // Drop row/step prefixes and SOAP/ErrorID dumps from ops reasons.
+    .replace(/^row=\S+\s+step=\w+:\s*/i, '')
+    .replace(/\s*\(ErrorID\s*=\s*-?\d+\)/gi, '')
+    .replace(/\s*\(ServiceCodeID\s*=\s*\d+[^)]*\)/gi, '')
+    .replace(/\s*Caregiver:\s*\[[^\]]*\]\s*/gi, ' ')
     // Never surface remediation / name-order coaching in CSV/email reasons.
     .replace(/\s*[—\-–]\s*Fix\s*:.*$/i, '')
     .replace(/\s*Fix\s*:.*$/i, '')
@@ -162,10 +167,13 @@ export function cleanExceptionMessage(message: string): string {
 export type HhaApiFaultKind =
   | 'invalid_service_code'
   | 'service_code_missing'
+  | 'invalid_zip'
+  | 'placement_overlap'
   | 'invalid_schedule_date'
   | 'invalid_patient_id'
   | 'no_active_placements'
   | 'provider_not_found'
+  | 'provider_not_eligible'
   | 'ambiguous_discharge'
   | 'unknown';
 
@@ -175,6 +183,52 @@ export interface ParsedHhaApiFault {
   title: string;
   /** Short problem line (no SOAP dump). */
   problem: string;
+}
+
+/** Build ops title when HHA rejected / could not resolve a service code. */
+export function formatRejectedServiceCodeTitle(options: {
+  serviceCode?: string;
+  serviceCodeId?: string;
+  hhaServiceName?: string;
+  /** When true, phrase as pre-send "not found" rather than HHA rejection. */
+  notFound?: boolean;
+  /** Ignored — ErrorID noise is not shown in ops titles. */
+  errorId?: string;
+}): string {
+  const serviceCode = options.serviceCode?.trim();
+  // serviceCodeId / hhaServiceName kept for call-site compat; ops titles stay short.
+  void options.serviceCodeId;
+  void options.hhaServiceName;
+  void options.errorId;
+
+  if (options.notFound) {
+    return serviceCode
+      ? `Failed — service type "${serviceCode}" not found in HHA billing codes`
+      : 'Failed — service type not found in HHA billing codes';
+  }
+  return serviceCode
+    ? `Failed — invalid service code "${serviceCode}"`
+    : 'Failed — invalid service code';
+}
+
+function serviceCodeFieldsFromException(ex: PipelineException): {
+  serviceCode?: string;
+  serviceCodeId?: string;
+  hhaServiceName?: string;
+} {
+  const serviceCode = detailString(ex.details, 'serviceCode');
+  const fromDetails = detailString(ex.details, 'serviceCodeId');
+  const fromMessage =
+    ex.message.match(/\bServiceCodeID\s*=\s*(\d+)\b/i)?.[1] ??
+    ex.message.match(/\b\(ServiceCodeID[=:\s]+(\d+)/i)?.[1];
+  const hhaServiceName =
+    detailString(ex.details, 'hhaServiceName') ??
+    detailString(ex.details, 'hhaServiceCodeName');
+  return {
+    serviceCode,
+    serviceCodeId: fromDetails ?? fromMessage,
+    hhaServiceName,
+  };
 }
 
 /** Collapse SOAP fault envelopes embedded in exception messages. */
@@ -199,6 +253,10 @@ function stripSoapFaultDump(message: string): string {
 /**
  * Map raw HHA API exception text to a readable fault when the pattern is known.
  * Fallback keeps a generic title; callers still attach the cleaned message as problem.
+ *
+ * Note: HHA reuses ErrorID=-74 for several unrelated faults (Invalid ServiceCodeID,
+ * ZipCodeLength, placement overlap). Always match the fault *text* before treating
+ * -74 as a service-code rejection.
  */
 export function parseHhaApiFault(message: string): ParsedHhaApiFault {
   const cleaned = cleanExceptionMessage(stripSoapFaultDump(message));
@@ -212,10 +270,36 @@ export function parseHhaApiFault(message: string): ParsedHhaApiFault {
     };
   }
 
+  // ErrorID=-74 is overloaded — classify by message text first.
   if (
-    /ErrorID\s*=\s*-74/i.test(message) ||
-    /Invalid\s+"?ServiceCodeID"?/i.test(message)
+    /ZipCodeLength/i.test(message) ||
+    /Invalid\s+"?ZipCode/i.test(message) ||
+    /Invalid\s+"?Zip\b/i.test(message)
   ) {
+    return {
+      kind: 'invalid_zip',
+      title: 'Failed — invalid zip code',
+      problem:
+        cleaned ||
+        'HHA rejected the patient zip (ZipCodeLength / Zip4).',
+    };
+  }
+
+  if (
+    /placement overlaps with an existing placement/i.test(message) ||
+    /New placement overlaps/i.test(message) ||
+    /placement overlap/i.test(message)
+  ) {
+    return {
+      kind: 'placement_overlap',
+      title: 'Failed — placement overlaps existing HHA placement',
+      problem:
+        cleaned ||
+        'HHA rejected AddPatientContract: new placement overlaps an existing placement.',
+    };
+  }
+
+  if (/Invalid\s+"?ServiceCodeID"?/i.test(message)) {
     return {
       kind: 'invalid_service_code',
       title: 'Failed — invalid service code',
@@ -279,6 +363,18 @@ export function parseHhaApiFault(message: string): ParsedHhaApiFault {
       kind: 'provider_not_found',
       title: 'Failed — Provider name not found in HHA',
       problem: cleaned || 'Provider / caregiver was not found in HHA.',
+    };
+  }
+
+  // CreateSchedule ErrorID=-310: caregiver discipline does not allow that visit type.
+  if (
+    /ErrorID\s*=\s*-310\b/i.test(message) ||
+    /cannot be scheduled for\s+\w+\s+visit/i.test(message)
+  ) {
+    return {
+      kind: 'provider_not_eligible',
+      title: 'Failed — provider not eligible for that service',
+      problem: 'Provider is not eligible to be scheduled for that service in HHA.',
     };
   }
 
@@ -347,9 +443,30 @@ export function formatActionableReason(
     pushCtx('maintenanceId', detailString(ex.details, 'maintenanceId'));
   }
   // Error-type context only (safe for email grouping keys / group titles).
-  pushCtx('pay code', detailString(ex.details, 'payCodeName'));
-  pushCtx('service type', detailString(ex.details, 'serviceCode'));
-  pushCtx('program type', detailString(ex.details, 'programType'));
+  // Skip billing/service noise for short HHA fault titles — ops only need the clear phrase.
+  const hhaFault =
+    ex.code === 'hha_api_error' ? parseHhaApiFault(ex.message) : undefined;
+  const skipBillingNoise =
+    hhaFault?.kind === 'provider_not_eligible' ||
+    hhaFault?.kind === 'invalid_service_code' ||
+    hhaFault?.kind === 'service_code_missing' ||
+    hhaFault?.kind === 'invalid_zip' ||
+    hhaFault?.kind === 'placement_overlap' ||
+    ex.code === 'unknown_service_code';
+  if (!skipBillingNoise) {
+    pushCtx('pay code', detailString(ex.details, 'payCodeName'));
+    pushCtx('ServiceCodeID', detailString(ex.details, 'serviceCodeId'));
+    pushCtx('HHA service', detailString(ex.details, 'hhaServiceName'));
+    pushCtx('service type', detailString(ex.details, 'serviceCode'));
+    pushCtx('program type', detailString(ex.details, 'programType'));
+  } else if (
+    hhaFault?.kind === 'invalid_service_code' ||
+    hhaFault?.kind === 'service_code_missing' ||
+    ex.code === 'unknown_service_code'
+  ) {
+    // Keep service type only when the short title did not already include it.
+    pushCtx('service type', detailString(ex.details, 'serviceCode'));
+  }
   pushCtx('source', detailString(ex.details, 'source'));
   const missingSide = detailString(ex.details, 'missingSide');
   const clockSource = detailString(ex.details, 'source');
@@ -374,20 +491,19 @@ export function explainException(ex: PipelineException): ExplainedException {
   const rowRef = ex.rowId ? `row ${ex.rowId}` : 'this row';
   const programType =
     typeof ex.details?.programType === 'string' ? ex.details.programType : undefined;
-  const serviceCode =
-    typeof ex.details?.serviceCode === 'string' ? ex.details.serviceCode : undefined;
   const missingFields = missingFieldLabels(ex.details);
   const step = typeof ex.details?.step === 'string' ? ex.details.step : undefined;
 
   switch (ex.code) {
-    case 'unknown_service_code':
+    case 'unknown_service_code': {
+      const sc = serviceCodeFieldsFromException(ex);
       return {
-        title: serviceCode
-          ? `Failed — invalid service code "${serviceCode}"`
-          : 'Failed — invalid service code',
-        problem: serviceCode
-          ? `Service Type "${serviceCode}" from ProviderSoft is not a valid HHA billing ServiceCodeID for this Program Type/contract.`
-          : 'Service Type from ProviderSoft does not match any HHA billing code for this contract.',
+        title: formatRejectedServiceCodeTitle({ ...sc, notFound: true }),
+        problem: sc.hhaServiceName && sc.serviceCode && sc.hhaServiceName !== sc.serviceCode
+          ? `ProviderSoft Service Type "${sc.serviceCode}" maps to HHA "${sc.hhaServiceName}", but that name/ID is not on this Program Type/contract billing codes.`
+          : sc.serviceCode
+            ? `Service Type "${sc.serviceCode}" from ProviderSoft is not a valid HHA billing ServiceCodeID for this Program Type/contract.`
+            : 'Service Type from ProviderSoft does not match any HHA billing code for this contract.',
         impact: isPreview
           ? 'Sandbox/dry-run only: on a live run HHA would reject CreatePatientAuthorization (Invalid ServiceCodeID / ErrorID=-74).'
           : 'The row was not sent to HHA.',
@@ -397,6 +513,7 @@ export function explainException(ex: PipelineException): ExplainedException {
         reportLabel: report,
         isPreview,
       };
+    }
 
     case 'missing_service_code':
       return {
@@ -411,7 +528,10 @@ export function explainException(ex: PipelineException): ExplainedException {
 
     case 'missing_field':
     case 'parse_error':
-      if (ex.reportKind === 'closed_cases' && ex.message.includes('discharge_service')) {
+      if (
+        ex.reportKind === 'discharge_service' ||
+        (ex.reportKind === 'closed_cases' && ex.message.includes('discharge_service'))
+      ) {
         return {
           title: 'Discharge row missing required fields',
           problem:
@@ -423,7 +543,7 @@ export function explainException(ex: PipelineException): ExplainedException {
           action:
             'Coordinator: open the case in ProviderSoft, confirm which service ended, and ensure the discharge service report row includes both Service Type (e.g. SI, OT HC Eval) and Service Begin Date exactly as shown on the active service line. Re-run the nightly sync.',
           rowRef,
-          reportLabel: 'Discharge service',
+          reportLabel: reportLabel('discharge_service'),
           isPreview,
         };
       }
@@ -521,12 +641,14 @@ export function explainException(ex: PipelineException): ExplainedException {
         };
       }
       if (fault.kind === 'invalid_service_code') {
-        const sc = serviceCode ? ` "${serviceCode}"` : '';
+        const sc = serviceCodeFieldsFromException(ex);
         return {
-          title: serviceCode
-            ? `Failed — invalid service code${sc}`
-            : fault.title,
-          problem: fault.problem,
+          title: formatRejectedServiceCodeTitle(sc),
+          problem: sc.serviceCodeId
+            ? `HHA rejected CreatePatientAuthorization for ServiceCodeID ${sc.serviceCodeId}${
+                sc.hhaServiceName ? ` ("${sc.hhaServiceName}")` : ''
+              }${sc.serviceCode ? ` mapped from ProviderSoft "${sc.serviceCode}"` : ''}.`
+            : fault.problem,
           impact: isPreview
             ? 'Sandbox/dry-run only: on a live run HHA would reject authorization for this service code.'
             : 'HHA rejected the authorization — ServiceCodeID is invalid for this contract/agency.',
@@ -538,13 +660,38 @@ export function explainException(ex: PipelineException): ExplainedException {
         };
       }
       if (fault.kind === 'service_code_missing') {
-        const sc = serviceCode ? ` "${serviceCode}"` : '';
+        const sc = serviceCodeFieldsFromException(ex);
         return {
-          title: `Failed — service type${sc} not found in HHA billing codes`,
+          title: formatRejectedServiceCodeTitle({ ...sc, notFound: true }),
           problem: fault.problem,
           impact: 'Authorization was not created — HHA needs a ServiceCodeID from GetBillingServiceCodes.',
           action:
             'Add or correct the Service Type in HHA billing codes for this contract (or fix the ProviderSoft Service Type text), then re-run.',
+          rowRef,
+          reportLabel: report,
+          isPreview,
+        };
+      }
+      if (fault.kind === 'invalid_zip') {
+        return {
+          title: fault.title,
+          problem: fault.problem,
+          impact: 'Patient was not created/updated — HHA rejected the zip code length.',
+          action:
+            'Confirm Child\'s Zip Code is a valid 5-digit ZIP (optional ZIP+4 like 11710-1234). A bare 5-digit zip is accepted once CreatePatient omits Zip4; re-run after that fix is deployed.',
+          rowRef,
+          reportLabel: report,
+          isPreview,
+        };
+      }
+      if (fault.kind === 'placement_overlap') {
+        return {
+          title: fault.title,
+          problem: fault.problem,
+          impact:
+            'Placement/contract was not added — HHA already has an overlapping active placement for this child/contract.',
+          action:
+            'Confirm the child is not already open on this contract for an overlapping date range. Adjust Service Begin Date or discharge the prior placement in HHA, then re-run.',
           rowRef,
           reportLabel: report,
           isPreview,
@@ -592,6 +739,20 @@ export function explainException(ex: PipelineException): ExplainedException {
           impact: 'EVV placeholder visit / session cannot be scheduled without a matching HHA caregiver.',
           action:
             'Confirm Provider Name on the ProviderSoft row matches an Active caregiver in HHA, then re-run.',
+          rowRef,
+          reportLabel: report,
+          isPreview,
+        };
+      }
+      if (fault.kind === 'provider_not_eligible') {
+        return {
+          title: fault.title,
+          problem: fault.problem,
+          impact: isPreview
+            ? 'Sandbox/dry-run only: on a live run HHA would reject CreateSchedule for this provider/service.'
+            : 'EVV placeholder visit was not created — HHA will not schedule this caregiver for that service type.',
+          action:
+            'In HHA, enable the required discipline for this caregiver, or assign a provider who is eligible for that service, then re-run.',
           rowRef,
           reportLabel: report,
           isPreview,
@@ -775,7 +936,7 @@ export function explainException(ex: PipelineException): ExplainedException {
           problem: cleanExceptionMessage(ex.message),
           impact: 'Session cannot be scheduled with the expected pay rate.',
           action:
-            'Confirm Pay Rate + Service Type in API Report produce a valid HHA pay code (e.g. OT72). Check GetCaregiverPayCodes.',
+            'Confirm Pay Rate + Service Type produce a valid HHA pay code (e.g. OT $72 or OT Group $34). Check GetCaregiverPayCodes.',
           rowRef,
           reportLabel: report,
           isPreview,
@@ -987,9 +1148,9 @@ export function exceptionReasonKey(ex: PipelineException): string {
   if (ex.code === 'hha_api_error') {
     const fault = parseHhaApiFault(ex.message);
     if (fault.kind === 'invalid_service_code' || fault.kind === 'service_code_missing') {
-      const serviceCode =
-        typeof ex.details?.serviceCode === 'string' ? ex.details.serviceCode.trim() : '';
-      return `hha:${fault.kind}:${serviceCode || '_blank'}|${report}|${code}`;
+      const sc = serviceCodeFieldsFromException(ex);
+      const idBit = sc.serviceCodeId || sc.serviceCode || '_blank';
+      return `hha:${fault.kind}:${idBit}|${report}|${code}`;
     }
     if (fault.kind !== 'unknown') {
       return `hha:${fault.kind}|${report}|${code}`;
@@ -1012,15 +1173,30 @@ export function exceptionReasonKey(ex: PipelineException): string {
 }
 
 function reasonDetailSuffix(ex: PipelineException): string | undefined {
-  const serviceCode =
-    typeof ex.details?.serviceCode === 'string' ? ex.details.serviceCode.trim() : '';
-  if (serviceCode && (ex.code === 'unknown_service_code' || ex.code === 'missing_service_code')) {
-    return `Service Type "${serviceCode}"`;
+  const sc = serviceCodeFieldsFromException(ex);
+  if (ex.code === 'unknown_service_code' || ex.code === 'missing_service_code') {
+    if (sc.serviceCodeId) {
+      return `ServiceCodeID ${sc.serviceCodeId}${sc.hhaServiceName ? ` ("${sc.hhaServiceName}")` : ''}${
+        sc.serviceCode ? ` · ProviderSoft "${sc.serviceCode}"` : ''
+      }`;
+    }
+    if (sc.serviceCode && sc.hhaServiceName && sc.hhaServiceName !== sc.serviceCode) {
+      return `ProviderSoft "${sc.serviceCode}" → HHA "${sc.hhaServiceName}"`;
+    }
+    if (sc.serviceCode) return `Service Type "${sc.serviceCode}"`;
   }
-  if (serviceCode && ex.code === 'hha_api_error') {
+  if (ex.code === 'hha_api_error') {
     const fault = parseHhaApiFault(ex.message);
     if (fault.kind === 'invalid_service_code' || fault.kind === 'service_code_missing') {
-      return `Service Type "${serviceCode}"`;
+      if (sc.serviceCodeId) {
+        return `ServiceCodeID ${sc.serviceCodeId}${sc.hhaServiceName ? ` ("${sc.hhaServiceName}")` : ''}${
+          sc.serviceCode ? ` · ProviderSoft "${sc.serviceCode}"` : ''
+        }`;
+      }
+      if (sc.serviceCode && sc.hhaServiceName && sc.hhaServiceName !== sc.serviceCode) {
+        return `ProviderSoft "${sc.serviceCode}" → HHA "${sc.hhaServiceName}"`;
+      }
+      if (sc.serviceCode) return `Service Type "${sc.serviceCode}"`;
     }
   }
   const programType =
@@ -1472,14 +1648,20 @@ export function formatReportsSummary(options: {
     lines.push(`  ${REPORT_LABELS.new_services}: not required to download`);
   }
 
-  if (options.closed) {
-    const dl = parse?.closed_cases !== undefined ? `${parse.closed_cases} downloaded — ` : '';
-    lines.push(`  ${REPORT_LABELS.closed_cases}: ${dl}${processorOutcomeSuffix(options.closed)}`);
-  } else if (parse?.closed_cases !== undefined) {
-    lines.push(
-      `  ${REPORT_LABELS.closed_cases}: ${parse.closed_cases} downloaded — not synced in this run`,
-    );
+  if (parse?.closed_cases !== undefined) {
+    if (parse.closed_cases === 0) {
+      lines.push(`  ${REPORT_LABELS.closed_cases}: 0 downloaded — no rows in closed report`);
+    } else if (options.closed) {
+      lines.push(
+        `  ${REPORT_LABELS.closed_cases}: ${parse.closed_cases} downloaded — ${processorOutcomeSuffix(options.closed)}`,
+      );
+    } else {
+      lines.push(
+        `  ${REPORT_LABELS.closed_cases}: ${parse.closed_cases} downloaded — not synced in this run`,
+      );
+    }
   } else {
+    // ClosedFn may still run with an empty artifact on sessions-only nights.
     lines.push(`  ${REPORT_LABELS.closed_cases}: not required to download`);
   }
 

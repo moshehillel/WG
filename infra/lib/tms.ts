@@ -33,11 +33,36 @@ export function addTherapyManagement(
     openaiModel?: string;
   },
 ): { apiUrl: lambda.FunctionUrl; userPool: cognito.UserPool; stateTable: dynamodb.Table } {
+  const spaOrigin = (props.spaOrigin || '').replace(/\/$/, '') || 'https://wgfront.netlify.app';
+  const spaHost = (() => {
+    try {
+      return new URL(spaOrigin).hostname;
+    } catch {
+      return 'wgfront.netlify.app';
+    }
+  })();
+  const cognitoFromEmail = (props.fromEmail || 'alerts@advancedautomations.net').trim();
+  const cognitoFromDomain = cognitoFromEmail.includes('@')
+    ? cognitoFromEmail.split('@')[1]
+    : 'advancedautomations.net';
+
   const userPool = new cognito.UserPool(scope, 'TmsUserPool', {
     userPoolName: 'white-glove-tms',
     selfSignUpEnabled: false,
     signInAliases: { email: true },
-    accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+    /**
+     * Email MFA cannot share the only recovery channel. Keep email first; SMS
+     * fallback when a user prefers email OTP MFA (needs a verified phone).
+     */
+    accountRecovery: cognito.AccountRecovery.EMAIL_AND_PHONE_WITHOUT_MFA,
+    featurePlan: cognito.FeaturePlan.ESSENTIALS,
+    // SES required for Cognito EMAIL_OTP MFA (Cognito default mailbox cannot).
+    email: cognito.UserPoolEmail.withSES({
+      fromEmail: cognitoFromEmail,
+      fromName: 'White Glove TMS',
+      replyTo: cognitoFromEmail,
+      sesVerifiedDomain: cognitoFromDomain,
+    }),
     // Match SPA copy: 8+ chars with upper, lower, number (no symbol required).
     passwordPolicy: {
       minLength: 8,
@@ -46,8 +71,28 @@ export function addTherapyManagement(
       requireDigits: true,
       requireSymbols: false,
     },
+    /**
+     * OPTIONAL at pool; app setting `requireMfa` enforces enroll-on-login.
+     * TOTP + email OTP available. SMS MFA stays OFF (Moshe decision Sep 2026).
+     * Passkeys (Windows Hello) with required user verification can satisfy MFA
+     * as a first factor via USER_AUTH / WEB_AUTHN.
+     */
+    mfa: cognito.Mfa.OPTIONAL,
+    mfaSecondFactor: { otp: true, sms: false, email: true },
+    signInPolicy: {
+      allowedFirstAuthFactors: { password: true, emailOtp: true, passkey: true },
+    },
+    passkeyRelyingPartyId: spaHost,
+    passkeyUserVerification: cognito.PasskeyUserVerification.REQUIRED,
+    deviceTracking: {
+      challengeRequiredOnNewDevice: true,
+      deviceOnlyRememberedOnUserPrompt: true,
+    },
     removalPolicy: cdk.RemovalPolicy.RETAIN,
   });
+  // Passkey + UV counts as MFA so USER_AUTH / WEB_AUTHN works for users who also have TOTP/email MFA.
+  const cfnUserPool = userPool.node.defaultChild as cognito.CfnUserPool;
+  cfnUserPool.webAuthnFactorConfiguration = 'MULTI_FACTOR_WITH_USER_VERIFICATION';
   const adminGroup = new cognito.CfnUserPoolGroup(scope, 'TmsAdminGroup', {
     userPoolId: userPool.userPoolId,
     groupName: 'Admin',
@@ -60,20 +105,15 @@ export function addTherapyManagement(
   void adminGroup;
   void therapistGroup;
 
-  const spaOrigin = (props.spaOrigin || '').replace(/\/$/, '');
   const webClient = userPool.addClient('TmsWebClient', {
-    authFlows: { userPassword: true, userSrp: true },
+    authFlows: { userPassword: true, userSrp: true, user: true },
     preventUserExistenceErrors: true,
-    ...(spaOrigin
-      ? {
-          oAuth: {
-            flows: { authorizationCodeGrant: true },
-            scopes: [cognito.OAuthScope.EMAIL, cognito.OAuthScope.OPENID, cognito.OAuthScope.PROFILE],
-            callbackUrls: [`${spaOrigin}/`],
-            logoutUrls: [`${spaOrigin}/`],
-          },
-        }
-      : {}),
+    oAuth: {
+      flows: { authorizationCodeGrant: true },
+      scopes: [cognito.OAuthScope.EMAIL, cognito.OAuthScope.OPENID, cognito.OAuthScope.PROFILE],
+      callbackUrls: [`${spaOrigin}/`],
+      logoutUrls: [`${spaOrigin}/`],
+    },
   });
 
   /**
@@ -174,6 +214,8 @@ export function addTherapyManagement(
     'cognito-idp:AdminRemoveUserFromGroup',
     'cognito-idp:AdminDisableUser',
     'cognito-idp:AdminDeleteUser',
+    'cognito-idp:ListUsers',
+    'cognito-idp:AdminSetUserMFAPreference',
   );
   fn.addToRolePolicy(
     new iam.PolicyStatement({

@@ -39,9 +39,33 @@ describe('processDischargeService', () => {
     });
 
     expect(result.succeeded).toBe(1);
+    expect(result.reportKind).toBe('discharge_service');
     expect(hha.dischargedPlacements.has(siPlacement.id)).toBe(true);
     const stillActive = (await hha.listPatientPlacements(patient.id)).filter((p) => !p.dischargeDate);
     expect(stillActive).toHaveLength(1);
+  });
+
+  it('labels failures as discharge_service (not Gluck closure / closed_cases)', async () => {
+    const result = await processDischargeService({
+      runId: 'run-label',
+      hha: new MockHhaClient(),
+      store: new InMemoryIdempotencyStore(),
+      dryRun: true,
+      rows: [
+        {
+          caseId: 'FERNANDO-1',
+          firstName: 'Fernando',
+          lastName: 'Test',
+          // Missing Service Type + Begin Date → billing guard fail
+          dischargeDate: '08/25/2026',
+        },
+      ],
+    });
+
+    expect(result.failed).toBe(1);
+    expect(result.reportKind).toBe('discharge_service');
+    expect(result.exceptions[0]?.reportKind).toBe('discharge_service');
+    expect(result.exceptions[0]?.message).toMatch(/^\[discharge_service\]/);
   });
 
   it('looks up via findPatient when patientExternalId equals Program Id (ErrorID=-56 footgun)', async () => {
@@ -134,7 +158,9 @@ describe('processDischargeService', () => {
 
     expect(second.failed).toBe(0);
     expect(second.skipped).toBe(1);
+    expect(second.reportKind).toBe('discharge_service');
     expect(second.exceptions[0]?.code).toBe('skipped_by_rule');
+    expect(second.exceptions[0]?.reportKind).toBe('discharge_service');
     expect(second.exceptions[0]?.details?.triageReason).toBe('already_discharged');
   });
 });

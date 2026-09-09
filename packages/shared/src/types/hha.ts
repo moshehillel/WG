@@ -24,6 +24,7 @@ export const HhaContractSchema = z.object({
   patientId: z.string(),
   contractExternalId: z.string().optional(),
   serviceCode: z.string().optional(),
+  serviceCodeId: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
 });
@@ -35,6 +36,16 @@ export const HhaAuthorizationSchema = z.object({
   authorizationNumber: z.string().optional(),
   serviceCode: z.string().optional(),
   contractId: z.string().optional(),
+  /** ProviderSoft Program Type — scopes Excel service-code aliases. */
+  programType: z.string().optional(),
+  /** HHA ServiceCodeID — required for CreatePatientAuthorization. */
+  serviceCodeId: z.string().optional(),
+  /** HHA DisciplineID — required for CreatePatientAuthorization. */
+  disciplineId: z.string().optional(),
+  /** HHA Period enum (Weekly, Monthly, Daily, Entire Period). */
+  period: z.string().optional(),
+  /** HHA Maximum units/hours per period. */
+  maximum: z.number().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   units: z.number().optional(),

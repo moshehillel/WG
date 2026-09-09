@@ -17,6 +17,10 @@ export function appSettingsFromStore(settings: AppSettings[] | undefined): AppSe
       : [],
     sessionImportMaxAgeDays:
       Number(row.sessionImportMaxAgeDays) > 0 ? Number(row.sessionImportMaxAgeDays) : 14,
+    yellowWarningsBlockImport:
+      typeof row.yellowWarningsBlockImport === 'boolean' ? row.yellowWarningsBlockImport : true,
+    requireMfa: typeof row.requireMfa === 'boolean' ? row.requireMfa : true,
+    allowSmsMfa: typeof row.allowSmsMfa === 'boolean' ? row.allowSmsMfa : false,
   };
 }
 

@@ -76,6 +76,15 @@ export {
   fetchCreateVisitDefaults,
   pickCreateVisitIds,
 } from './ent-create-visit.js';
+export {
+  mergePayCodeRows,
+  parsePayCodeReferenceXml,
+  resolveHhaPayCodeName,
+  resolvePayCodeIdFromCatalog,
+} from './pay-code-resolve.js';
+export type { PayCodeRow } from './pay-code-resolve.js';
+export { pickFirstPayCodeForDiscipline } from '@white-glove/shared';
+export type { FallbackPayCodePick } from '@white-glove/shared';
 export type {
   AcsEvvCallInfo,
   CreateVisitFromUnscheduledInput,

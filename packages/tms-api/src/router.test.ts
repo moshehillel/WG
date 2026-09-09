@@ -520,6 +520,51 @@ describe('TMS API weekly loop', () => {
     expect((selfBlocked.body as { error: string }).error).toMatch(/own admin/i);
   });
 
+  it('admin invite → /me.role is admin and never attaches providerId', async () => {
+    const { store, provider } = storeWithTherapist();
+    const invited = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/users',
+      headers: adminH,
+      query: {},
+      body: {
+        email: 'billu-admin@whiteglove.local',
+        displayName: 'Billu Admin',
+        role: 'admin',
+        // Malicious / mistaken provider link must be ignored for admin invites.
+        providerId: provider.id,
+        createProvider: true,
+        firstName: 'Billu',
+        lastName: 'Admin',
+        discipline: 'PT',
+      },
+    });
+    expect(invited.status).toBe(201);
+    const invitedUser = (invited.body as { user: { id: string; role: string; providerId: string; email: string } })
+      .user;
+    expect(invitedUser.role).toBe('admin');
+    expect(invitedUser.providerId || '').toBe('');
+    expect(store.data.providers.some((p) => p.userId === invitedUser.id)).toBe(false);
+
+    const me = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/me',
+      headers: {
+        'x-tms-role': 'therapist',
+        'x-tms-email': 'billu-admin@whiteglove.local',
+      },
+      query: {},
+      body: {},
+    });
+    expect(me.status).toBe(200);
+    const meBody = me.body as {
+      user: { role: string; providerId: string };
+      provider: { id: string } | null | undefined;
+    };
+    expect(meBody.user.role).toBe('admin');
+    expect(meBody.provider == null).toBe(true);
+  });
+
   it('hard-deletes leftover deactivated admins and keeps therapist deactivate', async () => {
     const { store } = storeWithTherapist();
     const leftover = store.upsertUser({
@@ -865,6 +910,38 @@ describe('TMS API weekly loop', () => {
     } finally {
       if (saved === undefined) delete process.env.TMS_ALLOW_DEV_HEADERS;
       else process.env.TMS_ALLOW_DEV_HEADERS = saved;
+    }
+  });
+
+  it('allows Luna chat without Cognito (guest) — not 401', async () => {
+    const saved = process.env.TMS_ALLOW_DEV_HEADERS;
+    const savedKey = process.env.OPENAI_API_KEY;
+    const savedArn = process.env.OPENAI_SECRET_ARN;
+    delete process.env.TMS_ALLOW_DEV_HEADERS;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_SECRET_ARN;
+    try {
+      const { store } = storeWithTherapist();
+      const res = await handleTmsRequest(store, {
+        method: 'POST',
+        path: '/support/luna/chat',
+        headers: { 'x-forwarded-for': '203.0.113.50' },
+        query: {},
+        body: {
+          messages: [{ role: 'user', content: 'I cannot sign in' }],
+          pageUrl: 'https://wgfront.netlify.app/',
+        },
+      });
+      // Guest path is public; without OpenAI configured we get 503, never 401.
+      expect(res.status).toBe(503);
+      expect(String((res.body as { error?: string }).error || '')).toMatch(/openai|unavailable/i);
+    } finally {
+      if (saved === undefined) delete process.env.TMS_ALLOW_DEV_HEADERS;
+      else process.env.TMS_ALLOW_DEV_HEADERS = saved;
+      if (savedKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = savedKey;
+      if (savedArn === undefined) delete process.env.OPENAI_SECRET_ARN;
+      else process.env.OPENAI_SECRET_ARN = savedArn;
     }
   });
 
@@ -1442,6 +1519,11 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     expect(detail.status).toBe(200);
     expect((detail.body as { school: { id: string } }).school.id).toBe(school.id);
     expect((detail.body as { calendarConfigured: boolean }).calendarConfigured).toBe(false);
+    expect((detail.body as { setupIncomplete: boolean }).setupIncomplete).toBe(true);
+    expect((detail.body as { setupMissingAddress: boolean }).setupMissingAddress).toBe(true);
+    expect((detail.body as { setupIncompleteMessage: string }).setupIncompleteMessage).toMatch(
+      /calendar|address/i,
+    );
     expect((detail.body as { calendarFallbackWarning: string }).calendarFallbackWarning).toMatch(
       /falling back to Mon–Fri/i,
     );
@@ -1482,6 +1564,10 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     expect((detailAfter.body as { calendarFallbackWarning: string }).calendarFallbackWarning).toBe(
       '',
     );
+    // Address still missing → school remains incomplete until address is filled.
+    expect((detailAfter.body as { setupIncomplete: boolean }).setupIncomplete).toBe(true);
+    expect((detailAfter.body as { setupMissingCalendar: boolean }).setupMissingCalendar).toBe(false);
+    expect((detailAfter.body as { setupMissingAddress: boolean }).setupMissingAddress).toBe(true);
 
     const list = await handleTmsRequest(store, {
       method: 'GET',
@@ -1494,6 +1580,81 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     const byId = (list.body as { calendarsBySchoolId: Record<string, { yearStart: string }> })
       .calendarsBySchoolId;
     expect(byId[school.id]?.yearStart).toBe('2025-09-02');
+    const setup = (list.body as {
+      setupBySchoolId: Record<string, { incomplete: boolean; missingAddress: boolean }>;
+    }).setupBySchoolId;
+    expect(setup[school.id]?.incomplete).toBe(true);
+    expect(setup[school.id]?.missingAddress).toBe(true);
+  });
+
+  it('parses school calendar PDF text into off days and can apply', async () => {
+    const { store } = storeWithTherapist();
+    const school = store.data.schools[0]!;
+    store.upsertSchoolCalendar({
+      schoolId: school.id,
+      yearStart: '2025-09-01',
+      yearEnd: '2026-06-20',
+      offDays: ['2025-11-27'],
+    });
+
+    const calendarText = `
+      Sample District 2025-2026
+      First Day of School: September 2, 2025
+      Last Day of School: June 25, 2026
+      Thanksgiving Recess November 27–28, 2025
+      Winter Recess Dec 24 – Jan 2, 2026
+    `;
+
+    const preview = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/schools/${school.id}/calendar/parse`,
+      headers: adminH,
+      query: {},
+      body: { pdfText: calendarText },
+    });
+    expect(preview.status).toBe(200);
+    const body = preview.body as {
+      applied: boolean;
+      parsed: { offDays: string[]; yearStart: string; yearEnd: string };
+      proposed: { offDays: string[]; yearStart: string; yearEnd: string };
+    };
+    expect(body.applied).toBe(false);
+    expect(body.parsed.yearStart).toBe('2025-09-02');
+    expect(body.parsed.yearEnd).toBe('2026-06-25');
+    expect(body.parsed.offDays).toEqual(
+      expect.arrayContaining(['2025-11-27', '2025-11-28', '2025-12-24', '2026-01-02']),
+    );
+    expect(body.proposed.offDays).toContain('2025-11-27');
+
+    const applied = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/schools/${school.id}/calendar/parse`,
+      headers: adminH,
+      query: {},
+      body: { pdfText: calendarText, apply: true },
+    });
+    expect(applied.status).toBe(200);
+    const saved = (applied.body as { calendar: { offDays: string[]; yearStart: string } }).calendar;
+    expect(saved.yearStart).toBe('2025-09-02');
+    expect(saved.offDays.length).toBeGreaterThanOrEqual(4);
+    expect(store.schoolCalendarForSchool(school.id)?.offDays).toEqual(
+      expect.arrayContaining(['2025-12-24', '2026-01-02']),
+    );
+  });
+
+  it('rejects scanned school calendar PDF with clear no-text error', async () => {
+    const { store } = storeWithTherapist();
+    const school = store.data.schools[0]!;
+    const emptyPdf = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n', 'utf8');
+    const res = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/schools/${school.id}/calendar/parse`,
+      headers: adminH,
+      query: {},
+      body: { pdfBase64: emptyPdf.toString('base64') },
+    });
+    expect(res.status).toBe(400);
+    expect((res.body as { error: string }).error).toMatch(/scanned|text/i);
   });
 
   it('upload cycle over-check uses school calendar off-days', async () => {
@@ -1783,6 +1944,112 @@ describe('TMS upload-sessions errors', () => {
     expect(body.skipped.length).toBeGreaterThanOrEqual(1);
     expect(body.saved.some((s) => s.dateOfService === '09/02/2026')).toBe(true);
     expect(store.data.sessions).toHaveLength(2);
+  });
+
+  it('imports missed sessions as missed without CPT, signature, or service note', async () => {
+    const { store, provider } = storeWithTherapist();
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 2x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    const res = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-08-31',
+        pdfText: [
+          'Student Name: Odne, Aiden',
+          'Service Provider: Pat Lee',
+          'Service: PT School',
+          '09/01/2026 9:00 am 9:30 am',
+          'Student Absence: student not in school',
+        ].join('\n'),
+      },
+    });
+    expect(res.status).toBe(200);
+    const body = res.body as { ok: boolean; saved: unknown[]; failed: Array<{ error: string }>; errors: string[] };
+    expect(body.ok).toBe(true);
+    expect(body.saved).toHaveLength(1);
+    expect(body.failed || []).toHaveLength(0);
+    expect(store.data.sessions).toHaveLength(1);
+    expect(store.data.sessions[0]?.attendance).toBe('missed');
+    expect(store.data.sessions[0]?.notes || '').toMatch(/Student Absence|not in school/i);
+  });
+
+  it('does not treat missed and attended at the same slot as duplicates', async () => {
+    const { store, provider } = storeWithTherapist();
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 2x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    const missedFirst = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-08-31',
+        pdfText: [
+          'Student Name: Odne, Aiden',
+          'Service Provider: Pat Lee',
+          'Service: PT School',
+          '09/01/2026 9:00 am 9:30 am',
+          'Student Absence: student not in school',
+        ].join('\n'),
+      },
+    });
+    expect(missedFirst.status).toBe(200);
+    expect((missedFirst.body as { ok: boolean }).ok).toBe(true);
+    expect(store.data.sessions[0]?.attendance).toBe('missed');
+
+    const attendedSameSlot = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-08-31',
+        pdfText: [
+          'Student Name: Odne, Aiden',
+          'Service Provider: Pat Lee',
+          'Service: PT School',
+          '09/01/2026 9:00 am 9:30 am',
+          'Service Provided: balance work in gym',
+          '97110x2',
+          signedBlock('Sep 1 2026 9:35AM'),
+        ].join('\n'),
+      },
+    });
+    expect(attendedSameSlot.status).toBe(200);
+    const body = attendedSameSlot.body as {
+      ok: boolean;
+      saved: Array<{ attendance?: string }>;
+      skipped: unknown[];
+      failed: Array<{ error: string }>;
+    };
+    expect(body.ok).toBe(true);
+    expect(body.skipped).toHaveLength(0);
+    expect(body.saved).toHaveLength(1);
+    expect(store.data.sessions).toHaveLength(2);
+    const statuses = store.data.sessions.map((s) => s.attendance).sort();
+    expect(statuses).toEqual(['attended', 'missed']);
   });
 
   it('fails whole import when any CPT session is under-covered (all-or-nothing)', async () => {
@@ -2823,5 +3090,283 @@ describe('TMS solo-group / group-mandate note locker', () => {
     const body = blocked.body as { ok: boolean; failed: Array<{ error: string }> };
     expect(body.ok).toBe(false);
     expect(body.failed.some((f) => /no (?:other )?peer was available|no partner available|seen individually/i.test(f.error))).toBe(true);
+  });
+
+  it('/me schools are unique caseload schoolIds for that provider only', async () => {
+    const { store, provider } = storeWithTherapist();
+    const mine = store.data.schools[0]!;
+    const other = store.upsertSchool({
+      id: newId(),
+      name: 'Other District',
+      district: 'Other',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const unassignedSchool = store.upsertSchool({
+      id: newId(),
+      name: 'Unassigned Campus',
+      district: 'UA',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+
+    const myStudent = store.upsertStudent({
+      id: newId(),
+      firstName: 'My',
+      lastName: 'Kid',
+      dob: '01/01/2018',
+      schoolId: mine.id,
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const otherProvider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Other',
+      lastName: 'Therapist',
+      discipline: 'OT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const otherStudent = store.upsertStudent({
+      id: newId(),
+      firstName: 'Their',
+      lastName: 'Kid',
+      dob: '01/01/2018',
+      schoolId: other.id,
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const orphanStudent = store.upsertStudent({
+      id: newId(),
+      firstName: 'Orphan',
+      lastName: 'Kid',
+      dob: '01/01/2018',
+      schoolId: unassignedSchool.id,
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+
+    store.upsertMandate({
+      id: newId(),
+      studentId: myStudent.id,
+      providerId: provider.id,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      frequencyPerWeek: 1,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: otherStudent.id,
+      providerId: otherProvider.id,
+      serviceType: 'OT School',
+      discipline: 'OT',
+      frequencyPerWeek: 1,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: orphanStudent.id,
+      providerId: '',
+      serviceType: 'PT School',
+      discipline: 'PT',
+      frequencyPerWeek: 1,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+
+    const me = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/me',
+      headers: thH,
+      query: {},
+      body: {},
+    });
+    expect(me.status).toBe(200);
+    const schools = (me.body as { schools: Array<{ id: string; name: string }> }).schools;
+    expect(schools.map((s) => s.id)).toEqual([mine.id]);
+    expect(schools.some((s) => s.id === other.id)).toBe(false);
+    expect(schools.some((s) => s.id === unassignedSchool.id)).toBe(false);
+
+    const adminMe = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/me',
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(adminMe.status).toBe(200);
+    // Admins have no provider profile → empty schools list from /me (admin UI uses /admin/schools).
+    expect((adminMe.body as { schools: unknown[] }).schools).toEqual([]);
+  });
+});
+
+describe('TMS MFA org policy', () => {
+  it('persists requireMfa false and returns it on /me and /admin/settings', async () => {
+    const { store } = storeWithTherapist();
+    let persisted = 0;
+    const off = await handleTmsRequest(
+      store,
+      {
+        method: 'POST',
+        path: '/admin/settings',
+        headers: adminH,
+        query: {},
+        body: { requireMfa: false },
+      },
+      {
+        persistNow: async () => {
+          persisted += 1;
+        },
+      },
+    );
+    expect(off.status).toBe(200);
+    expect(persisted).toBe(1);
+    const offBody = off.body as {
+      settings: { requireMfa: boolean };
+      mfaClear?: { skipped?: boolean; pending?: boolean };
+    };
+    expect(offBody.settings.requireMfa).toBe(false);
+    // Cognito clear is fire-and-forget so Netlify always gets requireMfa:false quickly.
+    expect(offBody.mfaClear?.pending).toBe(true);
+
+    // String "false" must stick OFF (proxies / form encodings) — not fall through to prev true.
+    store.data.settings = [{ ...store.data.settings[0]!, requireMfa: true }];
+    const offStr = await handleTmsRequest(
+      store,
+      {
+        method: 'POST',
+        path: '/admin/settings',
+        headers: adminH,
+        query: {},
+        body: { requireMfa: 'false' } as Record<string, unknown>,
+      },
+      {
+        persistNow: async () => {
+          persisted += 1;
+        },
+        readLiveSettings: async () => ({
+          id: 'global',
+          sessionImportAgeLockEnabled: true,
+          sessionImportMaxAgeDays: 14,
+          yellowWarningsBlockImport: true,
+          requireMfa: true,
+          allowSmsMfa: false,
+          unlockedWeekIds: [],
+          unlockedProviderIds: [],
+        }),
+      },
+    );
+    expect((offStr.body as { settings: { requireMfa: boolean } }).settings.requireMfa).toBe(false);
+
+    const getAdmin = await handleTmsRequest(
+      store,
+      {
+        method: 'GET',
+        path: '/admin/settings',
+        headers: adminH,
+        query: {},
+        body: {},
+      },
+      {
+        // Simulate Scan still stale-true while live GetItem is false.
+        readLiveSettings: async () => ({
+          id: 'global',
+          sessionImportAgeLockEnabled: true,
+          sessionImportMaxAgeDays: 14,
+          yellowWarningsBlockImport: true,
+          requireMfa: false,
+          allowSmsMfa: false,
+          unlockedWeekIds: [],
+          unlockedProviderIds: [],
+        }),
+      },
+    );
+    expect((getAdmin.body as { settings: { requireMfa: boolean } }).settings.requireMfa).toBe(false);
+
+    const me = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/me',
+      headers: thH,
+      query: {},
+      body: {},
+    });
+    expect((me.body as { settings: { requireMfa: boolean } }).settings.requireMfa).toBe(false);
+
+    // Other settings writes must not flip MFA back on when omit requireMfa.
+    // Simulate stale in-memory requireMfa:true while live Dynamo (readLiveSettings) still has false.
+    store.data.settings = [{ ...store.data.settings[0]!, requireMfa: true }];
+    const age = await handleTmsRequest(
+      store,
+      {
+        method: 'POST',
+        path: '/admin/settings',
+        headers: adminH,
+        query: {},
+        body: { sessionImportAgeLockEnabled: false },
+      },
+      {
+        readLiveSettings: async () => ({
+          id: 'global',
+          sessionImportAgeLockEnabled: true,
+          sessionImportMaxAgeDays: 14,
+          yellowWarningsBlockImport: true,
+          requireMfa: false,
+          allowSmsMfa: false,
+          unlockedWeekIds: [],
+          unlockedProviderIds: [],
+        }),
+      },
+    );
+    expect((age.body as { settings: { requireMfa: boolean; sessionImportAgeLockEnabled: boolean } }).settings.requireMfa).toBe(
+      false,
+    );
+    expect(
+      (age.body as { settings: { sessionImportAgeLockEnabled: boolean } }).settings.sessionImportAgeLockEnabled,
+    ).toBe(false);
+
+    // Bulk /admin/mfa/disable-all was removed — org MFA off is only via Require MFA policy.
+    const disableAllGone = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mfa/disable-all',
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(disableAllGone.status).toBe(404);
+    expect(persisted).toBe(2);
   });
 });

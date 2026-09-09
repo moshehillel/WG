@@ -46,23 +46,38 @@ const ALLOWED_KINDS = new Set([
   'caregiver_codes',
 ]);
 
-/** Live dryRun=false schedules controlled by the dashboard toggle (not Monday preview). */
+/** Live dryRun=false schedules — toggled independently (not Monday preview). */
 const LIVE_SCHEDULE_DEFS = [
   {
     envKey: 'LIVE_SCHEDULE_NIGHTLY_RULE',
     id: 'nightly_cases',
-    label: 'Nightly case reports',
+    label: 'Live cases schedule',
     detail:
-      'Gluck open/closure, new services, discharge — every day ~5pm Eastern (dryRun:false)',
+      'Gluck open/closure, new services, discharge — every day ~5pm Eastern (dryRun:false). No API Report.',
   },
   {
     envKey: 'LIVE_SCHEDULE_TUESDAY_RULE',
     id: 'tuesday_sessions',
-    label: 'Tuesday sessions',
+    label: 'API / sessions schedule',
     detail:
       'Verified visits (API Report) + caregiver codes — Tuesday ~11pm Eastern (dryRun:false)',
   },
 ] as const;
+
+type LiveScheduleId = (typeof LIVE_SCHEDULE_DEFS)[number]['id'];
+
+const LIVE_SCHEDULE_IDS = new Set<string>(LIVE_SCHEDULE_DEFS.map((d) => d.id));
+
+function parseScheduleIds(raw: unknown): LiveScheduleId[] | null {
+  if (!Array.isArray(raw) || !raw.length) return null;
+  const ids: LiveScheduleId[] = [];
+  for (const item of raw) {
+    const id = String(item ?? '').trim();
+    if (!LIVE_SCHEDULE_IDS.has(id)) return null;
+    if (!ids.includes(id as LiveScheduleId)) ids.push(id as LiveScheduleId);
+  }
+  return ids.length ? ids : null;
+}
 
 function json(statusCode: number, body: unknown) {
   return {
@@ -202,29 +217,51 @@ async function loadLiveScheduleStatus() {
   );
 
   const known = rules.filter((r) => r.state === 'ENABLED' || r.state === 'DISABLED');
-  const enabled = known.length > 0 && known.every((r) => r.state === 'ENABLED');
+  const enabledCount = known.filter((r) => r.state === 'ENABLED').length;
+  const allEnabled = known.length > 0 && enabledCount === known.length;
+  const anyEnabled = enabledCount > 0;
+  const byId = Object.fromEntries(rules.map((r) => [r.id, r.state === 'ENABLED']));
+
+  const parts: string[] = [];
+  for (const rule of rules) {
+    if (rule.state === 'ENABLED') parts.push(`${rule.label}: ON`);
+    else if (rule.state === 'DISABLED') parts.push(`${rule.label}: OFF`);
+    else parts.push(`${rule.label}: unknown`);
+  }
 
   return {
     configured: true,
-    enabled,
+    /** True only when every live schedule is ENABLED (legacy). Prefer per-rule state. */
+    enabled: allEnabled,
+    anyEnabled,
+    nightlyCasesEnabled: byId.nightly_cases === true,
+    tuesdaySessionsEnabled: byId.tuesday_sessions === true,
     rules,
-    note: enabled
-      ? 'Live EventBridge schedules are ON (nightly cases + Tuesday sessions).'
-      : 'Live EventBridge schedules are OFF.',
+    note: parts.length ? parts.join(' · ') : 'No live schedule rules found.',
     excludes:
-      'Monday dry-run preview (MondayPreviewSchedule) is not controlled by this toggle.',
+      'Monday dry-run preview (MondayPreviewSchedule) is not controlled by these toggles. Cases and API/sessions are independent.',
   };
 }
 
 async function setLiveSchedules(body: {
   enabled?: boolean;
   confirm?: string;
+  /** One or more of: nightly_cases, tuesday_sessions. Required. */
+  scheduleIds?: string[];
 }) {
   const wantEnabled = body.enabled === true;
   const expectedConfirm = wantEnabled ? 'SCHEDULE_ON' : 'SCHEDULE_OFF';
   if (body.confirm !== expectedConfirm) {
     return json(400, {
       error: `Safety check failed — POST body must include confirm:"${expectedConfirm}" and enabled:${wantEnabled}`,
+    });
+  }
+
+  const scheduleIds = parseScheduleIds(body.scheduleIds);
+  if (!scheduleIds) {
+    return json(400, {
+      error:
+        'Provide scheduleIds: ["nightly_cases"] and/or ["tuesday_sessions"] (cases and API schedules are independent)',
     });
   }
 
@@ -235,7 +272,15 @@ async function setLiveSchedules(body: {
     });
   }
 
-  for (const rule of configured) {
+  const selected = configured.filter((r) => scheduleIds.includes(r.id as LiveScheduleId));
+  if (selected.length !== scheduleIds.length) {
+    const missing = scheduleIds.filter((id) => !configured.some((r) => r.id === id));
+    return json(503, {
+      error: `Schedule rule(s) not configured on this Lambda: ${missing.join(', ')}`,
+    });
+  }
+
+  for (const rule of selected) {
     if (wantEnabled) {
       await eventbridge.send(new EnableRuleCommand({ Name: rule.name }));
     } else {
@@ -252,12 +297,14 @@ async function setLiveSchedules(body: {
   }
 
   const status = await loadLiveScheduleStatus();
+  const labels = selected.map((r) => r.label).join(' + ');
   return json(200, {
     ok: true,
     ...status,
+    updatedScheduleIds: selected.map((r) => r.id),
     message: wantEnabled
-      ? 'Live schedules enabled (nightly cases + Tuesday sessions).'
-      : 'Live schedules disabled.',
+      ? `Enabled: ${labels}.`
+      : `Disabled: ${labels}.`,
   });
 }
 
@@ -512,7 +559,11 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
 
     if (action === 'setLiveSchedules' && event.requestContext.http.method === 'POST') {
       const body = event.body
-        ? (JSON.parse(event.body) as { enabled?: boolean; confirm?: string })
+        ? (JSON.parse(event.body) as {
+            enabled?: boolean;
+            confirm?: string;
+            scheduleIds?: string[];
+          })
         : {};
       return await setLiveSchedules(body);
     }

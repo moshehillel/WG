@@ -1632,6 +1632,7 @@ export const SERVICE_CODE_ALIAS_MAP: readonly ServiceCodeAlias[] = [
   {
     programType: "NYS Medical Indemnity Fund Therapy",
     providerSoftCode: "PT NYS EVAL 107",
+    // Sheet row 357: "PT Eval 97162 107" (no dash). Matching is dash/space tolerant.
     hhaServiceCodeName: "PT Eval 97162 107",
   },
   {

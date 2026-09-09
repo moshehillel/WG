@@ -37,6 +37,19 @@ describe('parseOpenedCases', () => {
     expect(rows[1].serviceCode).toBe('PCA001');
   });
 
+  it('maps Pay Rate on opened / new_services rows', () => {
+    const csv = [
+      'Program Id,Child\'s Name,Service Type,Pay Rate,Program Type',
+      'C1,Smith Ann,OT CHHA,72.0000,Americare Certified',
+    ].join('\n');
+    const rows = parseOpenedCases(csv);
+    expect(rows[0]).toMatchObject({
+      caseId: 'C1',
+      serviceCode: 'OT CHHA',
+      payRate: '72.0000',
+    });
+  });
+
   it('maps Gluck open.csv headers', () => {
     const csv = readFileSync(path.join(samplesDir, 'gluck-open.csv'), 'utf8');
     const rows = parseOpenedCases(csv);

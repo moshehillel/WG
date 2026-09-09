@@ -5,6 +5,7 @@ import {
 import {
   getEnv,
   HHA_PRODUCTION_SOAP_URL,
+  HHA_SANDBOX_SOAP_URL,
   parseOfficeIds,
   resetEnvCache,
   type Env,
@@ -67,13 +68,22 @@ export async function applyHhaSecretFromArn(env: Env = getEnv()): Promise<Env> {
       process.env.HHA_PRODUCTION_BASE_URL?.trim() ||
       HHA_PRODUCTION_SOAP_URL;
     const baseUrl = parsed.baseUrl?.trim() ?? '';
-    const useProduction =
-      process.env.HHA_USE_PRODUCTION === 'true' ||
-      !baseUrl ||
-      baseUrl.includes('CHANGE_ME') ||
-      /sandbox1\.hhaexchange\.com/i.test(baseUrl);
-    process.env.HHA_BASE_URL = useProduction ? prodUrl : baseUrl;
-    if (useProduction) process.env.HHA_ALLOW_PRODUCTION = 'true';
+    const sandboxUrl =
+      process.env.HHA_SANDBOX_BASE_URL?.trim() ||
+      (/sandbox1\.hhaexchange\.com/i.test(baseUrl) ? baseUrl : '') ||
+      HHA_SANDBOX_SOAP_URL;
+    /**
+     * Explicit flag only. Live secret often stores production in `baseUrl` —
+     * when HHA_USE_PRODUCTION is not true, always use sandbox SOAP (same creds).
+     */
+    const useProduction = process.env.HHA_USE_PRODUCTION === 'true';
+    if (useProduction) {
+      process.env.HHA_BASE_URL = prodUrl;
+      process.env.HHA_ALLOW_PRODUCTION = 'true';
+    } else {
+      process.env.HHA_BASE_URL = sandboxUrl;
+      delete process.env.HHA_ALLOW_PRODUCTION;
+    }
     if (parsed.apiKey) process.env.HHA_API_KEY = parsed.apiKey;
     if (parsed.appName) process.env.HHA_APP_NAME = parsed.appName;
     if (parsed.appSecret) process.env.HHA_APP_SECRET = parsed.appSecret;

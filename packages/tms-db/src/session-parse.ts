@@ -28,8 +28,10 @@ export interface ParsedSessionNote {
 }
 
 const MISSED_RE =
-  /\b(student absence|student not available|student not in school|absent|missed|cancell?ed)\b/i;
+  /\b(provider absence|student absence|student not available|student not in school|student absent|absent|missed|cancell?ed|no[\s-]?show|did not attend|not present|refused)\b/i;
 const MAKEUP_RE = /\b(makeup|make[\s-]?up)\b/i;
+const FRONTLINE_ABSENCE_LABEL_RE =
+  /(?:Provider\s+Absence|Student\s+Absence|Student\s+Not\s+Available)\s*:/i;
 
 export function attendanceFromNotes(
   notes: string,
@@ -37,10 +39,22 @@ export function attendanceFromNotes(
   timeOut: string,
 ): ParsedSessionNote['attendance'] {
   const n = String(notes || '');
-  if (/student absence|student not available|student not in school|student absent/i.test(n)) {
+  if (
+    /provider absence|student absence|student not available|student not in school|student absent/i.test(
+      n,
+    )
+  ) {
     return 'missed';
   }
-  if (MAKEUP_RE.test(n)) return 'makeup';
+  // Makeup wins only when it is clearly a makeup session (not "will make up later" on an absence).
+  if (MAKEUP_RE.test(n) && !MISSED_RE.test(n)) return 'makeup';
+  if (
+    MAKEUP_RE.test(n) &&
+    /make[\s-]?up\s+(?:for|session)/i.test(n) &&
+    !/provider absence|student absence|student not available|student absent/i.test(n)
+  ) {
+    return 'makeup';
+  }
   if (MISSED_RE.test(n) && !/make[\s-]?up session/i.test(n)) return 'missed';
   if (timeIn && timeOut) return 'attended';
   return 'missed';
@@ -52,10 +66,15 @@ export function cancellationFromNotes(
 ): string {
   if (attendance !== 'missed') return '';
   const n = String(notes || '');
+  if (/provider absence/i.test(n)) return 'Provider Absence';
   if (/not available/i.test(n)) return 'Student Not Available';
   if (/not in school/i.test(n)) return 'Student not in school';
   if (/cancell?ed/i.test(n)) return 'Cancelled';
-  return 'Student Absent';
+  if (/no[\s-]?show/i.test(n)) return 'No show';
+  if (/did not attend|not present|refused/i.test(n)) return 'Student Absent';
+  if (/student absence|student absent|\babsent\b|\bmissed\b/i.test(n)) return 'Student Absent';
+  // Do not invent a reason when the miss note has none — upload locker requires one.
+  return '';
 }
 
 function cleanStudentName(raw: string): string {
@@ -262,24 +281,41 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
         .trim()
         .slice(0, 800);
     }
+    // Missed Therapist Activity rows often have no CPT — pull a short absence label when present.
+    // Leave notes empty otherwise; attendance still reads the full slice below.
+    if (!notes) {
+      const absenceHit = slice.match(
+        /\b((?:Provider\s+Absence|Student\s+Absence|Student\s+Not\s+Available|Student\s+Absent|Absent|Missed|Cancelled|Canceled|No[\s-]?Show)[:\s][\s\S]*?)(?=\s*Notes\s+Entered:|\s*Signed:|$)/i,
+      );
+      if (absenceHit?.[1]) {
+        notes = absenceHit[1].replace(/\s+/g, ' ').trim().slice(0, 800);
+      }
+    }
     if (makeupFor) {
       notes = `Make up for: ${makeupFor}${notes ? ` ${notes}` : ''}`.trim();
     }
 
+    // Use notes || slice so absence keywords still classify as missed when note text is sparse.
     const attendance: ParsedSessionNote['attendance'] = makeupFor
       ? 'makeup'
-      : attendanceFromNotes(notes, hit.beginTime, hit.endTime);
+      : attendanceFromNotes(notes || slice, hit.beginTime, hit.endTime);
+    // Missed notes must not keep invented/clock times from the activity header.
+    const beginTime = attendance === 'missed' ? '' : hit.beginTime;
+    const endTime = attendance === 'missed' ? '' : hit.endTime;
 
-    const cpt = parseCptCoverage(slice);
+    const cpt =
+      attendance === 'missed'
+        ? { codes: [] as string[], totalUnits: 0, procedures: [] as string[] }
+        : parseCptCoverage(slice);
     rows.push({
       studentName,
       providerName,
       schoolName,
       dateOfService: hit.dateOfService,
-      beginTime: hit.beginTime,
-      endTime: hit.endTime,
+      beginTime,
+      endTime,
       attendance,
-      cancelReason: cancellationFromNotes(notes, attendance),
+      cancelReason: cancellationFromNotes(notes || slice, attendance),
       notes,
       serviceType: mapped.serviceType,
       location: location || schoolName,
@@ -292,6 +328,118 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
     });
   }
   return rows;
+}
+
+/** True when this slash-date is a Frontline service-date row (not From/To/DOB/makeup). */
+function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
+  const before = blob.slice(Math.max(0, idx - 48), idx);
+  if (/\bFrom:\s*$/i.test(before) || /\bTo:\s*$/i.test(before) || /D\.?O\.?B\.?\s*$/i.test(before)) {
+    return false;
+  }
+  if (
+    /(?:makeup for|make[\s-]?up for|missed(?:\s+session)?(?:\s+on)?|original(?:\s+date|\s+dos)?|for(?:\s+date)?)\s*$/i.test(
+      before,
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/** End of this Frontline session block: next service date, next student, or EOF. */
+function frontlineSessionBlockEnd(blob: string, startIdx: number, dateToken: string): number {
+  // Must start after the full current DOS token — otherwise `09/01/2026` yields a
+  // false "next" hit on `9/01/2026` and the slice collapses to the leading `0`.
+  const searchFrom = startIdx + Math.max(String(dateToken || '').length, 1);
+  let nextDate = blob.length;
+  const dateRe = /(\d{1,2}\/\d{1,2}\/\d{2,4})/g;
+  dateRe.lastIndex = searchFrom;
+  let m: RegExpExecArray | null;
+  while ((m = dateRe.exec(blob))) {
+    const idx = m.index ?? -1;
+    if (idx < searchFrom || !isFrontlineServiceDateHit(blob, idx)) continue;
+    nextDate = idx;
+    break;
+  }
+  const nextStudent = blob.indexOf('Student Name:', searchFrom);
+  if (nextStudent >= searchFrom && nextStudent < nextDate) return nextStudent;
+  return nextDate;
+}
+
+function normClockKey(t: string): string {
+  return String(t || '')
+    .toLowerCase()
+    .replace(/\./g, '')
+    .replace(/\s+/g, '');
+}
+
+function mergeCptParts(
+  a: Pick<ParsedSessionNote, 'cptCodes' | 'cptUnits' | 'cptProcedures'>,
+  b: Pick<ParsedSessionNote, 'cptCodes' | 'cptUnits' | 'cptProcedures'>,
+): Pick<ParsedSessionNote, 'cptCodes' | 'cptUnits' | 'cptProcedures'> {
+  const byCode = new Map<string, number>();
+  const ingest = (codes: string[], procedures: string[]) => {
+    for (let i = 0; i < codes.length; i++) {
+      const code = String(codes[i] || '').trim();
+      if (!code) continue;
+      const fromProc = (procedures[i] || '').match(/x(\d+)/i)?.[1];
+      const units = Math.max(1, Number(fromProc) || 1);
+      byCode.set(code, Math.max(byCode.get(code) || 0, units));
+    }
+  };
+  ingest(a.cptCodes || [], a.cptProcedures || []);
+  ingest(b.cptCodes || [], b.cptProcedures || []);
+  // Also parse procedure labels that may not align 1:1 with codes arrays.
+  for (const label of [...(a.cptProcedures || []), ...(b.cptProcedures || [])]) {
+    const m = String(label || '').match(/^(\d{4,5})x(\d+)$/i);
+    if (!m) continue;
+    byCode.set(m[1]!, Math.max(byCode.get(m[1]!) || 0, Math.max(1, Number(m[2]) || 1)));
+  }
+  const codes = [...byCode.keys()];
+  const procedures = codes.map((c) => `${c}x${byCode.get(c)}`);
+  const totalUnits = [...byCode.values()].reduce((sum, n) => sum + n, 0);
+  return { cptCodes: codes, cptUnits: totalUnits, cptProcedures: procedures };
+}
+
+/**
+ * Frontline often exports one 30-min visit as two rows (different CPT codes, same
+ * child + clock window). Merge those into one session so units cover duration and
+ * overlap / double-count do not fire.
+ */
+export function mergeFrontlineSplitCptRows(rows: ParsedSessionNote[]): ParsedSessionNote[] {
+  const out: ParsedSessionNote[] = [];
+  const indexByKey = new Map<string, number>();
+  for (const row of rows) {
+    const key = [
+      normEntityName(row.studentName),
+      String(row.dateOfService || '').trim(),
+      normClockKey(row.beginTime),
+      normClockKey(row.endTime),
+      row.attendance,
+    ].join('|');
+    const existingIdx = indexByKey.get(key);
+    if (existingIdx == null) {
+      indexByKey.set(key, out.length);
+      out.push({ ...row, cptCodes: [...(row.cptCodes || [])], cptProcedures: [...(row.cptProcedures || [])] });
+      continue;
+    }
+    const prev = out[existingIdx]!;
+    const cpt = mergeCptParts(prev, row);
+    const preferNotes =
+      String(row.notes || '').length > String(prev.notes || '').length ? row.notes : prev.notes;
+    out[existingIdx] = {
+      ...prev,
+      ...cpt,
+      notes: preferNotes,
+      signed: prev.signed || row.signed,
+      sourceSlice: [prev.sourceSlice, row.sourceSlice].filter(Boolean).join('\n'),
+      cancelReason: prev.cancelReason || row.cancelReason,
+      ratio: prev.ratio || row.ratio,
+      beginTime: prev.beginTime || row.beginTime,
+      endTime: prev.endTime || row.endTime,
+    };
+  }
+  return out;
 }
 
 function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
@@ -314,37 +462,41 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
   for (const m of blob.matchAll(dateRe)) {
     const dateOfService = m[1]!;
     const idx = m.index ?? -1;
-    if (idx < 0) continue;
-    const before = blob.slice(Math.max(0, idx - 48), idx);
-    if (/\bFrom:\s*$/i.test(before) || /\bTo:\s*$/i.test(before) || /D\.?O\.?B\.?\s*$/i.test(before)) {
-      continue;
-    }
-    if (
-      /(?:makeup for|make[\s-]?up for|missed(?:\s+session)?(?:\s+on)?|original(?:\s+date|\s+dos)?|for(?:\s+date)?)\s*$/i.test(
-        before,
-      )
-    ) {
-      continue;
-    }
+    if (idx < 0 || !isFrontlineServiceDateHit(blob, idx)) continue;
     dateHits.push({ dateOfService, idx });
   }
-  for (const { dateOfService, idx } of dateHits.slice(0, 40)) {
-    const slice = blob.slice(idx, idx + 1200);
-    const times = [...slice.matchAll(/(\d{1,2}:\d{2}\s*[ap]\.?m\.?)/gi)].map((m) => m[1]);
+  for (const { dateOfService, idx } of dateHits.slice(0, 80)) {
+    const end = frontlineSessionBlockEnd(blob, idx, dateOfService);
+    const slice = blob.slice(idx, end);
     const notesMatch = slice.match(
-      /(?:Service Provided:|Student Absence:|Student Not Available:|Make[\s-]?up)[\s\S]*?(?=\n\s*(?:\d{4,5}\b|Provider\s+Signature|Telehealth:)|$)/i,
+      /(?:Service Provided:|Provider Absence:|Student Absence:|Student Not Available:|Make[\s-]?up)[\s\S]*?(?=\n\s*(?:Provider\s+Signature|Telehealth:)|$)/i,
     );
-    const notes = (notesMatch?.[0] || slice.replace(/\s+/g, ' ').trim())
+    const notes = (notesMatch?.[0] || '')
       .replace(/\s+/g, ' ')
       .trim()
       .slice(0, 800);
-    const beginTime = times[0] || '';
-    const endTime = times[1] || '';
-    const attendance = attendanceFromNotes(notes, beginTime, endTime);
-    const ratio = (slice.match(/\b(\d+\s*:\s*\d+)\b/) || [])[1] || '';
+    const absenceOnly =
+      FRONTLINE_ABSENCE_LABEL_RE.test(slice) && !/Service\s+Provided\s*:/i.test(slice);
+    // Missed Frontline rows have no Session Start/End — never borrow times from a later visit.
+    let beginTime = '';
+    let endTime = '';
+    if (!absenceOnly) {
+      const times = [...slice.matchAll(/(\d{1,2}:\d{2}\s*[ap]\.?m\.?)/gi)].map((m) => m[1]!);
+      beginTime = times[0] || '';
+      endTime = times[1] || '';
+    }
+    const attendance = attendanceFromNotes(notes || slice, beginTime, endTime);
+    if (attendance === 'missed') {
+      beginTime = '';
+      endTime = '';
+    }
+    const ratio = absenceOnly
+      ? ''
+      : (slice.match(/\b([1-9]\s*:\s*[1-9]\d?)\b/) || [])[1] || '';
     const location = schoolFromSlice(slice);
     const schoolName = location || reportSchool;
-    const cpt = parseCptCoverage(slice);
+    const cpt = attendance === 'missed' ? { codes: [] as string[], totalUnits: 0, procedures: [] as string[] } : parseCptCoverage(slice);
+    const noteText = notes || (absenceOnly ? slice.replace(/\s+/g, ' ').trim().slice(0, 200) : '');
     rows.push({
       studentName: studentNameBefore(blob, idx, fallbackStudent),
       providerName,
@@ -353,8 +505,8 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       beginTime,
       endTime,
       attendance,
-      cancelReason: cancellationFromNotes(notes, attendance),
-      notes,
+      cancelReason: cancellationFromNotes(noteText || slice, attendance),
+      notes: noteText || (attendance === 'missed' ? slice.replace(/\s+/g, ' ').trim().slice(0, 200) : ''),
       serviceType,
       location: location || schoolName,
       ratio,
@@ -365,7 +517,7 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       sourceSlice: slice,
     });
   }
-  return rows;
+  return mergeFrontlineSplitCptRows(rows);
 }
 
 /** Weekly notes as extracted text — Frontline or Therapist Activity (auto-detect). */

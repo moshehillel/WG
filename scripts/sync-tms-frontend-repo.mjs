@@ -19,6 +19,8 @@ const files = [
   'tms-atmosphere-school.webp',
 ];
 
+const dirs = ['vendor'];
+
 if (!existsSync(dest)) {
   console.error(`Frontend repo not found: ${dest}`);
   console.error('Create it first, or clone white-glove-tms-web next to White-glove.');
@@ -29,5 +31,10 @@ mkdirSync(dest, { recursive: true });
 for (const file of files) {
   cpSync(path.join(src, file), path.join(dest, file));
 }
-console.log(`Synced ${files.length} files to ${dest}`);
+for (const dir of dirs) {
+  const from = path.join(src, dir);
+  if (!existsSync(from)) continue;
+  cpSync(from, path.join(dest, dir), { recursive: true });
+}
+console.log(`Synced ${files.length} files + ${dirs.length} dirs to ${dest}`);
 console.log('Commit and push white-glove-tms-web to trigger Netlify.');

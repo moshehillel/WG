@@ -28,11 +28,15 @@ a proxy would not help and cannot hide ClientId.
 
 ---- Luna support chatbot ----
 UI: floating ball in apps/tms-web (index.html #lunaRoot + styles.css + app.js).
-API (auth required):
+Visible on the login screen and after sign-in.
+API (Cognito optional — same paths work as guest with rate limits):
   POST /support/luna/chat
   POST /support/luna/handoff
     Body requires contactName + contactEmail (light email format check).
-    Prefill from Cognito in the UI; both fields remain editable and mandatory.
+    Prefill from Cognito when signed in; both fields remain editable and mandatory.
+  Guest (no Bearer / invalid JWT): treated as unauthenticated support chat.
+    Rate limits (per Lambda instance, keyed by X-Forwarded-For):
+      chat ~30 / 15 min, handoff ~5 / hour.
 
 OpenAI key (NEVER in the frontend / Netlify env):
   Live (preferred): AWS Secrets Manager → secret created by CDK as TmsLunaOpenAiSecret

@@ -116,6 +116,8 @@ export interface HhaClient {
   ): Promise<void>;
   resolveCaregiverId(providerName: string | undefined): Promise<string | undefined>;
   resolvePayCodeId(payCodeName: string): Promise<string | undefined>;
+  /** Agency pay-rate catalog (GetPayRateCodes + caregiver pay codes). */
+  listPayRateCodes(): Promise<Array<{ id: string; name: string }>>;
   /** Live HHA lookup by Program Type name (static config fallback). */
   resolveContractId(programType: string | undefined): Promise<number | undefined>;
   /** Live HHA lookup by Service Type name (API Mappings sheet when programType provided). */

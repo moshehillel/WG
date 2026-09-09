@@ -1,6 +1,17 @@
 import type { HhaClient } from '@white-glove/hha-client';
 import type { OpenedCaseRow, PipelineException, VerifiedSessionRow } from '@white-glove/shared';
-import { buildPayCodeName, lookupCaregiverCode } from '@white-glove/shared';
+import {
+  buildPayCodeName,
+  extractDisciplineFromServiceType,
+  lookupCaregiverCode,
+  lookupServiceCodeAlias,
+  pickFirstPayCodeForDiscipline,
+  serviceTypeLooksGroup,
+} from '@white-glove/shared';
+import {
+  previewEvvNewServiceVisit,
+  shouldScheduleEvvVisitForNewService,
+} from './schedule-evv-new-service-visit.js';
 
 /** Shown when HHA live lookup misses — client owns exact name parity in ProviderSoft vs HHA admin. */
 export const HHA_NAME_MATCH_HINT =
@@ -100,20 +111,57 @@ export async function previewOpenedCaseWithHha(
     const serviceCodeId = await hha.resolveServiceCodeId(
       row.serviceCode,
       contractNum ?? undefined,
+      row.programType,
     );
     if (!serviceCodeId) {
+      const alias = lookupServiceCodeAlias(row.serviceCode, row.programType);
+      const hhaServiceName = alias?.hhaServiceCodeName;
+      const mappedBit =
+        hhaServiceName && hhaServiceName !== row.serviceCode
+          ? ` (mapped HHA "${hhaServiceName}")`
+          : '';
       issues.push({
         code: 'unknown_service_code',
         message: previewMessage({
           report: 'opened_cases',
           rowId,
-          summary: `Service Type "${row.serviceCode}" not found in HHA billing codes — ${HHA_NAME_MATCH_HINT}`,
+          summary: `Service Type "${row.serviceCode}"${mappedBit} not found in HHA billing codes — ${HHA_NAME_MATCH_HINT}`,
         }),
         reportKind: 'opened_cases',
         rowId,
-        details: { serviceCode: row.serviceCode, preview: true, patientName: name },
+        details: {
+          serviceCode: row.serviceCode,
+          ...(hhaServiceName ? { hhaServiceName } : {}),
+          preview: true,
+          patientName: name,
+        },
       });
     }
+  }
+
+  if (shouldScheduleEvvVisitForNewService(row)) {
+    let caregiverFound: boolean | undefined;
+    let payCodeId: string | null | undefined;
+    if (row.providerName?.trim()) {
+      const cg = await hha.resolveCaregiverId(row.providerName);
+      caregiverFound = Boolean(cg);
+    }
+    const built = buildPayCodeName(row.serviceCode, row.payRate);
+    if (built) {
+      const id = await hha.resolvePayCodeId(built.payCodeName);
+      payCodeId = id ?? null;
+    } else {
+      const discipline = extractDisciplineFromServiceType(row.serviceCode);
+      if (discipline) {
+        const catalog = await hha.listPayRateCodes();
+        const fallback = pickFirstPayCodeForDiscipline(discipline, catalog, {
+          group: serviceTypeLooksGroup(row.serviceCode),
+        });
+        payCodeId = fallback?.id ?? null;
+      }
+    }
+    const visitIssue = previewEvvNewServiceVisit(row, { caregiverFound, payCodeId });
+    if (visitIssue) issues.push(visitIssue);
   }
 
   return issues;
@@ -158,18 +206,29 @@ export async function previewVerifiedSessionWithHha(
     const serviceCodeId = await hha.resolveServiceCodeId(
       row.serviceCode,
       contractNum ?? undefined,
+      row.programType,
     );
     if (!serviceCodeId) {
+      const alias = lookupServiceCodeAlias(row.serviceCode, row.programType);
+      const hhaServiceName = alias?.hhaServiceCodeName;
+      const mappedBit =
+        hhaServiceName && hhaServiceName !== row.serviceCode
+          ? ` (mapped HHA "${hhaServiceName}")`
+          : '';
       issues.push({
         code: 'unknown_service_code',
         message: previewMessage({
           report: 'verified_sessions',
           rowId,
-          summary: `Service Type "${row.serviceCode}" not found in HHA billing codes — ${HHA_NAME_MATCH_HINT}`,
+          summary: `Service Type "${row.serviceCode}"${mappedBit} not found in HHA billing codes — ${HHA_NAME_MATCH_HINT}`,
         }),
         reportKind: 'verified_sessions',
         rowId,
-        details: { serviceCode: row.serviceCode, preview: true },
+        details: {
+          serviceCode: row.serviceCode,
+          ...(hhaServiceName ? { hhaServiceName } : {}),
+          preview: true,
+        },
       });
     }
   }

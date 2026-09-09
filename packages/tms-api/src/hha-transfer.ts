@@ -4,6 +4,7 @@ import {
   buildPayCodeName,
   buildSchoolBillingServiceName,
   extractDisciplineFromServiceType,
+  isIndividualSchoolBillingServiceName,
 } from '@white-glove/shared';
 import {
   mandateDurationMinutesForSession,
@@ -21,9 +22,19 @@ import {
   type WeeklyPeriod,
 } from '@white-glove/tms-db';
 
+/** School address fields mapped onto HHA CreatePatient demographics. */
+export type SchoolAddressForPatient = {
+  address1?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
+};
+
 /**
  * Resolve HHA PatientID for a TMS student.
  * Order: trusted hhaPatientId → Program Id / Case Id (+ name/DOB fallback inside find) → CreatePatient last.
+ * CreatePatient address = school address (when provided). DOB = student.dob from caseload
+ * (“Student BirthDate”) or admin edit — no fake DOB.
  */
 export async function resolveHhaPatientId(options: {
   hha: HhaClient;
@@ -36,8 +47,10 @@ export async function resolveHhaPatientId(options: {
         hhaPatientId?: string;
       }
     | undefined;
+  /** Prefer the child’s school address for CreatePatient. */
+  schoolAddress?: SchoolAddressForPatient;
 }): Promise<string | undefined> {
-  const { hha, student } = options;
+  const { hha, student, schoolAddress } = options;
   if (!student) return undefined;
 
   const programId = student.programId?.trim() || undefined;
@@ -61,6 +74,10 @@ export async function resolveHhaPatientId(options: {
     dateOfBirth: student.dob || undefined,
     caseId: programId,
     externalId: programId,
+    address1: schoolAddress?.address1?.trim() || undefined,
+    city: schoolAddress?.city?.trim() || undefined,
+    state: schoolAddress?.state?.trim() || undefined,
+    zipCode: schoolAddress?.zipCode?.trim() || undefined,
   });
   return created.id;
 }
@@ -106,7 +123,21 @@ export async function transferLockedWeek(options: {
     if (existing?.status === 'confirmed') continue;
     const student = store.data.students.find((s) => s.id === session.studentId);
     try {
-      const patientId = await resolveHhaPatientId({ hha, student });
+      const school = student?.schoolId
+        ? store.data.schools.find((s) => s.id === student.schoolId)
+        : undefined;
+      const patientId = await resolveHhaPatientId({
+        hha,
+        student,
+        schoolAddress: school
+          ? {
+              address1: school.address1,
+              city: school.city,
+              state: school.state,
+              zipCode: school.zipCode,
+            }
+          : undefined,
+      });
       if (!patientId) {
         throw new Error(`No HHA patient for ${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim());
       }
@@ -126,14 +157,24 @@ export async function transferLockedWeek(options: {
       // School billing duration bucket from mandate (not Frontline clock rounding).
       const billingDurationMinutes = billingKind === 'school' ? mandateMinutes : clockMinutes;
       // Prefer name stored at caseload import; fall back for legacy mandates.
+      // Group mandate billing stays "school group" even for solo-group sessions
+      // (pay rate may still be individual when no peers present).
+      const isGroupMandate =
+        Boolean(matchedMandate?.ratioGroup) ||
+        (matchedMandate?.groupSize != null && Number(matchedMandate.groupSize) > 1);
       const storedBillingName =
         billingKind === 'school' ? matchedMandate?.billingServiceName?.trim() : '';
+      const storedWrongForGroup =
+        billingKind === 'school' &&
+        isGroupMandate &&
+        isIndividualSchoolBillingServiceName(storedBillingName);
       const billingServiceName =
-        storedBillingName ||
+        (storedBillingName && !storedWrongForGroup ? storedBillingName : '') ||
         buildSchoolBillingServiceName({
           discipline,
           kind: billingKind,
           durationMinutes: billingDurationMinutes,
+          group: billingKind === 'school' ? isGroupMandate : false,
         });
       if (!billingServiceName) {
         throw new Error(

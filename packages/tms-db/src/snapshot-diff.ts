@@ -13,6 +13,7 @@ export const SNAPSHOT_COLLECTIONS = [
   'weeks',
   'sessions',
   'files',
+  'archives',
   'dueDates',
   'alerts',
   'hhaTransfers',

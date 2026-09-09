@@ -76,7 +76,7 @@ export interface CaseloadImportRow {
   ratioGroup: boolean;
   /** Minutes from RS Duration when present. */
   durationMinutes: number | null;
-  /** HHA school billing name derived at parse (e.g. `PT school 30`). */
+  /** HHA school billing name derived at parse (e.g. `PT school 30` / `PT school group 30`). */
   billingServiceName?: string;
   /** From group-size column, or derived from RS Ratio (Individual → 1). */
   groupSize: number | null;
@@ -114,7 +114,7 @@ export interface CaseloadPreviewMandate {
   discipline: Discipline | '';
   ratioGroup: boolean;
   durationMinutes: number | null;
-  /** HHA school billing name (e.g. `PT school 30`) when discipline + duration map cleanly. */
+  /** HHA school billing name (e.g. `PT school 30` / group → `PT school group 30`) when discipline + duration map cleanly. */
   billingServiceName?: string;
   groupSize: number | null;
   freqDisplay: string;
@@ -148,8 +148,8 @@ export interface CaseloadApplyResult {
 }
 
 /**
- * Final KU export: “Related Service by serviceschool (WG)” (Listing Results).
- * Older “Related Service Details by School” short headers stay as aliases.
+ * Final KU export: “Related Service Details by School (WG)” (Listing Results).
+ * Older “Related Service by serviceschool (WG)” / short KU headers stay as aliases.
  */
 const HEADER_ALIASES: Record<string, string[]> = {
   school: [
@@ -170,8 +170,19 @@ const HEADER_ALIASES: Record<string, string[]> = {
   period: ['rs period', 'freq period', 'period'],
   location: ['rs location', 'location'],
   provider: ['rs provider', 'related service provider', 'provider', 'therapist'],
-  /** Minutes per session (e.g. 30, 42, 45). */
-  duration: ['rs duration', 'duration', 'duration minutes', 'session duration'],
+  /**
+   * Minutes per session (e.g. 30, 42, 45).
+   * Final WG “Related Service Details by School” uses column header “Min”.
+   */
+  duration: [
+    'rs duration',
+    'duration minutes',
+    'session duration',
+    'duration',
+    'minutes',
+    'mins',
+    'min',
+  ],
   /** Optional group size; otherwise derived from RS Ratio. */
   groupSize: ['rs group size', 'group size', 'groupsize', 'rs size', 'group #'],
   /**
@@ -190,7 +201,16 @@ const HEADER_ALIASES: Record<string, string[]> = {
     'gen ed id',
   ],
   programType: ['program type', 'programtype'],
-  dob: ['date of birth', 'dob', 'birth date', 'birthdate', 'real dob'],
+  /** Final WG layout uses “Student BirthDate”. */
+  dob: [
+    'student birthdate',
+    'student birth date',
+    'date of birth',
+    'dob',
+    'birth date',
+    'birthdate',
+    'real dob',
+  ],
 };
 
 function normHeader(h: string): string {
@@ -230,7 +250,9 @@ export function splitCsvLine(line: string): string[] {
 function colIndex(headers: string[], aliases: string[]): number {
   const exact = headers.findIndex((h) => aliases.some((a) => h === a));
   if (exact >= 0) return exact;
-  return headers.findIndex((h) => aliases.some((a) => h.includes(a)));
+  // Substring match only for longer aliases — short ones like "min" / "end" / "dob"
+  // would false-positive inside unrelated headers (e.g. "admin", "recommended").
+  return headers.findIndex((h) => aliases.some((a) => a.length >= 4 && h.includes(a)));
 }
 
 function cell(cells: string[], idx: number): string {
@@ -277,7 +299,7 @@ export function parseDurationMinutes(raw: string): number | null {
 
 /**
  * Prefer explicit group-size column; else Individual → 1, N:1 ratio → N,
- * Small Group without a number → null (overlap cap treats as 2: fewer than 3).
+ * bare Group / Small Group → 2 (client: small group = fewer than 3).
  */
 export function parseGroupSize(groupSizeRaw: string, ratioRaw: string, ratioGroup: boolean): number | null {
   const fromCol = parseFreqNumber(groupSizeRaw);
@@ -294,7 +316,8 @@ export function parseGroupSize(groupSizeRaw: string, ratioRaw: string, ratioGrou
 
   if (/\bindividual\b|\b1\s*:\s*1\b/.test(ratio) || (!ratioGroup && !ratio.trim())) return 1;
   if (!ratioGroup) return 1;
-  return null;
+  // Group / Small Group with no numeric size → default 2 (matches overlap cap).
+  return 2;
 }
 
 function parsePeriod(raw: string): { kind: FrequencyKind; periodSchoolDays: number } {
@@ -603,15 +626,18 @@ export function parseCaseloadGrid(
       );
     }
 
-    const ratioGroup = parseRatioGroup(ratioRaw);
+    // Ratio column is primary; Related Service may also say "Small Group" / "Group".
+    const ratioGroup = parseRatioGroup(ratioRaw) || parseRatioGroup(serviceType);
     const durationMinutes = parseDurationMinutes(durationRaw);
-    const groupSize = parseGroupSize(groupSizeRaw, ratioRaw, ratioGroup);
+    const groupSize = parseGroupSize(groupSizeRaw, ratioRaw || serviceType, ratioGroup);
     const frequencyPerWeek = kind === 'weekly' ? freqNum! : 0;
     const sessionsPerPeriod = freqNum!;
     const days = kind === 'school_day_cycle' ? periodSchoolDays || 6 : 0;
     const billingServiceName = schoolBillingServiceNameForMandate({
       discipline,
       durationMinutes,
+      ratioGroup,
+      groupSize,
     });
 
     rows.push({
@@ -770,8 +796,10 @@ export function parseCaseloadWorkbook(input: Buffer | Uint8Array | ArrayBuffer):
   const dateCols = new Set<number>();
   const startIdx = colIndex(headersNorm, HEADER_ALIASES.startOn);
   const endIdx = colIndex(headersNorm, HEADER_ALIASES.endOn);
+  const dobIdx = colIndex(headersNorm, HEADER_ALIASES.dob);
   if (startIdx >= 0) dateCols.add(startIdx);
   if (endIdx >= 0) dateCols.add(endIdx);
+  if (dobIdx >= 0) dateCols.add(dobIdx);
 
   const dataRows: Array<{ rowNumber: number; cells: string[] }> = [];
   for (let i = chosen.headerIdx + 1; i < chosen.grid.length; i += 1) {
@@ -1318,6 +1346,8 @@ export function applyCaseloadImport(
       schoolBillingServiceNameForMandate({
         discipline: row.discipline,
         durationMinutes: row.durationMinutes,
+        ratioGroup: row.ratioGroup,
+        groupSize: row.groupSize,
       });
 
     const mandate: Mandate = {
@@ -1336,7 +1366,12 @@ export function applyCaseloadImport(
       ratioGroup: row.ratioGroup,
       durationMinutes: row.durationMinutes,
       billingServiceName: billingServiceName || undefined,
-      groupSize: row.groupSize,
+      groupSize:
+        row.groupSize != null && Number(row.groupSize) > 0
+          ? Number(row.groupSize)
+          : row.ratioGroup
+            ? 2
+            : 1,
       location: row.location || existing?.location || undefined,
       sourcePdfKey: existing?.sourcePdfKey || 'caseload-csv',
       parsedAt: nowIso(),
@@ -1372,7 +1407,7 @@ export function applyCaseloadImport(
       ratioGroup: row.ratioGroup,
       durationMinutes: row.durationMinutes,
       billingServiceName: billingServiceName || undefined,
-      groupSize: row.groupSize,
+      groupSize: mandate.groupSize,
       freqDisplay: row.freqDisplay,
       frequencyKind: row.frequencyKind,
       sessionsPerPeriod: row.sessionsPerPeriod,

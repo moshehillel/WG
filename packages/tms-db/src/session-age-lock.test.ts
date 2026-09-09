@@ -75,6 +75,16 @@ describe('session age lock', () => {
 
   it('merges settings defaults', () => {
     expect(appSettingsFromStore(undefined).sessionImportMaxAgeDays).toBe(14);
+    expect(appSettingsFromStore(undefined).yellowWarningsBlockImport).toBe(true);
+    expect(appSettingsFromStore(undefined).requireMfa).toBe(true);
+    expect(appSettingsFromStore(undefined).allowSmsMfa).toBe(false);
     expect(appSettingsFromStore([{ id: 'global', sessionImportAgeLockEnabled: false } as never]).sessionImportAgeLockEnabled).toBe(false);
+    expect(
+      appSettingsFromStore([{ id: 'global', yellowWarningsBlockImport: false } as never])
+        .yellowWarningsBlockImport,
+    ).toBe(false);
+    expect(
+      appSettingsFromStore([{ id: 'global', requireMfa: false } as never]).requireMfa,
+    ).toBe(false);
   });
 });

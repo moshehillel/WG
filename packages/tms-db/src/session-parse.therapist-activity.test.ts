@@ -68,6 +68,25 @@ describe('Therapist Activity Output parse', () => {
     expect(rows[0]?.studentName).toMatch(/ROBERTO/i);
   });
 
+  it('marks missed sessions without CPT/signature as missed (not attended)', () => {
+    const missedSample = `
+Therapist Activity Printed: 9/8/2026
+Date / Time Setting Child ICD/CPT Codes Notes
+09/02/26 In: 10:00 AM Out: 10:30 AM Preschool ODNE, AIDEN CBRS2627S0099999(ST-I)
+Student Absence: student not in school
+Notes Entered: 9/02/2026 11:00:00 AM
+Page 1 of 1
+Astacio, Wiglishai
+`;
+    const rows = parseTherapistActivityText(missedSample);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.attendance).toBe('missed');
+    expect(rows[0]?.cancelReason).toMatch(/not in school|Absent/i);
+    expect(rows[0]?.cptCodes).toEqual([]);
+    expect(rows[0]?.cptUnits).toBe(0);
+    expect(rows[0]?.signed).toBe(false);
+  });
+
   it('handles fragmented Tj-style tokens after normalize', () => {
     const fragmented = `
 Therapist Activity Printed: 8/14/2026

@@ -110,6 +110,8 @@ describe('provider pay rates', () => {
 
   it('bills additional services to the minute; eval uses flat eval rate', () => {
     expect(sessionDurationMinutes('9:00 am', '9:42 am')).toBe(42);
+    expect(sessionDurationMinutes('9:00 a.m.', '9:42 a.m.')).toBe(42);
+    expect(sessionDurationMinutes('9:00 A.M.', '9:30 P.M.')).toBe(12 * 60 + 30);
     const provider = {
       id: 'p',
       userId: '',

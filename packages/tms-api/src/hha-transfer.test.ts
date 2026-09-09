@@ -85,6 +85,34 @@ describe('resolveHhaPatientId', () => {
     expect(id).toBe(existing.id);
     expect(hha.calls.filter((c) => c === 'upsertPatient')).toHaveLength(0);
   });
+
+  it('passes school address into CreatePatient when patient is new', async () => {
+    const hha = new MockHhaClient();
+    const id = await resolveHhaPatientId({
+      hha,
+      student: {
+        firstName: 'Sam',
+        lastName: 'Lee',
+        programId: '55001',
+        hhaPatientId: '',
+        dob: '2018-03-15',
+      },
+      schoolAddress: {
+        address1: '1 School Lane',
+        city: 'Carle Place',
+        state: 'NY',
+        zipCode: '11514',
+      },
+    });
+    expect(id).toBeTruthy();
+    expect(hha.calls).toContain('upsertPatient');
+    const created = [...hha.patients.values()].find((p) => p.id === id);
+    expect(created?.address1).toBe('1 School Lane');
+    expect(created?.city).toBe('Carle Place');
+    expect(created?.state).toBe('NY');
+    expect(created?.zipCode).toBe('11514');
+    expect(created?.dateOfBirth).toBe('2018-03-15');
+  });
 });
 
 describe('transferLockedWeek Program Id', () => {
@@ -367,6 +395,102 @@ describe('transferLockedWeek Program Id', () => {
     expect(result.errors).toEqual([]);
     const visit = [...hha.visits.values()][0];
     expect(visit?.serviceCode).toBe('PT school 30');
+  });
+
+  it('group mandate billing uses school group; rewrites legacy individual stamp', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: 34,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Ana',
+      lastName: 'Binaj',
+      dob: '',
+      programId: '1012074',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School Group',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    // Legacy wrong stamp (individual); transfer must use school group for group mandate.
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      ratioGroup: true,
+      groupSize: 2,
+      durationMinutes: 30,
+      billingServiceName: 'PT school 30',
+      sourcePdfKey: 'caseload-csv',
+      parsedAt: nowIso(),
+      startOn: '2026-09-02',
+      endOn: '2027-06-25',
+      createdAt: nowIso(),
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-30');
+    hha.serviceCodesByName.set('PT SCHOOL GROUP 30', 'sc-pt-grp-30');
+    hha.payCodes.set('PT $70', 'pay-pt-70');
+    hha.payCodes.set('PT Group $34', 'pay-pt-grp-34');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    const visit = [...hha.visits.values()][0];
+    expect(visit?.serviceCode).toBe('PT school group 30');
   });
 
   it('hard-fails session when pay code missing in HHA', async () => {

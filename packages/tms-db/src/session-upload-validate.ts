@@ -96,11 +96,18 @@ export function cptDurationError(
   attendance: string,
 ): string | null {
   if (attendance !== 'attended' && attendance !== 'makeup') return null;
-  const minutes = sessionDurationMinutes(beginTime, endTime);
-  if (minutes == null || minutes <= 0) return null;
-  const required = requiredCptUnitsForDuration(minutes);
   const coverage =
     typeof sliceOrCoverage === 'string' ? parseCptCoverage(sliceOrCoverage) : sliceOrCoverage;
+  const minutes = sessionDurationMinutes(beginTime, endTime);
+  // Always require at least one CPT unit for attended/makeup — even when clock duration
+  // cannot be parsed (otherwise "attended + no CPT" silently skipped the locker).
+  if (minutes == null || minutes <= 0) {
+    if (!coverage.codes.length || coverage.totalUnits < 1) {
+      return 'CPT units missing for attended/makeup session (need at least 1 unit).';
+    }
+    return null;
+  }
+  const required = requiredCptUnitsForDuration(minutes);
   // 92507/92508 etc. are session-based (1 unit), not timed 15-min codes.
   if (cptCodesAreUntimedSession(coverage.codes) && coverage.totalUnits >= 1) return null;
   if (coverage.totalUnits >= required) return null;
@@ -120,9 +127,24 @@ export function cptDurationError(
 export function normalizeNoteForCompare(notes: string): string {
   return String(notes || '')
     .toLowerCase()
-    .replace(/\b(service provided|student absence|student not available|make[\s-]?up)\b:?/gi, '')
+    .replace(
+      /\b(service provided|student absence|student not available|provider absence|make[\s-]?up)\b:?/gi,
+      '',
+    )
     .replace(/[^a-z0-9]+/g, '')
     .trim();
+}
+
+/** Missed / empty absence templates must not be copy-paste sources for attended notes. */
+export function noteIsCopyPasteSource(attendance: string, notes: string): boolean {
+  if (attendance === 'missed') return false;
+  const normalized = normalizeNoteForCompare(notes);
+  if (!normalized) return false;
+  // Bare miss labels left after stripping still aren't real clinical notes.
+  if (/^(providerabsence|studentabsence|studentnotavailable|cancelled|canceled|noshow)$/i.test(normalized)) {
+    return false;
+  }
+  return true;
 }
 
 export function notesLookCopyPasted(a: string, b: string): boolean {
@@ -130,6 +152,32 @@ export function notesLookCopyPasted(a: string, b: string): boolean {
   const nb = normalizeNoteForCompare(b);
   if (!na || !nb) return false;
   return na === nb;
+}
+
+/** True when missed-note text / cancelReason already carries a recognizable reason. */
+export function hasMissedSessionReason(cancelReason: string, notes: string): boolean {
+  const reason = String(cancelReason || '').trim();
+  if (reason) return true;
+  const n = String(notes || '');
+  if (!n.trim()) return false;
+  return (
+    /provider\s+absence/i.test(n) ||
+    /student\s+absence/i.test(n) ||
+    /student\s+not\s+available/i.test(n) ||
+    /student\s+not\s+in\s+school/i.test(n) ||
+    /student\s+absent/i.test(n) ||
+    /\b(?:absent|missed|cancell?ed|no[\s-]?show|did not attend|not present|refused)\b/i.test(n)
+  );
+}
+
+export function missedSessionReasonError(
+  attendance: string,
+  cancelReason: string,
+  notes: string,
+): string | null {
+  if (attendance !== 'missed') return null;
+  if (hasMissedSessionReason(cancelReason, notes)) return null;
+  return 'Missed session needs a reason (e.g. provider absence, student absent).';
 }
 
 export function noteCopyPasteError(
