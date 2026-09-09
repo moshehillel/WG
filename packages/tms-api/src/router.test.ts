@@ -3457,4 +3457,121 @@ describe('TMS MFA org policy', () => {
     const sessions = (asTherapist.body as { sessions: Array<{ notes: string }> }).sessions;
     expect(sessions.some((s) => s.notes === 'admin eval')).toBe(true);
   });
+
+  it('week signer comes from session child school, not selected sibling school filter', async () => {
+    const { store, provider } = storeWithTherapist();
+    const hegarty = store.upsertSchool({
+      id: newId(),
+      name: 'Francis X. Hegarty Elementary School',
+      district: '',
+      signerName: 'Madison Gluck',
+      signerEmail: 'mgluck@whiteglovecare.net',
+      createdAt: nowIso(),
+    });
+    const carle = store.upsertSchool({
+      id: newId(),
+      name: 'Carle Place MS/HS',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const hegChild = store.upsertStudent({
+      id: newId(),
+      schoolId: hegarty.id,
+      firstName: 'Ana',
+      lastName: 'Binaj',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const carleChild = store.upsertStudent({
+      id: newId(),
+      schoolId: carle.id,
+      firstName: 'Dylan',
+      lastName: 'Santos',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    for (const studentId of [hegChild.id, carleChild.id]) {
+      store.upsertMandate({
+        id: newId(),
+        studentId,
+        providerId: provider.id,
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 1,
+        frequencyKind: 'weekly',
+        sessionsPerPeriod: 1,
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: nowIso(),
+        startOn: '',
+        endOn: '',
+        createdAt: nowIso(),
+      });
+    }
+    const weekStart = '2026-08-31';
+    // Empty week stamped from Carle Place picker (no signer) — reproduces multi-school bug.
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart, schoolId: carle.id },
+    });
+    expect(ensured.status).toBe(200);
+    const weekId = (ensured.body as { week: { id: string; signerEmail: string } }).week.id;
+    expect((ensured.body as { week: { signerEmail: string } }).week.signerEmail).toBe('');
+
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId: hegChild.id,
+        dateOfService: '09/01/2026',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        attendance: 'attended',
+        notes: 'Gait training practiced safely.',
+        serviceType: 'PT School',
+      },
+    });
+
+    // Ensure with Carle Place still selected must NOT wipe Hegarty Madison signer.
+    const reensure = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart, schoolId: carle.id },
+    });
+    expect(reensure.status).toBe(200);
+    const stamped = (reensure.body as { week: { signerName: string; signerEmail: string }; school: { id: string } })
+      .week;
+    expect(stamped.signerEmail).toBe('mgluck@whiteglovecare.net');
+    expect(stamped.signerName).toBe('Madison Gluck');
+    expect((reensure.body as { school: { id: string } }).school.id).toBe(hegarty.id);
+
+    const got = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/week',
+      headers: thH,
+      query: { weekStart, schoolId: carle.id, providerId: provider.id },
+      body: undefined,
+    });
+    expect(got.status).toBe(200);
+    expect((got.body as { week: { signerEmail: string }; schoolDistrict: string }).week.signerEmail).toBe(
+      'mgluck@whiteglovecare.net',
+    );
+    expect((got.body as { schoolDistrict: string }).schoolDistrict).toMatch(/Hegarty/i);
+  });
 });
