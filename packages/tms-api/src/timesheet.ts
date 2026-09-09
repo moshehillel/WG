@@ -155,14 +155,13 @@ function brandMark(x: number, y: number, size: number): string {
 type Col = { key: string; label: string; w: number; align: 'left' | 'center' | 'right' };
 
 const COLS: Col[] = [
-  { key: 'child', label: 'Child', w: 132, align: 'left' },
+  { key: 'child', label: 'Child', w: 148, align: 'left' },
   { key: 'dos', label: 'DOS', w: 78, align: 'left' },
   { key: 'in', label: 'In', w: 48, align: 'center' },
   { key: 'out', label: 'Out', w: 48, align: 'center' },
   { key: 'att', label: 'Attendance', w: 88, align: 'left' },
   { key: 'code', label: 'Code', w: 118, align: 'left' },
-  { key: 'pay', label: 'Pay', w: 64, align: 'right' },
-  { key: 'notes', label: 'Notes', w: 160, align: 'left' },
+  { key: 'notes', label: 'Notes', w: 208, align: 'left' },
 ];
 
 type RowCells = Record<string, string>;
@@ -483,10 +482,6 @@ export function buildTimesheetPdf(input: {
     const name = row.student
       ? `${row.student.firstName} ${row.student.lastName}`
       : row.session.studentId;
-    const pay =
-      row.payAmount != null && Number.isFinite(row.payAmount)
-        ? `$${row.payAmount.toFixed(2)}`
-        : '-';
     const notes = String(row.session.notes || row.session.location || '').trim();
     const cpt = String(row.session.cptLabel || (row.session.cptCodes || []).join(', ') || '').trim();
     return {
@@ -496,7 +491,6 @@ export function buildTimesheetPdf(input: {
       out: row.session.endTime || '',
       att: row.session.attendance || '',
       code: cpt || row.session.serviceType || '',
-      pay,
       notes,
     };
   });

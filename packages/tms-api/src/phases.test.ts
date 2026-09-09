@@ -233,6 +233,9 @@ describe('phase 2–3', () => {
     expect(extracted).toMatch(/makeup/);
     expect(extracted).not.toMatch(/Mia Patel/);
     expect(extracted).not.toMatch(/missed/);
+    expect(extracted).not.toMatch(/\bPay\b/);
+    expect(extracted).not.toMatch(/\$42\.50/);
+    expect(extracted).not.toMatch(/\$38/);
     expect(extracted).toMatch(/Powered by advancedautomations\.net/);
   });
 });

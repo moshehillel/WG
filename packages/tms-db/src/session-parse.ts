@@ -1,4 +1,9 @@
-import { parseCptCoverage, sessionIsSigned } from './session-upload-validate.js';
+import {
+  FRONTLINE_MISSED_REASON_RE,
+  matchFrontlineMissedReason,
+  parseCptCoverage,
+  sessionIsSigned,
+} from './session-upload-validate.js';
 
 export interface ParsedSessionNote {
   studentName: string;
@@ -27,11 +32,13 @@ export interface ParsedSessionNote {
   sourceSlice: string;
 }
 
-const MISSED_RE =
-  /\b(provider absence|student absence|student not available|student not in school|student absent|absent|missed|cancell?ed|no[\s-]?show|did not attend|not present|refused)\b/i;
+const MISSED_RE = new RegExp(
+  `${FRONTLINE_MISSED_REASON_RE.source}|\\b(?:student not in school|student absent|absent|missed|cancell?ed|no[\\s-]?show|did not attend|not present|refused)\\b`,
+  'i',
+);
 const MAKEUP_RE = /\b(makeup|make[\s-]?up)\b/i;
 const FRONTLINE_ABSENCE_LABEL_RE =
-  /(?:Provider\s+Absence|Student\s+Absence|Student\s+Not\s+Available)\s*:/i;
+  /(?:Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage)\s*:/i;
 
 export function attendanceFromNotes(
   notes: string,
@@ -51,7 +58,7 @@ export function attendanceFromNotes(
   if (
     MAKEUP_RE.test(n) &&
     /make[\s-]?up\s+(?:for|session)/i.test(n) &&
-    !/provider absence|student absence|student not available|student absent/i.test(n)
+    !FRONTLINE_MISSED_REASON_RE.test(n)
   ) {
     return 'makeup';
   }
@@ -65,16 +72,8 @@ export function cancellationFromNotes(
   attendance: ParsedSessionNote['attendance'],
 ): string {
   if (attendance !== 'missed') return '';
-  const n = String(notes || '');
-  if (/provider absence/i.test(n)) return 'Provider Absence';
-  if (/not available/i.test(n)) return 'Student Not Available';
-  if (/not in school/i.test(n)) return 'Student not in school';
-  if (/cancell?ed/i.test(n)) return 'Cancelled';
-  if (/no[\s-]?show/i.test(n)) return 'No show';
-  if (/did not attend|not present|refused/i.test(n)) return 'Student Absent';
-  if (/student absence|student absent|\babsent\b|\bmissed\b/i.test(n)) return 'Student Absent';
-  // Do not invent a reason when the miss note has none — upload locker requires one.
-  return '';
+  // Prefer Frontline dropdown labels; upload locker requires one of these.
+  return matchFrontlineMissedReason(notes);
 }
 
 function cleanStudentName(raw: string): string {
@@ -469,7 +468,7 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
     const end = frontlineSessionBlockEnd(blob, idx, dateOfService);
     const slice = blob.slice(idx, end);
     const notesMatch = slice.match(
-      /(?:Service Provided:|Provider Absence:|Student Absence:|Student Not Available:|Make[\s-]?up)[\s\S]*?(?=\n\s*(?:Provider\s+Signature|Telehealth:)|$)/i,
+      /(?:Service Provided:|Provider Absence:|Provider Not Available:|Student Absence:|Student Not Available:|School Closed:|Staff Shortage:|Make[\s-]?up)[\s\S]*?(?=\n\s*(?:Provider\s+Signature|Telehealth:)|$)/i,
     );
     const notes = (notesMatch?.[0] || '')
       .replace(/\s+/g, ' ')

@@ -128,7 +128,7 @@ export function normalizeNoteForCompare(notes: string): string {
   return String(notes || '')
     .toLowerCase()
     .replace(
-      /\b(service provided|student absence|student not available|provider absence|make[\s-]?up)\b:?/gi,
+      /\b(service provided|student absence|student not available|provider absence|provider not available|school closed|staff shortage|make[\s-]?up)\b:?/gi,
       '',
     )
     .replace(/[^a-z0-9]+/g, '')
@@ -141,7 +141,11 @@ export function noteIsCopyPasteSource(attendance: string, notes: string): boolea
   const normalized = normalizeNoteForCompare(notes);
   if (!normalized) return false;
   // Bare miss labels left after stripping still aren't real clinical notes.
-  if (/^(providerabsence|studentabsence|studentnotavailable|cancelled|canceled|noshow)$/i.test(normalized)) {
+  if (
+    /^(providerabsence|studentabsence|studentnotavailable|providernotavailable|schoolclosed|staffshortage|cancelled|canceled|noshow)$/i.test(
+      normalized,
+    )
+  ) {
     return false;
   }
   return true;
@@ -154,19 +158,37 @@ export function notesLookCopyPasted(a: string, b: string): boolean {
   return na === nb;
 }
 
-/** True when missed-note text / cancelReason already carries a recognizable reason. */
+/** Frontline missed-session reason dropdown labels (free-text after the label is OK). */
+export const FRONTLINE_MISSED_REASONS = [
+  'Student Not Available',
+  'Provider Not Available',
+  'School Closed',
+  'Staff Shortage',
+  'Student Absence',
+  'Provider Absence',
+] as const;
+
+/** Match a Frontline miss reason label anywhere in text (allows `Label: details`). */
+export const FRONTLINE_MISSED_REASON_RE =
+  /\b(?:student\s+not\s+available|provider\s+not\s+available|school\s+closed|staff\s+shortage|student\s+absence|provider\s+absence)\b/i;
+
+/** Canonical Frontline label when notes/cancelReason match a known miss reason; else ''. */
+export function matchFrontlineMissedReason(text: string): string {
+  const n = String(text || '');
+  if (!n.trim()) return '';
+  if (/provider\s+absence/i.test(n)) return 'Provider Absence';
+  if (/student\s+absence/i.test(n)) return 'Student Absence';
+  if (/student\s+not\s+available/i.test(n)) return 'Student Not Available';
+  if (/provider\s+not\s+available/i.test(n)) return 'Provider Not Available';
+  if (/school\s+closed/i.test(n)) return 'School Closed';
+  if (/staff\s+shortage/i.test(n)) return 'Staff Shortage';
+  return '';
+}
+
+/** True when missed-note text / cancelReason carries a Frontline miss reason from the allowed set. */
 export function hasMissedSessionReason(cancelReason: string, notes: string): boolean {
-  const reason = String(cancelReason || '').trim();
-  if (reason) return true;
-  const n = String(notes || '');
-  if (!n.trim()) return false;
-  return (
-    /provider\s+absence/i.test(n) ||
-    /student\s+absence/i.test(n) ||
-    /student\s+not\s+available/i.test(n) ||
-    /student\s+not\s+in\s+school/i.test(n) ||
-    /student\s+absent/i.test(n) ||
-    /\b(?:absent|missed|cancell?ed|no[\s-]?show|did not attend|not present|refused)\b/i.test(n)
+  return Boolean(
+    matchFrontlineMissedReason(cancelReason) || matchFrontlineMissedReason(notes),
   );
 }
 
@@ -177,7 +199,10 @@ export function missedSessionReasonError(
 ): string | null {
   if (attendance !== 'missed') return null;
   if (hasMissedSessionReason(cancelReason, notes)) return null;
-  return 'Missed session needs a reason (e.g. provider absence, student absent).';
+  return (
+    'Missed session needs a Frontline reason ' +
+    `(${FRONTLINE_MISSED_REASONS.join(', ')}).`
+  );
 }
 
 export function noteCopyPasteError(

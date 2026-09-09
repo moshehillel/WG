@@ -38,10 +38,16 @@ describe('CPT duration units', () => {
     expect(sessionSignatureError('no signature block here', 'missed')).toBeNull();
   });
 
-  it('requires a recognizable reason for missed sessions', () => {
-    expect(missedSessionReasonError('missed', '', '')).toMatch(/needs a reason/i);
+  it('requires a Frontline missed-session reason from the allowed set', () => {
+    expect(missedSessionReasonError('missed', '', '')).toMatch(/needs a Frontline reason/i);
     expect(missedSessionReasonError('missed', '', 'Provider Absence:')).toBeNull();
     expect(missedSessionReasonError('missed', 'Provider Absence', '')).toBeNull();
+    expect(missedSessionReasonError('missed', '', 'Student Not Available: out of room')).toBeNull();
+    expect(missedSessionReasonError('missed', '', 'Provider Not Available')).toBeNull();
+    expect(missedSessionReasonError('missed', '', 'School Closed — snow day')).toBeNull();
+    expect(missedSessionReasonError('missed', '', 'Staff Shortage')).toBeNull();
+    expect(missedSessionReasonError('missed', '', 'Student Absence:')).toBeNull();
+    expect(missedSessionReasonError('missed', '', 'Cancelled / no-show')).toMatch(/needs a Frontline reason/i);
     expect(missedSessionReasonError('attended', '', '')).toBeNull();
   });
 

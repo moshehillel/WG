@@ -526,6 +526,11 @@ export type MandateWeekCheckOpts = {
   schoolNameByStudentId?:
     | ReadonlyMap<string, string>
     | Record<string, string>;
+  /**
+   * Also evaluate these children when they have no sessions this week
+   * (so under-mandate yellow fires for 0 of N, not only partial uploads).
+   */
+  includeStudentIds?: readonly string[];
 };
 
 function resolveCalendarForStudent(
@@ -580,6 +585,10 @@ export function checkMandatesForWeek(
     list.push(s);
     byStudent.set(s.studentId, list);
   }
+  for (const studentId of opts?.includeStudentIds || []) {
+    if (!studentId || byStudent.has(studentId)) continue;
+    byStudent.set(studentId, []);
+  }
   for (const [studentId, rows] of byStudent) {
     const studentLabel = resolveStudentLabel(studentId, studentNameById);
     const calendar = resolveCalendarForStudent(studentId, opts);
@@ -596,6 +605,8 @@ export function checkMandatesForWeek(
       }
     }
     if (!studentMandates.length) {
+      // No sessions and no mandate → nothing to flag (avoid "no mandate" for empty include list).
+      if (!rows.length) continue;
       const result = checkMandate(undefined, rows, allSessions, {
         studentLabel,
         calendar,
