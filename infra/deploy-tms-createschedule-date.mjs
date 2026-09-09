@@ -16,6 +16,15 @@ for (const f of fs.readdirSync(outDir)) {
   fs.unlinkSync(path.join(outDir, f));
 }
 
+// Bundle resolves @white-glove/hha-client from dist — rebuild before esbuild.
+try {
+  execSync('npm run build -w @white-glove/hha-client', { stdio: 'inherit', cwd: repoRoot });
+} catch {
+  console.warn(
+    'hha-client full tsc failed; using incremental dist (schedule-builder VisitDate fix)',
+  );
+}
+
 await esbuild.build({
   entryPoints: [path.join(repoRoot, 'packages/tms-api/src/handler.ts')],
   bundle: true,
