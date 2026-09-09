@@ -459,7 +459,10 @@ function mondayIso() {
   const day = d.getDay();
   const offset = day === 0 ? -6 : 1 - day;
   d.setDate(d.getDate() + offset);
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dayNum = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dayNum}`;
 }
 
 function mondayFromDos(dos) {
@@ -596,8 +599,30 @@ function clearUploadIssues() {
   }
 }
 
+function uploadIssueHost() {
+  return document.getElementById('uploadIssues') || document.getElementById('pUploadIssues');
+}
+
+function splitFailedBySeverity(failed, extraWarnings) {
+  const reds = [];
+  const yellows = [...(extraWarnings || [])].map((w) => String(w || '').trim()).filter(Boolean);
+  for (const f of failed || []) {
+    if (f && typeof f === 'object' && String(f.severity || '') === 'warn') {
+      const t = String(f.error || f.message || '').trim();
+      if (t) yellows.push(t);
+      continue;
+    }
+    const t = typeof f === 'string' ? f : String(f?.error || f?.message || '').trim();
+    if (t) reds.push(t);
+  }
+  return {
+    reds: [...new Set(reds)],
+    yellows: [...new Set(yellows.filter((w) => !reds.includes(w)))],
+  };
+}
+
 function setUploadIssues(errors, warnings, successes) {
-  const el = document.getElementById('uploadIssues');
+  const el = uploadIssueHost();
   if (!el) return;
   const errs = (errors || []).map((e) => String(e || '').trim()).filter(Boolean);
   const warns = (warnings || []).map((w) => String(w || '').trim()).filter(Boolean);
@@ -2206,12 +2231,9 @@ async function therapistHome(statusFlash) {
         pdfBase64,
       });
       state.weekId = out.week.id;
-      const warnList = Array.isArray(out.warnings) ? out.warnings : [];
-      const failedList = Array.isArray(out.failed)
-        ? out.failed.map((f) => (typeof f === 'string' ? f : f.error || JSON.stringify(f)))
-        : Array.isArray(out.errors)
-          ? out.errors
-          : [];
+      const split = splitFailedBySeverity(out.failed, out.warnings);
+      const warnList = split.yellows;
+      const failedList = split.reds;
       const savedList = Array.isArray(out.saved)
         ? out.saved.map((s) => {
             if (typeof s === 'string') return s;
@@ -2231,12 +2253,18 @@ async function therapistHome(statusFlash) {
         successMsgs.push(`Imported ${out.parsed || 0} session(s).`);
       }
       if (failedList.length) successMsgs.length = 0;
+      const blockedByYellow = Boolean(out.ok === false && warnList.length && !failedList.length);
       await therapistHome({
         success: successMsgs,
         error: failedList,
-        warn: warnList,
+        warn: [
+          ...warnList,
+          ...(blockedByYellow
+            ? ['Import blocked by yellow warnings (admin locker is ON). Nothing was saved.']
+            : []),
+        ],
       });
-      setUploadIssues(failedList, warnList, failedList.length ? [] : savedList);
+      setUploadIssues(failedList, warnList, failedList.length || warnList.length ? [] : savedList);
     } catch (e) {
       const errs = Array.isArray(e.errors) && e.errors.length
         ? e.errors
@@ -3236,16 +3264,21 @@ async function adminProviderDetail(providerId) {
         ${bulkBar('prov-sessions')}
         <table>
           <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Child</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
-          ${filteredSessions.map((x) => `<tr>
+          ${filteredSessions.map((x) => {
+            const hard = Boolean(x.aiBlock);
+            const flags = x.aiFlags || [];
+            const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
+            return `<tr class="${rowClass}">
             ${bulkTd('prov-sessions', x.id)}
             <td>${esc(x.dateOfService)}</td>
             <td>${childNameLink(x.studentId, x.studentName || '—')}</td>
             <td>${esc(x.weekStart || '—')}</td>
             <td>${esc(x.weekStatus || '—')}</td>
             <td>${esc(x.attendance)}</td>
-            <td>${esc(x.notes || '')}</td>
+            <td>${esc(x.notes || '')}${flags.length ? `<div class="muted">${esc(flags.join('; '))}</div>` : ''}</td>
             <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
-          </tr>`).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
+          </tr>`;
+          }).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
         </table>
 
         <h3 style="margin-top:1.25rem">Import Frontline / Therapist Activity sessions</h3>
@@ -3255,11 +3288,13 @@ async function adminProviderDetail(providerId) {
         <div id="pUploadIssues" class="upload-issues" hidden></div>
 
         <h3 style="margin-top:1.25rem">Generate timesheet</h3>
-        <p class="muted">Open or create a week for this provider, then view the timesheet.</p>
+        <p class="muted">Open or create a week for this provider, then view or send the timesheet (same SignNow flow as the therapist).</p>
         <div class="row">
           <label>Week start (Monday) <input id="pWeekStart" type="date" value="${esc(mondayIso())}" /></label>
           <button type="button" class="btn-primary" id="pGenTimesheet">View timesheet</button>
+          <button type="button" class="btn-primary" id="pSendTimesheet">Send timesheet</button>
         </div>
+        <p class="muted" id="pSendTimesheetHint" hidden></p>
 
         <h3 style="margin-top:1.25rem">Additional services</h3>
         <p class="muted">Same service types as the therapist workspace, including paid absence.</p>
@@ -3498,12 +3533,9 @@ async function adminProviderDetail(providerId) {
         fileName: file.name || '',
         pdfBase64,
       });
-      const warnList = Array.isArray(out.warnings) ? out.warnings : [];
-      const failedList = Array.isArray(out.failed)
-        ? out.failed.map((f) => (typeof f === 'string' ? f : f.error || JSON.stringify(f)))
-        : Array.isArray(out.errors)
-          ? out.errors
-          : [];
+      const split = splitFailedBySeverity(out.failed, out.warnings);
+      const warnList = split.yellows;
+      const failedList = split.reds;
       const savedList = Array.isArray(out.saved)
         ? out.saved.map((s) => {
             if (typeof s === 'string') return s;
@@ -3513,50 +3545,47 @@ async function adminProviderDetail(providerId) {
           })
         : [];
       const skippedN = Array.isArray(out.skipped) ? out.skipped.length : out.skippedCount || 0;
-      if (issuesHost && (failedList.length || warnList.length || savedList.length)) {
-        const parts = [
-          `<div class="dismissible-toolbar"><button type="button" class="btn status-clear-btn" data-clear-p-upload>Clear</button></div>`,
-        ];
-        if (savedList.length) {
-          parts.push(
-            `<div class="ok-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-p-upload aria-label="Clear">×</button><strong>Saved</strong>${savedList
-              .map((s) => `<div class="upload-issue-line">${esc(s)}</div>`)
-              .join('')}</div>`,
-          );
-        }
-        if (failedList.length) {
-          parts.push(
-            `<div class="err-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-p-upload aria-label="Clear">×</button><strong>${savedList.length ? 'Failed sessions' : 'Upload issues'}</strong>${failedList
-              .map((e) => `<div class="upload-issue-line">${esc(e)}</div>`)
-              .join('')}</div>`,
-          );
-        }
-        if (warnList.length) {
-          parts.push(
-            `<div class="warn-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-p-upload aria-label="Clear">×</button><strong>Warnings</strong>${warnList
-              .map((w) => `<div class="upload-issue-line">${esc(w)}</div>`)
-              .join('')}</div>`,
-          );
-        }
-        issuesHost.innerHTML = parts.join('');
-        issuesHost.hidden = false;
-        issuesHost.querySelectorAll('[data-clear-p-upload]').forEach((b) => {
-          b.onclick = () => {
-            issuesHost.hidden = true;
-            issuesHost.innerHTML = '';
-            clearStatus();
-          };
-        });
-      }
+      const blockedByYellow = Boolean(out.ok === false && warnList.length && !failedList.length);
+      setUploadIssues(
+        failedList,
+        [
+          ...warnList,
+          ...(blockedByYellow
+            ? ['Import blocked by yellow warnings (locker is ON). Nothing was saved.']
+            : []),
+        ],
+        failedList.length || out.ok === false ? [] : savedList,
+      );
       if (failedList.length || out.ok === false) {
-        setStatus(out.error || failedList[0] || 'Import blocked.', 'error');
+        setStatus({
+          error: failedList.length ? failedList : [],
+          warn: warnList.length
+            ? warnList
+            : [],
+        });
+        if (blockedByYellow) {
+          setStatus({
+            error: ['Import blocked by yellow warnings. Nothing was saved.'],
+            warn: warnList,
+          });
+        }
       } else {
         const skipBit = skippedN ? ` (${skippedN} already imported skipped)` : '';
-        setStatus(`Imported ${savedList.length || out.imported || 0} session(s)${skipBit}.`, 'ok');
+        setStatus({
+          success: [`Imported ${savedList.length || out.imported || 0} session(s)${skipBit}.`],
+          warn: warnList,
+        });
+        const flashWarn = warnList;
         await adminProviderDetail(providerId);
+        if (flashWarn.length) setUploadIssues([], flashWarn, savedList);
       }
     } catch (e) {
-      setStatus(e.message || 'Import failed.', 'err');
+      const split = splitFailedBySeverity(e.failed || e.errors, e.warnings);
+      setUploadIssues(split.reds, split.yellows);
+      setStatus({
+        error: split.reds.length ? split.reds : [e.message || 'Import failed.'],
+        warn: split.yellows,
+      });
     } finally {
       if (btn) {
         btn.disabled = false;
@@ -3575,6 +3604,71 @@ async function adminProviderDetail(providerId) {
         providerName: `${p.firstName || ''} ${p.lastName || ''}`.trim(),
       });
     } catch (e) { setStatus(e.message, 'err'); }
+  };
+  document.getElementById('pSendTimesheet').onclick = async () => {
+    const btn = document.getElementById('pSendTimesheet');
+    const hint = document.getElementById('pSendTimesheetHint');
+    try {
+      const weekStart = document.getElementById('pWeekStart').value;
+      if (!weekStart) throw new Error('Select a week start date.');
+      const ensured = await api('POST', '/week/ensure', { providerId, weekStart });
+      const weekId = ensured.week?.id;
+      if (!weekId) throw new Error('Could not open this provider week.');
+      const detail = await api(
+        'GET',
+        `/week?weekStart=${encodeURIComponent(weekStart)}&providerId=${encodeURIComponent(providerId)}`,
+      );
+      const signerEmail = detail.week?.signerEmail || ensured.week?.signerEmail || '';
+      const signerName = detail.week?.signerName || ensured.week?.signerName || '';
+      const sessions = detail.sessions || [];
+      const errors = detail.errors || [];
+      const block = timesheetSendBlockReason({
+        week: detail.week || ensured.week,
+        sessions,
+        locked: ['submitted', 'signed', 'locked'].includes(String(detail.week?.status || '')),
+        errors,
+        signerEmail,
+      });
+      if (block) {
+        if (hint) {
+          hint.hidden = false;
+          hint.className = 'err-inline';
+          hint.textContent = block;
+        }
+        setStatus({ error: [block], warn: detail.warnings || [] });
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      if (hint) {
+        hint.hidden = false;
+        hint.className = 'muted';
+        hint.textContent = 'Sending timesheet — this can take up to a minute…';
+      }
+      const out = await api(
+        'POST',
+        `/weeks/${weekId}/submit`,
+        { signerName, signerEmail },
+        { timeoutMs: 120000 },
+      );
+      const okMsg = out.message || 'Timesheet sent. Status is now Pending.';
+      setStatus({ success: [okMsg], warn: detail.warnings || [] });
+      showActionToast(okMsg, 'success');
+      await adminProviderDetail(providerId);
+    } catch (e) {
+      const errs = Array.isArray(e.errors) && e.errors.length ? e.errors : [e.message || 'Unable to send timesheet.'];
+      const warns = Array.isArray(e.warnings) ? e.warnings : [];
+      setStatus({ error: errs, warn: warns });
+      if (hint) {
+        hint.hidden = false;
+        hint.className = 'err-inline';
+        hint.textContent = errs[0] || 'Unable to send timesheet.';
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Send timesheet';
+      }
+    }
   };
   document.getElementById('pAddlSave').onclick = async () => {
     try {

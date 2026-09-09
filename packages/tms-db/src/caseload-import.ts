@@ -955,8 +955,17 @@ export function reassignProviderOwnedData(
   }
   for (const w of [...store.data.weeks]) {
     if (w.providerId !== fromId) continue;
-    const clash = store.data.weeks.find((x) => x.providerId === toId && x.weekStart === w.weekStart);
-    if (clash) continue;
+    const clash = store.data.weeks.find(
+      (x) => x.id !== w.id && x.providerId === toId && x.weekStart === w.weekStart,
+    );
+    if (clash) {
+      for (const s of store.sessionsForWeek(w.id)) {
+        store.upsertSession({ ...s, weekId: clash.id });
+      }
+      store.removeWeek(w.id);
+      weeks += 1;
+      continue;
+    }
     store.upsertWeek({ ...w, providerId: toId });
     weeks += 1;
   }
