@@ -6,6 +6,7 @@ import * as XLSX from 'xlsx';
 import {
   applyCaseloadImport,
   consolidateDuplicateProviderMandates,
+  reassignProviderOwnedData,
   findProviderByName,
   formatFreqDisplay,
   isAgencyProviderName,
@@ -1269,6 +1270,60 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
     expect(store.data.mandates[0]?.providerId).toBe('p-linked');
     expect(store.data.adminNotes[0]?.providerId).toBe('p-linked');
     expect(isOrphanProvider(store, store.data.providers[0]!)).toBe(false);
+  });
+
+  it('reassignProviderOwnedData moves clash-week sessions onto the linked week', () => {
+    const store = new MemoryStore();
+    store.upsertWeek({
+      id: 'w-linked',
+      providerId: 'p-linked',
+      weekStart: '2026-09-07',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+      hhaError: '',
+    });
+    store.upsertWeek({
+      id: 'w-orphan',
+      providerId: 'p-orphan',
+      weekStart: '2026-09-07',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+      hhaError: '',
+    });
+    store.upsertSession({
+      id: 's-admin',
+      weekId: 'w-orphan',
+      studentId: 'st1',
+      dateOfService: '09/08/2026',
+      beginTime: '11:00 am',
+      endTime: '11:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      additionalServiceType: '',
+      location: '',
+      notes: 'admin added',
+      cptCodes: [],
+      cptUnits: 0,
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+    reassignProviderOwnedData(store, 'p-orphan', 'p-linked');
+    expect(store.data.sessions[0]?.weekId).toBe('w-linked');
+    expect(store.data.weeks.some((w) => w.id === 'w-orphan')).toBe(false);
+    expect(store.sessionsForWeek('w-linked').map((s) => s.id)).toEqual(['s-admin']);
   });
 
   it('purgeOrphanProviders keeps orphan that uniquely holds caseload', () => {

@@ -11,6 +11,7 @@ import {
   dueDateReport,
   findProviderByName,
   isOrphanProvider,
+  providerDisplayNameKey,
   purgeOrphanProviders,
   lastServiceByStudent,
   mappingName,
@@ -339,6 +340,47 @@ function providerFor(store: MemoryStore, user: AppUser) {
     return store.data.providers.find((p) => p.id === user.providerId);
   }
   return store.data.providers.find((p) => p.userId === user.id);
+}
+
+/** Same-name provider ids (orphan twins) so week/session lookup matches admin detail. */
+function providerLookupIds(store: MemoryStore, providerId: string): string[] {
+  const id = String(providerId || '').trim();
+  if (!id) return [];
+  const opened = store.data.providers.find((p) => p.id === id);
+  if (!opened) return [id];
+  const key = providerDisplayNameKey(opened);
+  if (!key) return [id];
+  const ids = store.data.providers
+    .filter((p) => providerDisplayNameKey(p) === key)
+    .map((p) => p.id);
+  return ids.length ? ids : [id];
+}
+
+function weeksForProviderStart(
+  store: MemoryStore,
+  providerId: string,
+  weekStart: string,
+): typeof store.data.weeks {
+  const ids = new Set(providerLookupIds(store, providerId));
+  const start = String(weekStart || '').trim();
+  return store.data.weeks.filter(
+    (w) => ids.has(w.providerId) && (!start || w.weekStart === start),
+  );
+}
+
+/** Fold duplicate Monday weeks (alias / clash) onto one row so the therapist GET sees admin sessions. */
+function foldWeeksOnto(
+  store: MemoryStore,
+  target: (typeof store.data.weeks)[number],
+  extras: Array<(typeof store.data.weeks)[number]>,
+): void {
+  for (const extra of extras) {
+    if (!extra || extra.id === target.id) continue;
+    for (const s of store.sessionsForWeek(extra.id)) {
+      store.upsertSession({ ...s, weekId: target.id });
+    }
+    store.removeWeek(extra.id);
+  }
 }
 
 function getAppSettings(store: MemoryStore): AppSettings {
@@ -2036,7 +2078,7 @@ export async function handleTmsRequest(
       store.data.providers.find((p) => p.id === providerId) ||
       (provider?.id === providerId ? provider : undefined);
     const weeks = store.data.weeks
-      .filter((w) => w.providerId === providerId)
+      .filter((w) => providerLookupIds(store, providerId).includes(w.providerId))
       .map((w) => ({
         id: w.id,
         weekStart: w.weekStart,
@@ -2091,14 +2133,24 @@ export async function handleTmsRequest(
     const weekStart = String(req.query.weekStart || obj(req).weekStart || '');
     const providerId = String(req.query.providerId || provider?.id || '');
     const schoolId = String(req.query.schoolId || '').trim();
-    const week = store.weekByProviderStart(providerId, weekStart) || (weekStart ? undefined : store.data.weeks.find((w) => w.providerId === providerId));
-    let sessions = week ? store.sessionsForWeek(week.id) : [];
-    if (schoolId) {
-      const schoolStudentIds = new Set(
-        store.data.students.filter((s) => s.schoolId === schoolId).map((s) => s.id),
-      );
-      sessions = sessions.filter((s) => schoolStudentIds.has(s.studentId));
+    const matchedWeeks = weeksForProviderStart(store, providerId, weekStart);
+    let week =
+      matchedWeeks.find((w) => w.providerId === providerId) ||
+      matchedWeeks[0] ||
+      (weekStart ? undefined : store.data.weeks.find((w) => w.providerId === providerId));
+    if (week && week.providerId !== providerId) {
+      week = store.upsertWeek({ ...week, providerId });
     }
+    if (week && matchedWeeks.length > 1) {
+      foldWeeksOnto(
+        store,
+        week,
+        matchedWeeks.filter((w) => w.id !== week.id),
+      );
+    }
+    // Keep every session on this provider week. School picker only scopes the caseload
+    // dropdown — hiding rows made admin-added sessions disappear for the therapist.
+    const sessions = week ? store.sessionsForWeek(week.id) : [];
     const students = visibleStudents(store, ctx.user, weekStart || week?.weekStart || '', schoolId || undefined);
     const check = week
       ? checkMandatesForWeek(
@@ -2173,6 +2225,17 @@ export async function handleTmsRequest(
     const schoolId = String(b.schoolId || '').trim();
     if (!providerId || !weekStart) return json(400, { error: 'providerId and weekStart are required.' });
     let week = store.weekByProviderStart(providerId, weekStart);
+    const aliasWeeks = weeksForProviderStart(store, providerId, weekStart);
+    if (!week && aliasWeeks[0]) {
+      week = store.upsertWeek({ ...aliasWeeks[0]!, providerId });
+    }
+    if (week) {
+      foldWeeksOnto(
+        store,
+        week,
+        aliasWeeks.filter((w) => w.id !== week!.id),
+      );
+    }
     const preferredSchool =
       (schoolId ? store.data.schools.find((s) => s.id === schoolId) : undefined) ||
       schoolsForProvider(store, providerId)[0] ||
@@ -2295,6 +2358,7 @@ export async function handleTmsRequest(
       beginTime: string;
       endTime: string;
       error: string;
+      severity?: 'error' | 'warn';
     };
     type UploadSaved = {
       id: string;
@@ -2315,7 +2379,7 @@ export async function handleTmsRequest(
     const existingKeys = new Map<string, SessionRow>();
     for (const s of store.data.sessions) {
       const sw = store.data.weeks.find((w) => w.id === s.weekId);
-      if (sw && sw.providerId === providerId) {
+      if (sw && providerLookupIds(store, providerId).includes(sw.providerId)) {
         existingKeys.set(uploadSessionKey(s), s);
       }
     }
@@ -2648,6 +2712,7 @@ export async function handleTmsRequest(
       }
       if (screened.warnFlags.length) {
         const warnMsg = `${label}: ${screened.warnFlags.join('; ')}`;
+        softWarns.push(warnMsg);
         if (yellowBlocks) {
           failed.push({
             studentName,
@@ -2655,10 +2720,10 @@ export async function handleTmsRequest(
             beginTime: row.beginTime,
             endTime: row.endTime,
             error: warnMsg,
+            severity: 'warn',
           });
           continue;
         }
-        softWarns.push(warnMsg);
       }
 
       const check = checkMandatesForWeek(
@@ -2808,6 +2873,13 @@ export async function handleTmsRequest(
         archiveId,
         errors: errors.slice(0, 20),
       });
+      const yellowMsgs = [
+        ...new Set([
+          ...softWarns,
+          ...failed.filter((f) => f.severity === 'warn').map((f) => f.error),
+        ]),
+      ];
+      const hardMsgs = failed.filter((f) => f.severity !== 'warn').map((f) => f.error);
       return json(200, {
         ok: false,
         partial: false,
@@ -2816,10 +2888,11 @@ export async function handleTmsRequest(
         saved: [],
         failed,
         skipped,
-        warnings: [],
+        warnings: yellowMsgs,
         errors,
         error:
-          errors[0] ||
+          hardMsgs[0] ||
+          yellowMsgs[0] ||
           `Import blocked — ${failed.length} issue(s). Nothing was saved. Fix all errors and import again.`,
         parsed: parsed.length,
         imported: 0,

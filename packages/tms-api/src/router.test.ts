@@ -3381,4 +3381,80 @@ describe('TMS MFA org policy', () => {
     expect(disableAllGone.status).toBe(404);
     expect(persisted).toBe(2);
   });
+
+  it('therapist GET /week shows admin-added sessions even with a school filter', async () => {
+    const { store, provider } = storeWithTherapist();
+    const schoolA = store.data.schools[0]!;
+    const schoolB = store.upsertSchool({
+      id: newId(),
+      name: 'Other School',
+      district: 'Other',
+      signerName: 'Other Signer',
+      signerEmail: 'other@school.test',
+      createdAt: nowIso(),
+    });
+    const childA = store.upsertStudent({
+      id: newId(),
+      schoolId: schoolA.id,
+      firstName: 'Ada',
+      lastName: 'Lee',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: childA.id,
+      providerId: provider.id,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      frequencyKind: 'weekly',
+      sessionsPerPeriod: 2,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    const weekStart = '2026-09-07';
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: adminH,
+      query: {},
+      body: { providerId: provider.id, weekStart },
+    });
+    expect(ensured.status).toBe(200);
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+    const added = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: adminH,
+      query: {},
+      body: {
+        weekId,
+        studentId: childA.id,
+        dateOfService: '09/08/2026',
+        attendance: 'attended',
+        additionalServiceType: 'eval',
+        notes: 'admin eval',
+      },
+    });
+    expect(added.status).toBe(200);
+
+    const asTherapist = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/week',
+      headers: thH,
+      query: { weekStart, schoolId: schoolB.id, providerId: provider.id },
+      body: undefined,
+    });
+    expect(asTherapist.status).toBe(200);
+    const sessions = (asTherapist.body as { sessions: Array<{ notes: string }> }).sessions;
+    expect(sessions.some((s) => s.notes === 'admin eval')).toBe(true);
+  });
 });

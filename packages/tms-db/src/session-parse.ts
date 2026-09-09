@@ -99,19 +99,27 @@ export function isGenericSettingLabel(name: string): boolean {
   );
 }
 
+const SCHOOL_NAME_RE =
+  /\b([A-Z][A-Za-z0-9'.-]+(?:\s+[A-Za-z0-9'.\/-]+){0,6}(?:\s+(?:MS\/HS|M\.?S\.?|H\.?S\.?)|\s+School))\b/g;
+
+function takeSchoolLabel(raw: string): string {
+  const name = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!name || isServiceTypeSchoolLabel(name) || isGenericSettingLabel(name)) return '';
+  return name;
+}
+
 function extractSchoolName(blob: string): string {
   const labeled =
+    (blob.match(/\bSetting\s*:\s*([^\n]+)/i) || [])[1]?.trim() ||
     (blob.match(/\bSchool(?:\s*Name)?\s*:\s*([^\n]+)/i) || [])[1]?.trim() ||
     (blob.match(/\bRecommended School\s*:\s*([^\n]+)/i) || [])[1]?.trim() ||
     '';
-  if (labeled && !isServiceTypeSchoolLabel(labeled)) {
-    return labeled.replace(/\s+/g, ' ').trim();
-  }
-  const re =
-    /\b([A-Z][A-Za-z0-9'.-]+(?:\s+[A-Za-z0-9'.-]+){0,5}\s+School)\b/g;
+  const fromLabel = takeSchoolLabel(labeled);
+  if (fromLabel) return fromLabel;
+  const re = new RegExp(SCHOOL_NAME_RE.source, 'g');
   for (const m of blob.matchAll(re)) {
-    const name = String(m[1] || '').replace(/\s+/g, ' ').trim();
-    if (!name || isServiceTypeSchoolLabel(name)) continue;
+    const name = takeSchoolLabel(m[1] || '');
+    if (!name) continue;
     const before = blob.slice(Math.max(0, (m.index ?? 0) - 24), m.index ?? 0);
     if (/Service:\s*$/i.test(before)) continue;
     return name;
@@ -120,12 +128,12 @@ function extractSchoolName(blob: string): string {
 }
 
 function schoolFromSlice(slice: string): string {
-  const re =
-    /\b([A-Z][A-Za-z0-9'.-]+(?:\s+[A-Za-z0-9'.-]+){0,5}\s+School)\b/g;
+  const setting = takeSchoolLabel((slice.match(/\bSetting\s*:\s*([^\n]+)/i) || [])[1] || '');
+  if (setting) return setting;
+  const re = new RegExp(SCHOOL_NAME_RE.source, 'g');
   for (const m of slice.matchAll(re)) {
-    const name = String(m[1] || '').replace(/\s+/g, ' ').trim();
-    if (!name || isServiceTypeSchoolLabel(name)) continue;
-    return name;
+    const name = takeSchoolLabel(m[1] || '');
+    if (name) return name;
   }
   return '';
 }
@@ -565,12 +573,41 @@ export function normEntityName(s: string): string {
     .trim();
 }
 
+/** Expand MS/HS-style tokens so Frontline Setting aliases match TMS school names. */
+export function expandSchoolNameTokens(s: string): string {
+  return ` ${normEntityName(s)} `
+    .replace(/\bms hs\b/g, ' middle school high school ')
+    .replace(/\bmiddle high\b/g, ' middle school high school ')
+    .replace(/\bjr sr\b/g, ' junior senior ')
+    .replace(/\bms\b/g, ' middle school ')
+    .replace(/\bhs\b/g, ' high school ')
+    .replace(/\bes\b/g, ' elementary school ')
+    .replace(/\belem\b/g, ' elementary ')
+    .replace(/\bint\b/g, ' intermediate ')
+    .replace(/\bjhs\b/g, ' junior high school ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function schoolCoreName(s: string): string {
+  return expandSchoolNameTokens(s)
+    .replace(
+      /\b(middle school|high school|elementary school|junior high school|junior|senior|elementary|intermediate|primary|school)\b/g,
+      ' ',
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** True when PDF school clearly differs from the child's known school. */
 export function schoolNamesConflict(pdfSchool: string, knownSchool: string): boolean {
-  const a = normEntityName(pdfSchool);
-  const b = normEntityName(knownSchool);
+  const a = expandSchoolNameTokens(pdfSchool);
+  const b = expandSchoolNameTokens(knownSchool);
   if (!a || !b) return false;
   if (a === b) return false;
   if (a.includes(b) || b.includes(a)) return false;
+  const ca = schoolCoreName(pdfSchool);
+  const cb = schoolCoreName(knownSchool);
+  if (ca && cb && (ca === cb || ca.includes(cb) || cb.includes(ca))) return false;
   return true;
 }
