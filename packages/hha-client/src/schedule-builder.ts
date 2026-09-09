@@ -1,5 +1,5 @@
 import type { HhaVisit } from '@white-glove/shared';
-import { psTimeToHhmm } from './hha-time.js';
+import { psDateToIso, psTimeToHhmm } from './hha-time.js';
 
 function esc(value: string): string {
   return value
@@ -17,6 +17,8 @@ export function buildCreateScheduleBody(visit: HhaVisit): string {
   if (!visit.caregiverId) {
     throw new Error('CreateSchedule requires caregiverId');
   }
+  // HHA VisitDate is xs:date (YYYY-MM-DD). TMS sessions often store MM/DD/YYYY.
+  const visitDate = psDateToIso(visit.visitDate) ?? visit.visitDate;
   const start = psTimeToHhmm(visit.startTime);
   const end = psTimeToHhmm(visit.endTime);
   if (!start || !end) {
@@ -33,7 +35,7 @@ export function buildCreateScheduleBody(visit: HhaVisit): string {
   <PatientID>${esc(visit.patientId)}</PatientID>
   <ScheduleType>${esc(scheduleType)}</ScheduleType>
   <VisitType>Daily Fixed</VisitType>
-  <VisitDate>${esc(visit.visitDate)}</VisitDate>
+  <VisitDate>${esc(visitDate)}</VisitDate>
   <ScheduleStartTime>${esc(start)}</ScheduleStartTime>
   <ScheduleEndTime>${esc(end)}</ScheduleEndTime>
   <IsScheduleTemporary>No</IsScheduleTemporary>
