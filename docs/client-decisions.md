@@ -320,6 +320,16 @@ Requires entities to **already exist**:
 
 Implementation: `infra/lib/tms.ts` (pool), `packages/tms-db` settings, `packages/tms-api` `/admin/settings` + `/me`, `apps/tms-web` login/enroll UX + i18n.
 
+## Timesheet principal e-sign (SignNow)
+
+| Rule | Behavior |
+|------|----------|
+| **Vendor** | **SignNow** (Moshe, Sep 2026) — **not** DocuSign |
+| **Send timesheet** | SES email + branded PDF to the school signer until a SignNow REST API is wired |
+| **UI copy** | “Awaiting SignNow”, SignNow / email hints — never DocuSign |
+| **Manual admin Sign** | Disabled (410); principal signs via SignNow; completion auto-locks → HHA |
+| **Legacy code** | Old DocuSign REST helper removed from the send path; CDK `TmsDocuSignSecret` id retained for stack stability only |
+
 ## TMS HHA environment (sandbox until go-live)
 
 Live `TmsApiFn` uses **real** SOAP (`HHA_USE_MOCK=false`) against **sandbox** (`HHA_USE_PRODUCTION=false`). Same `HhaSecret` creds; URL forced to `sandbox1.hhaexchange.com`.

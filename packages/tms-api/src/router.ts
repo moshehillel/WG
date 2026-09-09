@@ -3223,13 +3223,13 @@ export async function handleTmsRequest(
       pdf: Buffer.from(pdf),
       replaceId: existingTs?.id,
     });
-    // DocuSign emails the principal; only SES-attach the PDF on email fallback.
+    // SignNow is the client e-sign vendor; until SignNow API is wired, SES emails the PDF.
     if (deps.mail && next.signerEmail && envelope.vendor === 'email') {
       try {
         await deps.mail.send({
           to: [next.signerEmail],
           subject: `Please sign related-service timesheet (week of ${next.weekStart})`,
-          text: `Please review and sign the attached timesheet for ${provider ? `${provider.firstName} ${provider.lastName}` : 'the therapist'}. Reply with the signed copy or complete the e-sign link when DocuSign is configured.\n\nPowered by advancedautomations.net`,
+          text: `Please review and sign the attached timesheet for ${provider ? `${provider.firstName} ${provider.lastName}` : 'the therapist'}. Reply with the signed copy or complete signing in SignNow when a link is provided.\n\nPowered by advancedautomations.net`,
           attachmentName: `timesheet-${next.weekStart}.pdf`,
           attachment: pdf,
         });
@@ -3246,7 +3246,7 @@ export async function handleTmsRequest(
       week: store.data.weeks.find((w) => w.id === next.id),
       warnings: check.warnings,
       envelope,
-      message: `Timesheet sent to ${next.signerEmail || 'the entered signer'}${envelope.vendor === 'docusign' ? ' via DocuSign' : ' by email'}.`,
+      message: `Timesheet sent to ${next.signerEmail || 'the entered signer'}${envelope.vendor === 'email' ? ' by email' : ' via SignNow'}.`,
     });
   }
 
@@ -3385,7 +3385,7 @@ export async function handleTmsRequest(
     return adminUser(() =>
       json(410, {
         error:
-          'Manual Sign is disabled. After the therapist sends the timesheet, the school principal signs via DocuSign; completion auto-locks and sends to HHA. Use Send to HHA to retry a failed transfer.',
+          'Manual Sign is disabled. After the therapist sends the timesheet, the school principal signs via SignNow; completion auto-locks and sends to HHA. Use Send to HHA to retry a failed transfer.',
       }),
     );
   }

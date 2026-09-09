@@ -128,18 +128,17 @@ export function addTherapyManagement(
   });
 
   /**
-   * DocuSign REST creds for principal e-sign after therapist "Send timesheet".
-   * JSON: { "baseUrl", "accessToken", "accountId", "webhookUrl"? }.
-   * webhookUrl should be `{TmsApiUrl}/webhooks/esign` (DocuSign Connect completed).
+   * Legacy e-sign secret construct (resource id kept for stack stability).
+   * Client vendor is **SignNow**; DocuSign REST is not used. Send timesheet = SES email
+   * until a SignNow API is wired. webhookUrl may later point at `{TmsApiUrl}/webhooks/esign`.
    */
   const docusignSecret = new secretsmanager.Secret(scope, 'TmsDocuSignSecret', {
     description:
-      'DocuSign API for TMS timesheet e-sign (JSON: baseUrl, accessToken, accountId, webhookUrl)',
+      'Legacy placeholder (SignNow is the client e-sign vendor; DocuSign REST unused)',
     secretStringValue: cdk.SecretValue.unsafePlainText(
       JSON.stringify({
-        baseUrl: 'https://demo.docusign.net/restapi',
-        accessToken: 'REPLACE_ME',
-        accountId: 'REPLACE_ME',
+        vendor: 'signnow',
+        note: 'Unused — SES email fallback until SignNow API is wired',
         webhookUrl: '',
       }),
     ),
@@ -268,7 +267,7 @@ export function addTherapyManagement(
   new cdk.CfnOutput(scope, 'TmsDocuSignSecretArn', {
     value: docusignSecret.secretArn,
     description:
-      'DocuSign JSON secret (baseUrl, accessToken, accountId, webhookUrl={TmsApiUrl}webhooks/esign).',
+      'Legacy secret ARN (SignNow is the client vendor; DocuSign REST unused). Future SignNow webhook: {TmsApiUrl}/webhooks/esign.',
   });
   new cdk.CfnOutput(scope, 'TmsWebHint', {
     value: spaOrigin
