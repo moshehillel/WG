@@ -51,6 +51,23 @@ describe('archive helpers', () => {
     ]);
   });
 
+  it('includes timesheets when weekStart is in range even if created later', () => {
+    const rows = [
+      row({
+        id: 'late',
+        kind: 'timesheet',
+        sourceType: 'timesheet',
+        weekStart: '2026-08-31',
+        createdAt: '2026-09-09T17:00:00Z',
+      }),
+    ];
+    expect(
+      filterArchives(rows, { kind: 'timesheet', from: '2026-08-10', to: '2026-09-07' }).map(
+        (r) => r.id,
+      ),
+    ).toEqual(['late']);
+  });
+
   it('authz allows admin or matching provider/user', () => {
     const a = row({ userId: 'u1', providerId: 'p1' });
     expect(canAccessArchive(a, { role: 'admin', userId: 'other' })).toBe(true);
