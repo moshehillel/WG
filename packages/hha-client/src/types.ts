@@ -114,7 +114,10 @@ export interface HhaClient {
     visitId: string,
     options: { callerId: string; startTime?: string; endTime?: string },
   ): Promise<void>;
-  resolveCaregiverId(providerName: string | undefined): Promise<string | undefined>;
+  resolveCaregiverId(
+    providerName: string | undefined,
+    options?: { caregiverCode?: string },
+  ): Promise<string | undefined>;
   resolvePayCodeId(payCodeName: string): Promise<string | undefined>;
   /** Agency pay-rate catalog (GetPayRateCodes + caregiver pay codes). */
   listPayRateCodes(): Promise<Array<{ id: string; name: string }>>;

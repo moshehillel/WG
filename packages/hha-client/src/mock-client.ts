@@ -217,8 +217,13 @@ export class MockHhaClient implements HhaClient {
     }
   }
 
-  async resolveCaregiverId(providerName: string | undefined): Promise<string | undefined> {
+  async resolveCaregiverId(
+    providerName: string | undefined,
+    options?: { caregiverCode?: string },
+  ): Promise<string | undefined> {
     this.calls.push('resolveCaregiverId');
+    const saved = options?.caregiverCode?.trim();
+    if (saved) return saved;
     if (!providerName?.trim()) return undefined;
     const key = providerName.trim().toUpperCase();
     // Explicit map entry (including undefined) wins — tests can force "not found".

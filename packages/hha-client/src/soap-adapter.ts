@@ -689,12 +689,20 @@ export class SoapHhaClientAdapter implements HhaClient {
     );
   }
 
-  async resolveCaregiverId(providerName: string | undefined): Promise<string | undefined> {
+  async resolveCaregiverId(
+    providerName: string | undefined,
+    options?: { caregiverCode?: string },
+  ): Promise<string | undefined> {
+    // Prefer saved HHA CaregiverID / code when present (stable; skip name search).
+    const saved = options?.caregiverCode?.trim();
+    if (saved) return saved;
+
     const attempts = caregiverSearchNameOrders(providerName);
     if (attempts.length === 0) return undefined;
     const providerTokens = new Set(
       (providerName ?? '')
         .trim()
+        .replace(/[,.;:/\\|]+/g, ' ')
         .toUpperCase()
         .split(/\s+/)
         .filter(Boolean),

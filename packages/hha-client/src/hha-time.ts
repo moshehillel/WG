@@ -95,11 +95,17 @@ export function splitProviderName(full: string | undefined): { firstName: string
 /**
  * SearchCaregivers name-order attempts for ProviderSoft "Provider Name".
  * PS sheets mix LAST FIRST and FIRST LAST — try both (and last-token-as-surname).
+ * Also accepts "Last, First" (TMS transfer / PS) — commas must not stick to name tokens.
  */
 export function caregiverSearchNameOrders(
   providerName: string | undefined,
 ): Array<{ firstName: string; lastName: string }> {
-  const parts = (providerName ?? '').trim().split(/\s+/).filter(Boolean);
+  const parts = (providerName ?? '')
+    .trim()
+    // "Last, First" / stray punctuation must not stick to name tokens.
+    .replace(/[,.;:/\\|]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
   if (parts.length === 0) return [];
   if (parts.length === 1) {
     return [

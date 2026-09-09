@@ -32,4 +32,10 @@ describe('providerNameMatchKeys', () => {
     const b = providerNameMatchKeys('TRUDY BOYCE');
     expect(a.some((k) => b.includes(k))).toBe(true);
   });
+
+  it('strips commas so Last, First matches First Last', () => {
+    const a = providerNameMatchKeys('Vasaturo, James');
+    const b = providerNameMatchKeys('James Vasaturo');
+    expect(a.some((k) => b.includes(k))).toBe(true);
+  });
 });
