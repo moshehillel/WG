@@ -75,6 +75,7 @@ import {
   type SchoolCalendar,
   type SessionRow,
   type Student,
+  type WeeklyPeriod,
 } from '@white-glove/tms-db';
 import { authenticate, requireAdmin, type AuthContext } from './auth.js';
 import { screenNoteWithOptionalBedrock } from './bedrock.js';
@@ -409,36 +410,99 @@ function schoolsForProvider(store: MemoryStore, providerId: string) {
   return store.data.schools.filter((s) => schoolIds.has(s.id));
 }
 
+/** Majority student.schoolId among sessions on this week (child's school, not picker). */
+function dominantSchoolIdForWeek(store: MemoryStore, weekId: string): string {
+  const sessions = store.sessionsForWeek(weekId);
+  const counts = new Map<string, number>();
+  for (const s of sessions) {
+    const student = store.data.students.find((st) => st.id === s.studentId);
+    const sid = String(student?.schoolId || '').trim();
+    if (!sid) continue;
+    counts.set(sid, (counts.get(sid) || 0) + 1);
+  }
+  let best = '';
+  let bestN = 0;
+  for (const [id, n] of counts) {
+    if (n > bestN) {
+      best = id;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * Timesheet signer school = school of the children on the week (session majority).
+ * Therapist selected-school filter / first caseload school only apply when the week
+ * has no sessions yet. Never stamp a sibling school's signer onto another school.
+ */
+function resolveWeekSchool(
+  store: MemoryStore,
+  providerId: string,
+  opts?: { weekId?: string; preferredSchoolId?: string },
+) {
+  const weekId = String(opts?.weekId || '').trim();
+  if (weekId) {
+    const dominantId = dominantSchoolIdForWeek(store, weekId);
+    if (dominantId) {
+      const fromSessions = store.data.schools.find((s) => s.id === dominantId);
+      if (fromSessions) return fromSessions;
+    }
+  }
+  const preferredId = String(opts?.preferredSchoolId || '').trim();
+  if (preferredId) {
+    const preferred = store.data.schools.find((s) => s.id === preferredId);
+    if (preferred) return preferred;
+  }
+  return schoolsForProvider(store, providerId)[0] || store.data.schools[0];
+}
+
+function stampWeekSignerFromSchool(
+  store: MemoryStore,
+  week: WeeklyPeriod,
+  school: { signerName?: string; signerEmail?: string } | undefined,
+): WeeklyPeriod {
+  if (!school || !therapistCanEdit(week.status)) return week;
+  const signerName = String(school.signerName || '');
+  const signerEmail = String(school.signerEmail || '');
+  if (week.signerName === signerName && week.signerEmail === signerEmail) return week;
+  return store.upsertWeek({ ...week, signerName, signerEmail });
+}
+
 function schoolDistrictForWeek(
   store: MemoryStore,
   weekId: string,
   preferredSchoolId?: string,
 ): string {
+  // Prefer child's school from sessions (same rule as signer), not the school picker.
+  const sessions = store.sessionsForWeek(weekId);
+  if (sessions.length) {
+    const counts = new Map<string, number>();
+    for (const s of sessions) {
+      const student = store.data.students.find((st) => st.id === s.studentId);
+      const school = student
+        ? store.data.schools.find((sc) => sc.id === student.schoolId)
+        : undefined;
+      const label = String(school?.district || school?.name || '').trim();
+      if (!label) continue;
+      counts.set(label, (counts.get(label) || 0) + 1);
+    }
+    let best = '';
+    let bestN = 0;
+    for (const [label, n] of counts) {
+      if (n > bestN) {
+        best = label;
+        bestN = n;
+      }
+    }
+    if (best) return best;
+  }
   if (preferredSchoolId) {
     const preferred = store.data.schools.find((s) => s.id === preferredSchoolId);
     const label = String(preferred?.district || preferred?.name || '').trim();
     if (label) return label;
   }
-  const sessions = store.sessionsForWeek(weekId);
-  const counts = new Map<string, number>();
-  for (const s of sessions) {
-    const student = store.data.students.find((st) => st.id === s.studentId);
-    const school = student
-      ? store.data.schools.find((sc) => sc.id === student.schoolId)
-      : undefined;
-    const label = String(school?.district || school?.name || '').trim();
-    if (!label) continue;
-    counts.set(label, (counts.get(label) || 0) + 1);
-  }
-  let best = '';
-  let bestN = 0;
-  for (const [label, n] of counts) {
-    if (n > bestN) {
-      best = label;
-      bestN = n;
-    }
-  }
-  return best;
+  return '';
 }
 
 function cptLabelFromParts(codes: string[], procedures: string[], units: number): string {
@@ -2206,6 +2270,13 @@ export async function handleTmsRequest(
     const schoolDistrict = week
       ? schoolDistrictForWeek(store, week.id, schoolId || undefined)
       : '';
+    if (week && therapistCanEdit(week.status)) {
+      const signerSchool = resolveWeekSchool(store, providerId, {
+        weekId: week.id,
+        preferredSchoolId: schoolId || undefined,
+      });
+      week = stampWeekSignerFromSchool(store, week, signerSchool);
+    }
     return json(200, {
       week,
       sessions: sessionsOut,
@@ -2236,10 +2307,11 @@ export async function handleTmsRequest(
         aliasWeeks.filter((w) => w.id !== week!.id),
       );
     }
-    const preferredSchool =
-      (schoolId ? store.data.schools.find((s) => s.id === schoolId) : undefined) ||
-      schoolsForProvider(store, providerId)[0] ||
-      store.data.schools[0];
+    // Signer from session children's school when present; picker/caseload only if empty week.
+    const preferredSchool = resolveWeekSchool(store, providerId, {
+      weekId: week?.id,
+      preferredSchoolId: schoolId || undefined,
+    });
     if (!week) {
       week = store.upsertWeek({
         id: newId(),
@@ -2254,16 +2326,8 @@ export async function handleTmsRequest(
         hhaStatus: 'none',
         hhaError: '',
       });
-    } else if (
-      preferredSchool &&
-      therapistCanEdit(week.status) &&
-      (!week.signerEmail || schoolId)
-    ) {
-      week = store.upsertWeek({
-        ...week,
-        signerName: preferredSchool.signerName || week.signerName,
-        signerEmail: preferredSchool.signerEmail || week.signerEmail,
-      });
+    } else {
+      week = stampWeekSignerFromSchool(store, week, preferredSchool);
     }
     return json(200, { week, school: preferredSchool || null });
   }
@@ -2320,10 +2384,13 @@ export async function handleTmsRequest(
 
     // Attach each session to the Monday week of its date of service (no calendar picker required).
     const weekCache = new Map<string, (typeof store.data.weeks)[number]>();
+    const uploadSchoolId = String(b.schoolId || '').trim();
     const ensureWeek = (weekStart: string) => {
       let w = weekCache.get(weekStart) || store.weekByProviderStart(providerId, weekStart);
       if (!w) {
-        const school = store.data.schools[0];
+        const school = resolveWeekSchool(store, providerId, {
+          preferredSchoolId: uploadSchoolId || undefined,
+        });
         w = store.upsertWeek({
           id: newId(),
           providerId,
@@ -2914,6 +2981,17 @@ export async function handleTmsRequest(
       });
     }
 
+    // After sessions land, stamp signer from children's schools (not org schools[0] / picker).
+    const touchedWeekIds = new Set(pending.map((p) => p.session.weekId).filter(Boolean));
+    for (const wid of touchedWeekIds) {
+      const w = store.data.weeks.find((x) => x.id === wid);
+      if (!w) continue;
+      const school = resolveWeekSchool(store, providerId, { weekId: w.id });
+      const stamped = stampWeekSignerFromSchool(store, w, school);
+      weekCache.set(stamped.weekStart, stamped);
+      if (week?.id === stamped.id) week = stamped;
+    }
+
     const weekCheck = checkMandatesForWeek(
       store.data.mandates,
       store.sessionsForWeek(week.id),
@@ -3237,17 +3315,34 @@ export async function handleTmsRequest(
       });
     }
     const b = obj(req);
+    const signerSchool = resolveWeekSchool(store, week.providerId, {
+      weekId: week.id,
+      preferredSchoolId: String(b.schoolId || '').trim() || undefined,
+    });
+    // Prefer the child's school signer fields even when empty — do not fall back to a
+    // sibling school's stale week.signer* or the selected-school filter body.
+    const signerName = signerSchool
+      ? String(signerSchool.signerName || '')
+      : String(b.signerName || week.signerName || '');
+    const signerEmail = signerSchool
+      ? String(signerSchool.signerEmail || '')
+      : String(b.signerEmail || week.signerEmail || '');
+    if (!String(signerEmail || '').trim()) {
+      return json(400, {
+        error: 'No school signer is on file. Contact the office to assign a signer.',
+      });
+    }
     const next = store.upsertWeek({
       ...week,
       status: 'submitted',
-      signerName: String(b.signerName || week.signerName),
-      signerEmail: String(b.signerEmail || week.signerEmail),
+      signerName,
+      signerEmail,
     });
     const provider = store.data.providers.find((p) => p.id === next.providerId);
     const schoolDistrict = schoolDistrictForWeek(
       store,
       next.id,
-      String(b.schoolId || '').trim() || undefined,
+      signerSchool?.id || String(b.schoolId || '').trim() || undefined,
     );
     const pdf = buildTimesheetPdf({
       week: next,
@@ -3311,7 +3406,7 @@ export async function handleTmsRequest(
       sourceType: 'timesheet',
       userId: ctx.user.id,
       providerId: next.providerId,
-      schoolId: String(b.schoolId || '').trim(),
+      schoolId: signerSchool?.id || String(b.schoolId || '').trim(),
       weekId: next.id,
       weekStart: next.weekStart,
       filename: `timesheet-${next.weekStart}.pdf`,
