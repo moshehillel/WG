@@ -748,5 +748,87 @@ describe('transferLockedWeek Program Id', () => {
     expect(result.transferred).toBe(1);
     expect(hha.calls).toContain('resolvePayCodeId');
   });
+
+  it('saves resolved HHA caregiver id onto the provider for next transfer', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'James',
+      lastName: 'Vasaturo',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Kid',
+      lastName: 'One',
+      dob: '',
+      programId: '1',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+      serviceType: 'PT School',
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+    hha.payCodes.set('PT $70', 'pay-pt-70');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.ok).toBe(true);
+    expect(store.data.providers.find((p) => p.id === provider.id)?.hhaCaregiverCode).toBe(
+      'mock-caregiver-1',
+    );
+  });
 });
 

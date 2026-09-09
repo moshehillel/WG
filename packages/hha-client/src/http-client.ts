@@ -89,8 +89,14 @@ export class HttpHhaClient implements HhaClient {
     return this.request('POST', `/visits/${encodeURIComponent(visitId)}/link-clock`, options);
   }
 
-  resolveCaregiverId(providerName: string | undefined): Promise<string | undefined> {
-    return this.request('POST', '/caregivers/resolve', { providerName });
+  resolveCaregiverId(
+    providerName: string | undefined,
+    options?: { caregiverCode?: string },
+  ): Promise<string | undefined> {
+    return this.request('POST', '/caregivers/resolve', {
+      providerName,
+      caregiverCode: options?.caregiverCode,
+    });
   }
 
   resolvePayCodeId(payCodeName: string): Promise<string | undefined> {

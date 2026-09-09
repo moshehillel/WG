@@ -233,11 +233,17 @@ export async function transferLockedWeek(options: {
 
       const caregiverId = await hha.resolveCaregiverId(
         `${provider.lastName}, ${provider.firstName}`,
+        { caregiverCode: provider.hhaCaregiverCode || undefined },
       );
       if (!caregiverId) {
         throw new Error(
           `Caregiver not found in HHA for provider "${provider.firstName} ${provider.lastName}"`,
         );
+      }
+      // Persist HHA CaregiverID so the next transfer prefers code over name match.
+      if (provider.hhaCaregiverCode !== caregiverId) {
+        store.upsertProvider({ ...provider, hhaCaregiverCode: caregiverId });
+        provider.hhaCaregiverCode = caregiverId;
       }
 
       const result = await hha.locateOrScheduleVisit({

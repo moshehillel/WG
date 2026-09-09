@@ -20,13 +20,14 @@ export function normalizeMappingKey(value: string | undefined): string {
 
 /** Sorted token key — matches "BOYCE TRUDY" with "TRUDY BOYCE" after uppercasing. */
 export function providerNameMatchKeys(name: string | undefined): string[] {
-  const raw = (name ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
+  // Strip commas/punctuation so "Vasaturo, James" matches "VASATURO JAMES".
+  const raw = normalizeLookupName(name).toUpperCase();
   if (!raw) return [];
   const tokens = raw.split(' ').filter(Boolean);
-  const keys = new Set<string>([raw]);
+  const joined = tokens.join(' ');
+  const keys = new Set<string>([joined]);
   if (tokens.length > 1) {
     keys.add([...tokens].sort().join(' '));
-    keys.add(tokens.join(' '));
   }
   return [...keys];
 }
