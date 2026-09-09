@@ -8,12 +8,12 @@ const MARGIN_X = 28;
 const CONTENT_W = PAGE_W - MARGIN_X * 2;
 
 /**
- * DocuSign signHere anchor (must appear in the PDF text stream near the principal box).
+ * E-sign signHere anchor (must appear in the PDF text stream near the principal box).
  * Prefer this over absolute coordinates so layout tweaks stay signable.
  */
 export const PRINCIPAL_SIGN_ANCHOR = '/sig-principal/';
 
-/** Fallback absolute DocuSign tab (top-left origin) for the principal signature line. */
+/** Fallback absolute e-sign tab (top-left origin) for the principal signature line. */
 export const PRINCIPAL_SIGN_TAB = {
   pageNumber: '1',
   xPosition: '430',
@@ -352,7 +352,7 @@ function buildPageContent(input: {
       ops.push(textAt(dateX, cardsY + 22, 'Date', 7.5, C.muted, true));
       ops.push(line(dateX + 28, cardsY + 20, card.x + cardW - 14, cardsY + 20, C.line, 0.8));
       if (card.principal) {
-        // Tiny white anchor text for DocuSign tab placement
+        // Tiny white anchor text for e-sign tab placement
         ops.push(textAt(card.x + 14, cardsY + 6, PRINCIPAL_SIGN_ANCHOR, 4, C.white, false));
       }
     }
@@ -458,7 +458,7 @@ function assemblePdf(pageStreams: string[]): Uint8Array {
 }
 
 /**
- * Sessions shown on the DocuSign / email timesheet PDF.
+ * Sessions shown on the SignNow / email timesheet PDF.
  * Missed (absent / no-show) stay in TMS for makeup linking but are not signed for pay.
  * Matches HHA transfer: attended + makeup only.
  */

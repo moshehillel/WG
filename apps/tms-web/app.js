@@ -1466,7 +1466,7 @@ async function openTimesheetModal(opts) {
         </div>
       </div>
       ${meta.length ? `<p class="muted timesheet-pdf-meta">${meta.map((m) => esc(m)).join(' · ')}</p>` : ''}
-      <p class="muted timesheet-pdf-hint">Same branded PDF that DocuSign / email will send.</p>
+      <p class="muted timesheet-pdf-hint">Same branded PDF that SignNow / email will send.</p>
       <div class="timesheet-pdf-loading muted">Loading branded timesheet…</div>
       <div class="timesheet-pdf-pages" hidden></div>
       <iframe class="timesheet-pdf-frame" title="Timesheet PDF fallback" hidden></iframe>
@@ -2085,7 +2085,7 @@ async function therapistHome(statusFlash) {
   });
   document.getElementById('cancelApproval')?.addEventListener('click', async () => {
     if (!state.weekId) return;
-    if (!confirm('Cancel the pending approval request? This voids the DocuSign envelope (if any) and returns the week to draft.')) return;
+    if (!confirm('Cancel the pending approval request? This voids the SignNow / email signing request (if any) and returns the week to draft.')) return;
     try {
       clearTransientErrors();
       const out = await api('POST', `/weeks/${state.weekId}/cancel-approval`);
@@ -2500,7 +2500,7 @@ async function adminDash() {
     // Remove so it stays visible even when the actions cell is narrow.
     parts.push(`<button type="button" class="btn" data-remove-week="${esc(w.id)}" data-week-status="${esc(status)}">Remove</button>`);
     if (status === 'submitted') {
-      parts.push(`<span class="muted">Awaiting DocuSign</span>`);
+      parts.push(`<span class="muted">Awaiting SignNow</span>`);
     }
     if (canReopen) {
       parts.push(`<button type="button" class="btn" data-reopen="${esc(w.id)}">Reopen</button>`);

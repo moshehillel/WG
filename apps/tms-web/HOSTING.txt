@@ -55,6 +55,12 @@ Handoff email:
   Live stack already sets TMS_FROM_EMAIL from alertFromEmail (moshe@advancedautomations.net
   in cdk.json) and grants ses:SendEmail — ensure that From identity is verified in SES.
 
+---- Timesheet principal e-sign (SignNow) ----
+Client vendor is **SignNow** (not DocuSign). UI and API messages say SignNow.
+Until a SignNow REST integration exists, "Send timesheet" emails the branded PDF via SES.
+POST /webhooks/esign remains available for a future SignNow completion hook.
+Legacy AWS secret construct TmsDocuSignSecret is unused by the send path.
+
 ---- HHA transfer (lock / sign / admin "Send to HHA") ----
 Live TmsApiFn must have:
   HHA_USE_MOCK=false

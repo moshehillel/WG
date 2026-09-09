@@ -55,6 +55,7 @@ Bot **never runs daytime** — night batch only.
 | **Caregiver codes** | Separate PS report; lookup by Provider Name; alert if missing. |
 | **Weekly review** | Monday night dry-run; Tuesday night live sessions; other reports nightly. |
 | **Report UserReportIds** | Open **4526**, closure **4527**, discharge **4528**, API **4026**, caregiver codes **4541**. |
+| **Timesheet e-sign vendor** | **SignNow** (not DocuSign). Product copy + email path updated Sep 2026; SignNow REST API not built yet (SES PDF email until then). |
 
 Deploy:
 
