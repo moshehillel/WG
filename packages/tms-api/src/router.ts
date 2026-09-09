@@ -79,7 +79,13 @@ import { authenticate, requireAdmin, type AuthContext } from './auth.js';
 import { screenNoteWithOptionalBedrock } from './bedrock.js';
 import { transferLockedWeek } from './hha-transfer.js';
 import { buildTimesheetPdf } from './timesheet.js';
-import { createSignEnvelope, envelopeCompleted, voidSignEnvelope } from './esign.js';
+import {
+  createSignEnvelope,
+  envelopeCompleted,
+  SignNowApiError,
+  SignNowNotConfiguredError,
+  voidSignEnvelope,
+} from './esign.js';
 import { deactivateCognitoLogin, deleteCognitoLogin, inviteTherapist } from './invite.js';
 import { clearAllCognitoMfaPreferences } from './mfa-clear.js';
 import { PDF_NO_TEXT_ERROR, bodyHasPdfBytes, pdfTextFromBody } from './pdf-text.js';
@@ -3199,12 +3205,30 @@ export async function handleTmsRequest(
         };
       }),
     });
-    const envelope = await createSignEnvelope({
-      signerEmail: next.signerEmail,
-      signerName: next.signerName,
-      weekId: next.id,
-      pdf,
-    });
+    let envelope;
+    try {
+      envelope = await createSignEnvelope({
+        signerEmail: next.signerEmail,
+        signerName: next.signerName,
+        weekId: next.id,
+        pdf,
+      });
+    } catch (err) {
+      store.upsertWeek({ ...week });
+      const msg =
+        err instanceof SignNowNotConfiguredError || err instanceof SignNowApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Could not send timesheet via SignNow.';
+      const status =
+        err instanceof SignNowNotConfiguredError
+          ? 503
+          : err instanceof SignNowApiError && err.status && err.status >= 400 && err.status < 500
+            ? 502
+            : 503;
+      return json(status, { error: msg });
+    }
     const timesheetKey = `tms/timesheets/${next.id}.pdf`;
     store.upsertWeek({ ...next, envelopeId: envelope.envelopeId, timesheetKey });
     const existingTs = findTimesheetArchive(store, next.id);
@@ -3223,7 +3247,7 @@ export async function handleTmsRequest(
       pdf: Buffer.from(pdf),
       replaceId: existingTs?.id,
     });
-    // SignNow is the client e-sign vendor; until SignNow API is wired, SES emails the PDF.
+    // SES email fallback only when SignNow is off (tests / TMS_SIGNNOW_ALLOW_EMAIL_FALLBACK=1).
     if (deps.mail && next.signerEmail && envelope.vendor === 'email') {
       try {
         await deps.mail.send({

@@ -1,0 +1,9 @@
+TMS SignNow REST (upload + freeform invite + cancel + webhook)
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+{
+    "CodeSha256": "fPPDa4QUCqYNM1r/18cttoHwrzPBWV9jOG0BvujYjqg=",
+    "LastModified": "2026-09-09T15:50:35.000+0000",
+    "CodeSize": 1982394
+}
+Secret: TmsDocuSignSecret — JSON { api_key, from_email, webhook_url }
+FE: white-glove-tms-web ?v=84
