@@ -15,6 +15,7 @@ export { resolvePlacementForService } from './resolve-placement.js';
 export { AmbiguousPatientNameError } from './patient-errors.js';
 export {
   isAlreadyDischargedError,
+  isInvalidHhaPatientError,
   isTrustedHhaPatientId,
   toFindPatientOptions,
 } from './resolve-patient-id.js';

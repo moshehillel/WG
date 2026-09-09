@@ -37,6 +37,8 @@ export class MockHhaClient implements HhaClient {
   /** Optional exact (normalized) billing service names for TMS school codes in unit tests. */
   readonly serviceCodesByName = new Map<string, string>();
   readonly caregiverByName = new Map<string, string | undefined>();
+  /** PatientIDs that CreateSchedule rejects with ErrorID=-56 (stale / wrong agency). */
+  readonly invalidPatientIds = new Set<string>();
   readonly calls: string[] = [];
 
   async findPatient(options: FindPatientOptions): Promise<string | undefined> {
@@ -184,6 +186,11 @@ export class MockHhaClient implements HhaClient {
 
   async locateOrScheduleVisit(visit: HhaVisit): Promise<UpsertResult> {
     this.calls.push('locateOrScheduleVisit');
+    if (visit.patientId && this.invalidPatientIds.has(String(visit.patientId).trim())) {
+      throw new Error(
+        'HHA CreateSchedule failed: "Patient ID is an invalid for current Agency." (ErrorID=-56)',
+      );
+    }
     const key =
       visit.visitExternalId ??
       `${visit.patientId}:${visit.visitDate ?? ''}:${visit.startTime ?? ''}`;
