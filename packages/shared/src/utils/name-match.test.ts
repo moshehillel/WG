@@ -38,4 +38,11 @@ describe('providerNameMatchKeys', () => {
     const b = providerNameMatchKeys('James Vasaturo');
     expect(a.some((k) => b.includes(k))).toBe(true);
   });
+
+  it('strips PT* / OT / SLP so dirty TMS names match clean HHA names', () => {
+    const a = providerNameMatchKeys('Patel PT*, NEELAMBEN');
+    const b = providerNameMatchKeys('NEELAMBEN Patel');
+    expect(a.some((k) => b.includes(k))).toBe(true);
+    expect(a.every((k) => !/\bPT\b/.test(k))).toBe(true);
+  });
 });

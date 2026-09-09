@@ -1,3 +1,5 @@
+import { stripProviderDisciplineSuffixes } from '@white-glove/shared';
+
 /** Minutes from midnight for "4:30 PM" style times. */
 export function toMinutes12h(t: string | undefined): number | null {
   if (!t?.trim()) return null;
@@ -100,10 +102,8 @@ export function splitProviderName(full: string | undefined): { firstName: string
 export function caregiverSearchNameOrders(
   providerName: string | undefined,
 ): Array<{ firstName: string; lastName: string }> {
-  const parts = (providerName ?? '')
-    .trim()
-    // "Last, First" / stray punctuation must not stick to name tokens.
-    .replace(/[,.;:/\\|]+/g, ' ')
+  // Drop PT*/OT/SLP (and trailing *) so "Patel PT*, NEELAMBEN" searches as Patel / NEELAMBEN.
+  const parts = stripProviderDisciplineSuffixes(providerName)
     .split(/\s+/)
     .filter(Boolean);
   if (parts.length === 0) return [];

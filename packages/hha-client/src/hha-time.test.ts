@@ -31,4 +31,22 @@ describe('caregiverSearchNameOrders', () => {
       ]),
     );
   });
+
+  it('strips discipline suffixes like PT* before building search orders', () => {
+    const attempts = caregiverSearchNameOrders('Patel PT*, NEELAMBEN');
+    expect(attempts).toEqual(
+      expect.arrayContaining([
+        { lastName: 'Patel', firstName: 'NEELAMBEN' },
+        { firstName: 'NEELAMBEN', lastName: 'Patel' },
+      ]),
+    );
+    expect(
+      attempts.every(
+        (a) =>
+          !/\bPT\b|\*/i.test(`${a.firstName} ${a.lastName}`) &&
+          !a.firstName.includes('*') &&
+          !a.lastName.includes('*'),
+      ),
+    ).toBe(true);
+  });
 });

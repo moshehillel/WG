@@ -1,0 +1,14 @@
+HHA caregiver lookup — strip PT-star / OT / SLP discipline suffixes before SearchCaregivers
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+{
+    "CodeSha256": "B5xjDtlHrS+iHO+C7vLZ91UnkAJSPmsOTGVVI+HzPj4=",
+    "LastModified": "2026-09-09T20:51:51.000+0000",
+    "CodeSize": 532543
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
