@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isAlreadyDischargedError,
+  isInvalidHhaPatientError,
   isTrustedHhaPatientId,
   toFindPatientOptions,
 } from './resolve-patient-id.js';
@@ -51,5 +52,18 @@ describe('isAlreadyDischargedError', () => {
       true,
     );
     expect(isAlreadyDischargedError(new Error('ErrorID=-56'))).toBe(false);
+  });
+});
+
+describe('isInvalidHhaPatientError', () => {
+  it('detects ErrorID=-56 and invalid-for-agency wording', () => {
+    expect(
+      isInvalidHhaPatientError(
+        new Error(
+          'HHA CreateSchedule failed: "Patient ID is an invalid for current Agency." (ErrorID=-56)',
+        ),
+      ),
+    ).toBe(true);
+    expect(isInvalidHhaPatientError(new Error('ErrorID=-310'))).toBe(false);
   });
 });

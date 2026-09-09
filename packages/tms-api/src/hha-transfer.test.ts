@@ -832,3 +832,139 @@ describe('transferLockedWeek Program Id', () => {
   });
 });
 
+describe('transferLockedWeek ErrorID=-56 patient recovery', () => {
+  function seedWeek(store: MemoryStore, opts: { badPatientId: string; programId: string }) {
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Ana',
+      lastName: 'Binaj',
+      dob: '2021-02-22',
+      programId: opts.programId,
+      programType: 'Baldwin UFSD',
+      hhaPatientId: opts.badPatientId,
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+      serviceType: 'PT School',
+    });
+    return { provider, student, week };
+  }
+
+  it('on -56: clears bad ID, searches, saves found PatientID, does not CreatePatient', async () => {
+    const store = new MemoryStore();
+    const { student, week } = seedWeek(store, {
+      badPatientId: '26027958',
+      programId: '21021322',
+    });
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+    hha.invalidPatientIds.add('26027958');
+    const existing = await hha.upsertPatient({
+      firstName: 'Ana',
+      lastName: 'Binaj',
+      caseId: '21021322',
+      externalId: '21021322',
+      dateOfBirth: '2021-02-22',
+    });
+    hha.calls.length = 0;
+
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+
+    expect(result.ok).toBe(true);
+    expect(result.transferred).toBe(1);
+    expect(store.data.students.find((s) => s.id === student.id)?.hhaPatientId).toBe(existing.id);
+    expect(hha.calls.filter((c) => c === 'findPatient').length).toBeGreaterThanOrEqual(1);
+    // First resolve used trusted bad ID (no find); recovery find + upsertPatient may find again.
+    // CreatePatient path is upsertPatient — must not create a second patient.
+    expect([...hha.patients.values()].filter((p) => p.firstName === 'Ana').length).toBe(1);
+    expect(hha.calls.filter((c) => c === 'locateOrScheduleVisit').length).toBe(2);
+  });
+
+  it('on -56: when search misses, CreatePatient then save new PatientID and retry', async () => {
+    const store = new MemoryStore();
+    const { student, week } = seedWeek(store, {
+      badPatientId: '26027959',
+      programId: '21042316',
+    });
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+    hha.invalidPatientIds.add('26027959');
+    // No existing patient in mock → find misses → upsert creates.
+
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+
+    expect(result.ok).toBe(true);
+    expect(result.transferred).toBe(1);
+    const saved = store.data.students.find((s) => s.id === student.id)?.hhaPatientId;
+    expect(saved).toBeTruthy();
+    expect(saved).not.toBe('26027959');
+    expect(hha.calls).toContain('findPatient');
+    expect(hha.calls).toContain('upsertPatient');
+    expect(hha.calls.filter((c) => c === 'locateOrScheduleVisit').length).toBe(2);
+  });
+
+  it('normal CreatePatient success already persists hhaPatientId', async () => {
+    const store = new MemoryStore();
+    const { student, week } = seedWeek(store, { badPatientId: '', programId: '550099' });
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+
+    expect(result.ok).toBe(true);
+    const saved = store.data.students.find((s) => s.id === student.id)?.hhaPatientId;
+    expect(saved).toBeTruthy();
+    expect(hha.calls).toContain('upsertPatient');
+  });
+});
+

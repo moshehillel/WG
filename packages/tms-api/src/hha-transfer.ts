@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
-import { isTrustedHhaPatientId, type HhaClient } from '@white-glove/hha-client';
+import {
+  isInvalidHhaPatientError,
+  isTrustedHhaPatientId,
+  type HhaClient,
+} from '@white-glove/hha-client';
 import {
   buildPayCodeName,
   buildSchoolBillingServiceName,
@@ -30,34 +34,41 @@ export type SchoolAddressForPatient = {
   zipCode?: string;
 };
 
+type StudentForHha = {
+  firstName: string;
+  lastName: string;
+  dob?: string;
+  programId?: string;
+  hhaPatientId?: string;
+};
+
 /**
  * Resolve HHA PatientID for a TMS student.
- * Order: trusted hhaPatientId → Program Id / Case Id (+ name/DOB fallback inside find) → CreatePatient last.
+ * Order: trusted hhaPatientId → findPatient (MR/Program Id, admission, name+DOB)
+ * → CreatePatient only if no match. Never create when a search hit exists.
  * CreatePatient address = school address (when provided). DOB = student.dob from caseload
  * (“Student BirthDate”) or admin edit — no fake DOB.
  */
 export async function resolveHhaPatientId(options: {
   hha: HhaClient;
-  student:
-    | {
-        firstName: string;
-        lastName: string;
-        dob?: string;
-        programId?: string;
-        hhaPatientId?: string;
-      }
-    | undefined;
+  student: StudentForHha | undefined;
   /** Prefer the child’s school address for CreatePatient. */
   schoolAddress?: SchoolAddressForPatient;
+  /**
+   * Skip stored hhaPatientId and re-run find → create-if-missing.
+   * Used after ErrorID=-56 (invalid PatientID for agency).
+   */
+  forceResearch?: boolean;
 }): Promise<string | undefined> {
-  const { hha, student, schoolAddress } = options;
+  const { hha, student, schoolAddress, forceResearch } = options;
   if (!student) return undefined;
 
   const programId = student.programId?.trim() || undefined;
-  if (isTrustedHhaPatientId(student.hhaPatientId, programId)) {
+  if (!forceResearch && isTrustedHhaPatientId(student.hhaPatientId, programId)) {
     return student.hhaPatientId!.trim();
   }
 
+  // Always search before create (MR / admission / name+DOB inside findPatient).
   const found = await hha.findPatient({
     caseId: programId,
     externalId: programId,
@@ -67,7 +78,7 @@ export async function resolveHhaPatientId(options: {
   });
   if (found) return found;
 
-  // Create only as last resort — needs demographics; most kids already exist in HHA.
+  // Create only when no HHA child matches — upsertPatient also re-checks before CreatePatient.
   const created = await hha.upsertPatient({
     firstName: student.firstName,
     lastName: student.lastName,
@@ -80,6 +91,79 @@ export async function resolveHhaPatientId(options: {
     zipCode: schoolAddress?.zipCode?.trim() || undefined,
   });
   return created.id;
+}
+
+function schoolAddressForStudent(
+  store: MemoryStore,
+  student: { schoolId?: string } | undefined,
+): SchoolAddressForPatient | undefined {
+  if (!student?.schoolId) return undefined;
+  const school = store.data.schools.find((s) => s.id === student.schoolId);
+  if (!school) return undefined;
+  return {
+    address1: school.address1,
+    city: school.city,
+    state: school.state,
+    zipCode: school.zipCode,
+  };
+}
+
+function persistStudentHhaPatientId(
+  store: MemoryStore,
+  studentId: string | undefined,
+  patientId: string,
+): void {
+  if (!studentId) return;
+  const student = store.data.students.find((s) => s.id === studentId);
+  if (!student || student.hhaPatientId === patientId) return;
+  store.upsertStudent({ ...student, hhaPatientId: patientId });
+}
+
+/**
+ * CreateSchedule / visit resolve. On ErrorID=-56 (bad stored PatientID):
+ * clear → search HHA → CreatePatient only if missing → save new ID → retry once.
+ */
+async function locateOrScheduleVisitWithPatientRecovery(options: {
+  store: MemoryStore;
+  hha: HhaClient;
+  student: { id: string } | undefined;
+  patientId: string;
+  visit: Parameters<HhaClient['locateOrScheduleVisit']>[0];
+}): Promise<{ result: Awaited<ReturnType<HhaClient['locateOrScheduleVisit']>>; patientId: string }> {
+  const { store, hha } = options;
+  let patientId = options.patientId;
+  try {
+    const result = await hha.locateOrScheduleVisit({ ...options.visit, patientId });
+    return { result, patientId };
+  } catch (err) {
+    if (!options.student || !isInvalidHhaPatientError(err)) throw err;
+
+    const live = store.data.students.find((s) => s.id === options.student!.id);
+    if (!live) throw err;
+
+    // 1) Drop the bad stored ID so we do not reuse it.
+    store.upsertStudent({ ...live, hhaPatientId: '' });
+    live.hhaPatientId = '';
+
+    // 2) Search first; 3) CreatePatient only if not found; then persist.
+    const recovered = await resolveHhaPatientId({
+      hha,
+      student: { ...live, hhaPatientId: '' },
+      schoolAddress: schoolAddressForStudent(store, live),
+      forceResearch: true,
+    });
+    if (!recovered) {
+      throw new Error(
+        `HHA PatientID ${patientId} invalid for agency (ErrorID=-56); search/create found no patient for ${live.firstName} ${live.lastName}`.trim(),
+      );
+    }
+    persistStudentHhaPatientId(store, live.id, recovered);
+    patientId = recovered;
+
+    // 4) Retry CreateSchedule once with the recovered ID.
+    const result = await hha.locateOrScheduleVisit({ ...options.visit, patientId });
+    return { result, patientId };
+  }
 }
 
 /** Discipline for pay/billing: session Service Type token, else provider discipline. */
@@ -123,27 +207,16 @@ export async function transferLockedWeek(options: {
     if (existing?.status === 'confirmed') continue;
     const student = store.data.students.find((s) => s.id === session.studentId);
     try {
-      const school = student?.schoolId
-        ? store.data.schools.find((s) => s.id === student.schoolId)
-        : undefined;
-      const patientId = await resolveHhaPatientId({
+      let patientId = await resolveHhaPatientId({
         hha,
         student,
-        schoolAddress: school
-          ? {
-              address1: school.address1,
-              city: school.city,
-              state: school.state,
-              zipCode: school.zipCode,
-            }
-          : undefined,
+        schoolAddress: schoolAddressForStudent(store, student),
       });
       if (!patientId) {
         throw new Error(`No HHA patient for ${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim());
       }
-      if (student && student.hhaPatientId !== patientId) {
-        store.upsertStudent({ ...student, hhaPatientId: patientId });
-      }
+      persistStudentHhaPatientId(store, student?.id, patientId);
+      if (student) student.hhaPatientId = patientId;
 
       if (!provider) {
         throw new Error('No provider on week for HHA pay/service codes');
@@ -246,23 +319,31 @@ export async function transferLockedWeek(options: {
         provider.hhaCaregiverCode = caregiverId;
       }
 
-      const result = await hha.locateOrScheduleVisit({
+      const scheduled = await locateOrScheduleVisitWithPatientRecovery({
+        store,
+        hha,
+        student,
         patientId,
-        visitExternalId: session.id,
-        visitDate: session.dateOfService,
-        startTime: session.beginTime,
-        endTime: session.endTime,
-        serviceCode: billingServiceName,
-        serviceCodeId,
-        contractId: String(contractNum),
-        caregiverId,
-        payCodeId,
-        programType: student?.programType,
-        providerName: `${provider.firstName} ${provider.lastName}`,
-        payRate: String(rate),
-        // Visit clock length stays Frontline begin/end; pay/billing buckets use mandate above.
-        durationMinutes: clockMinutes ?? undefined,
+        visit: {
+          patientId,
+          visitExternalId: session.id,
+          visitDate: session.dateOfService,
+          startTime: session.beginTime,
+          endTime: session.endTime,
+          serviceCode: billingServiceName,
+          serviceCodeId,
+          contractId: String(contractNum),
+          caregiverId,
+          payCodeId,
+          programType: student?.programType,
+          providerName: `${provider.firstName} ${provider.lastName}`,
+          payRate: String(rate),
+          // Visit clock length stays Frontline begin/end; pay/billing buckets use mandate above.
+          durationMinutes: clockMinutes ?? undefined,
+        },
       });
+      patientId = scheduled.patientId;
+      const result = scheduled.result;
       await hha.approveVisit(result.id);
       store.upsertTransfer({
         id: existing?.id || newId(),

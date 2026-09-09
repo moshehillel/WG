@@ -1,0 +1,16 @@
+TMS HHA ErrorID=-56: clear bad hhaPatientId → search → CreatePatient only if missing → save → retry CreateSchedule
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+GitSHA: 4701a4641fda6b69068f53b54adcd7dbb9ea3d0b
+{
+    "CodeSha256": "zv9Sa78f10vh3GotGfkmxAYIDCDrvPjVJwy23ZxM9ic=",
+    "LastModified": "2026-09-09T19:07:03.000+0000",
+    "CodeSize": 2003062
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA prod preserved (USE_MOCK=false, USE_PRODUCTION=true, ALLOW_PRODUCTION=true)

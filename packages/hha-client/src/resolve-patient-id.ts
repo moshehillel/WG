@@ -41,3 +41,13 @@ export function isAlreadyDischargedError(err: unknown): boolean {
     /No active HHA placements to discharge/i.test(msg)
   );
 }
+
+/**
+ * True when HHA rejected the PatientID for this agency (CreateSchedule / contracts).
+ * Typical: stale or wrong-agency ID stored on the student → clear and re-search.
+ */
+export function isInvalidHhaPatientError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  if (/ErrorID\s*=\s*-56\b/i.test(msg)) return true;
+  return /Patient ID is an invalid/i.test(msg) || /invalid for (?:the )?current Agency/i.test(msg);
+}
