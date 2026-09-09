@@ -83,6 +83,7 @@ import { transferLockedWeek } from './hha-transfer.js';
 import { buildTimesheetPdf } from './timesheet.js';
 import {
   createSignEnvelope,
+  downloadSignedDocument,
   envelopeCompleted,
   SignNowApiError,
   SignNowNotConfiguredError,
@@ -913,13 +914,107 @@ export async function handleTmsRequest(
   const path = req.path.replace(/\/+$/, '') || '/';
 
   if (req.method === 'POST' && path === '/webhooks/esign') {
-    const { envelopeId, completed } = envelopeCompleted(obj(req));
-    if (!completed || !envelopeId) return json(202, { ok: true, ignored: true });
-    const week = store.data.weeks.find((w) => w.envelopeId === envelopeId || w.id === envelopeId.replace(/^email:/, ''));
+    // SignNow Webhooks 2.0 with docid_queryparam=true puts document_id on the query string.
+    const queryDoc = String(
+      req.query.document_id || req.query.documentId || req.query.docid || '',
+    ).trim();
+    const body = obj(req);
+    const parsed = envelopeCompleted({
+      ...body,
+      document_id: body.document_id || body.documentId || queryDoc,
+      documentId: body.documentId || body.document_id || queryDoc,
+    });
+    const envelopeId = parsed.envelopeId || queryDoc;
+    if (!parsed.completed || !envelopeId) {
+      console.info('[tms-esign] webhook ignored', {
+        envelopeId: envelopeId || null,
+        queryDoc: queryDoc || null,
+        completed: parsed.completed,
+      });
+      return json(202, { ok: true, ignored: true });
+    }
+    const week = store.data.weeks.find(
+      (w) => w.envelopeId === envelopeId || w.id === envelopeId.replace(/^email:/, ''),
+    );
     if (!week) return json(404, { error: 'Envelope week not found.' });
-    const locked = store.upsertWeek({ ...week, status: 'locked', signedKey: `tms/signed/${week.id}.pdf` });
+
+    const signedKey = `tms/signed/${week.id}.pdf`;
+    const timesheetKey = week.timesheetKey || `tms/timesheets/${week.id}.pdf`;
+    let signedPdfOk = false;
+    try {
+      const bytes = await downloadSignedDocument(envelopeId);
+      if (bytes?.length) {
+        const buf = Buffer.from(bytes);
+        await putLockerPdf(signedKey, buf);
+        // Also mirror into timesheets/ so older archive rows that still point there stay wet-ink.
+        if (timesheetKey && timesheetKey !== signedKey) {
+          await putLockerPdf(timesheetKey, buf);
+        }
+        // Index wet-ink under signedKey so Admin/Therapist archive Open always finds the signed PDF.
+        const existingTs = findTimesheetArchive(store, week.id);
+        await persistArchivePdf({
+          store,
+          kind: 'timesheet',
+          sourceType: 'timesheet',
+          userId: 'esign',
+          providerId: week.providerId,
+          weekId: week.id,
+          weekStart: week.weekStart,
+          filename: `timesheet-${week.weekStart}-signed.pdf`,
+          s3Key: signedKey,
+          status: 'locked',
+          pdf: buf,
+          replaceId: existingTs?.id,
+        });
+        signedPdfOk = true;
+        console.info('[tms-esign] signed PDF stored', {
+          weekId: week.id,
+          envelopeId,
+          bytes: buf.length,
+          signedKey,
+          timesheetKey,
+        });
+      } else {
+        console.warn('[tms-esign] signed PDF download empty', { weekId: week.id, envelopeId });
+      }
+    } catch (err) {
+      console.warn(
+        '[tms-esign] signed PDF download failed',
+        err instanceof Error ? err.message : err,
+        { weekId: week.id, envelopeId },
+      );
+    }
+
+    const locked = store.upsertWeek({
+      ...week,
+      status: 'locked',
+      timesheetKey,
+      signedKey: signedPdfOk ? signedKey : week.signedKey || '',
+    });
+    // Always ensure a timesheet archive row exists for locked weeks (submit may have been
+    // before archives existed, or SignNow download may have failed this pass).
+    if (!signedPdfOk) {
+      const existingTs = findTimesheetArchive(store, week.id);
+      if (!existingTs) {
+        await persistArchivePdf({
+          store,
+          kind: 'timesheet',
+          sourceType: 'timesheet',
+          userId: 'esign',
+          providerId: week.providerId,
+          weekId: week.id,
+          weekStart: week.weekStart,
+          filename: `timesheet-${week.weekStart}.pdf`,
+          s3Key: week.signedKey || signedKey || timesheetKey,
+          status: 'locked',
+        });
+      }
+    }
     markTimesheetArchivesStatus(store, week.id, 'locked');
-    store.audit('esign', 'sign_and_lock', `week:${week.id}`, week, locked);
+    store.audit('esign', 'sign_and_lock', `week:${week.id}`, week, {
+      ...locked,
+      signedPdfOk,
+    });
     const provider = store.data.providers.find((p) => p.id === week.providerId);
     const therapist = provider ? store.userById(provider.userId) : undefined;
     if (deps.mail && therapist?.email) {
@@ -929,12 +1024,24 @@ export async function handleTmsRequest(
         text: 'Success. This week is signed and locked. You will be paid.',
       });
     }
-    if (deps.hha && (locked.status === 'locked')) {
-      await transferLockedWeek({ store, week: locked, hha: deps.hha, actorId: 'esign' });
+    if (deps.hha && locked.status === 'locked') {
+      const hhaResult = await transferLockedWeek({
+        store,
+        week: locked,
+        hha: deps.hha,
+        actorId: 'esign',
+      });
+      console.info('[tms-hha] post-sign transfer', {
+        weekId: week.id,
+        ok: hhaResult.ok,
+        transferred: hhaResult.transferred,
+        errors: hhaResult.errors,
+      });
     }
     return json(200, {
       week: store.data.weeks.find((w) => w.id === week.id),
       therapistMessage: 'Success. This week is signed and locked. You will be paid.',
+      signedPdfOk,
     });
   }
 
@@ -1040,7 +1147,18 @@ export async function handleTmsRequest(
       return json(403, { error: 'You can only open your own archived files.' });
     }
     if (!row.s3Key) return json(404, { error: 'No file stored for this archive item.' });
-    const pdf = await getPdfFromS3(row.s3Key);
+    let pdf = await getPdfFromS3(row.s3Key);
+    // Locked timesheets may live at tms/signed/{weekId}.pdf after SignNow — fall back if needed.
+    if (!pdf && row.kind === 'timesheet' && row.weekId) {
+      const week = store.data.weeks.find((w) => w.id === row.weekId);
+      const alt = week?.signedKey || (week ? `tms/signed/${week.id}.pdf` : '');
+      if (alt && alt !== row.s3Key) {
+        pdf = await getPdfFromS3(alt);
+        if (pdf?.length) {
+          store.upsertArchive({ ...row, s3Key: alt, status: row.status || week?.status || '' });
+        }
+      }
+    }
     if (!pdf) return json(404, { error: 'Archived file missing from storage.' });
     const safeName = String(row.filename || 'archive.pdf').replace(/[^\w.\-]+/g, '_');
     return {
@@ -3548,6 +3666,69 @@ export async function handleTmsRequest(
   if (req.method === 'GET' && /^\/weeks\/[^/]+\/timesheet$/.test(path)) {
     const week = store.data.weeks.find((w) => w.id === path.split('/')[2]);
     if (!week) return json(404, { error: 'Week not found.' });
+
+    const servePdf = (buf: Buffer, filename: string) => ({
+      status: 200,
+      headers: {
+        'content-type': 'application/pdf',
+        'content-disposition': `inline; filename="${filename}"`,
+      },
+      body: buf,
+    });
+
+    // Prefer wet-ink SignNow PDF after lock (signature + date). Do not regenerate over it.
+    if (week.status === 'locked' || week.status === 'signed' || week.signedKey) {
+      if (week.signedKey) {
+        const existing = await getPdfFromS3(week.signedKey);
+        if (existing?.length) {
+          return servePdf(existing, `timesheet-${week.weekStart}-signed.pdf`);
+        }
+      }
+      // Lazy backfill when webhook locked without storing PDF bytes.
+      const envelopeId = String(week.envelopeId || '').trim();
+      if (envelopeId && !envelopeId.startsWith('email:')) {
+        try {
+          const bytes = await downloadSignedDocument(envelopeId);
+          if (bytes?.length) {
+            const buf = Buffer.from(bytes);
+            const signedKey = `tms/signed/${week.id}.pdf`;
+            const timesheetKey = week.timesheetKey || `tms/timesheets/${week.id}.pdf`;
+            await putLockerPdf(signedKey, buf);
+            if (timesheetKey && timesheetKey !== signedKey) {
+              await putLockerPdf(timesheetKey, buf);
+            }
+            const existingTs = findTimesheetArchive(store, week.id);
+            await persistArchivePdf({
+              store,
+              kind: 'timesheet',
+              sourceType: 'timesheet',
+              userId: ctx.user.id,
+              providerId: week.providerId,
+              weekId: week.id,
+              weekStart: week.weekStart,
+              filename: `timesheet-${week.weekStart}-signed.pdf`,
+              s3Key: signedKey,
+              status: 'locked',
+              pdf: buf,
+              replaceId: existingTs?.id,
+            });
+            store.upsertWeek({ ...week, signedKey, timesheetKey });
+            console.info('[tms-esign] lazy signed PDF backfill', {
+              weekId: week.id,
+              bytes: buf.length,
+            });
+            return servePdf(buf, `timesheet-${week.weekStart}-signed.pdf`);
+          }
+        } catch (err) {
+          console.warn(
+            '[tms-esign] lazy signed PDF backfill failed',
+            err instanceof Error ? err.message : err,
+            { weekId: week.id },
+          );
+        }
+      }
+    }
+
     const provider = store.data.providers.find((p) => p.id === week.providerId);
     const schoolId = String(req.query.schoolId || '').trim();
     const schoolDistrict = schoolDistrictForWeek(store, week.id, schoolId || undefined);
@@ -3580,31 +3761,27 @@ export async function handleTmsRequest(
         };
       }),
     });
-    store.upsertWeek({ ...week, timesheetKey: `tms/timesheets/${week.id}.pdf` });
-    const existingTs = findTimesheetArchive(store, week.id);
-    await persistArchivePdf({
-      store,
-      kind: 'timesheet',
-      sourceType: 'timesheet',
-      userId: ctx.user.id,
-      providerId: week.providerId,
-      schoolId,
-      weekId: week.id,
-      weekStart: week.weekStart,
-      filename: `timesheet-${week.weekStart}.pdf`,
-      s3Key: `tms/timesheets/${week.id}.pdf`,
-      status: week.status || 'draft',
-      pdf: Buffer.from(pdf),
-      replaceId: existingTs?.id,
-    });
-    return {
-      status: 200,
-      headers: {
-        'content-type': 'application/pdf',
-        'content-disposition': `inline; filename="timesheet-${week.weekStart}.pdf"`,
-      },
-      body: Buffer.from(pdf),
-    };
+    // Never overwrite a locked week's archive with an unsigned regeneration.
+    if (week.status !== 'locked' && week.status !== 'signed') {
+      store.upsertWeek({ ...week, timesheetKey: `tms/timesheets/${week.id}.pdf` });
+      const existingTs = findTimesheetArchive(store, week.id);
+      await persistArchivePdf({
+        store,
+        kind: 'timesheet',
+        sourceType: 'timesheet',
+        userId: ctx.user.id,
+        providerId: week.providerId,
+        schoolId,
+        weekId: week.id,
+        weekStart: week.weekStart,
+        filename: `timesheet-${week.weekStart}.pdf`,
+        s3Key: `tms/timesheets/${week.id}.pdf`,
+        status: week.status || 'draft',
+        pdf: Buffer.from(pdf),
+        replaceId: existingTs?.id,
+      });
+    }
+    return servePdf(Buffer.from(pdf), `timesheet-${week.weekStart}.pdf`);
   }
 
   if (req.method === 'POST' && /^\/weeks\/[^/]+\/cancel-approval$/.test(path)) {
@@ -3695,6 +3872,54 @@ export async function handleTmsRequest(
       const next = store.upsertWeek({ ...week, status: 'reopened', hhaStatus: week.hhaStatus });
       store.audit(ctx.user.id, 'reopen_week', `week:${week.id}`, week, next);
       return json(200, { week: next });
+    });
+  }
+
+  /** Re-download completed SignNow PDF into locker (fixes missing scribble after lock). */
+  if (req.method === 'POST' && /^\/admin\/weeks\/[^/]+\/refresh-signed-pdf$/.test(path)) {
+    return adminUser(async () => {
+      const week = store.data.weeks.find((w) => w.id === path.split('/')[3]);
+      if (!week) return json(404, { error: 'Week not found.' });
+      const envelopeId = String(week.envelopeId || '').trim();
+      if (!envelopeId || envelopeId.startsWith('email:')) {
+        return json(409, { error: 'Week has no SignNow document id to download.' });
+      }
+      const bytes = await downloadSignedDocument(envelopeId);
+      if (!bytes?.length) {
+        return json(502, {
+          error:
+            'Could not download signed PDF from SignNow. Confirm the invite is fulfilled, then retry.',
+        });
+      }
+      const buf = Buffer.from(bytes);
+      const signedKey = `tms/signed/${week.id}.pdf`;
+      const timesheetKey = week.timesheetKey || `tms/timesheets/${week.id}.pdf`;
+      await putLockerPdf(signedKey, buf);
+      if (timesheetKey && timesheetKey !== signedKey) {
+        await putLockerPdf(timesheetKey, buf);
+      }
+      const existingTs = findTimesheetArchive(store, week.id);
+      await persistArchivePdf({
+        store,
+        kind: 'timesheet',
+        sourceType: 'timesheet',
+        userId: ctx.user.id,
+        providerId: week.providerId,
+        weekId: week.id,
+        weekStart: week.weekStart,
+        filename: `timesheet-${week.weekStart}-signed.pdf`,
+        s3Key: signedKey,
+        status: week.status === 'locked' || week.status === 'signed' ? 'locked' : week.status,
+        pdf: buf,
+        replaceId: existingTs?.id,
+      });
+      const next = store.upsertWeek({ ...week, signedKey, timesheetKey });
+      store.audit(ctx.user.id, 'refresh_signed_pdf', `week:${week.id}`, week, {
+        signedKey,
+        timesheetKey,
+        bytes: buf.length,
+      });
+      return json(200, { week: next, bytes: buf.length, signedKey, timesheetKey });
     });
   }
 

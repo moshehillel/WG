@@ -28,14 +28,22 @@ export function filterArchives(
   const providerId = String(filter.providerId || '').trim();
   const from = String(filter.from || '').trim().slice(0, 10);
   const to = String(filter.to || '').trim().slice(0, 10);
+  const inRange = (day: string) => {
+    if (!day) return false;
+    if (from && day < from) return false;
+    if (to && day > to) return false;
+    return true;
+  };
   return rows
     .filter((row) => {
       if (kind && row.kind !== kind) return false;
       if (providerId && row.providerId !== providerId) return false;
-      const day = String(row.createdAt || '').slice(0, 10);
-      if (from && day && day < from) return false;
-      if (to && day && day > to) return false;
-      return true;
+      if (!from && !to) return true;
+      // Match archive created day OR timesheet week-start so signed PDFs archived
+      // after the service week (and mid-week defaults) still show up.
+      const created = String(row.createdAt || '').slice(0, 10);
+      const weekStart = String(row.weekStart || '').slice(0, 10);
+      return inRange(created) || inRange(weekStart);
     })
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
