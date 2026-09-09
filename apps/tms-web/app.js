@@ -469,6 +469,30 @@ function mondayIso() {
   return `${y}-${m}-${dayNum}`;
 }
 
+/** Normalize MM/DD/YYYY or YYYY-MM-DD to YYYY-MM-DD for range compares. */
+function dosToIso(dos) {
+  const s = String(dos || '').trim();
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const md = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!md) return '';
+  let y = Number(md[3]);
+  if (y < 100) y += 2000;
+  const m = String(Number(md[1])).padStart(2, '0');
+  const d = String(Number(md[2])).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/** Inclusive From/To filter; HTML date inputs are ISO, session DOS is usually MM/DD/YYYY. */
+function sessionDosInRange(dateOfService, fromIso, toIso) {
+  if (!fromIso && !toIso) return true;
+  const iso = dosToIso(dateOfService);
+  if (!iso) return false;
+  if (fromIso && iso < fromIso) return false;
+  if (toIso && iso > toIso) return false;
+  return true;
+}
+
 function mondayFromDos(dos) {
   const s = String(dos || '').trim();
   let d;
@@ -2918,12 +2942,9 @@ async function adminChildDetail(studentId, opts = {}) {
   const backLabel = state.childDetailBack === 'reports' ? '← Reports' : '← Children';
   const sessFrom = state.childSessionFrom || '';
   const sessTo = state.childSessionTo || '';
-  const filteredSessions = sessions.filter((x) => {
-    const d = String(x.dateOfService || '');
-    if (sessFrom && d < sessFrom) return false;
-    if (sessTo && d > sessTo) return false;
-    return true;
-  });
+  const filteredSessions = sessions.filter((x) =>
+    sessionDosInRange(x.dateOfService, sessFrom, sessTo),
+  );
   const childTab = ['basic', 'mandates', 'sessions', 'timesheet', 'files'].includes(state.childDetailTab)
     ? state.childDetailTab
     : 'basic';
@@ -3234,12 +3255,9 @@ async function adminProviderDetail(providerId) {
   if (p?.id && String(p.id) !== String(providerId)) providerId = p.id;
   const sessFrom = state.providerSessionFrom || '';
   const sessTo = state.providerSessionTo || '';
-  const filteredSessions = sessions.filter((x) => {
-    const d = String(x.dateOfService || '');
-    if (sessFrom && d < sessFrom) return false;
-    if (sessTo && d > sessTo) return false;
-    return true;
-  });
+  const filteredSessions = sessions.filter((x) =>
+    sessionDosInRange(x.dateOfService, sessFrom, sessTo),
+  );
   const provTab = ['basic', 'pay', 'caseload', 'sessions', 'reports', 'notes'].includes(state.providerDetailTab)
     ? state.providerDetailTab
     : 'basic';
