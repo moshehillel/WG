@@ -3574,4 +3574,245 @@ describe('TMS MFA org policy', () => {
     );
     expect((got.body as { schoolDistrict: string }).schoolDistrict).toMatch(/Hegarty/i);
   });
+
+  it('GET /me returns programTypes and archive delete works for therapist', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.data.schools[0]!;
+    const childA = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Ada',
+      lastName: 'One',
+      dob: '',
+      programId: '',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const schoolB = store.upsertSchool({
+      id: newId(),
+      name: 'Baldwin Building B',
+      district: '',
+      signerName: 'Madison',
+      signerEmail: 'm@test.com',
+      createdAt: nowIso(),
+    });
+    const childB = store.upsertStudent({
+      id: newId(),
+      schoolId: schoolB.id,
+      firstName: 'Bea',
+      lastName: 'Two',
+      dob: '',
+      programId: '',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    for (const studentId of [childA.id, childB.id]) {
+      store.upsertMandate({
+        id: newId(),
+        studentId,
+        providerId: provider.id,
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 1,
+        frequencyKind: 'weekly',
+        sessionsPerPeriod: 1,
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: nowIso(),
+        startOn: '',
+        endOn: '',
+        createdAt: nowIso(),
+      });
+    }
+    const me = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/me',
+      headers: thH,
+      query: {},
+      body: undefined,
+    });
+    expect(me.status).toBe(200);
+    expect((me.body as { programTypes: string[] }).programTypes).toEqual(['Baldwin UFSD']);
+    expect((me.body as { schools: unknown[] }).schools.length).toBe(2);
+
+    const archId = newId();
+    store.upsertArchive({
+      id: archId,
+      kind: 'upload',
+      sourceType: 'frontline',
+      userId: 'admin-user',
+      providerId: provider.id,
+      schoolId: '',
+      weekId: '',
+      weekStart: '2026-09-01',
+      filename: 'ok.pdf',
+      s3Key: '',
+      status: 'imported',
+      createdAt: nowIso(),
+    });
+    store.upsertArchive({
+      id: newId(),
+      kind: 'upload',
+      sourceType: 'frontline',
+      userId: 'admin-user',
+      providerId: provider.id,
+      schoolId: '',
+      weekId: '',
+      weekStart: '2026-09-01',
+      filename: 'blocked.pdf',
+      s3Key: '',
+      status: 'blocked',
+      createdAt: nowIso(),
+    });
+    const listed = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/archive',
+      headers: thH,
+      query: { kind: 'upload' },
+      body: undefined,
+    });
+    expect(listed.status).toBe(200);
+    const items = (listed.body as { items: Array<{ id: string; status: string }> }).items;
+    expect(items.every((i) => i.status !== 'blocked')).toBe(true);
+    expect(items.some((i) => i.id === archId)).toBe(true);
+
+    const del = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/archive/${archId}`,
+      headers: thH,
+      query: {},
+      body: undefined,
+    });
+    expect(del.status).toBe(200);
+    expect(store.archiveById(archId)).toBeUndefined();
+  });
+
+  it('students filtered by programType across buildings; week sessions stay unfiltered', async () => {
+    const { store, provider } = storeWithTherapist();
+    const schoolA = store.data.schools[0]!;
+    const schoolB = store.upsertSchool({
+      id: newId(),
+      name: 'Building B',
+      district: '',
+      signerName: 'S',
+      signerEmail: 's@test.com',
+      createdAt: nowIso(),
+    });
+    const baldwin = store.upsertStudent({
+      id: newId(),
+      schoolId: schoolA.id,
+      firstName: 'Bald',
+      lastName: 'Win',
+      dob: '',
+      programId: '',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const island = store.upsertStudent({
+      id: newId(),
+      schoolId: schoolB.id,
+      firstName: 'Isle',
+      lastName: 'Park',
+      dob: '',
+      programId: '',
+      programType: 'Island Park UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    for (const studentId of [baldwin.id, island.id]) {
+      store.upsertMandate({
+        id: newId(),
+        studentId,
+        providerId: provider.id,
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 1,
+        frequencyKind: 'weekly',
+        sessionsPerPeriod: 1,
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: nowIso(),
+        startOn: '',
+        endOn: '',
+        createdAt: nowIso(),
+      });
+    }
+    const weekStart = '2026-09-01';
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart,
+      status: 'draft',
+      signerName: 'S',
+      signerEmail: 's@test.com',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+      hhaError: '',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: baldwin.id,
+      dateOfService: '09/02/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'school',
+      notes: 'baldwin session',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: island.id,
+      dateOfService: '09/03/2026',
+      beginTime: '10:00 am',
+      endTime: '10:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'school',
+      notes: 'island session',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+
+    const students = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/students',
+      headers: thH,
+      query: { weekStart, programType: 'Baldwin UFSD' },
+      body: undefined,
+    });
+    expect(students.status).toBe(200);
+    const kids = (students.body as { students: Array<{ id: string }> }).students;
+    expect(kids.map((s) => s.id)).toEqual([baldwin.id]);
+
+    const weekGet = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/week',
+      headers: thH,
+      query: { weekStart, programType: 'Baldwin UFSD', providerId: provider.id },
+      body: undefined,
+    });
+    expect(weekGet.status).toBe(200);
+    const sessions = (weekGet.body as { sessions: Array<{ notes: string; studentName: string }> }).sessions;
+    expect(sessions).toHaveLength(2);
+    expect(sessions.some((s) => s.notes === 'island session')).toBe(true);
+    expect(sessions.find((s) => s.notes === 'baldwin session')?.studentName).toMatch(/Bald/i);
+  });
 });

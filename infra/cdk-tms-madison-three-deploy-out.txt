@@ -1,0 +1,18 @@
+Madison three suggestions: archive success-only + delete; admin import visibility; program-type scope
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+{
+    "CodeSha256": "QTznhxUvRCZIWDYCj5GHDfiDt4hjKilnynfpW0flSnw=",
+    "LastModified": "2026-09-09T17:25:16.000+0000",
+    "CodeSize": 1989308
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "false",
+    "HHA_ALLOW_PRODUCTION": "false",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA: sandbox preserved (USE_MOCK=false, USE_PRODUCTION=false, ALLOW_PRODUCTION=false)
+1) Archive only successful Frontline imports; DELETE /archive/{id}; hide blocked from My uploads
+2) Alias-aware archives + upload ensureWeek fold so admin imports show for provider
+3) Program-type caseload scope (not building picker); one timesheet/SignNow across district buildings

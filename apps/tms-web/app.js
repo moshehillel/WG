@@ -24,6 +24,8 @@ const state = {
   focusSchoolId: '',
   selectedSchoolId: sessionStorage.getItem('tmsSchoolId') || '',
   schoolConfirmed: sessionStorage.getItem('tmsSchoolConfirmed') === '1',
+  selectedProgramType: sessionStorage.getItem('tmsProgramType') || '',
+  programConfirmed: sessionStorage.getItem('tmsProgramConfirmed') === '1',
   lastServiceProviderId: '',
   childSessionFrom: '',
   childSessionTo: '',
@@ -196,7 +198,8 @@ const I18N = {
     'therapist.processed': 'Processed Sessions',
     'therapist.archive': 'My uploads',
     'therapist.reload': 'Reload sessions',
-    'therapist.changeSchool': 'Change school',
+    'therapist.changeSchool': 'Change program',
+    'therapist.changeProgram': 'Change program',
     'common.save': 'Save',
     'common.cancel': 'Cancel',
     'common.error': 'Something went wrong.',
@@ -341,7 +344,8 @@ const I18N = {
     'therapist.processed': 'Sesiones procesadas',
     'therapist.archive': 'Mis cargas',
     'therapist.reload': 'Recargar sesiones',
-    'therapist.changeSchool': 'Cambiar escuela',
+    'therapist.changeSchool': 'Cambiar programa',
+    'therapist.changeProgram': 'Cambiar programa',
     'common.save': 'Guardar',
     'common.cancel': 'Cancelar',
     'common.error': 'Algo salió mal.',
@@ -1146,9 +1150,17 @@ async function fileToBase64(file) {
   return btoa(bin);
 }
 
-function studentName(students, id) {
+function studentName(students, id, fallback) {
   const st = (students || []).find((x) => x.id === id);
-  return st ? `${st.firstName} ${st.lastName}`.trim() : id;
+  if (st) return `${st.firstName} ${st.lastName}`.trim();
+  const named = String(fallback || '').trim();
+  return named || id;
+}
+
+function therapistScopeQuery() {
+  const q = new URLSearchParams();
+  if (state.selectedProgramType) q.set('programType', state.selectedProgramType);
+  return q;
 }
 
 function childNameLink(studentId, label) {
@@ -1503,9 +1515,11 @@ async function openTimesheetModal(opts) {
   });
   backdrop.querySelector('[data-close-timesheet]').onclick = () => closeTimesheetModal();
   try {
-    const q = state.selectedSchoolId
-      ? `?schoolId=${encodeURIComponent(state.selectedSchoolId)}`
-      : '';
+    const q = state.selectedProgramType
+      ? `?programType=${encodeURIComponent(state.selectedProgramType)}`
+      : state.selectedSchoolId
+        ? `?schoolId=${encodeURIComponent(state.selectedSchoolId)}`
+        : '';
     const raw = await api('GET', `/weeks/${weekId}/timesheet${q}`);
     if (!(raw instanceof Blob)) {
       throw new Error('Timesheet PDF response was not a file.');
@@ -1555,7 +1569,8 @@ async function fetchAndShowTimesheet({ weekId, weekStart, providerId, providerNa
   const q = new URLSearchParams();
   if (weekStart) q.set('weekStart', weekStart);
   if (providerId) q.set('providerId', providerId);
-  if (state.selectedSchoolId) q.set('schoolId', state.selectedSchoolId);
+  if (state.selectedProgramType) q.set('programType', state.selectedProgramType);
+  else if (state.selectedSchoolId) q.set('schoolId', state.selectedSchoolId);
   const data = await api('GET', `/week?${q.toString()}`);
   const id = data.week?.id || weekId;
   await openTimesheetModal({
@@ -1731,35 +1746,60 @@ async function therapistHome(statusFlash) {
   let schoolDistrict = '';
   let loadFailed = null;
   let schools = [];
+  let programTypes = [];
 
   try {
     const me = await api('GET', '/me');
     providerId = me.provider?.id || '';
     schools = me.schools || [];
+    programTypes = Array.isArray(me.programTypes) ? me.programTypes.filter(Boolean) : [];
     state.meSettings = me.settings || {};
-    if (schools.length === 0) {
+    if (schools.length === 0 && programTypes.length === 0) {
       // Caseload has no schools — empty state only (never org-wide / other therapists).
       state.selectedSchoolId = '';
       state.schoolConfirmed = false;
+      state.selectedProgramType = '';
+      state.programConfirmed = false;
       sessionStorage.removeItem('tmsSchoolId');
       sessionStorage.removeItem('tmsSchoolConfirmed');
-      await showSchoolPicker([]);
+      sessionStorage.removeItem('tmsProgramType');
+      sessionStorage.removeItem('tmsProgramConfirmed');
+      await showProgramPicker([]);
       return;
     }
-    if (schools.length === 1) {
-      // Exactly one working school → auto-enter; skip picker UI.
-      state.selectedSchoolId = schools[0].id;
-      state.schoolConfirmed = true;
-      sessionStorage.setItem('tmsSchoolId', state.selectedSchoolId);
-      sessionStorage.setItem('tmsSchoolConfirmed', '1');
-    } else if (schools.length > 1) {
-      const stillValid = schools.some((s) => s.id === state.selectedSchoolId);
-      // Multi-school providers must pick a school on the dashboard before the homepage.
-      if (!state.schoolConfirmed || !stillValid) {
-        await showSchoolPicker(schools);
+    // Primary scope = program type (district/payer), not school building.
+    // Multiple buildings under one program → no picker; one timesheet across buildings.
+    if (programTypes.length <= 1) {
+      state.selectedProgramType = programTypes[0] || '';
+      state.programConfirmed = true;
+      sessionStorage.setItem('tmsProgramType', state.selectedProgramType);
+      sessionStorage.setItem('tmsProgramConfirmed', '1');
+    } else {
+      const stillValid = programTypes.some(
+        (p) => String(p).toLowerCase() === String(state.selectedProgramType || '').toLowerCase(),
+      );
+      if (!state.programConfirmed || !stillValid) {
+        await showProgramPicker(programTypes);
         return;
       }
+      const match = programTypes.find(
+        (p) => String(p).toLowerCase() === String(state.selectedProgramType || '').toLowerCase(),
+      );
+      if (match) state.selectedProgramType = match;
     }
+    // Keep a school id only as optional metadata for ensure/signer fallbacks — never gate the UI.
+    if (schools.length === 1) {
+      state.selectedSchoolId = schools[0].id;
+      sessionStorage.setItem('tmsSchoolId', state.selectedSchoolId);
+    } else if (
+      state.selectedSchoolId &&
+      !schools.some((s) => s.id === state.selectedSchoolId)
+    ) {
+      state.selectedSchoolId = '';
+      sessionStorage.removeItem('tmsSchoolId');
+    }
+    state.schoolConfirmed = true;
+    sessionStorage.setItem('tmsSchoolConfirmed', '1');
     const dues = (me.dueDates || []).filter((d) => d.status !== 'done');
     const alerts = me.alerts || [];
     if (dues.length || alerts.length) {
@@ -1774,6 +1814,7 @@ async function therapistHome(statusFlash) {
         weekStart: state.weekStart,
         providerId,
         schoolId: state.selectedSchoolId || undefined,
+        programType: state.selectedProgramType || undefined,
       });
       week = ensured.week;
       state.weekId = week.id;
@@ -1784,9 +1825,8 @@ async function therapistHome(statusFlash) {
     loadFailed = e.message || 'Unable to load this week.';
   }
 
-  const schoolQ = state.selectedSchoolId
-    ? `&schoolId=${encodeURIComponent(state.selectedSchoolId)}`
-    : '';
+  const scopeQ = therapistScopeQuery();
+  const schoolQ = scopeQ.toString() ? `&${scopeQ.toString()}` : '';
 
   try {
     const list = await api(
@@ -1832,10 +1872,11 @@ async function therapistHome(statusFlash) {
     signerEmail,
   });
   const canSend = !sendBlockReason;
+  const programLabel = state.selectedProgramType || '';
   const selectedSchool = schools.find((s) => s.id === state.selectedSchoolId);
-  const schoolLabel = selectedSchool
-    ? (selectedSchool.district || selectedSchool.name || '')
-    : schoolDistrict;
+  const schoolLabel = programLabel
+    || (selectedSchool ? (selectedSchool.district || selectedSchool.name || '') : '')
+    || schoolDistrict;
 
   const flash = statusFlash && typeof statusFlash === 'object' ? statusFlash : null;
   const topSuccess = [...(flash?.success || [])];
@@ -1961,7 +2002,7 @@ async function therapistHome(statusFlash) {
       </div>
       ${isArchivePane ? `
       <h2>My uploads &amp; timesheets</h2>
-      <p class="muted">Past session-note PDFs you imported and timesheets you generated. Open a row to preview the PDF.</p>
+      <p class="muted">Successfully imported session-note PDFs and timesheets you generated. Open a row to preview the PDF, or delete a saved report you no longer need.</p>
       <h3 class="sec">My uploads</h3>
       <div class="table-wrap"><table>
         <tr><th>Uploaded</th><th>Type</th><th>Week</th><th>File</th><th></th></tr>
@@ -1970,7 +2011,10 @@ async function therapistHome(statusFlash) {
           <td>${esc(archiveSourceLabel(a.sourceType))}</td>
           <td>${esc(a.weekStart || '—')}</td>
           <td>${esc(a.filename || 'PDF')}</td>
-          <td>${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : '—'}</td>
+          <td class="row-actions">
+            ${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : ''}
+            <button type="button" class="btn" data-delete-archive="${esc(a.id)}">Delete</button>
+          </td>
         </tr>`).join('') || '<tr><td colspan="5">No uploaded reports archived yet.</td></tr>'}
       </table></div>
       <h3 class="sec">My timesheets</h3>
@@ -1981,7 +2025,10 @@ async function therapistHome(statusFlash) {
           <td>${esc(a.weekStart || '—')}</td>
           <td>${esc(a.status || '—')}</td>
           <td>${esc(a.filename || 'timesheet.pdf')}</td>
-          <td>${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : '—'}</td>
+          <td class="row-actions">
+            ${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : ''}
+            <button type="button" class="btn" data-delete-archive="${esc(a.id)}">Delete</button>
+          </td>
         </tr>`).join('') || '<tr><td colspan="5">No timesheets archived yet.</td></tr>'}
       </table></div>
       ` : isPriorPane ? `
@@ -2004,7 +2051,7 @@ async function therapistHome(statusFlash) {
       ${week ? approvalBanner(status) : '<div class="warn-box">Contact the office to complete your therapist profile setup.</div>'}
       <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${pending ? ' · awaiting signature (sessions locked)' : ''}${processed ? ' · signed/locked (sessions locked)' : ''}</p>
       <div class="row">
-        ${schools.length > 1 ? `<button type="button" class="btn" id="changeSchool">${esc(t('therapist.changeSchool'))}</button>` : ''}
+        ${programTypes.length > 1 ? `<button type="button" class="btn" id="changeSchool">${esc(t('therapist.changeProgram'))}</button>` : ''}
         <button class="btn" id="refreshHome">${esc(t('therapist.reload'))}</button>
         ${pending ? `<button type="button" class="btn" id="cancelApproval">Cancel approval request</button>` : ''}
       </div>
@@ -2016,7 +2063,7 @@ async function therapistHome(statusFlash) {
       <table>
         <tr><th>Date</th><th>Child</th><th>Service</th><th>CPT</th><th>Time</th><th>Attendance</th><th>Notes</th><th></th></tr>
         ${sessions.map((s) => {
-          const name = studentName(students, s.studentId);
+          const name = studentName(students, s.studentId, s.studentName);
           const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ');
           const hard = Boolean(s.aiBlock);
           const flags = s.aiFlags || [];
@@ -2106,7 +2153,7 @@ async function therapistHome(statusFlash) {
   });
   document.getElementById('changeSchool')?.addEventListener('click', async () => {
     clearTransientErrors();
-    await showSchoolPicker(schools, { allowKeep: true });
+    await showProgramPicker(programTypes, { allowKeep: true });
   });
   document.getElementById('cancelApproval')?.addEventListener('click', async () => {
     if (!state.weekId) return;
@@ -2157,6 +2204,19 @@ async function therapistHome(statusFlash) {
     btn.onclick = () => {
       const id = btn.getAttribute('data-open-archive');
       if (id) openArchivePdf(id);
+    };
+  });
+  document.querySelectorAll('[data-delete-archive]').forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute('data-delete-archive');
+      if (!id) return;
+      if (!confirm('Delete this saved report from your archive? This cannot be undone.')) return;
+      try {
+        await api('DELETE', `/archive/${encodeURIComponent(id)}`);
+        await therapistHome({ success: ['Archived report deleted.'] });
+      } catch (e) {
+        setStatus(e.message || 'Unable to delete archived report.', 'error');
+      }
     };
   });
 
@@ -2227,6 +2287,7 @@ async function therapistHome(statusFlash) {
         weekStart: state.weekStart,
         providerId,
         schoolId: state.selectedSchoolId || undefined,
+        programType: state.selectedProgramType || undefined,
         fileName: file.name || '',
         pdfBase64,
       });
@@ -2291,6 +2352,7 @@ async function therapistHome(statusFlash) {
           weekStart: state.weekStart,
           providerId,
           schoolId: state.selectedSchoolId || undefined,
+          programType: state.selectedProgramType || undefined,
         });
         state.weekId = ensured.week?.id || '';
       }
@@ -2374,7 +2436,7 @@ async function therapistHome(statusFlash) {
         const out = await api(
           'POST',
           `/weeks/${state.weekId}/submit`,
-          { signerName, signerEmail, schoolId: state.selectedSchoolId || undefined },
+          { signerName, signerEmail, schoolId: state.selectedSchoolId || undefined, programType: state.selectedProgramType || undefined },
           { timeoutMs: 120000 },
         );
         state.last = out;
@@ -2406,37 +2468,43 @@ function pencilIcon() {
   return `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm17.71-10.04a1.003 1.003 0 0 0 0-1.42l-2.5-2.5a1.003 1.003 0 0 0-1.42 0l-1.83 1.83 3.75 3.75 1.999-1.66z"/></svg>`;
 }
 
-async function showSchoolPicker(schools, opts = {}) {
+async function showProgramPicker(programTypes, opts = {}) {
+  const types = Array.isArray(programTypes) ? programTypes.filter(Boolean) : [];
   view(`
     <div class="hero-strip" aria-hidden="true"></div>
     <div class="card school-picker-card">
-      <h2>Select your school</h2>
-      <p class="muted">Choose the school for this session before continuing to your homepage. Your caseload and timesheet will be filtered to that school.</p>
+      <h2>Select your program</h2>
+      <p class="muted">Choose the program type for your caseload. Your timesheet stays one per week across all buildings in that program — we do not split by school building.</p>
       <div class="school-picker-grid">
-        ${(schools || []).map((s) => `
-          <button type="button" class="school-pick-btn" data-school-id="${esc(s.id)}">
-            <strong>${esc(s.name || 'School')}</strong>
-            ${s.district ? `<span class="muted">${esc(s.district)}</span>` : ''}
+        ${types.map((pt) => `
+          <button type="button" class="school-pick-btn" data-program-type="${esc(pt)}">
+            <strong>${esc(pt)}</strong>
           </button>
-        `).join('') || '<p class="muted">No schools on your caseload yet. Contact the office.</p>'}
+        `).join('') || '<p class="muted">No program types on your caseload yet. Contact the office.</p>'}
       </div>
-      ${opts.allowKeep && state.selectedSchoolId ? `<p><button type="button" class="btn" id="keepSchool">Keep current school</button></p>` : ''}
+      ${opts.allowKeep && state.selectedProgramType ? `<p><button type="button" class="btn" id="keepSchool">Keep current program</button></p>` : ''}
     </div>
   `);
-  document.querySelectorAll('[data-school-id]').forEach((btn) => {
+  document.querySelectorAll('[data-program-type]').forEach((btn) => {
     btn.onclick = async () => {
-      state.selectedSchoolId = btn.getAttribute('data-school-id') || '';
-      state.schoolConfirmed = true;
-      sessionStorage.setItem('tmsSchoolId', state.selectedSchoolId);
-      sessionStorage.setItem('tmsSchoolConfirmed', '1');
+      state.selectedProgramType = btn.getAttribute('data-program-type') || '';
+      state.programConfirmed = true;
+      sessionStorage.setItem('tmsProgramType', state.selectedProgramType);
+      sessionStorage.setItem('tmsProgramConfirmed', '1');
       await therapistHome();
     };
   });
   document.getElementById('keepSchool')?.addEventListener('click', () => {
-    state.schoolConfirmed = true;
-    sessionStorage.setItem('tmsSchoolConfirmed', '1');
+    state.programConfirmed = true;
+    sessionStorage.setItem('tmsProgramConfirmed', '1');
     therapistHome();
   });
+}
+
+/** @deprecated building picker replaced by program-type scope — kept as alias */
+async function showSchoolPicker(schools, opts = {}) {
+  const types = [...new Set((schools || []).map((s) => s.district || s.name).filter(Boolean))];
+  return showProgramPicker(types.length ? types : [], opts);
 }
 
 
@@ -5212,13 +5280,30 @@ async function adminReportArchive() {
             <td>${esc(a.weekStart || '—')}</td>
             <td>${esc(a.status || '—')}</td>
             <td>${esc(a.filename || '—')}</td>
-            <td>${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : '—'}</td>
+            <td class="row-actions">
+              ${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : ''}
+              <button type="button" class="btn" data-delete-archive="${esc(a.id)}">Delete</button>
+            </td>
           </tr>`,
             )
             .join('') || '<tr><td colspan="8">No archive items match these filters.</td></tr>';
       }
       document.querySelectorAll('[data-open-archive]').forEach((btn) => {
         btn.onclick = () => openArchivePdf(btn.getAttribute('data-open-archive'));
+      });
+      document.querySelectorAll('[data-delete-archive]').forEach((btn) => {
+        btn.onclick = async () => {
+          const id = btn.getAttribute('data-delete-archive');
+          if (!id) return;
+          if (!confirm('Delete this archived report? This cannot be undone.')) return;
+          try {
+            await api('DELETE', `/archive/${encodeURIComponent(id)}`);
+            await load();
+            setStatus('Archived report deleted.', 'ok');
+          } catch (e) {
+            setStatus(e.message || 'Unable to delete archived report.', 'err');
+          }
+        };
       });
       setStatus('', '');
     } catch (e) {
@@ -5752,6 +5837,8 @@ async function completeAuthSuccess(authResult, opts = {}) {
   if (opts.trustDevice) await rememberDeviceIfRequested(authResult, username, true);
   state.schoolConfirmed = false;
   sessionStorage.removeItem('tmsSchoolConfirmed');
+  state.programConfirmed = false;
+  sessionStorage.removeItem('tmsProgramConfirmed');
   openingAccountView();
   // Prefer Dynamo/API role (admin) over Cognito groups alone — fixes Admin invite left in Therapist group.
   try {
@@ -5880,8 +5967,12 @@ function signOut(message) {
   state.email = '';
   state.selectedSchoolId = '';
   state.schoolConfirmed = false;
+  state.selectedProgramType = '';
+  state.programConfirmed = false;
   sessionStorage.removeItem('tmsSchoolId');
   sessionStorage.removeItem('tmsSchoolConfirmed');
+  sessionStorage.removeItem('tmsProgramType');
+  sessionStorage.removeItem('tmsProgramConfirmed');
   localStorage.removeItem('tmsIdToken');
   localStorage.removeItem('tmsAccessToken');
   showLogin(message || '');

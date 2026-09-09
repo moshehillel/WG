@@ -93,7 +93,7 @@ import { clearAllCognitoMfaPreferences } from './mfa-clear.js';
 import { PDF_NO_TEXT_ERROR, bodyHasPdfBytes, pdfTextFromBody } from './pdf-text.js';
 import { runDueNags } from './due-nags.js';
 import { runHhaErrorDigest } from './hha-error-digest.js';
-import { getPdfFromS3, putLockerPdf } from './s3-state.js';
+import { getPdfFromS3, putLockerPdf, deletePdfFromS3 } from './s3-state.js';
 import type { Mailer } from './mail.js';
 import type { HhaClient } from '@white-glove/hha-client';
 import {
@@ -107,6 +107,7 @@ import {
 } from './luna.js';
 import {
   archiveListItem,
+  archivesForProviderIds,
   canAccessArchive,
   detectUploadSourceType,
   filterArchives,
@@ -410,6 +411,25 @@ function schoolsForProvider(store: MemoryStore, providerId: string) {
   return store.data.schools.filter((s) => schoolIds.has(s.id));
 }
 
+/** Distinct program types on this provider's caseload (district/payer scope, not building). */
+function programTypesForProvider(store: MemoryStore, providerId: string): string[] {
+  if (!providerId) return [];
+  const studentIds = new Set(
+    store.data.mandates.filter((m) => m.providerId === providerId).map((m) => m.studentId),
+  );
+  const types = new Set<string>();
+  for (const s of store.data.students) {
+    if (!studentIds.has(s.id)) continue;
+    const pt = String(s.programType || '').trim();
+    if (pt) types.add(pt);
+  }
+  return [...types].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+function programTypeKey(v: string): string {
+  return String(v || '').trim().toLowerCase();
+}
+
 /** Majority student.schoolId among sessions on this week (child's school, not picker). */
 function dominantSchoolIdForWeek(store: MemoryStore, weekId: string): string {
   const sessions = store.sessionsForWeek(weekId);
@@ -656,10 +676,18 @@ function visibleStudents(
   user: AppUser,
   weekStart: string,
   schoolId?: string,
+  programType?: string,
 ): Student[] {
   if (user.role === 'admin') {
-    const all = store.data.students;
-    return schoolId ? all.filter((s) => s.schoolId === schoolId) : all;
+    let all = store.data.students;
+    const pt = String(programType || '').trim();
+    if (pt) {
+      const key = programTypeKey(pt);
+      all = all.filter((s) => programTypeKey(s.programType) === key);
+    } else if (schoolId) {
+      all = all.filter((s) => s.schoolId === schoolId);
+    }
+    return all;
   }
   const provider = providerFor(store, user);
   const providerId = provider?.id || '';
@@ -670,9 +698,16 @@ function visibleStudents(
   );
   const week = weekStart ? store.weekByProviderStart(providerId, weekStart) : undefined;
   const fromWeek = new Set((week ? store.sessionsForWeek(week.id) : []).map((s) => s.studentId));
-  const students = store.data.students.filter((s) => mandated.has(s.id) || fromWeek.has(s.id));
-  if (!schoolId) return students;
-  return students.filter((s) => s.schoolId === schoolId);
+  let students = store.data.students.filter((s) => mandated.has(s.id) || fromWeek.has(s.id));
+  const pt = String(programType || '').trim();
+  // Prefer program-type scope (district/payer) over building-level schoolId.
+  if (pt) {
+    const key = programTypeKey(pt);
+    students = students.filter((s) => programTypeKey(s.programType) === key);
+  } else if (schoolId) {
+    students = students.filter((s) => s.schoolId === schoolId);
+  }
+  return students;
 }
 
 function pickStr(v: unknown, fallback: string): string {
@@ -933,10 +968,12 @@ export async function handleTmsRequest(
   if (req.method === 'GET' && path === '/me') {
     const provider = providerFor(store, ctx.user);
     const schools = provider ? schoolsForProvider(store, provider.id) : [];
+    const programTypes = provider ? programTypesForProvider(store, provider.id) : [];
     return json(200, {
       user: ctx.user,
       provider,
       schools,
+      programTypes,
       settings: {
         sessionImportAgeLockEnabled: getAppSettings(store).sessionImportAgeLockEnabled,
         sessionImportMaxAgeDays: getAppSettings(store).sessionImportMaxAgeDays,
@@ -957,14 +994,19 @@ export async function handleTmsRequest(
       return json(400, { error: 'No provider profile on this login.' });
     }
     const kind = String(req.query.kind || '').trim();
-    const rows = filterArchives(
-      providerId ? store.archivesForProvider(providerId) : store.data.archives,
-      {
-        kind: kind === 'upload' || kind === 'timesheet' ? kind : '',
-        from: String(req.query.from || ''),
-        to: String(req.query.to || ''),
-      },
-    );
+    const aliasIds = providerId ? providerLookupIds(store, providerId) : [];
+    const source = providerId
+      ? archivesForProviderIds(store.data.archives, aliasIds)
+      : store.data.archives;
+    let rows = filterArchives(source, {
+      kind: kind === 'upload' || kind === 'timesheet' ? kind : '',
+      from: String(req.query.from || ''),
+      to: String(req.query.to || ''),
+    });
+    // Therapists only see successful imports — blocked attempts no longer clutter My uploads.
+    if (kind === 'upload' || !kind) {
+      rows = rows.filter((r) => r.kind !== 'upload' || r.status !== 'blocked');
+    }
     return json(200, { items: rows.map((r) => archiveListItem(r, store)) });
   }
 
@@ -986,11 +1028,13 @@ export async function handleTmsRequest(
     const row = store.archiveById(id);
     if (!row) return json(404, { error: 'Archive item not found.' });
     const provider = providerFor(store, ctx.user);
+    const providerIds = provider?.id ? providerLookupIds(store, provider.id) : [];
     if (
       !canAccessArchive(row, {
         role: ctx.user.role,
         userId: ctx.user.id,
         providerId: provider?.id,
+        providerIds,
       })
     ) {
       return json(403, { error: 'You can only open your own archived files.' });
@@ -1007,6 +1051,33 @@ export async function handleTmsRequest(
       },
       body: pdf,
     };
+  }
+
+  if (req.method === 'DELETE' && /^\/archive\/[^/]+$/.test(path)) {
+    const id = path.split('/')[2];
+    const row = store.archiveById(id);
+    if (!row) return json(404, { error: 'Archive item not found.' });
+    const provider = providerFor(store, ctx.user);
+    const providerIds = provider?.id ? providerLookupIds(store, provider.id) : [];
+    if (
+      !canAccessArchive(row, {
+        role: ctx.user.role,
+        userId: ctx.user.id,
+        providerId: provider?.id,
+        providerIds,
+      })
+    ) {
+      return json(403, { error: 'You can only delete your own archived files.' });
+    }
+    if (row.s3Key) await deletePdfFromS3(row.s3Key);
+    store.removeArchive(id);
+    store.audit(ctx.user.id, 'delete_archive', `archive:${id}`, null, {
+      kind: row.kind,
+      providerId: row.providerId,
+      filename: row.filename,
+      weekStart: row.weekStart,
+    });
+    return json(200, { ok: true, id });
   }
 
   if (req.method === 'GET' && path === '/dashboard') {
@@ -2090,7 +2161,14 @@ export async function handleTmsRequest(
   if (req.method === 'GET' && path === '/students') {
     const weekStart = String(req.query.weekStart || weekStartFromDos(nowIso().slice(0, 10)));
     const schoolId = String(req.query.schoolId || '').trim();
-    const students = visibleStudents(store, ctx.user, weekStart, schoolId || undefined);
+    const programType = String(req.query.programType || '').trim();
+    const students = visibleStudents(
+      store,
+      ctx.user,
+      weekStart,
+      schoolId || undefined,
+      programType || undefined,
+    );
     const ids = new Set(students.map((s) => s.id));
     return json(200, {
       students,
@@ -2197,6 +2275,7 @@ export async function handleTmsRequest(
     const weekStart = String(req.query.weekStart || obj(req).weekStart || '');
     const providerId = String(req.query.providerId || provider?.id || '');
     const schoolId = String(req.query.schoolId || '').trim();
+    const programType = String(req.query.programType || '').trim();
     const matchedWeeks = weeksForProviderStart(store, providerId, weekStart);
     let week =
       matchedWeeks.find((w) => w.providerId === providerId) ||
@@ -2212,16 +2291,23 @@ export async function handleTmsRequest(
         matchedWeeks.filter((w) => w.id !== week.id),
       );
     }
-    // Keep every session on this provider week. School picker only scopes the caseload
+    // Keep every session on this provider week. Program/school picker only scopes the caseload
     // dropdown — hiding rows made admin-added sessions disappear for the therapist.
     const sessions = week ? store.sessionsForWeek(week.id) : [];
-    const students = visibleStudents(store, ctx.user, weekStart || week?.weekStart || '', schoolId || undefined);
+    const nameMap = studentNameById(store);
+    const students = visibleStudents(
+      store,
+      ctx.user,
+      weekStart || week?.weekStart || '',
+      schoolId || undefined,
+      programType || undefined,
+    );
     const check = week
       ? checkMandatesForWeek(
           store.data.mandates,
           sessions,
           store.data.sessions,
-          studentNameById(store),
+          nameMap,
           {
             ...mandateWeekOpts(store),
             // Include caseload kids with 0 sessions so under-mandate yellow fires (0 of N).
@@ -2257,11 +2343,12 @@ export async function handleTmsRequest(
         presentGroupPeerCount: payOpts.presentGroupPeerCount,
       });
       if (soloNote) {
-        const who = studentNameById(store).get(s.studentId) || s.studentId;
+        const who = nameMap.get(s.studentId) || s.studentId;
         soloNoteErrors.push(`${s.dateOfService} ${who}: ${soloNote}`);
       }
       return {
         ...s,
+        studentName: nameMap.get(s.studentId) || '',
         aiFlags: flags,
         aiBlock: Boolean(s.aiBlock) || local.block,
         payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
@@ -2282,6 +2369,7 @@ export async function handleTmsRequest(
       sessions: sessionsOut,
       students,
       schoolDistrict,
+      programType: programType || '',
       mandates: store.data.mandates.filter((m) => students.some((s) => s.id === m.studentId) || ctx.user.role === 'admin'),
       warnings: [...new Set([...check.warnings, ...ai.warnings])],
       errors: [...new Set([...check.errors, ...ai.errors, ...soloNoteErrors])],
@@ -2335,7 +2423,7 @@ export async function handleTmsRequest(
   if (req.method === 'POST' && path === '/week/upload-sessions') {
     const provider = providerFor(store, ctx.user);
     const b = obj(req);
-    const providerId = String(b.providerId || provider?.id || '');
+    let providerId = String(b.providerId || provider?.id || '');
     if (!providerId) {
       const error =
         ctx.user.role === 'admin'
@@ -2345,6 +2433,11 @@ export async function handleTmsRequest(
     }
     if (ctx.user.role !== 'admin' && provider?.id !== providerId) {
       return json(403, { error: 'You can only import sessions for your own provider profile.' });
+    }
+    // Prefer login-linked / requested id; fold alias twins onto that canonical id.
+    const aliasIds = providerLookupIds(store, providerId);
+    if (provider?.id && aliasIds.includes(provider.id)) {
+      providerId = provider.id;
     }
     const accountProvider =
       (providerId ? store.data.providers.find((p) => p.id === providerId) : undefined) || provider;
@@ -2386,7 +2479,20 @@ export async function handleTmsRequest(
     const weekCache = new Map<string, (typeof store.data.weeks)[number]>();
     const uploadSchoolId = String(b.schoolId || '').trim();
     const ensureWeek = (weekStart: string) => {
-      let w = weekCache.get(weekStart) || store.weekByProviderStart(providerId, weekStart);
+      let w = weekCache.get(weekStart);
+      if (w) return w;
+      const matched = weeksForProviderStart(store, providerId, weekStart);
+      w = matched.find((x) => x.providerId === providerId) || matched[0];
+      if (w && w.providerId !== providerId) {
+        w = store.upsertWeek({ ...w, providerId });
+      }
+      if (w && matched.length > 1) {
+        foldWeeksOnto(
+          store,
+          w,
+          matched.filter((x) => x.id !== w!.id),
+        );
+      }
       if (!w) {
         const school = resolveWeekSchool(store, providerId, {
           preferredSchoolId: uploadSchoolId || undefined,
@@ -2871,9 +2977,9 @@ export async function handleTmsRequest(
         ? `therapist-activity-${week.weekStart || 'upload'}.pdf`
         : `frontline-${week.weekStart || 'upload'}.pdf`);
 
-    /** Best-effort: keep the PDF even when import is blocked so admins can audit later. */
+    /** Persist PDF only after a successful import — blocked attempts must not clutter archive. */
     const archiveUploadPdf = async (
-      status: 'imported' | 'blocked',
+      status: 'imported',
       schoolIdHint?: string,
     ): Promise<string | null> => {
       const uploadPdf = pdfBufferFromBody(b);
@@ -2906,10 +3012,9 @@ export async function handleTmsRequest(
       return row?.id || null;
     };
 
-    // Any issue → save nothing (but still archive + log for audit).
+    // Any issue → save nothing (audit log only — do not archive blocked PDFs).
     if (failed.length) {
       const errors = failed.map((f) => f.error);
-      const archiveId = await archiveUploadPdf('blocked');
       const attendanceCounts = parsed.reduce(
         (acc, r) => {
           acc[r.attendance] = (acc[r.attendance] || 0) + 1;
@@ -2924,7 +3029,6 @@ export async function handleTmsRequest(
         failed: failed.length,
         skipped: skipped.length,
         attendanceCounts,
-        archiveId,
         sampleErrors: errors.slice(0, 5),
       });
       store.audit(ctx.user.id, 'upload_sessions', `provider:${providerId}`, null, {
@@ -2937,7 +3041,6 @@ export async function handleTmsRequest(
         failed: failed.length,
         skipped: skipped.length,
         attendanceCounts,
-        archiveId,
         errors: errors.slice(0, 20),
       });
       const yellowMsgs = [

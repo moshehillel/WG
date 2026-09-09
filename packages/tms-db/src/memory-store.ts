@@ -355,6 +355,13 @@ export class MemoryStore {
     return this.data.archives.filter((a) => a.providerId === providerId);
   }
 
+  removeArchive(id: string): ArchiveRecord | undefined {
+    const i = this.data.archives.findIndex((a) => a.id === id);
+    if (i < 0) return undefined;
+    const [removed] = this.data.archives.splice(i, 1);
+    return removed;
+  }
+
   upsertDueDate(row: DueDate): DueDate {
     const i = this.data.dueDates.findIndex((s) => s.id === row.id);
     if (i >= 0) this.data.dueDates[i] = row;
