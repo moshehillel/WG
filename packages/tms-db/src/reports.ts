@@ -4,7 +4,13 @@ import {
   providerDisplayNameKey,
 } from './caseload-import.js';
 import { dueDateStatus } from './due-dates.js';
-import { assignSessionsToMandates, mandateFrequencyKind } from './mandate.js';
+import {
+  assignSessionsToMandates,
+  cycleAllowedSessions,
+  mandateFrequencyKind,
+  monthlyAllowedSessions,
+  weeklyAllowedSessions,
+} from './mandate.js';
 import { isoDate, parseDos } from './ids.js';
 import { schoolCalendarSummary, hasConfiguredSchoolCalendar, schoolCalendarMonFriFallbackWarning, schoolSetupIncomplete } from './school-calendar.js';
 import type { Mandate, SessionRow } from './types.js';
@@ -16,7 +22,8 @@ export function sessionHasPostedNote(notes: string | undefined): boolean {
   return String(notes || '').trim().length > 0;
 }
 
-function isProvidedSession(s: SessionRow): boolean {
+/** Attended + makeup count as delivered; missed does not. */
+function isDeliveredSession(s: SessionRow): boolean {
   return s.attendance === 'attended' || s.attendance === 'makeup';
 }
 
@@ -27,17 +34,28 @@ function mandateLabel(m: Mandate | undefined): string {
   return `${svc}${m.serviceType ? '' : ratio}`.trim() || 'Mandate';
 }
 
+/** Expected session count for progress % (weekly / cycle / monthly mandate frequency). */
+export function mandateExpectedSessions(mandate: Mandate | undefined): number {
+  if (!mandate) return 0;
+  const weekly = weeklyAllowedSessions(mandate);
+  if (weekly != null) return weekly > 0 ? weekly : 0;
+  const kind = mandateFrequencyKind(mandate);
+  if (kind === 'monthly') return monthlyAllowedSessions(mandate);
+  if (kind === 'school_day_cycle') return cycleAllowedSessions(mandate);
+  return Number(mandate.frequencyPerWeek) || Number(mandate.sessionsPerPeriod) || 0;
+}
+
+/** Cap at 100; 0 expected → 0% when nothing delivered, else 100 when any work exists. */
+export function pctOfMandate(count: number, expected: number): number {
+  if (expected <= 0) return count > 0 ? 100 : 0;
+  return Math.min(100, Math.round((Math.max(0, count) / expected) * 100));
+}
+
 function weekEndFromStart(weekStart: string): string {
   const dt = parseDos(weekStart);
   if (!dt) return weekStart;
   dt.setUTCDate(dt.getUTCDate() + 6);
   return isoDate(dt);
-}
-
-function payProgressPct(sessionsProvided: number, notesPosted: number): 0 | 50 | 100 {
-  if (sessionsProvided <= 0) return 0;
-  if (notesPosted >= sessionsProvided) return 100;
-  return 50;
 }
 
 function dosInRange(dos: string, from: string, to: string): boolean {
@@ -88,10 +106,10 @@ export function missingNotes(
 }
 
 /**
- * Admin pay-tracking rows: child + mandate + week.
- * - Sessions provided = attended + makeup (missed excluded).
- * - Notes posted = provided sessions with a non-empty note.
- * - Progress: 0% none · 50% provided · 100% notes posted for all provided.
+ * Admin weekly progress: child + mandate + week.
+ * - Sessions delivered % = attended+makeup vs mandate frequency (missed excluded).
+ * - Notes posted % = sessions with any note (missed + attended + makeup) vs mandate.
+ * - belowMandate / yellow when delivered count is under the mandate.
  */
 export function weekProgressReport(
   store: MemoryStore,
@@ -119,11 +137,16 @@ export function weekProgressReport(
     weekStart: string;
     weekEnd: string;
     weekLabel: string;
+    mandateExpected: number;
     sessionsProvided: number;
+    sessionsDeliveredPct: number;
     notesPosted: number;
+    notesPostedPct: number;
     sessionsMissed: number;
     notesFollowUp: number;
-    progressPct: 0 | 50 | 100;
+    /** @deprecated alias of sessionsDeliveredPct for older clients */
+    progressPct: number;
+    belowMandate: boolean;
     milestoneProvided: boolean;
     milestoneNotes: boolean;
   }> = [];
@@ -153,14 +176,17 @@ export function weekProgressReport(
         mandate: Mandate | undefined,
         assigned: SessionRow[],
       ) => {
-        const provided = assigned.filter(isProvidedSession);
+        const delivered = assigned.filter(isDeliveredSession);
         const missed = assigned.filter((s) => s.attendance === 'missed');
-        const sessionsProvided = provided.length;
-        const notesPosted = provided.filter((s) => sessionHasPostedNote(s.notes)).length;
-        const notesFollowUp =
-          provided.filter((s) => !sessionHasPostedNote(s.notes)).length + missed.length;
+        const sessionsProvided = delivered.length;
+        // Missed + attended + makeup all count once a note/reason text is present.
+        const notesPosted = assigned.filter((s) => sessionHasPostedNote(s.notes)).length;
+        const notesFollowUp = assigned.filter((s) => !sessionHasPostedNote(s.notes)).length;
         if (!assigned.length && sessionsProvided === 0) return;
-        const progressPct = payProgressPct(sessionsProvided, notesPosted);
+        const mandateExpected = mandateExpectedSessions(mandate);
+        const sessionsDeliveredPct = pctOfMandate(sessionsProvided, mandateExpected);
+        const notesPostedPct = pctOfMandate(notesPosted, mandateExpected);
+        const belowMandate = mandateExpected > 0 && sessionsProvided < mandateExpected;
         const provider = mandate
           ? store.data.providers.find((p) => p.id === mandate.providerId)
           : undefined;
@@ -177,13 +203,17 @@ export function weekProgressReport(
           weekStart: week.weekStart,
           weekEnd: weekEndFromStart(week.weekStart),
           weekLabel: `${week.weekStart} → ${weekEndFromStart(week.weekStart)}`,
+          mandateExpected,
           sessionsProvided,
+          sessionsDeliveredPct,
           notesPosted,
+          notesPostedPct,
           sessionsMissed: missed.length,
           notesFollowUp,
-          progressPct,
-          milestoneProvided: progressPct >= 50,
-          milestoneNotes: progressPct >= 100,
+          progressPct: sessionsDeliveredPct,
+          belowMandate,
+          milestoneProvided: sessionsDeliveredPct >= 100,
+          milestoneNotes: notesPostedPct >= 100,
         });
       };
 

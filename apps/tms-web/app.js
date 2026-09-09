@@ -40,7 +40,7 @@ const REPORT_LIST = [
   {
     id: 'week-progress',
     title: 'Weekly session progress',
-    blurb: 'Sessions delivered and notes posted by child and week.',
+    blurb: 'Sessions delivered % and notes posted % versus mandate by child and week.',
   },
   {
     id: 'last-service',
@@ -1963,19 +1963,15 @@ async function therapistHome(statusFlash) {
       <h2>Processed sessions</h2>
       <p class="muted">Signed and paid sessions only. Draft, pending signature, and reopened work stay under Pending Sessions.</p>
       <div class="table-wrap"><table>
-        <tr><th>Session date</th><th>Attended status</th><th>Start/End time</th><th>Pay rate</th></tr>
+        <tr><th>Session date</th><th>Attended status</th><th>Start/End time</th></tr>
         ${processedSessions.map((s) => {
           const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ') || '—';
-          const pay = s.payAmount == null || s.payAmount === ''
-            ? '—'
-            : `$${Number(s.payAmount).toFixed(2)}`;
           return `<tr>
           <td>${esc(s.dateOfService || '—')}</td>
           <td>${esc(s.attendance || '—')}</td>
           <td>${esc(time)}</td>
-          <td>${esc(pay)}</td>
         </tr>`;
-        }).join('') || '<tr><td colspan="4">No processed sessions yet.</td></tr>'}
+        }).join('') || '<tr><td colspan="3">No processed sessions yet.</td></tr>'}
       </table></div>
       ` : `
       <h2>Pending sessions</h2>
@@ -1999,7 +1995,13 @@ async function therapistHome(statusFlash) {
           const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ');
           const hard = Boolean(s.aiBlock);
           const flags = s.aiFlags || [];
-          const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
+          const underChild = (warnings || []).some(
+            (w) =>
+              /under\s+(?:monthly\s+|cycle\s+)?mandate/i.test(String(w || '')) &&
+              name &&
+              String(w).toLowerCase().includes(String(name).toLowerCase()),
+          );
+          const rowClass = hard ? 'hard' : flags.length || underChild ? 'warn' : '';
           const serviceLabel = additionalServiceLabel(s.additionalServiceType) || s.serviceType || '—';
           const cpt = s.cptLabel || (s.cptCodes || []).join(', ') || '—';
           const canEditAddl = Boolean(s.additionalServiceType) && canMutateExisting;
@@ -4621,12 +4623,29 @@ async function adminMandates() {
 function weekProgressRowsHtml(progressRows) {
   return (progressRows || [])
     .map((r) => {
-      return `<tr>
+      const expected = Number(r.mandateExpected || 0);
+      const delivered = Number(r.sessionsProvided ?? 0);
+      const notes = Number(r.notesPosted ?? 0);
+      const deliveredPct =
+        r.sessionsDeliveredPct != null
+          ? Number(r.sessionsDeliveredPct)
+          : Number(r.progressPct ?? 0);
+      const notesPct = r.notesPostedPct != null ? Number(r.notesPostedPct) : 0;
+      const below =
+        r.belowMandate === true ||
+        (expected > 0 && delivered < expected);
+      const deliveredLabel = expected > 0
+        ? `${delivered}/${expected} (${deliveredPct}%)`
+        : `${delivered} (${deliveredPct}%)`;
+      const notesLabel = expected > 0
+        ? `${notes}/${expected} (${notesPct}%)`
+        : `${notes} (${notesPct}%)`;
+      return `<tr class="${below ? 'row-warn' : ''}">
             <td><button type="button" class="linkish" data-open-child="${esc(r.studentId)}">${esc(r.childName)}</button></td>
             <td>${esc(r.mandateLabel || '—')}</td>
             <td>${esc(r.weekLabel || r.weekStart || '—')}</td>
-            <td>${esc(String(r.sessionsProvided ?? 0))}</td>
-            <td>${esc(String(r.notesPosted ?? 0))}</td>
+            <td>${esc(deliveredLabel)}</td>
+            <td>${esc(notesLabel)}</td>
           </tr>`;
     })
     .join('') || '<tr><td colspan="5">No sessions in this week range.</td></tr>';
@@ -4722,7 +4741,7 @@ async function adminReportWeekProgress() {
     <div class="card">
       <button type="button" class="btn" id="backReports">← Reports</button>
       <h2>Weekly session progress</h2>
-      <p class="muted">Sessions delivered versus notes posted for each child and week.</p>
+      <p class="muted">Sessions delivered % and notes posted % versus each child's mandate. Missed sessions do not count as delivered; missed and attended both count toward notes posted. Yellow rows are below mandate.</p>
       <div class="row">
         <label>Week from <input id="progFrom" type="date" value="${esc(from)}" /></label>
         <label>Week to <input id="progTo" type="date" value="${esc(to)}" /></label>
@@ -4734,8 +4753,8 @@ async function adminReportWeekProgress() {
           <th>Child</th>
           <th>Mandate</th>
           <th>Week</th>
-          <th>Sessions delivered</th>
-          <th>Notes posted</th>
+          <th>Sessions delivered %</th>
+          <th>Notes posted %</th>
         </tr>
         <tbody id="progBody"><tr><td colspan="5">Loading…</td></tr></tbody>
       </table>

@@ -433,7 +433,7 @@ Service: Physical Therapy
 `);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows[0]?.attendance).toBe('missed');
-    expect(rows[0]?.cancelReason).toMatch(/not in school|Absent/i);
+    expect(rows[0]?.cancelReason).toMatch(/Student Absence|not in school|Absent/i);
   });
 
   it('parses a session date from text', () => {
@@ -813,9 +813,13 @@ describe('due dates and dashboard', () => {
     );
     const half = weekProgressReport(store, { from: '2026-08-31', to: '2026-08-31' });
     expect(half).toHaveLength(1);
+    expect(half[0]?.mandateExpected).toBe(2);
     expect(half[0]?.sessionsProvided).toBe(1);
     expect(half[0]?.notesPosted).toBe(0);
+    expect(half[0]?.sessionsDeliveredPct).toBe(50);
+    expect(half[0]?.notesPostedPct).toBe(0);
     expect(half[0]?.progressPct).toBe(50);
+    expect(half[0]?.belowMandate).toBe(true);
     expect(half[0]?.childName).toMatch(/Aiden/);
     expect(half[0]?.mandateLabel).toMatch(/PT/);
 
@@ -828,9 +832,23 @@ describe('due dates and dashboard', () => {
         notes: 'ok',
       }),
     );
-    const full = weekProgressReport(store, { from: '2026-08-31', to: '2026-08-31' });
-    expect(full[0]?.notesPosted).toBe(1);
-    expect(full[0]?.progressPct).toBe(100);
+    store.upsertSession(
+      sess({
+        id: 'b',
+        weekId: 'w',
+        studentId: 'st',
+        attendance: 'missed',
+        notes: 'Provider Absence:',
+      }),
+    );
+    const mixed = weekProgressReport(store, { from: '2026-08-31', to: '2026-08-31' });
+    // Mandate 2×: one delivered + one miss with note → delivered 50%, notes posted 100%.
+    expect(mixed[0]?.sessionsProvided).toBe(1);
+    expect(mixed[0]?.sessionsDeliveredPct).toBe(50);
+    expect(mixed[0]?.notesPosted).toBe(2);
+    expect(mixed[0]?.notesPostedPct).toBe(100);
+    expect(mixed[0]?.belowMandate).toBe(true);
+    expect(mixed[0]?.progressPct).toBe(50);
     expect(weekProgressReport(store, { from: '2026-09-07', to: '2026-09-07' })).toHaveLength(0);
   });
 });

@@ -687,15 +687,23 @@ function reportXlsxWeekProgress(
         'Child',
         'Mandate',
         'Week',
-        'Sessions provided',
+        'Mandate expected',
+        'Sessions delivered',
+        'Sessions delivered %',
         'Notes posted',
+        'Notes posted %',
+        'Below mandate',
       ],
       rows.map((r) => [
         r.childName,
         r.mandateLabel,
         r.weekLabel,
+        r.mandateExpected,
         r.sessionsProvided,
+        r.sessionsDeliveredPct,
         r.notesPosted,
+        r.notesPostedPct,
+        r.belowMandate ? 'yes' : 'no',
       ]),
     ),
   );
@@ -2085,17 +2093,21 @@ export async function handleTmsRequest(
       );
       sessions = sessions.filter((s) => schoolStudentIds.has(s.studentId));
     }
+    const students = visibleStudents(store, ctx.user, weekStart || week?.weekStart || '', schoolId || undefined);
     const check = week
       ? checkMandatesForWeek(
           store.data.mandates,
           sessions,
           store.data.sessions,
           studentNameById(store),
-          mandateWeekOpts(store),
+          {
+            ...mandateWeekOpts(store),
+            // Include caseload kids with 0 sessions so under-mandate yellow fires (0 of N).
+            includeStudentIds: students.map((s) => s.id),
+          },
         )
       : { errors: [] as string[], warnings: [] as string[] };
     const ai = week ? collectHeuristicAiIssues(sessions) : { errors: [] as string[], warnings: [] as string[] };
-    const students = visibleStudents(store, ctx.user, weekStart || week?.weekStart || '', schoolId || undefined);
     const payProvider =
       store.data.providers.find((p) => p.id === (week?.providerId || providerId)) || provider;
     const payProviderId = week?.providerId || providerId;

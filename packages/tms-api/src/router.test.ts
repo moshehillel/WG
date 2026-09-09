@@ -1045,11 +1045,23 @@ describe('TMS API weekly loop', () => {
       body: {},
     });
     expect(report.status).toBe(200);
-    const rows = (report.body as { rows: Array<{ childName: string; progressPct: number; sessionsProvided: number }> }).rows;
+    const rows = (report.body as { rows: Array<{
+      childName: string;
+      progressPct: number;
+      sessionsProvided: number;
+      sessionsDeliveredPct: number;
+      notesPostedPct: number;
+      belowMandate: boolean;
+      mandateExpected: number;
+    }> }).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0]?.childName).toMatch(/Aiden/);
+    expect(rows[0]?.mandateExpected).toBe(2);
     expect(rows[0]?.sessionsProvided).toBe(1);
-    expect(rows[0]?.progressPct).toBe(100);
+    expect(rows[0]?.sessionsDeliveredPct).toBe(50);
+    expect(rows[0]?.notesPostedPct).toBe(50);
+    expect(rows[0]?.progressPct).toBe(50);
+    expect(rows[0]?.belowMandate).toBe(true);
   });
 
   it('caseload CSV/Excel import commits immediately; dryRun stays unused unless set', async () => {
