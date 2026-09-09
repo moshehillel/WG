@@ -189,6 +189,24 @@ async function sendSesHtmlBatch(options: {
   return { sesCount, failures };
 }
 
+function resolveAlwaysSns(explicit?: boolean): boolean {
+  if (typeof explicit === 'boolean') return explicit;
+  const raw = process.env.ALERT_ALWAYS_SNS?.trim().toLowerCase();
+  if (raw === 'false' || raw === '0' || raw === 'no') return false;
+  // Default true: SES can "succeed" while M365/Barracuda quarantine mail —
+  // SNS email subscriptions remain the reliable path for White Glove staff.
+  return true;
+}
+
+export type PipelineAlertResult = {
+  channel: 'ses' | 'sns' | 'mixed' | 'dual' | 'none';
+  sesCount: number;
+  /** True when SNS was used because every SES attempt failed. */
+  snsFallback: boolean;
+  /** True whenever a message was published to the exception SNS topic. */
+  snsPublished: boolean;
+};
+
 export async function sendPipelineAlert(options: {
   topicArn?: string;
   fromEmail?: string;
@@ -196,19 +214,22 @@ export async function sendPipelineAlert(options: {
   fromName?: string;
   replyTo?: string;
   alertEmails?: string;
+  /** When true (default), always publish SNS plain text in addition to SES HTML. */
+  alwaysSns?: boolean;
   subject: string;
   textBody: string;
   htmlBody: string;
   attachments?: PipelineAlertAttachment[];
-}): Promise<{ channel: 'ses' | 'sns' | 'mixed' | 'none'; sesCount: number; snsFallback: boolean }> {
+}): Promise<PipelineAlertResult> {
   const recipients = parseAlertEmails(options.alertEmails);
   const primaryFrom = options.fromEmail?.trim();
   const fallbackFrom = options.fromEmailFallback?.trim();
   const replyTo = options.replyTo?.trim();
+  const alwaysSns = resolveAlwaysSns(options.alwaysSns);
 
   if (recipients.length === 0) {
     console.warn('No alert recipients configured (ALERT_EMAILS empty)');
-    return { channel: 'none', sesCount: 0, snsFallback: false };
+    return { channel: 'none', sesCount: 0, snsFallback: false, snsPublished: false };
   }
 
   if (!primaryFrom && !fallbackFrom) {
@@ -239,6 +260,35 @@ export async function sendPipelineAlert(options: {
   }
 
   const { sesCount, failures: sesFailures } = result;
+  const shouldPublishSns =
+    Boolean(options.topicArn) && (sesCount === 0 || alwaysSns);
+
+  let snsPublished = false;
+  let snsFallback = false;
+
+  if (shouldPublishSns && options.topicArn) {
+    if (sesCount === 0) {
+      console.warn(
+        'All SES HTML sends failed — SNS plain text is the primary delivery path. ' +
+          'CSV attachments are SES-only (not on SNS). ' +
+          'Optional: verify a SES From identity you own for HTML/CSV; WG domain/DKIM is not required for SNS alerts.',
+      );
+      snsFallback = true;
+    } else {
+      console.log(
+        'Publishing SNS plain-text alert alongside SES HTML (ALERT_ALWAYS_SNS). ' +
+          'SNS (AWS Notifications) is the primary reliable path; CSV attachments are SES-only.',
+      );
+    }
+    await sns.send(
+      new PublishCommand({
+        TopicArn: options.topicArn,
+        Subject: options.subject,
+        Message: options.textBody,
+      }),
+    );
+    snsPublished = true;
+  }
 
   if (sesCount > 0) {
     if (sesFailures.length > 0) {
@@ -247,27 +297,16 @@ export async function sendPipelineAlert(options: {
       );
     }
     return {
-      channel: sesFailures.length > 0 ? 'mixed' : 'ses',
+      channel: snsPublished ? 'dual' : sesFailures.length > 0 ? 'mixed' : 'ses',
       sesCount,
       snsFallback: false,
+      snsPublished,
     };
   }
 
-  if (options.topicArn) {
-    console.warn(
-      'All SES HTML sends failed — falling back to SNS plain text for all subscribers. ' +
-        'CSV attachments are not included on SNS fallback. ' +
-        'Verify alerts@ domain in SES or complete recipient verification to receive HTML.',
-    );
-    await sns.send(
-      new PublishCommand({
-        TopicArn: options.topicArn,
-        Subject: options.subject,
-        Message: options.textBody,
-      }),
-    );
-    return { channel: 'sns', sesCount: 0, snsFallback: true };
+  if (snsPublished) {
+    return { channel: 'sns', sesCount: 0, snsFallback, snsPublished: true };
   }
 
-  return { channel: 'none', sesCount: 0, snsFallback: false };
+  return { channel: 'none', sesCount: 0, snsFallback: false, snsPublished: false };
 }

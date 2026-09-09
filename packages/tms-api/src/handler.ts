@@ -5,13 +5,13 @@ import {
   MockHhaClient,
   type HhaClient,
 } from '@white-glove/hha-client';
-import { MemoryStore, purgeOrphanProviders } from '@white-glove/tms-db';
+import { MemoryStore, purgeOrphanProviders, appSettingsFromStore, type AppSettings } from '@white-glove/tms-db';
 import { handleTmsRequest, type HttpRequest } from './router.js';
 import { createMailer, type Mailer } from './mail.js';
 import { runDueNags } from './due-nags.js';
 import { runHhaErrorDigest } from './hha-error-digest.js';
 import { deleteCognitoLogin } from './invite.js';
-import { loadTmsState, saveTmsState } from './dynamo-state.js';
+import { loadTmsState, readLiveAppSettingsEntity, saveTmsState } from './dynamo-state.js';
 
 const store = new MemoryStore();
 let mailer: Mailer | undefined;
@@ -207,17 +207,45 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       query: event.queryStringParameters || {},
       body,
     };
-    const before = await loadTmsState(store);
+    await loadTmsState(store);
+    // Scan used by loadTmsState is eventually consistent — a re-GET right after
+    // requireMfa:false can still hydrate the stale true and make Advanced Save look failed.
+    // Overlay settings from a strongly consistent GetItem before serving the request.
+    try {
+      const liveSettingsEntity = await readLiveAppSettingsEntity();
+      if (liveSettingsEntity) {
+        store.data.settings = [appSettingsFromStore([liveSettingsEntity as AppSettings])];
+      }
+    } catch (err) {
+      console.error('[tms-api] live settings overlay failed; using scanned snapshot', err);
+    }
+    let before = store.snapshot();
     const mandateSig = () =>
       store.data.mandates.map((m) => `${m.id}:${m.providerId}`).join('|');
     const beforeMandates = mandateSig();
+    let midPersisted = false;
     const result = await handleTmsRequest(store, req, {
       hha: await resolveHhaClient(),
       mail: await mail(),
+      persistNow: async () => {
+        await saveTmsState(before, store);
+        // Rebase so the final save only writes mutations after this flush (e.g. audit of MFA clear).
+        before = store.snapshot();
+        midPersisted = true;
+      },
+      readLiveSettings: async (): Promise<AppSettings | null> => {
+        const entity = await readLiveAppSettingsEntity();
+        if (!entity) return null;
+        return appSettingsFromStore([entity as AppSettings]);
+      },
     });
     // Skip write on pure reads — but persist when a GET repairs provider caseload aliases.
     const mutatedOnRead = beforeMandates !== mandateSig();
-    if ((method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') || mutatedOnRead) {
+    if (
+      midPersisted ||
+      (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') ||
+      mutatedOnRead
+    ) {
       await saveTmsState(before, store);
     }
     if (Buffer.isBuffer(result.body)) {

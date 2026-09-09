@@ -132,7 +132,7 @@ describe('resolveSessionVisit group remap', () => {
       needsEvv: false,
     });
 
-    expect(resolved.ok).toBe(true);
+    expect(resolved.ok, !resolved.ok ? resolved.error.message : '').toBe(true);
     if (!resolved.ok) {
       throw new Error(resolved.error.message);
     }

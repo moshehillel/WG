@@ -124,6 +124,7 @@ export function parseOpenedCases(content: string): OpenedCaseRow[] {
       ),
       endDate: firstField(row, 'end_date', 'auth_end_date', 'service_end_date'),
       providerName: firstField(row, 'provider_name', 'provider', 'therapist_name'),
+      payRate: firstField(row, 'pay_rate', 'payrate') || undefined,
       isEarlyIntervention,
       raw: row,
     };

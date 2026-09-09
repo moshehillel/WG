@@ -20,7 +20,9 @@ describe('create-patient-builder', () => {
   });
 
   it('parses zip codes', () => {
-    expect(parseZipCode('10801-4721')).toEqual({ zip5: 10801, zip4: 4721 });
+    expect(parseZipCode('10801-4721')).toEqual({ zip5: 10801, zip4: '4721' });
+    expect(parseZipCode('11710')).toEqual({ zip5: 11710 });
+    expect(parseZipCode('11710-0000')).toEqual({ zip5: 11710, zip4: '0000' });
   });
 
   it('validates required create fields', () => {
@@ -70,5 +72,44 @@ describe('create-patient-builder', () => {
     expect(xml).toContain('<AdmissionID>PS1012074</AdmissionID>');
     expect(xml).toContain('<Discipline>SI</Discipline>');
     expect(xml).toContain('<Zip5>10801</Zip5>');
+    expect(xml).toContain('<Zip4>4721</Zip4>');
+  });
+
+  it('omits Zip4 for 5-digit zip (HHA rejects Zip4=0 length)', () => {
+    const xml = buildCreatePatientBody(
+      {
+        firstName: 'Martin',
+        lastName: 'Solomon',
+        dateOfBirth: '12/01/1947',
+        caseId: '06771684',
+        intakeDate: '09/08/2026',
+        serviceCode: 'OT HC Eval',
+        address1: '2486 JACKSON PLACE',
+        city: 'North Bellmore',
+        state: 'NY',
+        zipCode: '11710',
+        gender: 'Male',
+      },
+      {
+        officeId: 1025,
+        coordinatorId: 81103,
+        sourceOfAdmission: 9300,
+        branchId: 10073742,
+        teamId: 2036,
+        locationId: 12284,
+        mobilityStatusId: 2495,
+        evacuationZoneId: 10003239,
+        defaultGender: 'Male',
+      },
+      {
+        branchId: 10073742,
+        teamId: 2036,
+        locationId: 12284,
+        mobilityStatusId: 2495,
+        evacuationZoneId: 10003239,
+      },
+    );
+    expect(xml).toContain('<Zip5>11710</Zip5>');
+    expect(xml).not.toContain('<Zip4>');
   });
 });

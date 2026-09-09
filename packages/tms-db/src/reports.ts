@@ -6,7 +6,7 @@ import {
 import { dueDateStatus } from './due-dates.js';
 import { assignSessionsToMandates, mandateFrequencyKind } from './mandate.js';
 import { isoDate, parseDos } from './ids.js';
-import { schoolCalendarSummary, hasConfiguredSchoolCalendar, schoolCalendarMonFriFallbackWarning } from './school-calendar.js';
+import { schoolCalendarSummary, hasConfiguredSchoolCalendar, schoolCalendarMonFriFallbackWarning, schoolSetupIncomplete } from './school-calendar.js';
 import type { Mandate, SessionRow } from './types.js';
 import { DEFAULT_ADMIN_NOTE_TAGS } from './types.js';
 import type { MemoryStore } from './memory-store.js';
@@ -460,6 +460,7 @@ export function adminSchoolDetail(store: MemoryStore, schoolId: string) {
   const dueDates = dueDateReport(store).filter((d) => d.schoolId === schoolId);
   const students = store.data.students.filter((s) => s.schoolId === schoolId);
   const configured = hasConfiguredSchoolCalendar(calendar);
+  const setup = schoolSetupIncomplete(school, calendar);
   return {
     school,
     calendar,
@@ -468,6 +469,11 @@ export function adminSchoolDetail(store: MemoryStore, schoolId: string) {
     calendarFallbackWarning: configured
       ? ''
       : schoolCalendarMonFriFallbackWarning(school.name),
+    addressConfigured: !setup.missingAddress,
+    setupIncomplete: setup.incomplete,
+    setupMissingCalendar: setup.missingCalendar,
+    setupMissingAddress: setup.missingAddress,
+    setupIncompleteMessage: setup.message,
     dueDates,
     studentCount: students.length,
   };

@@ -29,9 +29,13 @@ export class MockHhaClient implements HhaClient {
   readonly dischargedPlacements = new Set<string>();
   readonly pendingCalls = new Map<string, PendingCall>();
   readonly payCodes = new Map<string, string>([
-    ['OT72', 'pay-ot72'],
-    ['OT70', 'pay-ot70'],
+    ['OT $72', 'pay-ot72'],
+    ['OT $70', 'pay-ot70'],
+    ['PT $70', 'pay-pt70'],
+    ['OT GROUP $34', 'pay-ot-group-34'],
   ]);
+  /** Optional exact (normalized) billing service names for TMS school codes in unit tests. */
+  readonly serviceCodesByName = new Map<string, string>();
   readonly caregiverByName = new Map<string, string | undefined>();
   readonly calls: string[] = [];
 
@@ -227,6 +231,11 @@ export class MockHhaClient implements HhaClient {
     return this.payCodes.get(payCodeName.trim().toUpperCase());
   }
 
+  async listPayRateCodes(): Promise<Array<{ id: string; name: string }>> {
+    this.calls.push('listPayRateCodes');
+    return [...this.payCodes.entries()].map(([name, id]) => ({ id, name }));
+  }
+
   async resolveContractId(programType: string | undefined): Promise<number | undefined> {
     this.calls.push('resolveContractId');
     return lookupContractId(programType);
@@ -243,7 +252,11 @@ export class MockHhaClient implements HhaClient {
     // Mock has no contract rows: expose mapped HHA *name* as a sentinel so callers
     // can assert map-first behavior without live HHA.
     if (alias?.hhaServiceCodeName) return `alias:${alias.hhaServiceCodeName}`;
-    return lookupServiceCode(serviceType)?.hhaCode;
+    const staticId = lookupServiceCode(serviceType)?.hhaCode;
+    if (staticId) return staticId;
+    if (!serviceType?.trim()) return undefined;
+    const key = serviceType.trim().toUpperCase().replace(/\s+/g, ' ');
+    return this.serviceCodesByName.get(key);
   }
 
   async getClockingDetails(visitId: string, expected: HhaVisit): Promise<HhaClockingDetails> {

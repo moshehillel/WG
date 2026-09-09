@@ -424,6 +424,18 @@ describe('weekly notes', () => {
     );
   });
 
+  it('parses Frontline Student Absence rows as missed', () => {
+    const rows = parseWeeklySessionText(`
+Student Name: Odne, Aiden
+Service Provider: Pat Lee
+Service: Physical Therapy
+09/02/2026 1:1 9:00 am 9:30 am Student Absence: student not in school
+`);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.attendance).toBe('missed');
+    expect(rows[0]?.cancelReason).toMatch(/not in school|Absent/i);
+  });
+
   it('parses a session date from text', () => {
     const rows = parseWeeklySessionText(`
 Student Name: Jack De Oliveira
@@ -881,17 +893,18 @@ describe('AI heuristic', () => {
     expect(r.blockFlags.some((f) => /time/i.test(f))).toBe(true);
   });
 
-  it('warns on missed notes without blocking', () => {
+  it('allows empty missed notes without warning or block', () => {
     const r = screenServiceNote({
-      notes: 'No detail given',
+      notes: '',
       attendance: 'missed',
-      beginTime: '',
-      endTime: '',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
       makeupOfSessionId: '',
       dateOfService: '09/01/2026',
     });
     expect(r.block).toBe(false);
-    expect(r.warnFlags.length).toBeGreaterThan(0);
+    expect(r.flags).toEqual([]);
+    expect(r.warnFlags).toEqual([]);
   });
 
   it('passes a complete attended note', () => {

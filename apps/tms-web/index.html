@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=53" />
+  <link rel="stylesheet" href="styles.css?v=81" />
 </head>
 <body class="is-auth">
   <div class="app-backdrop" aria-hidden="true"></div>
@@ -16,20 +16,24 @@
     <div class="brand">
       <img class="brand-logo" src="wg-logo.png" width="220" height="50" alt="White Glove Therapy &amp; Education" />
       <div class="brand-copy">
-        <h1>Provider portal</h1>
-        <p class="brand-tag">Clinical timesheets &amp; caseload operations</p>
+        <h1 id="brandH1">Provider portal</h1>
+        <p class="brand-tag" id="brandTag">Clinical timesheets &amp; caseload operations</p>
       </div>
     </div>
-    <div class="who" id="whoBar" hidden>
-      <label id="rolePick" hidden>Role
-        <select id="role">
-          <option value="therapist">Therapist</option>
-          <option value="admin">Admin</option>
-        </select>
-      </label>
-      <span id="whoami"></span>
-      <button type="button" class="btn" id="changePassword" hidden>Change password</button>
-      <button type="button" class="btn" id="signout" hidden>Sign out</button>
+    <div class="header-actions">
+      <span id="headerLang" class="header-lang" aria-live="polite"></span>
+      <div class="who" id="whoBar" hidden>
+        <label id="rolePick" hidden><span id="rolePickLabel">Role</span>
+          <select id="role">
+            <option value="therapist">Therapist</option>
+            <option value="admin">Admin</option>
+          </select>
+        </label>
+        <span id="whoami"></span>
+        <button type="button" class="btn" id="securityMfa" hidden>Security (MFA)</button>
+        <button type="button" class="btn" id="changePassword" hidden>Change password</button>
+        <button type="button" class="btn" id="signout" hidden>Sign out</button>
+      </div>
     </div>
     <!-- Therapists use one page — keep this empty and always hidden -->
     <nav id="therapistNav" hidden></nav>
@@ -38,7 +42,7 @@
       <button type="button" data-admin="children" class="nav">Children</button>
       <button type="button" data-admin="providers" class="nav">Providers</button>
       <button type="button" data-admin="mandates" class="nav">Mandates</button>
-      <button type="button" data-admin="schools" class="nav">Schools</button>
+      <button type="button" data-admin="schools" class="nav">Schools <span id="schoolsSetupBadge" class="nav-alert-badge" hidden></span></button>
       <button type="button" data-admin="admins" class="nav">Admins</button>
       <button type="button" data-admin="reports" class="nav">Reports</button>
     </nav>
@@ -47,9 +51,9 @@
     <p id="status"></p>
     <div class="view-stage">
       <aside id="authAside" class="auth-aside" aria-hidden="true">
-        <p class="auth-aside-kicker">White Glove Therapy</p>
-        <p class="auth-aside-lead">Secure access for therapists and office staff.</p>
-        <p class="auth-aside-sub">Manage weekly timesheets, mandates, and signatures in one workspace.</p>
+        <p class="auth-aside-kicker" id="authAsideKicker">White Glove Therapy</p>
+        <p class="auth-aside-lead" id="authAsideLead">Secure access for therapists and office staff.</p>
+        <p class="auth-aside-sub" id="authAsideSub">Manage weekly timesheets, mandates, and signatures in one workspace.</p>
       </aside>
       <section id="view"></section>
     </div>
@@ -88,7 +92,7 @@
       </form>
       <p id="lunaStatus" class="luna-status" hidden></p>
     </div>
-    <button type="button" id="lunaFab" class="luna-fab" aria-label="Open Luna support" aria-expanded="false" title="Luna support">
+    <button type="button" id="lunaFab" class="luna-fab" aria-label="Hi, I’m Luna — happy to help" aria-expanded="false" title="Hi, I’m Luna — happy to help" data-tooltip="Hi, I’m Luna — happy to help">
       <span class="luna-fab-orb" aria-hidden="true">
         <img class="luna-fab-icon" src="luna-robot.webp" width="48" height="48" alt="" />
       </span>
@@ -97,6 +101,6 @@
   </div>
 
   <script src="config.js?v=38"></script>
-  <script src="app.js?v=53"></script>
+  <script src="app.js?v=81"></script>
 </body>
 </html>

@@ -12,7 +12,9 @@ See **[client-decisions.md](./client-decisions.md)** for answered rules (EVV pro
 
 4. **HHA clock → visit linking** — **Partial (pipeline only).** ProviderSoft verified-sessions pipeline already implements `findPendingCall` → `linkClockToVisit` (`ConfirmVisitsEVV`) → clock compare → approve. Live sandbox still needs usable ReasonCode/ActionCode pairs (`GetVisitEditReasonActionTaken` often `-9` on sandbox unless `HHA_REASON_LOOKUP_URL` / visit id is configured). Not a TMS product gap.
 
-5. **Caseload DOB sample (TMS → HHA CreatePatient)** — Moshe will provide a sample caseload export that includes DOB. Until then: document intent only; do **not** build DOB mapping. School address → patient address is wired (admin school fields); DOB still waits on the sample.
+## Done recently
+
+5. **Caseload DOB (TMS → HHA CreatePatient)** — **Done (Sep 2026).** Final WG caseload includes `Student BirthDate`; import maps to `student.dob` and CreatePatient uses it. School address → patient address remains wired; schools show red/incomplete until calendar + address are complete.
 
 ## School calendar → mandate over-checks (done)
 
@@ -42,7 +44,7 @@ Bot **never runs daytime** — night batch only.
 
 | Item | Decision |
 |------|----------|
-| **Provider & Student Selection** | Multi-school picker is required after provider sign-in. Providers/Children remain separate nav lists (A–Z letter layout removed). **Madison will call** re: preferred separate-tab UX — wait for that call. |
+| **Provider & Student Selection** | Multi-school picker is required after provider sign-in. Providers/Children remain separate nav lists (A–Z letter layout removed). Child/provider **detail** tabs (ProviderSoft-style) shipped Sep 2026. |
 | **CPSE session import** | **Done (Sep 2026, Moshe).** CPSE portal session reports **are** Therapist Activity Output PDFs (`Therapist_Activity_Output…` sample/fixture — already imported). Same `/week/upload-sessions` as Frontline. Do **not** say “need a different CPSE sample” or “CPSE not built.” |
 | **AI activity + student response** | **Done (Sep 2026, Moshe).** Covered by duplicate-note blocking (notes must be unique per child; copy-paste blocked) plus existing AI / required-note lockers. No separate unfinished feature. |
 | **Early Intervention** | Skip all rows — never send to HHA. |

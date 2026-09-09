@@ -97,6 +97,10 @@ export class HttpHhaClient implements HhaClient {
     return this.request('POST', '/pay-codes/resolve', { payCodeName });
   }
 
+  listPayRateCodes(): Promise<Array<{ id: string; name: string }>> {
+    return this.request('GET', '/pay-codes');
+  }
+
   resolveContractId(programType: string | undefined): Promise<number | undefined> {
     return this.request('POST', '/contracts/resolve', { programType });
   }

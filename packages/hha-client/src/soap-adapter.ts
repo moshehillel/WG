@@ -35,10 +35,12 @@ import {
   matchByName,
   normalizeRefName,
   parseContractsFromXml,
+  filterServiceCodesForContract,
   parseServiceCodesFromXml,
 } from './reference-resolve.js';
 import {
   parseCallDashboardEntries,
+  parsePayCodesFromXml,
   parsePayRateCodesFromXml,
   xmlFirstTag,
   xmlIds,
@@ -59,6 +61,7 @@ import { AmbiguousPatientNameError } from './patient-errors.js';
 import { isTrustedHhaPatientId, toFindPatientOptions } from './resolve-patient-id.js';
 import type { HhaReferenceCache } from './reference-cache.js';
 import {
+  mergePayCodeRows,
   normalizePsPayCodeName,
   resolveHhaPayCodeName,
   resolvePayCodeIdFromCatalog,
@@ -199,9 +202,11 @@ export class SoapHhaClientAdapter implements HhaClient {
       return ids[0] ? String(ids[0]) : undefined;
     };
 
-    // Order: exact MR → admission PS{id} → leading-zero strip (MR + admission) → exact name (+ DOB).
+    // Order: exact MR (externalId then caseId/Program Id) → admission PS{id} →
+    // leading-zero strip (MR + admission) → exact name (+ DOB).
     const found =
       (await byMr(options.externalId)) ??
+      (await byMr(options.caseId)) ??
       (await byAdmission(options.caseId ?? options.externalId));
     if (found) return found;
 
@@ -537,7 +542,9 @@ export class SoapHhaClientAdapter implements HhaClient {
         }
       }
       throw new Error(
-        `CreatePatientAuthorization failed: ${result.errorMessage ?? result.status} (ErrorID=${result.errorId}).`,
+        `CreatePatientAuthorization failed: ${result.errorMessage ?? result.status} (ErrorID=${result.errorId}) (ServiceCodeID=${serviceCodeId}${
+          auth.serviceCode ? `; ProviderSoft="${auth.serviceCode}"` : ''
+        }).`,
       );
     }
     return {
@@ -782,6 +789,10 @@ export class SoapHhaClientAdapter implements HhaClient {
     return resolved;
   }
 
+  async listPayRateCodes(): Promise<PayCodeRow[]> {
+    return this.loadPayRateCodeRows();
+  }
+
   async resolveContractId(programType: string | undefined): Promise<number | undefined> {
     if (!programType?.trim()) return undefined;
 
@@ -924,7 +935,11 @@ export class SoapHhaClientAdapter implements HhaClient {
     for (const scheduleType of ['Skilled', 'Non-Skilled'] as const) {
       const result = await this.soap.getBillingServiceCodes(contractId, scheduleType);
       if (!result.ok) continue;
-      for (const row of parseServiceCodesFromXml(result.bodyXml)) {
+      const scoped = filterServiceCodesForContract(
+        parseServiceCodesFromXml(result.bodyXml),
+        contractId,
+      );
+      for (const row of scoped) {
         this.serviceCodeByName.set(normalizeRefName(row.name), row.id);
         if (scheduleType === 'Skilled') skilledRows.push(row);
         else fallbackRows.push(row);
@@ -1042,12 +1057,22 @@ export class SoapHhaClientAdapter implements HhaClient {
   private async loadPayRateCodeRows(): Promise<PayCodeRow[]> {
     if (this.payRateCodeRows) return this.payRateCodeRows;
 
-    let result = await this.soap.getPayRateCodes();
-    if (!result.ok && this.reasonLookup) {
-      result = await this.reasonLookup.getPayRateCodes();
+    let rateResult = await this.soap.getPayRateCodes();
+    if (!rateResult.ok && this.reasonLookup) {
+      rateResult = await this.reasonLookup.getPayRateCodes();
     }
 
-    const rows = result.ok ? parsePayRateCodesFromXml(result.bodyXml) : [];
+    let rows = rateResult.ok ? parsePayRateCodesFromXml(rateResult.bodyXml) : [];
+
+    // Office catalog often also appears on GetCaregiverPayCodes (PayCodeID/Name).
+    let cgResult = await this.soap.getCaregiverPayCodes();
+    if (!cgResult.ok && this.reasonLookup) {
+      cgResult = await this.reasonLookup.getCaregiverPayCodes();
+    }
+    if (cgResult.ok) {
+      rows = mergePayCodeRows(rows, parsePayCodesFromXml(cgResult.bodyXml));
+    }
+
     this.payRateCodeRows = rows;
     return rows;
   }

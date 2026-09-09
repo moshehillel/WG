@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   cptDurationError,
+  missedSessionReasonError,
   normalizeNoteForCompare,
+  noteIsCopyPasteSource,
   notesLookCopyPasted,
   parseCptCoverage,
   requiredCptUnitsForDuration,
   sessionIsSigned,
   sessionSignatureError,
 } from './session-upload-validate.js';
-import { parseWeeklySessionText } from './session-parse.js';
+import { mergeFrontlineSplitCptRows, parseWeeklySessionText } from './session-parse.js';
 
 describe('CPT duration units', () => {
   it('requires 2 units for 30 minutes', () => {
@@ -31,6 +33,34 @@ describe('CPT duration units', () => {
     expect(cptDurationError('9:00 am', '9:30 am', '97112x1, 97110x1', 'attended')).toBeNull();
   });
 
+  it('skips CPT and signature requirements for missed sessions', () => {
+    expect(cptDurationError('9:00 am', '9:30 am', '', 'missed')).toBeNull();
+    expect(sessionSignatureError('no signature block here', 'missed')).toBeNull();
+  });
+
+  it('requires a recognizable reason for missed sessions', () => {
+    expect(missedSessionReasonError('missed', '', '')).toMatch(/needs a reason/i);
+    expect(missedSessionReasonError('missed', '', 'Provider Absence:')).toBeNull();
+    expect(missedSessionReasonError('missed', 'Provider Absence', '')).toBeNull();
+    expect(missedSessionReasonError('attended', '', '')).toBeNull();
+  });
+
+  it('does not treat missed notes as copy-paste sources', () => {
+    expect(noteIsCopyPasteSource('missed', 'Provider Absence:')).toBe(false);
+    expect(noteIsCopyPasteSource('attended', 'Service Provided: gait work')).toBe(true);
+    expect(
+      notesLookCopyPasted(
+        'Service Provided: Student performed gross motor activity',
+        'Provider Absence:',
+      ),
+    ).toBe(false);
+  });
+
+  it('blocks attended sessions with no CPT even when duration cannot be parsed', () => {
+    expect(cptDurationError('', '', '', 'attended')).toMatch(/CPT units missing/i);
+    expect(cptDurationError('bad', 'time', '', 'makeup')).toMatch(/CPT units missing/i);
+  });
+
   it('allows untimed speech CPT 92507x1 for a 30-minute session', () => {
     expect(cptDurationError('10:00 AM', '10:30 AM', '92507x1', 'attended')).toBeNull();
     expect(cptDurationError('10:00 AM', '10:30 AM', '92508x1', 'attended')).toBeNull();
@@ -48,6 +78,157 @@ Service Provided: gait work
 `);
     expect(rows[0]?.cptUnits).toBe(2);
     expect(rows[0]?.cptCodes).toContain('97110');
+  });
+
+  it('merges Frontline multi-CPT split rows into one session', () => {
+    const rows = parseWeeklySessionText(`
+Student Name: Flores, Milan
+Service Provider: Patel PT*, Neelamben
+Service: Physical Therapy
+09/04/2026
+1:1
+97110
+ 1
+11:35 am
+12:05 pm
+Clara H. Carlson School
+Service Provided: Student engaged in gross motor activity to improve his strength.
+Provider Signature/Credentials
+Date
+Neelamben Patel PT* PT (NPI# 1699139774) (License# 039203)
+Sep 4 2026 2:03PM
+Telehealth:
+No
+09/04/2026
+1:1
+97112
+ 1
+11:35 am
+12:05 pm
+Clara H. Carlson School
+Service Provided: Student engaged in gross motor activity to improve his strength.
+Provider Signature/Credentials
+Date
+Neelamben Patel PT* PT (NPI# 1699139774) (License# 039203)
+Sep 4 2026 2:03PM
+Telehealth:
+No
+`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.cptUnits).toBe(2);
+    expect(rows[0]?.cptCodes.sort()).toEqual(['97110', '97112']);
+    expect(
+      cptDurationError(
+        rows[0]!.beginTime,
+        rows[0]!.endTime,
+        { codes: rows[0]!.cptCodes, totalUnits: rows[0]!.cptUnits, procedures: rows[0]!.cptProcedures },
+        'attended',
+      ),
+    ).toBeNull();
+  });
+
+  it('keeps Provider Absence misses without times or CPT bleed', () => {
+    const rows = parseWeeklySessionText(`
+Student Name: Keshwani, Ayan
+Service Provider: Patel PT*, Neelamben
+Service: Physical Therapy
+09/02/2026
+ 0
+Clara H. Carlson School
+Provider Absence:
+09/03/2026
+ 0
+Clara H. Carlson School
+Provider Absence:
+Student Name: Legagneur, Samuel
+Service Provider: Patel PT*, Neelamben
+Service: Physical Therapy
+09/04/2026
+1:1
+97112
+ 1
+ 1:05 pm
+ 1:35 pm
+Clara H. Carlson School
+Service Provided: Student performed gross motor activity.
+Provider Signature/Credentials
+Date
+Neelamben Patel PT* PT (NPI# 1699139774) (License# 039203)
+Sep 4 2026 2:03PM
+Telehealth:
+No
+09/04/2026
+1:1
+97110
+ 1
+ 1:05 pm
+ 1:35 pm
+Clara H. Carlson School
+Service Provided: Student performed gross motor activity.
+Provider Signature/Credentials
+Date
+Neelamben Patel PT* PT (NPI# 1699139774) (License# 039203)
+Sep 4 2026 2:03PM
+Telehealth:
+No
+`);
+    const ayan = rows.filter((r) => /Ayan|Keshwani/i.test(r.studentName));
+    expect(ayan).toHaveLength(2);
+    expect(ayan.every((r) => r.attendance === 'missed')).toBe(true);
+    expect(ayan.every((r) => !r.beginTime && !r.endTime)).toBe(true);
+    expect(ayan.every((r) => r.cptUnits === 0)).toBe(true);
+    expect(ayan.every((r) => /provider absence/i.test(r.cancelReason || r.notes))).toBe(true);
+    const samuel = rows.filter((r) => /Samuel|Legagneur/i.test(r.studentName));
+    expect(samuel).toHaveLength(1);
+    expect(samuel[0]?.cptUnits).toBe(2);
+  });
+});
+
+describe('mergeFrontlineSplitCptRows', () => {
+  it('combines different CPT codes on the same clock window', () => {
+    const merged = mergeFrontlineSplitCptRows([
+      {
+        studentName: 'A',
+        providerName: '',
+        schoolName: '',
+        dateOfService: '09/04/2026',
+        beginTime: '10:05 am',
+        endTime: '10:35 am',
+        attendance: 'attended',
+        cancelReason: '',
+        notes: 'n1',
+        serviceType: 'PT',
+        location: '',
+        ratio: '1:1',
+        cptCodes: ['97110'],
+        cptUnits: 1,
+        cptProcedures: ['97110x1'],
+        signed: true,
+        sourceSlice: 'a',
+      },
+      {
+        studentName: 'A',
+        providerName: '',
+        schoolName: '',
+        dateOfService: '09/04/2026',
+        beginTime: '10:05 am',
+        endTime: '10:35 am',
+        attendance: 'attended',
+        cancelReason: '',
+        notes: 'n1 longer text',
+        serviceType: 'PT',
+        location: '',
+        ratio: '1:1',
+        cptCodes: ['97116'],
+        cptUnits: 1,
+        cptProcedures: ['97116x1'],
+        signed: true,
+        sourceSlice: 'b',
+      },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.cptUnits).toBe(2);
+    expect(merged[0]?.cptCodes.sort()).toEqual(['97110', '97116']);
   });
 });
 

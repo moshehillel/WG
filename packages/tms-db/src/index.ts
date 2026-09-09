@@ -9,6 +9,7 @@ export * from './caseload-import.js';
 export * from './due-dates.js';
 export * from './provider-pay.js';
 export * from './school-calendar.js';
+export * from './school-calendar-parse.js';
 export * from './ai-screen.js';
 export * from './memory-store.js';
 export * from './snapshot-diff.js';

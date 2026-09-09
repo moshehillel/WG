@@ -106,7 +106,8 @@ function parseUsDate(s) {
 
 function parseZip(zip) {
   const m = zip?.replace(/\s/g, '').match(/^(\d{5})(?:-(\d{4}))?/);
-  return { zip5: m ? Number(m[1]) : 0, zip4: m?.[2] ? Number(m[2]) : 0 };
+  if (!m) return { zip5: 0 };
+  return { zip5: Number(m[1]), ...(m[2] !== undefined ? { zip4: m[2] } : {}) };
 }
 
 function parsePhone(phone) {
@@ -144,7 +145,7 @@ function loadGluckRow() {
       city: row["Child's City"] ?? 'Brooklyn',
       state: row["Child's State"] ?? 'NY',
       zip5: zip.zip5 || 11201,
-      zip4: zip.zip4 || 0,
+      zip4: zip.zip4,
       homePhone: parsePhone(row['Primary Contact Phone']),
       emergencyName: row['Primary Contact Name'] ?? '',
       programType: row['Program Type'] ?? '',
@@ -168,7 +169,7 @@ function loadGluckRow() {
       city: 'New Rochelle',
       state: 'NY',
       zip5: 10801,
-      zip4: 4721,
+      zip4: '4721',
       homePhone: '3473244088',
       emergencyName: 'Test Contact',
       programType: 'Early Intervention',
@@ -239,7 +240,7 @@ function buildCreatePatientBody(p, refs) {
       <City>${escapeXml(p.city)}</City>
       <State>${escapeXml(p.state)}</State>
       <Zip5>${p.zip5}</Zip5>
-      <Zip4>${p.zip4}</Zip4>
+      ${p.zip4 !== undefined ? `<Zip4>${p.zip4}</Zip4>` : ''}
       <IsPrimaryAddress>Yes</IsPrimaryAddress>
       <AddressTypes>Home</AddressTypes>
     </Address>

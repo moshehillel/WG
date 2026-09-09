@@ -98,7 +98,7 @@ export function sandboxEmailPreviewAlertOptions(): {
       rowId: '9000104',
       details: {
         preview: true,
-        payCodeName: 'OT75',
+        payCodeName: 'OT $75',
         patientName: 'SANDBOX-FIX Bad Pay',
         caregiverName: 'FIX PROVIDER',
         programType: 'Extended Home Care Therapy',

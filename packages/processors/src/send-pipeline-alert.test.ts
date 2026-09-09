@@ -21,21 +21,72 @@ describe('sendPipelineAlert', () => {
   beforeEach(() => {
     sesSend.mockReset();
     snsSend.mockReset();
+    delete process.env.ALERT_ALWAYS_SNS;
   });
 
-  it('sends HTML via SES when primary FROM succeeds', async () => {
+  it('sends HTML via SES when primary FROM succeeds (no topic → no SNS)', async () => {
     sesSend.mockResolvedValue({});
 
     const result = await sendPipelineAlert({
-      fromEmail: 'alerts@whiteglovecare.net',
+      fromEmail: 'alerts@advancedautomations.net',
       alertEmails: 'a@example.com,b@example.com',
       subject: 'Test',
       textBody: 'plain',
       htmlBody: '<p>html</p>',
     });
 
-    expect(result).toEqual({ channel: 'ses', sesCount: 2, snsFallback: false });
+    expect(result).toEqual({
+      channel: 'ses',
+      sesCount: 2,
+      snsFallback: false,
+      snsPublished: false,
+    });
     expect(sesSend).toHaveBeenCalledTimes(2);
+    expect(snsSend).not.toHaveBeenCalled();
+  });
+
+  it('publishes SNS alongside SES when topicArn is set (dual channel)', async () => {
+    sesSend.mockResolvedValue({});
+    snsSend.mockResolvedValue({});
+
+    const result = await sendPipelineAlert({
+      fromEmail: 'alerts@advancedautomations.net',
+      alertEmails: 'a@example.com,b@example.com',
+      topicArn: 'arn:aws:sns:us-east-1:123:topic',
+      subject: 'Test',
+      textBody: 'plain',
+      htmlBody: '<p>html</p>',
+    });
+
+    expect(result).toEqual({
+      channel: 'dual',
+      sesCount: 2,
+      snsFallback: false,
+      snsPublished: true,
+    });
+    expect(sesSend).toHaveBeenCalledTimes(2);
+    expect(snsSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips dual SNS when alwaysSns is false and SES succeeds', async () => {
+    sesSend.mockResolvedValue({});
+
+    const result = await sendPipelineAlert({
+      fromEmail: 'alerts@advancedautomations.net',
+      alertEmails: 'a@example.com,b@example.com',
+      topicArn: 'arn:aws:sns:us-east-1:123:topic',
+      alwaysSns: false,
+      subject: 'Test',
+      textBody: 'plain',
+      htmlBody: '<p>html</p>',
+    });
+
+    expect(result).toEqual({
+      channel: 'ses',
+      sesCount: 2,
+      snsFallback: false,
+      snsPublished: false,
+    });
     expect(snsSend).not.toHaveBeenCalled();
   });
 
@@ -45,18 +96,25 @@ describe('sendPipelineAlert', () => {
       .mockRejectedValueOnce(new Error('MessageRejected'))
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({});
+    snsSend.mockResolvedValue({});
 
     const result = await sendPipelineAlert({
-      fromEmail: 'alerts@whiteglovecare.net',
+      fromEmail: 'alerts@advancedautomations.net',
       fromEmailFallback: 'verified@example.com',
       alertEmails: 'a@example.com,b@example.com',
       topicArn: 'arn:aws:sns:us-east-1:123:topic',
+      alwaysSns: false,
       subject: 'Test',
       textBody: 'plain',
       htmlBody: '<p>html</p>',
     });
 
-    expect(result).toEqual({ channel: 'ses', sesCount: 2, snsFallback: false });
+    expect(result).toEqual({
+      channel: 'ses',
+      sesCount: 2,
+      snsFallback: false,
+      snsPublished: false,
+    });
     expect(sesSend).toHaveBeenCalledTimes(4);
     expect(snsSend).not.toHaveBeenCalled();
   });
@@ -66,16 +124,22 @@ describe('sendPipelineAlert', () => {
     snsSend.mockResolvedValue({});
 
     const result = await sendPipelineAlert({
-      fromEmail: 'alerts@whiteglovecare.net',
+      fromEmail: 'alerts@advancedautomations.net',
       fromEmailFallback: 'verified@example.com',
       alertEmails: 'a@example.com',
       topicArn: 'arn:aws:sns:us-east-1:123:topic',
+      alwaysSns: false,
       subject: 'Test',
       textBody: 'plain',
       htmlBody: '<p>html</p>',
     });
 
-    expect(result).toEqual({ channel: 'sns', sesCount: 0, snsFallback: true });
+    expect(result).toEqual({
+      channel: 'sns',
+      sesCount: 0,
+      snsFallback: true,
+      snsPublished: true,
+    });
     expect(sesSend).toHaveBeenCalledTimes(2);
     expect(snsSend).toHaveBeenCalledTimes(1);
   });
@@ -84,8 +148,8 @@ describe('sendPipelineAlert', () => {
     sesSend.mockResolvedValue({});
 
     await sendPipelineAlert({
-      fromEmail: 'alerts@whiteglovecare.net',
-      replyTo: 'ops@whiteglovecare.net',
+      fromEmail: 'alerts@advancedautomations.net',
+      replyTo: 'elefkowitz@whiteglovecare.net',
       alertEmails: 'a@example.com',
       subject: 'Test',
       textBody: 'plain',
@@ -95,7 +159,7 @@ describe('sendPipelineAlert', () => {
     expect(sesSend).toHaveBeenCalledTimes(1);
     const raw = sesSend.mock.calls[0]![0] as { RawMessage?: { Data?: Buffer } };
     const mime = raw.RawMessage!.Data!.toString('utf8');
-    expect(mime).toContain('Reply-To: ops@whiteglovecare.net');
+    expect(mime).toContain('Reply-To: elefkowitz@whiteglovecare.net');
     expect(mime).toContain('List-Id:');
     expect(mime).toContain('Auto-Submitted: auto-generated');
   });
@@ -104,7 +168,7 @@ describe('sendPipelineAlert', () => {
     sesSend.mockResolvedValue({});
 
     const result = await sendPipelineAlert({
-      fromEmail: 'alerts@whiteglovecare.net',
+      fromEmail: 'alerts@advancedautomations.net',
       alertEmails: 'a@example.com',
       subject: 'Test',
       textBody: 'plain',
@@ -118,7 +182,12 @@ describe('sendPipelineAlert', () => {
       ],
     });
 
-    expect(result).toEqual({ channel: 'ses', sesCount: 1, snsFallback: false });
+    expect(result).toEqual({
+      channel: 'ses',
+      sesCount: 1,
+      snsFallback: false,
+      snsPublished: false,
+    });
     expect(sesSend).toHaveBeenCalledTimes(1);
     const raw = sesSend.mock.calls[0]![0] as { RawMessage?: { Data?: Buffer } };
     expect(raw.RawMessage?.Data).toBeInstanceOf(Buffer);

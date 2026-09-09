@@ -30,6 +30,7 @@ export {
   patientNameFromDetails,
   caregiverNameFromDetails,
   parseHhaApiFault,
+  formatRejectedServiceCodeTitle,
   cleanExceptionMessage,
   formatActionableReason,
 } from './exception-guidance.js';

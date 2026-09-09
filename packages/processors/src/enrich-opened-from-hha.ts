@@ -7,11 +7,24 @@ function blank(value: string | undefined): boolean {
   return !value?.trim();
 }
 
+function needsDemographicFill(row: OpenedCaseRow): boolean {
+  return (
+    blank(row.gender) ||
+    !normalizeHhaGender(row.gender) ||
+    blank(row.address1) ||
+    blank(row.city) ||
+    blank(row.state) ||
+    blank(row.zipCode)
+  );
+}
+
 export type EnrichOpenedFromHhaResult = {
   row: OpenedCaseRow;
   /**
-   * new_services only: whether findPatient matched an HHA child.
-   * undefined for Gluck open (no pre-lookup).
+   * Whether findPatient matched an HHA child.
+   * - new_services: always looked up (false → caller fails unmatched).
+   * - opened_cases: looked up only when demographics need fill; false = true new intake.
+   * - undefined: no lookup (e.g. Gluck row already had address fields).
    */
   patientFound: boolean | undefined;
   /** HHA patient id when patientFound === true. */
@@ -24,18 +37,28 @@ export type EnrichOpenedFromHhaResult = {
  * treat blank Gender/City as the primary error). If found → fill blank demographics
  * from GetPatientDemographics, then caller may run billing guard.
  *
- * Gluck open is a new intake — fields must come from ProviderSoft, not HHA.
+ * opened_cases (Gluck): if blank address/city/state (or gender) and an existing HHA
+ * patient is found, backfill those blanks before billing guard. If not found (true
+ * new intake), leave ProviderSoft fields as-is — billing guard still requires them.
  */
 export async function enrichOpenedRowFromHha(
   row: OpenedCaseRow,
   hha: HhaClient,
 ): Promise<EnrichOpenedFromHhaResult> {
-  if (row.sourceReport !== 'new_services') {
+  const isNewServices = row.sourceReport === 'new_services';
+  const isGluck = row.sourceReport === 'opened_cases';
+
+  if (!isNewServices && !isGluck) {
+    return { row, patientFound: undefined };
+  }
+
+  // Gluck with complete demographics: no HHA lookup (true new intakes keep PS fields).
+  if (isGluck && !needsDemographicFill(row)) {
     return { row, patientFound: undefined };
   }
 
   if (!row.caseId?.trim()) {
-    return { row, patientFound: false };
+    return { row, patientFound: isNewServices ? false : undefined };
   }
 
   const patientId = await resolveHhaPatientId(hha, row);

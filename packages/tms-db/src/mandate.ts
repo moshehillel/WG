@@ -8,17 +8,22 @@ import {
 import type { Discipline, FrequencyKind, Mandate, MandateKind, SchoolCalendar, SessionRow } from './types.js';
 
 /**
- * HHA school billing name from mandate discipline + RS Duration bucket.
+ * HHA school billing name from mandate discipline + RS Duration bucket (+ group).
+ * Group → `{Disc} school group {bucket}`; individual → `{Disc} school {bucket}`.
  * Does not replace Related Service (`serviceType`) — therapists still see that text.
  */
 export function schoolBillingServiceNameForMandate(
-  mandate: Pick<Mandate, 'discipline' | 'durationMinutes' | 'mandateKind'>,
+  mandate: Pick<Mandate, 'discipline' | 'durationMinutes' | 'mandateKind' | 'ratioGroup' | 'groupSize'>,
 ): string | undefined {
   if (mandate.mandateKind === 'makeup_auth') return undefined;
+  const group =
+    Boolean(mandate.ratioGroup) ||
+    (mandate.groupSize != null && Number(mandate.groupSize) > 1);
   return buildSchoolBillingServiceName({
     discipline: mandate.discipline || undefined,
     kind: 'school',
     durationMinutes: mandate.durationMinutes,
+    group,
   });
 }
 

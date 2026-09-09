@@ -41,9 +41,18 @@ export function mapServiceToDiscipline(serviceType: string | undefined): string 
   return 'OT';
 }
 
-export function parseZipCode(zip: string | undefined): { zip5: number; zip4: number } {
+/**
+ * Parse US ZIP / ZIP+4 for HHA CreatePatient.
+ * When only 5 digits are present, omit Zip4 entirely — HHA rejects `<Zip4>0</Zip4>`
+ * with Invalid "ZipCodeLength Zip4" (ErrorID=-74).
+ */
+export function parseZipCode(zip: string | undefined): { zip5: number; zip4?: string } {
   const m = zip?.replace(/\s/g, '').match(/^(\d{5})(?:-(\d{4}))?/);
-  return { zip5: m ? Number(m[1]) : 0, zip4: m?.[2] ? Number(m[2]) : 0 };
+  if (!m) return { zip5: 0 };
+  return {
+    zip5: Number(m[1]),
+    ...(m[2] !== undefined ? { zip4: m[2] } : {}),
+  };
 }
 
 /** HHA MedicaidNumber when PS does not supply one (sandbox convention). */
@@ -125,6 +134,7 @@ export function buildCreatePatientBody(
   const phone = patient.homePhone ? formatPhone(patient.homePhone) : '';
   const discipline = mapServiceToDiscipline(patient.serviceCode);
   const gender = patient.gender?.trim() || defaults.defaultGender;
+  const zip4Xml = zip4 !== undefined ? `\n      <Zip4>${zip4}</Zip4>` : '';
 
   return `<PatientInfo>
   <OfficeID>${defaults.officeId}</OfficeID>
@@ -149,8 +159,7 @@ export function buildCreatePatientBody(
       <Address1>${esc(patient.address1!)}</Address1>
       <City>${esc(patient.city!)}</City>
       <State>${esc(patient.state!)}</State>
-      <Zip5>${zip5 || 11201}</Zip5>
-      <Zip4>${zip4}</Zip4>
+      <Zip5>${zip5 || 11201}</Zip5>${zip4Xml}
       <IsPrimaryAddress>Yes</IsPrimaryAddress>
       <AddressTypes>Home</AddressTypes>
     </Address>

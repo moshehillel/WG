@@ -55,15 +55,19 @@ export type DownloadResult = z.infer<typeof DownloadResultSchema>;
 export const ParseResultSchema = z.object({
   runId: z.string(),
   counts: z.object({
-    opened_cases: z.number(),
-    closed_cases: z.number(),
+    /**
+     * Present (including `0`) only when that report CSV was downloaded for this run.
+     * Omitted when the kind was not in reportKinds — email shows "not required to download".
+     */
+    opened_cases: z.number().optional(),
+    closed_cases: z.number().optional(),
     /**
      * Present only when the API Report CSV was downloaded for this run.
      * Omitted (not `0`) when verified_sessions was not in reportKinds — avoids
      * "0 downloaded" emails on case-only nightly runs.
      */
     verified_sessions: z.number().optional(),
-    opened_cases_after_ei_filter: z.number(),
+    opened_cases_after_ei_filter: z.number().optional(),
     new_services: z.number().optional(),
     gluck_opened_cases: z.number().optional(),
     gluck_opened_after_ei_filter: z.number().optional(),

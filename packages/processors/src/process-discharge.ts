@@ -22,6 +22,8 @@ export interface DischargeServiceRow {
   isEarlyIntervention?: boolean;
 }
 
+const REPORT_KIND = 'discharge_service' as const;
+
 function dischargeRowId(row: DischargeServiceRow): string {
   const service = row.serviceCode?.trim() || 'unknown-service';
   const start = row.startDate?.trim() || 'unknown-start';
@@ -48,7 +50,7 @@ export async function processDischargeService(options: {
       shouldYield,
       options.rows.length - i,
       i,
-      'closed_cases',
+      REPORT_KIND,
       exceptions,
     );
     if (budget.stop) {
@@ -63,7 +65,7 @@ export async function processDischargeService(options: {
         buildRowException({
           code: 'missing_field',
           message: '[discharge_service] row missing caseId',
-          reportKind: 'closed_cases',
+          reportKind: REPORT_KIND,
           details: party,
         }),
       );
@@ -76,7 +78,7 @@ export async function processDischargeService(options: {
         buildRowException({
           code: 'skipped_by_rule',
           message: `[discharge_service] row=${row.caseId} skipped: Early Intervention not sent to HHA`,
-          reportKind: 'closed_cases',
+          reportKind: REPORT_KIND,
           rowId: row.caseId,
           details: { triageReason: 'early_intervention', ...party },
         }),
@@ -84,6 +86,8 @@ export async function processDischargeService(options: {
       continue;
     }
 
+    // Keep closed_cases idempotency pk so historical discharge rows are not re-sent
+    // after reportKind labeling was split from Gluck closure.
     const { pk, sk } = rowKey('closed_cases', dischargeRowId(row));
     if (!dryRun && (await store.alreadyProcessed(pk, sk))) {
       skipped += 1;
@@ -98,7 +102,7 @@ export async function processDischargeService(options: {
           buildRowException({
             code: 'missing_field',
             message: billingGuardMessage('discharge_service', row.caseId, billingMissing),
-            reportKind: 'closed_cases',
+            reportKind: REPORT_KIND,
             rowId: row.caseId,
             details: { missing: billingMissing, preview: true, ...party },
           }),
@@ -117,7 +121,7 @@ export async function processDischargeService(options: {
         buildRowException({
           code: 'missing_field',
           message: billingGuardMessage('discharge_service', row.caseId, billingMissing),
-          reportKind: 'closed_cases',
+          reportKind: REPORT_KIND,
           rowId: row.caseId,
           details: { missing: billingMissing, ...party },
         }),
@@ -157,7 +161,7 @@ export async function processDischargeService(options: {
           buildRowException({
             code: 'skipped_by_rule',
             message: `[discharge_service] row=${row.caseId} skipped: already discharged / no active HHA placements`,
-            reportKind: 'closed_cases',
+            reportKind: REPORT_KIND,
             rowId: row.caseId,
             details: {
               triageReason: 'already_discharged',
@@ -173,7 +177,7 @@ export async function processDischargeService(options: {
       failed += 1;
       exceptions.push(
         buildHhaRowException({
-          reportKind: 'closed_cases',
+          reportKind: REPORT_KIND,
           rowId: row.caseId,
           step,
           err,
@@ -190,7 +194,7 @@ export async function processDischargeService(options: {
 
   return {
     runId,
-    reportKind: 'closed_cases',
+    reportKind: REPORT_KIND,
     processed: options.rows.length,
     succeeded,
     skipped,

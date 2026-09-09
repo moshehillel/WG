@@ -75,6 +75,10 @@ export function buildLivePipelineInput(now: Date = new Date()): PipelineRunInput
   };
 }
 
+/** HHA Enterprise SOAP sandbox endpoint (default for TMS until Moshe flips to prod). */
+export const HHA_SANDBOX_SOAP_URL =
+  'https://sandbox1.hhaexchange.com/Integration/ENT/V1.8/ws.asmx';
+
 /** HHA Enterprise SOAP production endpoint (read-only in sandbox / dry-run). */
 export const HHA_PRODUCTION_SOAP_URL =
   'https://app.hhaexchange.com/Integration/ENT/V1.8/ws.asmx';

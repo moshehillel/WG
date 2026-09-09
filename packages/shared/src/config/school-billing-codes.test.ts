@@ -2,15 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   SCHOOL_BILLING_SERVICE_NAMES,
   buildSchoolBillingServiceName,
+  isIndividualSchoolBillingServiceName,
   nearestSchoolDurationBucket,
   normalizeSchoolBillingDiscipline,
 } from './school-billing-codes.js';
 
 describe('school-billing-codes', () => {
-  it('lists 18 canonical HHA names for billing', () => {
-    expect(SCHOOL_BILLING_SERVICE_NAMES).toHaveLength(18);
+  it('lists 30 canonical HHA names for billing (indiv + group + eval + additional)', () => {
+    expect(SCHOOL_BILLING_SERVICE_NAMES).toHaveLength(30);
     expect(SCHOOL_BILLING_SERVICE_NAMES).toContain('OT School eval');
     expect(SCHOOL_BILLING_SERVICE_NAMES).toContain('PT school 42');
+    expect(SCHOOL_BILLING_SERVICE_NAMES).toContain('PT school group 42');
+    expect(SCHOOL_BILLING_SERVICE_NAMES).toContain('OT school group 30');
+    expect(SCHOOL_BILLING_SERVICE_NAMES).toContain('SLP school group 60');
     expect(SCHOOL_BILLING_SERVICE_NAMES).toContain('SLP additional services');
   });
 
@@ -29,7 +33,7 @@ describe('school-billing-codes', () => {
     expect(normalizeSchoolBillingDiscipline('slp')).toBe('SLP');
   });
 
-  it('builds eval / additional / school names', () => {
+  it('builds eval / additional / school / school group names', () => {
     expect(
       buildSchoolBillingServiceName({ discipline: 'OT', kind: 'eval' }),
     ).toBe('OT School eval');
@@ -39,6 +43,30 @@ describe('school-billing-codes', () => {
     expect(
       buildSchoolBillingServiceName({ discipline: 'SLP', kind: 'school', durationMinutes: 30 }),
     ).toBe('SLP school 30');
+    expect(
+      buildSchoolBillingServiceName({
+        discipline: 'PT',
+        kind: 'school',
+        durationMinutes: 30,
+        group: true,
+      }),
+    ).toBe('PT school group 30');
+    expect(
+      buildSchoolBillingServiceName({
+        discipline: 'OT',
+        kind: 'school',
+        durationMinutes: 42,
+        group: true,
+      }),
+    ).toBe('OT school group 42');
+    expect(
+      buildSchoolBillingServiceName({
+        discipline: 'SLP',
+        kind: 'school',
+        durationMinutes: 58,
+        group: true,
+      }),
+    ).toBe('SLP school group 60');
     expect(
       buildSchoolBillingServiceName({ discipline: 'OT', kind: 'school', durationMinutes: 42 }),
     ).toBe('OT school 42');
@@ -51,6 +79,19 @@ describe('school-billing-codes', () => {
     expect(
       buildSchoolBillingServiceName({ discipline: 'OT', kind: 'school', durationMinutes: null }),
     ).toBeUndefined();
+    expect(
+      buildSchoolBillingServiceName({
+        discipline: 'OT',
+        kind: 'school',
+        durationMinutes: null,
+        group: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it('detects individual school names missing "group"', () => {
+    expect(isIndividualSchoolBillingServiceName('PT school 30')).toBe(true);
+    expect(isIndividualSchoolBillingServiceName('PT school group 30')).toBe(false);
+    expect(isIndividualSchoolBillingServiceName('OT School eval')).toBe(false);
   });
 });
-

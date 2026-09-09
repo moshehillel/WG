@@ -1,10 +1,14 @@
+import { isIndividualSchoolBillingServiceName } from '@white-glove/shared';
 import { migrateDueDatesToSchools } from './due-dates.js';
 import { newId, nowIso } from './ids.js';
+import { schoolBillingServiceNameForMandate } from './mandate.js';
 import { migrateProviders } from './provider-pay.js';
+import { mandateLooksGroup } from './session-overlap.js';
 import type {
   AdminNote,
   AlertRow,
   AppUser,
+  ArchiveRecord,
   AuditEvent,
   DueDate,
   HhaTransfer,
@@ -20,6 +24,45 @@ import type {
 } from './types.js';
 import { defaultAppSettings, emptySnapshot } from './types.js';
 
+/**
+ * Legacy Group / Small Group rows often stored null groupSize.
+ * Backfill size 2 (and ratioGroup) so provider caseload / child tables show 2, not —.
+ */
+export function migrateMandateGroupSizes(mandates: Mandate[]): Mandate[] {
+  return (mandates || []).map((m) => {
+    const n = m.groupSize == null ? NaN : Number(m.groupSize);
+    const hasSize = Number.isFinite(n) && n > 0;
+    if (hasSize) {
+      if (!m.ratioGroup && n > 1) return { ...m, ratioGroup: true };
+      return m;
+    }
+    if (mandateLooksGroup(m) || m.ratioGroup) {
+      return { ...m, ratioGroup: true, groupSize: 2 };
+    }
+    return { ...m, groupSize: 1 };
+  });
+}
+
+/**
+ * Fix group mandates stamped with individual `{Disc} school {bucket}` names,
+ * and fill missing billingServiceName when discipline + duration are known.
+ */
+export function migrateMandateBillingServiceNames(mandates: Mandate[]): Mandate[] {
+  return (mandates || []).map((m) => {
+    if (m.mandateKind === 'makeup_auth') return m;
+    const isGroup =
+      Boolean(m.ratioGroup) || (m.groupSize != null && Number(m.groupSize) > 1);
+    if (!isGroup) return m;
+    const expected = schoolBillingServiceNameForMandate(m);
+    if (!expected) return m;
+    const current = (m.billingServiceName || '').trim();
+    if (!current || isIndividualSchoolBillingServiceName(current)) {
+      return { ...m, billingServiceName: expected };
+    }
+    return m;
+  });
+}
+
 function mergeSnapshot(snapshot: Partial<TmsSnapshot> | null | undefined): TmsSnapshot {
   const base = emptySnapshot();
   const src = snapshot && typeof snapshot === 'object' ? snapshot : {};
@@ -29,6 +72,7 @@ function mergeSnapshot(snapshot: Partial<TmsSnapshot> | null | undefined): TmsSn
   }
   base.dueDates = migrateDueDatesToSchools(base.dueDates as never, base.students);
   base.providers = migrateProviders(base.providers);
+  base.mandates = migrateMandateBillingServiceNames(migrateMandateGroupSizes(base.mandates));
   base.adminNotes = (base.adminNotes || []).map((n) => ({
     ...n,
     tags: Array.isArray((n as { tags?: unknown }).tags)
@@ -294,6 +338,21 @@ export class MemoryStore {
 
   filesForProvider(providerId: string): StoredFile[] {
     return this.data.files.filter((f) => f.providerId === providerId && !f.studentId);
+  }
+
+  upsertArchive(row: ArchiveRecord): ArchiveRecord {
+    const i = this.data.archives.findIndex((a) => a.id === row.id);
+    if (i >= 0) this.data.archives[i] = row;
+    else this.data.archives.push(row);
+    return row;
+  }
+
+  archiveById(id: string): ArchiveRecord | undefined {
+    return this.data.archives.find((a) => a.id === id);
+  }
+
+  archivesForProvider(providerId: string): ArchiveRecord[] {
+    return this.data.archives.filter((a) => a.providerId === providerId);
   }
 
   upsertDueDate(row: DueDate): DueDate {

@@ -314,7 +314,7 @@ export async function validateAndNotify(options: {
       });
 
       console.log(
-        `[validate] Alert result run=${options.runId} channel=${sent.channel} sesCount=${sent.sesCount} snsFallback=${sent.snsFallback}`,
+        `[validate] Alert result run=${options.runId} channel=${sent.channel} sesCount=${sent.sesCount} snsPublished=${sent.snsPublished} snsFallback=${sent.snsFallback}`,
       );
 
       if (sent.channel === 'none') {
@@ -327,6 +327,7 @@ export async function validateAndNotify(options: {
           subject,
           channel: sent.channel,
           sesCount: sent.sesCount,
+          snsPublished: sent.snsPublished,
           snsFallback: sent.snsFallback,
           attachments: csvAttachments.map((a) => a.filename),
         });

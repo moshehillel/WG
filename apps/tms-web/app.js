@@ -30,6 +30,8 @@ const state = {
   providerSessionFrom: '',
   providerSessionTo: '',
   therapistPane: sessionStorage.getItem('tmsTherapistPane') || 'current',
+  childDetailTab: sessionStorage.getItem('tmsChildDetailTab') || 'basic',
+  providerDetailTab: sessionStorage.getItem('tmsProviderDetailTab') || 'basic',
   listTabLetter: 'A',
   editingMandateId: '',
 };
@@ -50,7 +52,407 @@ const REPORT_LIST = [
     title: 'Progress-report due dates',
     blurb: 'School progress, annual, and reevaluation due dates with completion status.',
   },
+  {
+    id: 'archive',
+    title: 'Uploads & timesheets archive',
+    blurb: 'Look up uploaded session PDFs and generated timesheets by provider and date.',
+  },
 ];
+
+/** UI language: en | es (persisted). */
+const I18N = {
+  en: {
+    'brand.h1': 'Provider portal',
+    'brand.tag': 'Clinical timesheets & caseload operations',
+    'nav.role': 'Role',
+    'nav.therapist': 'Therapist',
+    'nav.admin': 'Admin',
+    'nav.security': 'Security (MFA)',
+    'nav.changePassword': 'Change password',
+    'nav.signOut': 'Sign out',
+    'nav.dash': 'Dashboard',
+    'nav.children': 'Children',
+    'nav.providers': 'Providers',
+    'nav.mandates': 'Mandates',
+    'nav.schools': 'Schools',
+    'nav.admins': 'Admins',
+    'nav.reports': 'Reports',
+    'auth.kicker': 'White Glove Therapy',
+    'auth.lead': 'Secure access for therapists and office staff.',
+    'auth.sub': 'Manage weekly timesheets, mandates, and signatures in one workspace.',
+    'login.title': 'Sign in',
+    'login.blurb': 'Use the email and temporary password from your White Glove invitation.',
+    'login.email': 'Email',
+    'login.password': 'Password',
+    'login.submit': 'Sign in',
+    'login.signingIn': 'Signing in…',
+    'login.forgot': 'Forgot password?',
+    'login.needBoth': 'Enter your email and password.',
+    'login.lang': 'Language',
+    'mfa.challengeTitle': 'Two-step verification',
+    'mfa.challengeSms': 'Enter the code sent to your phone.',
+    'mfa.challengeEmail': 'Enter the code we emailed you.',
+    'mfa.challengeTotp': 'Enter the 6-digit code from your authenticator app.',
+    'mfa.code': 'Verification code',
+    'mfa.verify': 'Verify',
+    'mfa.verifying': 'Verifying…',
+    'mfa.needCode': 'Enter the verification code.',
+    'mfa.backLogin': 'Back to sign in',
+    'mfa.trustDevice': 'Trust this device (skip MFA next time on this browser)',
+    'mfa.selectTitle': 'Choose verification method',
+    'mfa.selectBlurb': 'Pick how you want to verify this sign-in.',
+    'mfa.pickTotp': 'Authenticator app',
+    'mfa.pickEmail': 'Email code',
+    'mfa.pickSms': 'Text message (SMS)',
+    'mfa.setupForcedTitle': 'Set up two-step verification',
+    'mfa.setupTitle': 'Security — MFA',
+    'mfa.setupForcedBlurb':
+      'Your organization requires multi-factor authentication before continuing. Choose a method to finish signing in.',
+    'mfa.setupBlurb':
+      'Protect your account with an authenticator app (recommended), email codes, or Windows Hello / passkey.',
+    'mfa.enrollTotp': 'Set up authenticator app',
+    'mfa.enrollEmail': 'Set up email codes',
+    'mfa.enrollPasskey': 'Set up Windows Hello / passkey',
+    'mfa.enrollSms': 'Set up text message (SMS)',
+    'mfa.smsOffNote':
+      'SMS MFA is disabled. Use authenticator, email codes, or Windows Hello / passkey.',
+    'mfa.emailTitle': 'Email verification codes',
+    'mfa.emailBlurb':
+      'We will send a one-time code to your sign-in email when you log in. Authenticator apps remain recommended when available.',
+    'mfa.emailOn': 'Email MFA is on.',
+    'mfa.passkeyTitle': 'Windows Hello / passkey',
+    'mfa.passkeyBlurb':
+      'Register this device (Windows Hello, Face ID, Touch ID, or a security key). After setup you can sign in with the passkey instead of password + MFA.',
+    'mfa.passkeyRegister': 'Register passkey on this device',
+    'mfa.passkeyOn': 'Passkey registered for this account.',
+    'mfa.passkeyNeedSecure': 'Passkeys need a secure context (HTTPS) and a supported browser.',
+    'mfa.passkeySignIn': 'Sign in with Windows Hello / passkey',
+    'mfa.passkeyNeedEmail': 'Enter your email, then use Windows Hello / passkey.',
+    'mfa.passkeyWorking': 'Waiting for Windows Hello / passkey…',
+    'mfa.passkeyNotRegistered':
+      'No passkey is registered for this account. Sign in with your password, then open Security and register Windows Hello / passkey.',
+    'mfa.passkeyHint': 'First time? Sign in with password, then register a passkey under Security.',
+    'mfa.statusEmail': 'Email codes',
+    'mfa.statusPasskey': 'Passkey / Windows Hello',
+    'mfa.back': 'Back',
+    'mfa.totpTitle': 'Authenticator app',
+    'mfa.totpBlurb':
+      'Scan the QR code with Google Authenticator, Authy, or Microsoft Authenticator. Or enter the key manually.',
+    'mfa.copyKey': 'Copy key',
+    'mfa.openApp': 'Open in authenticator app',
+    'mfa.confirmCode': 'Enter 6-digit code to confirm',
+    'mfa.confirmEnable': 'Confirm and enable',
+    'mfa.confirming': 'Confirming…',
+    'mfa.needSix': 'Enter the 6-digit code from your authenticator app.',
+    'mfa.totpOn': 'Authenticator MFA is on.',
+    'mfa.smsTitle': 'Text message (SMS)',
+    'mfa.smsBlurb':
+      'Use your personal mobile number for verification codes. SMS is billed to the organization (~$0.00645+ per US message via AWS SNS). Authenticator apps are free and recommended.',
+    'mfa.phone': 'Mobile number (E.164, e.g. +15551234567)',
+    'mfa.sendSms': 'Send verification code',
+    'mfa.smsCode': 'SMS code',
+    'mfa.smsConfirm': 'Verify phone and enable SMS MFA',
+    'mfa.needPhone': 'Enter a valid phone in E.164 format (example: +15551234567).',
+    'mfa.smsSent': 'Verification code sent by SMS (if SNS is configured).',
+    'mfa.needSmsCode': 'Enter the SMS verification code.',
+    'mfa.smsOn': 'SMS MFA is on.',
+    'mfa.securityTitle': 'Security — MFA',
+    'mfa.securityBlurb':
+      'Authenticator app is recommended. Email codes and Windows Hello / passkeys are also available. SMS MFA is disabled.',
+    'mfa.statusTotp': 'Authenticator app',
+    'mfa.statusSms': 'SMS',
+    'mfa.statusOrg': 'Organization requires MFA',
+    'mfa.yes': 'Yes',
+    'mfa.no': 'No',
+    'mfa.on': 'On',
+    'mfa.off': 'Off',
+    'mfa.addMethods': 'Add or change methods',
+    'mfa.disableMine': 'Turn off MFA on my account',
+    'mfa.requiredNote':
+      'MFA is required by your organization — you cannot turn it off here. An admin can change the policy under Advanced security.',
+    'mfa.trustedYes': 'This browser is remembered for MFA skip.',
+    'mfa.trustedNo': 'Not remembered on this browser.',
+    'mfa.trustedLabel': 'Trusted device',
+    'mfa.forgetDevice': 'Forget this device',
+    'mfa.forgotDeviceOk': 'This device will require MFA on the next sign-in.',
+    'mfa.disabledOk': 'MFA turned off for your account.',
+    'mfa.needResign': 'Sign out and sign in again to manage MFA.',
+    'mfa.needResignSetup': 'Sign out and sign in again to set up MFA.',
+    'mfa.advanced': 'Advanced',
+    'mfa.advancedHint': 'Organization MFA policy (admins)',
+    'mfa.requireLabel': 'Require MFA for all logins',
+    'mfa.allowSmsLabel': 'Allow SMS MFA enrollment',
+    'mfa.savePolicy': 'Save policy',
+    'mfa.policySaved': 'MFA policy saved.',
+    'mfa.policyBlurb':
+      'Require MFA applies to every therapist and admin Cognito login. Methods: authenticator app, email codes, or Windows Hello / passkey. SMS MFA stays off.',
+    'mfa.footerHold': 'Hold to open advanced security…',
+    'forgot.title': 'Forgot password',
+    'forgot.blurb': 'We will email a confirmation code. Then choose a new password.',
+    'forgot.send': 'Send reset code',
+    'forgot.sending': 'Sending…',
+    'forgot.needEmail': 'Enter your email address.',
+    'therapist.pending': 'Pending Sessions',
+    'therapist.processed': 'Processed Sessions',
+    'therapist.archive': 'My uploads',
+    'therapist.reload': 'Reload sessions',
+    'therapist.changeSchool': 'Change school',
+    'common.save': 'Save',
+    'common.cancel': 'Cancel',
+    'common.error': 'Something went wrong.',
+    'common.ok': 'OK',
+    'common.back': 'Back',
+    'session.ended': 'Your session has ended. Please sign in again.',
+    'lang.en': 'English',
+    'lang.es': 'Español',
+  },
+  es: {
+    'brand.h1': 'Portal del proveedor',
+    'brand.tag': 'Hojas de tiempo clínicas y operaciones de caseload',
+    'nav.role': 'Rol',
+    'nav.therapist': 'Terapeuta',
+    'nav.admin': 'Administrador',
+    'nav.security': 'Seguridad (MFA)',
+    'nav.changePassword': 'Cambiar contraseña',
+    'nav.signOut': 'Cerrar sesión',
+    'nav.dash': 'Panel',
+    'nav.children': 'Niños',
+    'nav.providers': 'Proveedores',
+    'nav.mandates': 'Mandatos',
+    'nav.schools': 'Escuelas',
+    'nav.admins': 'Administradores',
+    'nav.reports': 'Informes',
+    'auth.kicker': 'White Glove Therapy',
+    'auth.lead': 'Acceso seguro para terapeutas y personal de oficina.',
+    'auth.sub': 'Gestione hojas de tiempo semanales, mandatos y firmas en un solo espacio.',
+    'login.title': 'Iniciar sesión',
+    'login.blurb': 'Use el correo y la contraseña temporal de su invitación de White Glove.',
+    'login.email': 'Correo electrónico',
+    'login.password': 'Contraseña',
+    'login.submit': 'Iniciar sesión',
+    'login.signingIn': 'Iniciando sesión…',
+    'login.forgot': '¿Olvidó su contraseña?',
+    'login.needBoth': 'Ingrese su correo y contraseña.',
+    'login.lang': 'Idioma',
+    'mfa.challengeTitle': 'Verificación en dos pasos',
+    'mfa.challengeSms': 'Ingrese el código enviado a su teléfono.',
+    'mfa.challengeEmail': 'Ingrese el código que le enviamos por correo.',
+    'mfa.challengeTotp': 'Ingrese el código de 6 dígitos de su aplicación de autenticación.',
+    'mfa.code': 'Código de verificación',
+    'mfa.verify': 'Verificar',
+    'mfa.verifying': 'Verificando…',
+    'mfa.needCode': 'Ingrese el código de verificación.',
+    'mfa.backLogin': 'Volver al inicio de sesión',
+    'mfa.trustDevice': 'Confiar en este dispositivo (omitir MFA la próxima vez en este navegador)',
+    'mfa.selectTitle': 'Elija el método de verificación',
+    'mfa.selectBlurb': 'Seleccione cómo desea verificar este inicio de sesión.',
+    'mfa.pickTotp': 'Aplicación de autenticación',
+    'mfa.pickEmail': 'Código por correo',
+    'mfa.pickSms': 'Mensaje de texto (SMS)',
+    'mfa.setupForcedTitle': 'Configure la verificación en dos pasos',
+    'mfa.setupTitle': 'Seguridad — MFA',
+    'mfa.setupForcedBlurb':
+      'Su organización exige autenticación multifactor antes de continuar. Elija un método para completar el acceso.',
+    'mfa.setupBlurb':
+      'Proteja su cuenta con una aplicación de autenticación (recomendado), códigos por correo o Windows Hello / passkey.',
+    'mfa.enrollTotp': 'Configurar aplicación de autenticación',
+    'mfa.enrollEmail': 'Configurar códigos por correo',
+    'mfa.enrollPasskey': 'Configurar Windows Hello / passkey',
+    'mfa.enrollSms': 'Configurar mensaje de texto (SMS)',
+    'mfa.smsOffNote':
+      'El MFA por SMS está desactivado. Use autenticador, correo o Windows Hello / passkey.',
+    'mfa.emailTitle': 'Códigos por correo',
+    'mfa.emailBlurb':
+      'Enviaremos un código de un solo uso a su correo de inicio de sesión. Las aplicaciones de autenticación siguen siendo recomendadas.',
+    'mfa.emailOn': 'MFA por correo activado.',
+    'mfa.passkeyTitle': 'Windows Hello / passkey',
+    'mfa.passkeyBlurb':
+      'Registre este dispositivo (Windows Hello, Face ID, Touch ID o una llave de seguridad). Después podrá iniciar sesión con passkey en lugar de contraseña + MFA.',
+    'mfa.passkeyRegister': 'Registrar passkey en este dispositivo',
+    'mfa.passkeyOn': 'Passkey registrado para esta cuenta.',
+    'mfa.passkeyNeedSecure': 'Los passkeys requieren HTTPS y un navegador compatible.',
+    'mfa.passkeySignIn': 'Iniciar sesión con Windows Hello / passkey',
+    'mfa.passkeyNeedEmail': 'Ingrese su correo y luego use Windows Hello / passkey.',
+    'mfa.passkeyWorking': 'Esperando Windows Hello / passkey…',
+    'mfa.passkeyNotRegistered':
+      'No hay passkey registrado para esta cuenta. Inicie sesión con su contraseña, luego abra Seguridad y registre Windows Hello / passkey.',
+    'mfa.passkeyHint': '¿Primera vez? Inicie sesión con contraseña y registre un passkey en Seguridad.',
+    'mfa.statusEmail': 'Códigos por correo',
+    'mfa.statusPasskey': 'Passkey / Windows Hello',
+    'mfa.back': 'Volver',
+    'mfa.totpTitle': 'Aplicación de autenticación',
+    'mfa.totpBlurb':
+      'Escanee el código QR con Google Authenticator, Authy o Microsoft Authenticator. O ingrese la clave manualmente.',
+    'mfa.copyKey': 'Copiar clave',
+    'mfa.openApp': 'Abrir en la aplicación de autenticación',
+    'mfa.confirmCode': 'Ingrese el código de 6 dígitos para confirmar',
+    'mfa.confirmEnable': 'Confirmar y activar',
+    'mfa.confirming': 'Confirmando…',
+    'mfa.needSix': 'Ingrese el código de 6 dígitos de su aplicación de autenticación.',
+    'mfa.totpOn': 'MFA por autenticador activado.',
+    'mfa.smsTitle': 'Mensaje de texto (SMS)',
+    'mfa.smsBlurb':
+      'Use su número de celular personal para los códigos. El SMS se factura a la organización (~$0.00645+ por mensaje en EE. UU. vía AWS SNS). Las aplicaciones de autenticación son gratuitas y recomendadas.',
+    'mfa.phone': 'Número móvil (E.164, p. ej. +15551234567)',
+    'mfa.sendSms': 'Enviar código de verificación',
+    'mfa.smsCode': 'Código SMS',
+    'mfa.smsConfirm': 'Verificar teléfono y activar MFA por SMS',
+    'mfa.needPhone': 'Ingrese un teléfono válido en formato E.164 (ejemplo: +15551234567).',
+    'mfa.smsSent': 'Código de verificación enviado por SMS (si SNS está configurado).',
+    'mfa.needSmsCode': 'Ingrese el código de verificación SMS.',
+    'mfa.smsOn': 'MFA por SMS activado.',
+    'mfa.securityTitle': 'Seguridad — MFA',
+    'mfa.securityBlurb':
+      'Se recomienda la aplicación de autenticación. También hay códigos por correo y Windows Hello / passkeys. El MFA por SMS está desactivado.',
+    'mfa.statusTotp': 'Aplicación de autenticación',
+    'mfa.statusSms': 'SMS',
+    'mfa.statusOrg': 'La organización exige MFA',
+    'mfa.yes': 'Sí',
+    'mfa.no': 'No',
+    'mfa.on': 'Activado',
+    'mfa.off': 'Desactivado',
+    'mfa.addMethods': 'Agregar o cambiar métodos',
+    'mfa.disableMine': 'Desactivar MFA en mi cuenta',
+    'mfa.requiredNote':
+      'Su organización exige MFA — no puede desactivarlo aquí. Un administrador puede cambiar la política en Seguridad avanzada.',
+    'mfa.trustedYes': 'Este navegador está recordado para omitir MFA.',
+    'mfa.trustedNo': 'No está recordado en este navegador.',
+    'mfa.trustedLabel': 'Dispositivo de confianza',
+    'mfa.forgetDevice': 'Olvidar este dispositivo',
+    'mfa.forgotDeviceOk': 'Este dispositivo exigirá MFA en el próximo inicio de sesión.',
+    'mfa.disabledOk': 'MFA desactivado en su cuenta.',
+    'mfa.needResign': 'Cierre sesión e inicie de nuevo para administrar MFA.',
+    'mfa.needResignSetup': 'Cierre sesión e inicie de nuevo para configurar MFA.',
+    'mfa.advanced': 'Avanzado',
+    'mfa.advancedHint': 'Política MFA de la organización (administradores)',
+    'mfa.requireLabel': 'Exigir MFA en todos los inicios de sesión',
+    'mfa.allowSmsLabel': 'Permitir inscripción MFA por SMS',
+    'mfa.savePolicy': 'Guardar política',
+    'mfa.policySaved': 'Política MFA guardada.',
+    'mfa.policyBlurb':
+      'Exigir MFA aplica a cada inicio de sesión. Métodos: autenticador, correo o Windows Hello / passkey. El MFA por SMS permanece desactivado.',
+    'mfa.footerHold': 'Mantenga pulsado para abrir seguridad avanzada…',
+    'forgot.title': 'Olvidé mi contraseña',
+    'forgot.blurb': 'Le enviaremos un código de confirmación por correo. Luego elija una contraseña nueva.',
+    'forgot.send': 'Enviar código',
+    'forgot.sending': 'Enviando…',
+    'forgot.needEmail': 'Ingrese su dirección de correo.',
+    'therapist.pending': 'Sesiones pendientes',
+    'therapist.processed': 'Sesiones procesadas',
+    'therapist.archive': 'Mis cargas',
+    'therapist.reload': 'Recargar sesiones',
+    'therapist.changeSchool': 'Cambiar escuela',
+    'common.save': 'Guardar',
+    'common.cancel': 'Cancelar',
+    'common.error': 'Algo salió mal.',
+    'common.ok': 'Aceptar',
+    'common.back': 'Volver',
+    'session.ended': 'Su sesión ha terminado. Inicie sesión de nuevo.',
+    'lang.en': 'English',
+    'lang.es': 'Español',
+  },
+};
+
+let uiLang = localStorage.getItem('tmsLang') === 'es' ? 'es' : 'en';
+
+function t(key) {
+  const pack = I18N[uiLang] || I18N.en;
+  return pack[key] || I18N.en[key] || key;
+}
+
+function langSwitcherHtml(compact) {
+  const cls = compact ? 'lang-switch lang-switch--compact' : 'lang-switch';
+  return `<div class="${cls}" role="group" aria-label="${esc(t('login.lang'))}">
+    <button type="button" class="lang-btn ${uiLang === 'en' ? 'on' : ''}" data-lang="en">${esc(t('lang.en'))}</button>
+    <button type="button" class="lang-btn ${uiLang === 'es' ? 'on' : ''}" data-lang="es">${esc(t('lang.es'))}</button>
+  </div>`;
+}
+
+function bindLangSwitcher(root, onChange) {
+  const scope = root || document;
+  scope.querySelectorAll('[data-lang]').forEach((btn) => {
+    btn.onclick = () => {
+      const next = btn.getAttribute('data-lang') === 'es' ? 'es' : 'en';
+      if (next === uiLang) return;
+      setUiLang(next);
+      if (typeof onChange === 'function') onChange();
+    };
+  });
+}
+
+function setUiLang(next) {
+  uiLang = next === 'es' ? 'es' : 'en';
+  localStorage.setItem('tmsLang', uiLang);
+  document.documentElement.lang = uiLang;
+  applyStaticI18n();
+}
+
+function applyStaticI18n() {
+  document.documentElement.lang = uiLang;
+  const map = [
+    ['#brandH1', 'brand.h1'],
+    ['#brandTag', 'brand.tag'],
+    ['#rolePickLabel', 'nav.role'],
+    ['#securityMfa', 'nav.security'],
+    ['#changePassword', 'nav.changePassword'],
+    ['#signout', 'nav.signOut'],
+    ['#authAsideKicker', 'auth.kicker'],
+    ['#authAsideLead', 'auth.lead'],
+    ['#authAsideSub', 'auth.sub'],
+  ];
+  for (const [sel, key] of map) {
+    const el = document.querySelector(sel);
+    if (el) el.textContent = t(key);
+  }
+  const roleSel = document.getElementById('role');
+  if (roleSel) {
+    const th = roleSel.querySelector('option[value="therapist"]');
+    const ad = roleSel.querySelector('option[value="admin"]');
+    if (th) th.textContent = t('nav.therapist');
+    if (ad) ad.textContent = t('nav.admin');
+  }
+  const adminNav = {
+    dash: 'nav.dash',
+    children: 'nav.children',
+    providers: 'nav.providers',
+    mandates: 'nav.mandates',
+    schools: 'nav.schools',
+    admins: 'nav.admins',
+    reports: 'nav.reports',
+  };
+  document.querySelectorAll('#adminNav [data-admin]').forEach((btn) => {
+    const screen = btn.getAttribute('data-admin');
+    const key = adminNav[screen];
+    if (!key) return;
+    if (screen === 'schools') {
+      const badge = document.getElementById('schoolsSetupBadge');
+      const count = badge && !badge.hidden ? badge.textContent : '';
+      const hidden = !badge || badge.hidden;
+      btn.innerHTML = `${esc(t(key))} <span id="schoolsSetupBadge" class="nav-alert-badge"${hidden ? ' hidden' : ''}>${esc(count || '')}</span>`;
+    } else {
+      btn.textContent = t(key);
+    }
+  });
+  const headerLang = document.getElementById('headerLang');
+  if (headerLang) {
+    headerLang.innerHTML = langSwitcherHtml(true);
+    bindLangSwitcher(headerLang, () => {
+      if (document.body.classList.contains('is-auth') && document.getElementById('loginBtn')) {
+        const msg = document.getElementById('loginErr')?.textContent || '';
+        showLogin(msg);
+        return;
+      }
+      if (document.body.classList.contains('is-app') && state.idToken) {
+        const sec = document.getElementById('mfaAddMethods') || document.getElementById('mfaEnrollTotp');
+        if (sec) {
+          showSecurityMfa();
+          return;
+        }
+        showRole();
+      }
+    });
+  }
+}
 
 function mondayIso() {
   const d = new Date();
@@ -92,15 +494,19 @@ async function downloadReportXlsx(path, filename) {
   URL.revokeObjectURL(url);
 }
 
-function headers() {
+function headers(opts = {}) {
+  const base = { 'content-type': 'application/json' };
+  if (opts.anonymous) return base;
   if (COGNITO_MODE) {
+    const token = String(state.idToken || '').trim();
+    if (!token) return base;
     return {
-      'content-type': 'application/json',
-      authorization: `Bearer ${state.idToken}`,
+      ...base,
+      authorization: `Bearer ${token}`,
     };
   }
   return {
-    'content-type': 'application/json',
+    ...base,
     'x-tms-role': state.role,
     'x-tms-email': state.role === 'admin' ? 'admin@whiteglove.local' : 'therapist@whiteglove.local',
   };
@@ -139,7 +545,7 @@ async function api(method, path, body, opts = {}) {
   try {
     res = await fetch(API + path, {
       method,
-      headers: headers(),
+      headers: headers({ anonymous: Boolean(opts.anonymous) }),
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller ? controller.signal : undefined,
     });
@@ -155,7 +561,7 @@ async function api(method, path, body, opts = {}) {
   } finally {
     if (timer) clearTimeout(timer);
   }
-  if (res.status === 401 && COGNITO_MODE) {
+  if (res.status === 401 && COGNITO_MODE && !opts.anonymous && !opts.skipAuthSignOut) {
     signOut('Your session has ended. Please sign in again.');
     throw apiError('Please sign in again.', { status: 401 });
   }
@@ -170,6 +576,11 @@ async function api(method, path, body, opts = {}) {
     throw apiError(msg, { errors, warnings, status: res.status });
   }
   return data;
+}
+
+function lunaApiOpts() {
+  const signedIn = Boolean(COGNITO_MODE ? String(state.idToken || '').trim() : state.role);
+  return signedIn ? {} : { anonymous: true, skipAuthSignOut: true };
 }
 
 function clearUploadIssues() {
@@ -604,6 +1015,85 @@ function formatCalendarSummary(calendar) {
   return `${formatIsoDateLabel(calendar.yearStart)} – ${formatIsoDateLabel(calendar.yearEnd)}, ${offLabel}`;
 }
 
+function schoolHasAddress(school) {
+  return Boolean(
+    String(school?.address1 || '').trim() &&
+      String(school?.city || '').trim() &&
+      String(school?.state || '').trim() &&
+      String(school?.zipCode || '').trim(),
+  );
+}
+
+function schoolCalendarConfigured(calendar) {
+  if (!calendar) return false;
+  if (String(calendar.yearStart || '').trim()) return true;
+  if (String(calendar.yearEnd || '').trim()) return true;
+  return (calendar.offDays || []).some((d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || '').trim()));
+}
+
+/** Prefer API setupBySchoolId; fall back to local calendar + address checks. */
+function schoolSetupFromApi(school, calendar, setupEntry) {
+  if (setupEntry) {
+    return {
+      incomplete: Boolean(setupEntry.incomplete),
+      missingCalendar: Boolean(setupEntry.missingCalendar),
+      missingAddress: Boolean(setupEntry.missingAddress),
+      message: String(setupEntry.message || ''),
+    };
+  }
+  const missingCalendar = !schoolCalendarConfigured(calendar);
+  const missingAddress = !schoolHasAddress(school);
+  const parts = [];
+  if (missingCalendar) parts.push('calendar');
+  if (missingAddress) parts.push('address');
+  const name = String(school?.name || '').trim() || 'This school';
+  let message = '';
+  if (parts.length === 2) {
+    message = `${name} needs a calendar and address before HHA patient create and school-day mandate tracking are complete.`;
+  } else if (missingCalendar) {
+    message = `${name} needs a school calendar (first/last day and off days).`;
+  } else if (missingAddress) {
+    message = `${name} needs a full address (street, city, state, zip) for HHA CreatePatient.`;
+  }
+  return {
+    incomplete: parts.length > 0,
+    missingCalendar,
+    missingAddress,
+    message,
+  };
+}
+
+function updateSchoolsSetupBadge(count) {
+  const badge = document.getElementById('schoolsSetupBadge');
+  if (!badge) return;
+  const n = Number(count) || 0;
+  if (n <= 0) {
+    badge.hidden = true;
+    badge.textContent = '';
+    return;
+  }
+  badge.hidden = false;
+  badge.textContent = String(n);
+  badge.title = n === 1
+    ? '1 school needs calendar and/or address'
+    : `${n} schools need calendar and/or address`;
+}
+
+async function refreshSchoolsSetupBadge() {
+  try {
+    const out = await api('GET', '/admin/schools');
+    const schools = out.schools || [];
+    const calendarsBySchoolId = out.calendarsBySchoolId || {};
+    const setupBySchoolId = out.setupBySchoolId || {};
+    const incomplete = schools.filter((s) =>
+      schoolSetupFromApi(s, calendarsBySchoolId[s.id], setupBySchoolId[s.id]).incomplete,
+    );
+    updateSchoolsSetupBadge(incomplete.length);
+  } catch {
+    /* ignore badge refresh failures */
+  }
+}
+
 function renderCalendarSavedHtml(calendar, schoolName) {
   const name = schoolName ? ` for ${esc(schoolName)}` : '';
   if (!calendar?.yearStart && !calendar?.yearEnd && !(calendar?.offDays || []).length) {
@@ -703,7 +1193,7 @@ function bindMandateEditor(opts) {
         </div>
         <div class="row">
           <label>Service type <input id="emService" value="${esc(m.serviceType || '')}" /></label>
-          <label>Kind
+          <label>Type
             <select id="emKind">
               <option value="regular"${kind === 'regular' ? ' selected' : ''}>Weekly</option>
               <option value="makeup_auth"${kind === 'makeup_auth' ? ' selected' : ''}>Makeup auth</option>
@@ -717,7 +1207,7 @@ function bindMandateEditor(opts) {
               <option value="group"${m.ratioGroup ? ' selected' : ''}>Group</option>
             </select>
           </label>
-          <label>Group size <input id="emGroupSize" type="number" min="1" step="1" value="${esc(m.groupSize ?? '')}" /></label>
+          <label>Group size <input id="emGroupSize" type="number" min="1" step="1" value="${esc(m.groupSize != null && m.groupSize !== '' ? m.groupSize : (mandateLooksGroupUi(m) ? 2 : 1))}" /></label>
         </div>
         <div class="row">
           <label>Duration (minutes) <input id="emDuration" type="number" min="1" step="1" value="${esc(m.durationMinutes ?? '')}" /></label>
@@ -749,14 +1239,16 @@ function bindMandateEditor(opts) {
           const durationRaw = document.getElementById('emDuration').value;
           const groupSizeRaw = document.getElementById('emGroupSize').value;
           const frequencyKind = document.getElementById('emPeriod').value;
+          const ratioGroup = document.getElementById('emRatio').value === 'group';
+          const groupSize = groupSizeRaw === '' ? (ratioGroup ? 2 : 1) : Number(groupSizeRaw);
           await api('PATCH', `/admin/mandates/${id}`, {
             studentId: document.getElementById('emStudent').value,
             providerId: document.getElementById('emProvider').value,
             serviceType: document.getElementById('emService').value,
             mandateKind: document.getElementById('emKind').value,
-            ratioGroup: document.getElementById('emRatio').value === 'group',
+            ratioGroup,
             durationMinutes: durationRaw === '' ? null : Number(durationRaw),
-            groupSize: groupSizeRaw === '' ? null : Number(groupSizeRaw),
+            groupSize,
             frequencyKind,
             frequencyPerWeek: freq,
             sessionsPerPeriod: freq,
@@ -778,17 +1270,32 @@ function mandateDurationLabel(m) {
   return `${n} min`;
 }
 
+/** True when mandate is group (ratio flag, size > 1, or Group / Small Group in service text). */
+function mandateLooksGroupUi(m) {
+  if (m?.ratioGroup) return true;
+  const n = m?.groupSize;
+  if (n != null && n !== '' && Number.isFinite(Number(n)) && Number(n) > 1) return true;
+  const blob = `${m?.serviceType || ''} ${m?.ratioLabel || ''}`;
+  return /\bgroup\b|\b2\s*:\s*1\b|\b3\s*:\s*1\b|\b4\s*:\s*1\b/i.test(blob);
+}
+
 function mandateGroupSizeLabel(m) {
   const n = m?.groupSize;
-  if (n == null || n === '') return '—';
-  return String(n);
+  if (n != null && n !== '' && Number.isFinite(Number(n)) && Number(n) > 0) return String(Math.round(Number(n)));
+  // Legacy Group / Small Group imports stored null; overlap + import + load backfill default to 2.
+  if (mandateLooksGroupUi(m)) return '2';
+  return '—';
 }
 
 function bindOpenChildLinks(opts = {}) {
   document.querySelectorAll('[data-open-child]').forEach((el) => {
     el.addEventListener('click', () => {
       const id = el.getAttribute('data-open-child');
-      if (id) adminChildDetail(id, opts);
+      if (id) {
+        state.childDetailTab = 'basic';
+        sessionStorage.setItem('tmsChildDetailTab', 'basic');
+        adminChildDetail(id, opts);
+      }
     });
   });
 }
@@ -797,7 +1304,11 @@ function bindOpenProviderLinks() {
   document.querySelectorAll('[data-open-provider]').forEach((el) => {
     el.addEventListener('click', () => {
       const id = el.getAttribute('data-open-provider');
-      if (id) adminProviderDetail(id);
+      if (id) {
+        state.providerDetailTab = 'basic';
+        sessionStorage.setItem('tmsProviderDetailTab', 'basic');
+        adminProviderDetail(id);
+      }
     });
   });
 }
@@ -815,11 +1326,103 @@ function sessionExtraLabel(s) {
 function closeTimesheetModal() {
   const modal = document.getElementById('timesheetModal');
   if (modal) {
-    const frame = modal.querySelector('iframe');
-    const src = frame?.getAttribute('src') || '';
-    if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+    const blobUrl = modal.dataset.timesheetBlobUrl || '';
+    if (blobUrl.startsWith('blob:')) URL.revokeObjectURL(blobUrl);
+    modal.querySelectorAll('iframe[src^="blob:"]').forEach((frame) => {
+      const src = frame.getAttribute('src') || '';
+      if (src.startsWith('blob:')) URL.revokeObjectURL(src);
+    });
     modal.remove();
   }
+}
+
+function loadScriptOnce(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[data-src="${src}"]`);
+    if (existing) {
+      if (existing.dataset.loaded === '1') resolve();
+      else existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener('error', () => reject(new Error(`Unable to load ${src}`)), { once: true });
+      return;
+    }
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    s.dataset.src = src;
+    s.onload = () => {
+      s.dataset.loaded = '1';
+      resolve();
+    };
+    s.onerror = () => reject(new Error(`Unable to load ${src}`));
+    document.head.appendChild(s);
+  });
+}
+
+async function ensurePdfJs() {
+  const lib = window.pdfjsLib || window['pdfjs-dist/build/pdf'] || null;
+  if (lib?.getDocument) {
+    if (lib.GlobalWorkerOptions && !lib.GlobalWorkerOptions.workerSrc) {
+      lib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
+    }
+    return lib;
+  }
+  await loadScriptOnce('vendor/pdf.min.js');
+  const loaded = window.pdfjsLib;
+  if (!loaded?.getDocument) throw new Error('PDF viewer failed to load.');
+  loaded.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
+  return loaded;
+}
+
+async function renderTimesheetPdfPages(host, pdfBlob) {
+  const pdfjsLib = await ensurePdfJs();
+  const data = new Uint8Array(await pdfBlob.arrayBuffer());
+  let pdf;
+  try {
+    pdf = await pdfjsLib.getDocument({ data, verbosity: 0 }).promise;
+  } catch {
+    pdf = await pdfjsLib.getDocument({ data, verbosity: 0, disableWorker: true }).promise;
+  }
+  host.innerHTML = '';
+  const maxWidth = Math.max(320, Math.floor(host.clientWidth || 980));
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+    const page = await pdf.getPage(pageNum);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(2, maxWidth / base.width);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.className = 'timesheet-pdf-page';
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    canvas.setAttribute('aria-label', `Timesheet page ${pageNum} of ${pdf.numPages}`);
+    const ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    host.appendChild(canvas);
+  }
+}
+
+function printTimesheetPdfBlob(url) {
+  const frame = document.createElement('iframe');
+  frame.className = 'timesheet-print-frame';
+  frame.setAttribute('aria-hidden', 'true');
+  frame.src = url;
+  document.body.appendChild(frame);
+  const cleanup = () => {
+    try {
+      frame.remove();
+    } catch {
+      /* ignore */
+    }
+  };
+  frame.onload = () => {
+    try {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+    } catch {
+      window.open(url, '_blank');
+    }
+    setTimeout(cleanup, 60_000);
+  };
+  setTimeout(cleanup, 120_000);
 }
 
 async function openTimesheetModal(opts) {
@@ -857,13 +1460,16 @@ async function openTimesheetModal(opts) {
       <div class="modal-head">
         <h2>Timesheet</h2>
         <div class="modal-actions">
-          <button type="button" class="btn" data-print-timesheet>Print</button>
+          <button type="button" class="btn" data-download-timesheet hidden>Download PDF</button>
+          <button type="button" class="btn" data-print-timesheet hidden>Print</button>
           <button type="button" class="btn" data-close-timesheet>Close</button>
         </div>
       </div>
-      ${meta.length ? `<p class="muted">${meta.map((m) => esc(m)).join(' · ')}</p>` : ''}
+      ${meta.length ? `<p class="muted timesheet-pdf-meta">${meta.map((m) => esc(m)).join(' · ')}</p>` : ''}
+      <p class="muted timesheet-pdf-hint">Same branded PDF that DocuSign / email will send.</p>
       <div class="timesheet-pdf-loading muted">Loading branded timesheet…</div>
-      <iframe class="timesheet-pdf-frame" title="Timesheet PDF" hidden></iframe>
+      <div class="timesheet-pdf-pages" hidden></div>
+      <iframe class="timesheet-pdf-frame" title="Timesheet PDF fallback" hidden></iframe>
     </div>
   `;
   document.body.appendChild(backdrop);
@@ -875,21 +1481,45 @@ async function openTimesheetModal(opts) {
     const q = state.selectedSchoolId
       ? `?schoolId=${encodeURIComponent(state.selectedSchoolId)}`
       : '';
-    const blob = await api('GET', `/weeks/${weekId}/timesheet${q}`);
+    const raw = await api('GET', `/weeks/${weekId}/timesheet${q}`);
+    if (!(raw instanceof Blob)) {
+      throw new Error('Timesheet PDF response was not a file.');
+    }
+    const blob = raw.type && raw.type.includes('pdf')
+      ? raw
+      : new Blob([await raw.arrayBuffer()], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
-    const frame = backdrop.querySelector('.timesheet-pdf-frame');
+    backdrop.dataset.timesheetBlobUrl = url;
     const loading = backdrop.querySelector('.timesheet-pdf-loading');
-    frame.src = url;
-    frame.hidden = false;
-    if (loading) loading.hidden = true;
-    backdrop.querySelector('[data-print-timesheet]').onclick = () => {
-      try {
-        frame.contentWindow?.focus();
-        frame.contentWindow?.print();
-      } catch {
-        window.open(url, '_blank');
-      }
+    const pages = backdrop.querySelector('.timesheet-pdf-pages');
+    const frame = backdrop.querySelector('.timesheet-pdf-frame');
+    const printBtn = backdrop.querySelector('[data-print-timesheet]');
+    const downloadBtn = backdrop.querySelector('[data-download-timesheet]');
+    printBtn.hidden = false;
+    downloadBtn.hidden = false;
+    downloadBtn.onclick = () => {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `timesheet-${weekStart || weekId}.pdf`;
+      a.click();
     };
+    printBtn.onclick = () => printTimesheetPdfBlob(url);
+    try {
+      await renderTimesheetPdfPages(pages, blob);
+      pages.hidden = false;
+      if (loading) loading.hidden = true;
+    } catch (renderErr) {
+      // Fallback: native PDF plugin in iframe / object (may be blank under NetFree).
+      frame.src = `${url}#view=FitH`;
+      frame.hidden = false;
+      if (loading) {
+        loading.textContent =
+          renderErr?.message ||
+          'Embedded page preview unavailable — use Print or Download for the full PDF.';
+        loading.hidden = false;
+        loading.classList.add('warn-box');
+      }
+    }
   } catch (err) {
     closeTimesheetModal();
     setStatus(err.message || 'Unable to load timesheet PDF.', 'error');
@@ -1081,7 +1711,18 @@ async function therapistHome(statusFlash) {
     const me = await api('GET', '/me');
     providerId = me.provider?.id || '';
     schools = me.schools || [];
+    state.meSettings = me.settings || {};
+    if (schools.length === 0) {
+      // Caseload has no schools — empty state only (never org-wide / other therapists).
+      state.selectedSchoolId = '';
+      state.schoolConfirmed = false;
+      sessionStorage.removeItem('tmsSchoolId');
+      sessionStorage.removeItem('tmsSchoolConfirmed');
+      await showSchoolPicker([]);
+      return;
+    }
     if (schools.length === 1) {
+      // Exactly one working school → auto-enter; skip picker UI.
       state.selectedSchoolId = schools[0].id;
       state.schoolConfirmed = true;
       sessionStorage.setItem('tmsSchoolId', state.selectedSchoolId);
@@ -1097,7 +1738,11 @@ async function therapistHome(statusFlash) {
     const dues = (me.dueDates || []).filter((d) => d.status !== 'done');
     const alerts = me.alerts || [];
     if (dues.length || alerts.length) {
-      banner = `<div class="warn-box">${[...alerts.map((a) => a.body), ...dues.map((d) => `${d.schoolName || d.schoolId || 'School'}: ${d.kind} due ${d.dueOn}`)].map((t) => `<div>${esc(t)}</div>`).join('')}</div>`;
+      banner = `<div class="warn-box">${[...alerts.map((a) => a.body), ...dues.map((d) => {
+        const type = d.kind === 'annual' ? 'Annual' : d.kind === 'reeval' ? 'Reevaluation' : 'Progress';
+        const note = d.notes ? ` (${d.notes})` : '';
+        return `${d.schoolName || d.schoolId || 'School'}: ${type}${note} due ${d.dueOn}`;
+      })].map((t) => `<div>${esc(t)}</div>`).join('')}</div>`;
     }
     if (providerId) {
       const ensured = await api('POST', '/week/ensure', {
@@ -1178,17 +1823,64 @@ async function therapistHome(statusFlash) {
     warn: [...(flash?.warn || []), ...warnings],
   });
 
-  let priorWeeks = [];
+  let processedSessions = [];
   if (providerId) {
     try {
       const listed = await api('GET', '/weeks');
-      priorWeeks = (listed.weeks || []).filter((w) => w.weekStart !== mondayIso());
+      processedSessions = Array.isArray(listed.processedSessions) ? listed.processedSessions : [];
+      if (!processedSessions.length) {
+        // Fallback: flatten sessions from signed/locked weeks if API is older.
+        const signed = (listed.weeks || []).filter((w) => w.status === 'signed' || w.status === 'locked');
+        for (const w of signed) {
+          try {
+            const detail = await api('GET', `/week?weekStart=${encodeURIComponent(w.weekStart)}`);
+            for (const s of detail.sessions || []) {
+              processedSessions.push({
+                id: s.id,
+                dateOfService: s.dateOfService,
+                attendance: s.attendance,
+                beginTime: s.beginTime || '',
+                endTime: s.endTime || '',
+                payAmount: s.payAmount ?? null,
+              });
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
     } catch {
-      priorWeeks = [];
+      processedSessions = [];
     }
   }
-  const pane = state.therapistPane === 'prior' ? 'prior' : 'current';
+  const pane =
+    state.therapistPane === 'prior'
+      ? 'prior'
+      : state.therapistPane === 'archive'
+        ? 'archive'
+        : 'current';
   const isPriorPane = pane === 'prior';
+  const isArchivePane = pane === 'archive';
+  const yellowBlocksImport = state.meSettings?.yellowWarningsBlockImport !== false;
+  const importBlockCopy = yellowBlocksImport
+    ? 'Import is all-or-nothing — any error or yellow warning blocks the whole file.'
+    : 'Import is all-or-nothing for hard errors (red). Yellow note warnings are shown but do not block the file.';
+
+  let archiveUploads = [];
+  let archiveTimesheets = [];
+  if (isArchivePane && providerId) {
+    try {
+      const [up, ts] = await Promise.all([
+        api('GET', '/archive?kind=upload'),
+        api('GET', '/archive?kind=timesheet'),
+      ]);
+      archiveUploads = Array.isArray(up.items) ? up.items : [];
+      archiveTimesheets = Array.isArray(ts.items) ? ts.items : [];
+    } catch {
+      archiveUploads = [];
+      archiveTimesheets = [];
+    }
+  }
 
   const addlForm = `
     <div class="card sec-card">
@@ -1238,20 +1930,52 @@ async function therapistHome(statusFlash) {
     <div class="hero-strip" aria-hidden="true"></div>
     <div class="card">
       <div class="pane-tabs" id="therapistPaneTabs" role="tablist">
-        <button type="button" class="pane-tab${pane === 'current' ? ' on' : ''}" data-therapist-pane="current" role="tab">Pending Sessions</button>
-        <button type="button" class="pane-tab${pane === 'prior' ? ' on' : ''}" data-therapist-pane="prior" role="tab">Processed Sessions</button>
+        <button type="button" class="pane-tab${pane === 'current' ? ' on' : ''}" data-therapist-pane="current" role="tab">${esc(t('therapist.pending'))}</button>
+        <button type="button" class="pane-tab${pane === 'prior' ? ' on' : ''}" data-therapist-pane="prior" role="tab">${esc(t('therapist.processed'))}</button>
+        <button type="button" class="pane-tab${pane === 'archive' ? ' on' : ''}" data-therapist-pane="archive" role="tab">${esc(t('therapist.archive'))}</button>
       </div>
-      ${isPriorPane ? `
-      <h2>Processed sessions</h2>
-      <p class="muted">Open a prior week to review timesheets. Sessions on signed or locked weeks are view-only for providers. Cancel a pending signature request (or ask an admin to reopen) before editing.</p>
+      ${isArchivePane ? `
+      <h2>My uploads &amp; timesheets</h2>
+      <p class="muted">Past session-note PDFs you imported and timesheets you generated. Open a row to preview the PDF.</p>
+      <h3 class="sec">My uploads</h3>
       <div class="table-wrap"><table>
-        <tr><th>Week</th><th>Status</th><th>Sessions</th><th></th></tr>
-        ${priorWeeks.map((w) => `<tr>
-          <td>${esc(w.weekStart)}</td>
-          <td>${esc(w.status)}</td>
-          <td>${esc(String(w.sessionCount ?? 0))}</td>
-          <td><button type="button" class="btn" data-open-prior-week="${esc(w.weekStart)}">Open</button></td>
-        </tr>`).join('') || '<tr><td colspan="4">No processed sessions yet.</td></tr>'}
+        <tr><th>Uploaded</th><th>Type</th><th>Week</th><th>File</th><th></th></tr>
+        ${archiveUploads.map((a) => `<tr>
+          <td>${esc(formatArchiveWhen(a.createdAt))}</td>
+          <td>${esc(archiveSourceLabel(a.sourceType))}</td>
+          <td>${esc(a.weekStart || '—')}</td>
+          <td>${esc(a.filename || 'PDF')}</td>
+          <td>${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : '—'}</td>
+        </tr>`).join('') || '<tr><td colspan="5">No uploaded reports archived yet.</td></tr>'}
+      </table></div>
+      <h3 class="sec">My timesheets</h3>
+      <div class="table-wrap"><table>
+        <tr><th>Generated</th><th>Week</th><th>Status</th><th>File</th><th></th></tr>
+        ${archiveTimesheets.map((a) => `<tr>
+          <td>${esc(formatArchiveWhen(a.createdAt))}</td>
+          <td>${esc(a.weekStart || '—')}</td>
+          <td>${esc(a.status || '—')}</td>
+          <td>${esc(a.filename || 'timesheet.pdf')}</td>
+          <td>${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : '—'}</td>
+        </tr>`).join('') || '<tr><td colspan="5">No timesheets archived yet.</td></tr>'}
+      </table></div>
+      ` : isPriorPane ? `
+      <h2>Processed sessions</h2>
+      <p class="muted">Signed and paid sessions only. Draft, pending signature, and reopened work stay under Pending Sessions.</p>
+      <div class="table-wrap"><table>
+        <tr><th>Session date</th><th>Attended status</th><th>Start/End time</th><th>Pay rate</th></tr>
+        ${processedSessions.map((s) => {
+          const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ') || '—';
+          const pay = s.payAmount == null || s.payAmount === ''
+            ? '—'
+            : `$${Number(s.payAmount).toFixed(2)}`;
+          return `<tr>
+          <td>${esc(s.dateOfService || '—')}</td>
+          <td>${esc(s.attendance || '—')}</td>
+          <td>${esc(time)}</td>
+          <td>${esc(pay)}</td>
+        </tr>`;
+        }).join('') || '<tr><td colspan="4">No processed sessions yet.</td></tr>'}
       </table></div>
       ` : `
       <h2>Pending sessions</h2>
@@ -1259,14 +1983,14 @@ async function therapistHome(statusFlash) {
       ${week ? approvalBanner(status) : '<div class="warn-box">Contact the office to complete your therapist profile setup.</div>'}
       <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${pending ? ' · awaiting signature (sessions locked)' : ''}${processed ? ' · signed/locked (sessions locked)' : ''}</p>
       <div class="row">
-        ${schools.length > 1 ? `<button type="button" class="btn" id="changeSchool">Change school</button>` : ''}
-        <button class="btn" id="refreshHome">Reload week</button>
+        ${schools.length > 1 ? `<button type="button" class="btn" id="changeSchool">${esc(t('therapist.changeSchool'))}</button>` : ''}
+        <button class="btn" id="refreshHome">${esc(t('therapist.reload'))}</button>
         ${pending ? `<button type="button" class="btn" id="cancelApproval">Cancel approval request</button>` : ''}
       </div>
       `}
-      ${!isPriorPane && errors.length ? `<div class="err-box status-banner" id="weekErrorsBox" data-week-issue="errors"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss errors">×</button><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
-      ${!isPriorPane && warnings.length ? `<div class="warn-box status-banner" id="weekWarningsBox" data-week-issue="warnings"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss warnings">×</button><strong>Warnings (submission is still allowed).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
-      ${!isPriorPane ? `<p class="muted">Red indicates a blocking issue (no mandate on file, over-mandate, or note review). Yellow indicates under-mandate or soft warnings only.</p>
+      ${!isPriorPane && !isArchivePane && errors.length ? `<div class="err-box status-banner" id="weekErrorsBox" data-week-issue="errors"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss errors">×</button><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
+      ${!isPriorPane && !isArchivePane && warnings.length ? `<div class="warn-box status-banner" id="weekWarningsBox" data-week-issue="warnings"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss warnings">×</button><strong>Warnings (submission is still allowed).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
+      ${!isPriorPane && !isArchivePane ? `<p class="muted">Red indicates a blocking issue (no mandate on file, over-mandate, or note review). Yellow indicates under-mandate or soft warnings only.</p>
       <div class="table-wrap">
       <table>
         <tr><th>Date</th><th>Child</th><th>Service</th><th>CPT</th><th>Time</th><th>Attendance</th><th>Notes</th><th></th></tr>
@@ -1303,13 +2027,13 @@ async function therapistHome(statusFlash) {
     </div>` : ''}
     </div>
 
-    ${!isPriorPane ? `
+    ${!isPriorPane && !isArchivePane ? `
     ${processed ? `<div class="warn-box">This week is signed and locked. Sessions cannot be edited, removed, or added. Ask an admin to reopen the week if a change is required.</div>` : ''}
     ${pending ? `<div class="warn-box">Approval is pending. Sessions are locked until you cancel the approval request (returns the week to draft) or the timesheet is signed.</div>` : ''}
     ${canImport ? `
     <div class="card sec-card">
       <h2 class="sec"><span class="sec-num">1</span> Import session notes</h2>
-      <p>Select a Frontline Related Service Session Notes PDF or a Therapist Activity Output PDF (text-based, not a scan). Children and schools must already exist from caseload import; this upload will not create them. Import is all-or-nothing — any error or yellow warning blocks the whole file. Already-imported sessions are skipped. Sessions attach to the week of each date of service (within the 14-day locker).</p>
+      <p>Select a Frontline Related Service Session Notes PDF or a Therapist Activity Output PDF (text-based, not a scan). Children and schools must already exist from caseload import; this upload will not create them. ${importBlockCopy} Exact duplicates (same child, date, times, and attendance) are skipped — missed and attended at the same slot are kept separate. Sessions attach to the week of each date of service (within the 14-day locker).</p>
       <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
       <button class="btn-primary big" id="upload">Import</button>
       <p class="muted" id="uploadHint">Accepts Frontline session-notes or Therapist Activity Output PDFs. Import caseloads under Mandates. Scanned PDFs are not supported.</p>
@@ -1346,15 +2070,6 @@ async function therapistHome(statusFlash) {
       state.therapistPane = btn.getAttribute('data-therapist-pane') || 'current';
       sessionStorage.setItem('tmsTherapistPane', state.therapistPane);
       if (state.therapistPane === 'current') state.weekStart = mondayIso();
-      therapistHome();
-    };
-  });
-  document.querySelectorAll('[data-open-prior-week]').forEach((btn) => {
-    btn.onclick = () => {
-      clearTransientErrors();
-      state.weekStart = btn.getAttribute('data-open-prior-week') || mondayIso();
-      state.therapistPane = 'current';
-      sessionStorage.setItem('tmsTherapistPane', 'current');
       therapistHome();
     };
   });
@@ -1411,7 +2126,14 @@ async function therapistHome(statusFlash) {
     };
   }
 
-  if (isPriorPane) return;
+  document.querySelectorAll('[data-open-archive]').forEach((btn) => {
+    btn.onclick = () => {
+      const id = btn.getAttribute('data-open-archive');
+      if (id) openArchivePdf(id);
+    };
+  });
+
+  if (isPriorPane || isArchivePane) return;
 
   const viewEl = document.getElementById('view');
   if (!canImport) {
@@ -1477,6 +2199,8 @@ async function therapistHome(statusFlash) {
       const out = await api('POST', '/week/upload-sessions', {
         weekStart: state.weekStart,
         providerId,
+        schoolId: state.selectedSchoolId || undefined,
+        fileName: file.name || '',
         pdfBase64,
       });
       state.weekId = out.week.id;
@@ -1819,6 +2543,20 @@ async function adminDash() {
       <p class="muted" id="ageLockStatus"></p>
     </div>
     <div class="card">
+      <h2>PDF import note screening</h2>
+      <p class="muted">Controls whether yellow AI / soft note warnings fail the entire Frontline or Therapist Activity import. Red (hard) issues always block the whole file.</p>
+      <div class="row">
+        <label>Block entire import on yellow/warning note issues
+          <select id="yellowBlockImport">
+            <option value="true">ON (block)</option>
+            <option value="false">OFF (warn only)</option>
+          </select>
+        </label>
+      </div>
+      <button type="button" class="btn-primary" id="saveYellowBlock">Save import screening</button>
+      <p class="muted" id="yellowBlockStatus"></p>
+    </div>
+    <div class="card">
       <h2>Weeks</h2>
       ${bulkBar('weeks')}
       <div class="table-wrap">
@@ -1838,7 +2576,7 @@ async function adminDash() {
       </div>
     </div>
   `);
-  // Load 14-day locker settings
+  // Load 14-day locker + yellow import settings
   (async () => {
     try {
       const out = await api('GET', '/admin/settings');
@@ -1847,10 +2585,18 @@ async function adminDash() {
       const days = document.getElementById('ageLockDays');
       const weeks = document.getElementById('ageUnlockWeeks');
       const providers = document.getElementById('ageUnlockProviders');
+      const yellow = document.getElementById('yellowBlockImport');
       if (en) en.value = s.sessionImportAgeLockEnabled === false ? 'false' : 'true';
       if (days) days.value = String(s.sessionImportMaxAgeDays || 14);
       if (weeks) weeks.value = (s.unlockedWeekIds || []).join(', ');
       if (providers) providers.value = (s.unlockedProviderIds || []).join(', ');
+      if (yellow) yellow.value = s.yellowWarningsBlockImport === false ? 'false' : 'true';
+      state.meSettings = {
+        ...(state.meSettings || {}),
+        requireMfa: coerceRequireMfa(s.requireMfa, false),
+        allowSmsMfa: s.allowSmsMfa === true,
+      };
+      cacheRequireMfa(state.meSettings.requireMfa);
     } catch {
       /* ignore */
     }
@@ -1863,6 +2609,7 @@ async function adminDash() {
           .split(/[,;\s]+/)
           .map((s) => s.trim())
           .filter(Boolean);
+      // Never send requireMfa here — a stale local cache of true was flipping org MFA back ON.
       const out = await api('POST', '/admin/settings', {
         sessionImportAgeLockEnabled: document.getElementById('ageLockEnabled').value === 'true',
         sessionImportMaxAgeDays: Number(document.getElementById('ageLockDays').value) || 14,
@@ -1877,6 +2624,21 @@ async function adminDash() {
     } catch (err) {
       if (statusEl) statusEl.textContent = err.message || 'Save failed.';
       setStatus(err.message || 'Unable to save locker settings.', 'err');
+    }
+  });
+  document.getElementById('saveYellowBlock')?.addEventListener('click', async () => {
+    const statusEl = document.getElementById('yellowBlockStatus');
+    try {
+      const out = await api('POST', '/admin/settings', {
+        yellowWarningsBlockImport: document.getElementById('yellowBlockImport').value === 'true',
+      });
+      const on = out.settings?.yellowWarningsBlockImport !== false;
+      document.getElementById('yellowBlockImport').value = on ? 'true' : 'false';
+      if (statusEl) statusEl.textContent = on ? 'Yellow warnings block import (ON).' : 'Yellow warnings do not block import (OFF).';
+      setStatus('Import screening setting saved.', 'ok');
+    } catch (err) {
+      if (statusEl) statusEl.textContent = err.message || 'Save failed.';
+      setStatus(err.message || 'Unable to save import screening.', 'err');
     }
   });
   bindBulkDelete('weeks', {
@@ -2064,6 +2826,11 @@ async function adminChildDetail(studentId, opts = {}) {
     if (sessTo && d > sessTo) return false;
     return true;
   });
+  const childTab = ['basic', 'mandates', 'sessions', 'timesheet', 'files'].includes(state.childDetailTab)
+    ? state.childDetailTab
+    : 'basic';
+  const childTabBtn = (id, label) =>
+    `<button type="button" class="pane-tab${childTab === id ? ' on' : ''}" data-child-tab="${id}" role="tab">${label}</button>`;
   view(`
     <div class="card">
       <button type="button" class="btn" id="backChildren">${backLabel}</button>
@@ -2075,126 +2842,147 @@ async function adminChildDetail(studentId, opts = {}) {
           ? assignedProviders.map((p) => providerNameLink(p.id, p.name)).join(', ')
           : '—'
       }</p>
-      <div class="row">
-        <label>First name <input id="cFirst" value="${esc(s.firstName || '')}" /></label>
-        <label>Last name <input id="cLast" value="${esc(s.lastName || '')}" /></label>
+      <div class="pane-tabs" role="tablist">
+        ${childTabBtn('basic', 'Basic info')}
+        ${childTabBtn('mandates', 'Mandates')}
+        ${childTabBtn('sessions', 'Sessions')}
+        ${childTabBtn('timesheet', 'Timesheet')}
+        ${childTabBtn('files', 'Student files')}
       </div>
-      <div class="row">
-        <label>School
-          <select id="cSchool">${schoolOptions(schools, s.schoolId)}</select>
-        </label>
-        <label>Grade <input id="cGrade" value="${esc(s.grade || '')}" /></label>
+
+      <div class="detail-pane"${childTab === 'basic' ? '' : ' hidden'}>
+        <h3>Basic information</h3>
+        <div class="row">
+          <label>First name <input id="cFirst" value="${esc(s.firstName || '')}" /></label>
+          <label>Last name <input id="cLast" value="${esc(s.lastName || '')}" /></label>
+        </div>
+        <div class="row">
+          <label>School
+            <select id="cSchool">${schoolOptions(schools, s.schoolId)}</select>
+          </label>
+          <label>Grade <input id="cGrade" value="${esc(s.grade || '')}" /></label>
+        </div>
+        <div class="row">
+          <label>DOB <input id="cDob" value="${esc(s.dob || '')}" placeholder="YYYY-MM-DD" />
+            <span class="muted" style="display:block;font-size:0.85rem">Optional now; recommended before HHA transfer.</span>
+          </label>
+          <label>HHA patient id <input id="cHha" value="${esc(s.hhaPatientId || '')}" /></label>
+        </div>
+        <div class="row">
+          <label>Program id <input id="cProgId" value="${esc(s.programId || '')}" /></label>
+          <label>Program type <input id="cProgType" value="${esc(s.programType || '')}" /></label>
+        </div>
+        <button type="button" class="btn-primary" id="saveChild">Save child</button>
+        <button type="button" class="btn" id="deleteChild">Delete child</button>
       </div>
-      <div class="row">
-        <label>DOB <input id="cDob" value="${esc(s.dob || '')}" placeholder="YYYY-MM-DD" />
-          <span class="muted" style="display:block;font-size:0.85rem">Optional now; recommended before HHA transfer.</span>
-        </label>
-        <label>HHA patient id <input id="cHha" value="${esc(s.hhaPatientId || '')}" /></label>
+
+      <div class="detail-pane"${childTab === 'mandates' ? '' : ' hidden'}>
+        <h3>Mandates</h3>
+        ${bulkBar('child-mandates')}
+        <table>
+          <tr>${bulkTh('child-mandates')}<th>Discipline / service</th><th>Ratio</th><th>Group size</th><th>Duration</th><th>Frequency</th><th>Dates</th><th>Provider</th><th></th></tr>
+          ${mandates.map((m) => {
+            const service = [m.discipline, m.serviceType].filter(Boolean).join(' · ') || '—';
+            const billing = m.billingServiceName
+              ? `<div class="muted" style="font-size:0.85rem">${esc(m.billingServiceName)}</div>`
+              : '';
+            const dates = [m.startOn, m.endOn].filter(Boolean).join(' → ') || '—';
+            return `<tr>
+            ${bulkTd('child-mandates', m.id)}
+            <td>${esc(service)}${billing}</td>
+            <td>${esc(m.ratioLabel || (m.ratioGroup ? 'Group' : 'Individual'))}</td>
+            <td>${esc(mandateGroupSizeLabel(m))}</td>
+            <td>${esc(mandateDurationLabel(m))}</td>
+            <td>${esc(mandateFreqLabel(m))}</td>
+            <td>${esc(dates)}</td>
+            <td>${providerNameLink(m.providerId, m.providerName || '—')}</td>
+            <td>
+              <button type="button" class="btn" data-edit-mandate="${esc(m.id)}">Edit</button>
+              <button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete</button>
+            </td>
+          </tr>`;
+          }).join('') || '<tr><td colspan="9">No mandates on file.</td></tr>'}
+        </table>
+        <div id="editMandatePanel" class="entry-card" hidden style="margin-top:1rem"></div>
+        <h3 style="margin-top:1.25rem">Progress-report due dates</h3>
+        <p class="muted">School-level progress, annual, and reevaluation due dates for this child’s school. Child-specific notes appear when set on the school assignment.</p>
+        ${bulkBar('child-dues')}
+        <table>
+          <tr>${bulkTh('child-dues')}<th>Type</th><th>Due Date</th><th>Notes</th><th>Status</th><th></th></tr>
+          ${dueDates.map((d) => `<tr>
+            ${bulkTd('child-dues', d.id)}
+            <td>${esc(d.kind === 'annual' ? 'Annual' : d.kind === 'reeval' ? 'Reevaluation' : 'Progress')}</td>
+            <td>${esc(d.dueOn)}</td>
+            <td>${esc(d.notes || '—')}</td>
+            <td>${esc(d.status)}</td>
+            <td><button type="button" class="btn" data-del-due="${esc(d.id)}">Remove</button></td>
+          </tr>`).join('') || '<tr><td colspan="6">None for this school.</td></tr>'}
+        </table>
       </div>
-      <div class="row">
-        <label>Program id <input id="cProgId" value="${esc(s.programId || '')}" /></label>
-        <label>Program type <input id="cProgType" value="${esc(s.programType || '')}" /></label>
+
+      <div class="detail-pane"${childTab === 'sessions' ? '' : ' hidden'}>
+        <h3>Sessions</h3>
+        <div class="row">
+          <label>From <input id="sessFrom" type="date" value="${esc(sessFrom)}" /></label>
+          <label>To <input id="sessTo" type="date" value="${esc(sessTo)}" /></label>
+          <button type="button" class="btn" id="sessFilter">Filter</button>
+          <button type="button" class="btn" id="sessClear">Clear</button>
+        </div>
+        ${bulkBar('child-sessions')}
+        <table>
+          <tr>${bulkTh('child-sessions')}<th>Date</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
+          ${filteredSessions.map((x) => `<tr>
+            ${bulkTd('child-sessions', x.id)}
+            <td>${esc(x.dateOfService)}</td>
+            <td>${esc(x.weekStart || '—')}</td>
+            <td>${esc(x.weekStatus || '—')}</td>
+            <td>${esc(x.attendance)}</td>
+            <td>${esc(x.notes || '')}</td>
+            <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
+          </tr>`).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
+        </table>
       </div>
-      <button type="button" class="btn-primary" id="saveChild">Save child</button>
-      <button type="button" class="btn" id="deleteChild">Delete child</button>
-    </div>
-    <div class="card">
-      <h3>Mandates</h3>
-      ${bulkBar('child-mandates')}
-      <table>
-        <tr>${bulkTh('child-mandates')}<th>Discipline / service</th><th>Ratio</th><th>Group size</th><th>Duration</th><th>Frequency</th><th>Dates</th><th>Provider</th><th></th></tr>
-        ${mandates.map((m) => {
-          const service = [m.discipline, m.serviceType].filter(Boolean).join(' · ') || '—';
-          const billing = m.billingServiceName
-            ? `<div class="muted" style="font-size:0.85rem">${esc(m.billingServiceName)}</div>`
-            : '';
-          const dates = [m.startOn, m.endOn].filter(Boolean).join(' → ') || '—';
-          return `<tr>
-          ${bulkTd('child-mandates', m.id)}
-          <td>${esc(service)}${billing}</td>
-          <td>${esc(m.ratioLabel || (m.ratioGroup ? 'Group' : 'Individual'))}</td>
-          <td>${esc(mandateGroupSizeLabel(m))}</td>
-          <td>${esc(mandateDurationLabel(m))}</td>
-          <td>${esc(mandateFreqLabel(m))}</td>
-          <td>${esc(dates)}</td>
-          <td>${providerNameLink(m.providerId, m.providerName || '—')}</td>
-          <td>
-            <button type="button" class="btn" data-edit-mandate="${esc(m.id)}">Edit</button>
-            <button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete</button>
-          </td>
-        </tr>`;
-        }).join('') || '<tr><td colspan="9">No mandates on file.</td></tr>'}
-      </table>
-      <div id="editMandatePanel" class="entry-card" hidden style="margin-top:1rem"></div>
-    </div>
-    <div class="card">
-      <h3>Sessions</h3>
-      <div class="row">
-        <label>From <input id="sessFrom" type="date" value="${esc(sessFrom)}" /></label>
-        <label>To <input id="sessTo" type="date" value="${esc(sessTo)}" /></label>
-        <button type="button" class="btn" id="sessFilter">Filter</button>
-        <button type="button" class="btn" id="sessClear">Clear</button>
+
+      <div class="detail-pane"${childTab === 'timesheet' ? '' : ' hidden'}>
+        <h3 title="Weekly timesheet periods that include sessions for this child">Timesheet</h3>
+        <p class="muted">Weekly timesheet periods linked to this child’s sessions.</p>
+        ${bulkBar('child-weeks')}
+        <table>
+          <tr>${bulkTh('child-weeks')}<th>Week</th><th>Status</th><th>HHA</th><th></th></tr>
+          ${weeks.map((w) => `<tr>
+            ${bulkTd('child-weeks', w.id)}
+            <td>${esc(w.weekStart)}</td>
+            <td>${esc(w.status)}</td>
+            <td>${hhaStatusCell(w)}</td>
+            <td><button type="button" class="btn" data-del-week="${esc(w.id)}" data-week-status="${esc(w.status || '')}">Remove</button></td>
+          </tr>`).join('') || '<tr><td colspan="5">None.</td></tr>'}
+        </table>
       </div>
-      ${bulkBar('child-sessions')}
-      <table>
-        <tr>${bulkTh('child-sessions')}<th>Date</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
-        ${filteredSessions.map((x) => `<tr>
-          ${bulkTd('child-sessions', x.id)}
-          <td>${esc(x.dateOfService)}</td>
-          <td>${esc(x.weekStart || '—')}</td>
-          <td>${esc(x.weekStatus || '—')}</td>
-          <td>${esc(x.attendance)}</td>
-          <td>${esc(x.notes || '')}</td>
-          <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
-      </table>
-    </div>
-    <div class="card">
-      <h3 title="Weekly timesheet periods that include sessions for this child">Timesheet weeks</h3>
-      <p class="muted">Weekly timesheet periods linked to this child’s sessions.</p>
-      ${bulkBar('child-weeks')}
-      <table>
-        <tr>${bulkTh('child-weeks')}<th>Week</th><th>Status</th><th>HHA</th><th></th></tr>
-        ${weeks.map((w) => `<tr>
-          ${bulkTd('child-weeks', w.id)}
-          <td>${esc(w.weekStart)}</td>
-          <td>${esc(w.status)}</td>
-          <td>${hhaStatusCell(w)}</td>
-          <td><button type="button" class="btn" data-del-week="${esc(w.id)}" data-week-status="${esc(w.status || '')}">Remove</button></td>
-        </tr>`).join('') || '<tr><td colspan="5">None.</td></tr>'}
-      </table>
-    </div>
-    <div class="card">
-      <h3>Progress-report due dates</h3>
-      <p class="muted">School-level progress, annual, and reevaluation due dates for this child’s school.</p>
-      ${bulkBar('child-dues')}
-      <table>
-        <tr>${bulkTh('child-dues')}<th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
-        ${dueDates.map((d) => `<tr>
-          ${bulkTd('child-dues', d.id)}
-          <td>${esc(d.kind)}</td>
-          <td>${esc(d.dueOn)}</td>
-          <td>${esc(d.status)}</td>
-          <td><button type="button" class="btn" data-del-due="${esc(d.id)}">Remove</button></td>
-        </tr>`).join('') || '<tr><td colspan="5">None for this school.</td></tr>'}
-      </table>
-    </div>
-    <div class="card">
-      <h3 title="Uploaded PDFs and documents kept with this child">Student files</h3>
-      <p class="muted">Documents stored with this child (timesheets, notes PDFs, and related files).</p>
-      ${bulkBar('child-files')}
-      <table>
-        <tr>${bulkTh('child-files')}<th>Label</th><th>Kind</th><th>When</th><th></th></tr>
-        ${files.map((f) => `<tr>
-          ${bulkTd('child-files', f.id)}
-          <td>${esc(f.label || f.s3Key || '—')}</td>
-          <td>${esc(f.kind || '—')}</td>
-          <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
-          <td><button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="5">No files on file.</td></tr>'}
-      </table>
+
+      <div class="detail-pane"${childTab === 'files' ? '' : ' hidden'}>
+        <h3 title="Uploaded PDFs and documents kept with this child">Student files</h3>
+        <p class="muted">Documents stored with this child (timesheets, notes PDFs, and related files).</p>
+        ${bulkBar('child-files')}
+        <table>
+          <tr>${bulkTh('child-files')}<th>Label</th><th>Type</th><th>When</th><th></th></tr>
+          ${files.map((f) => `<tr>
+            ${bulkTd('child-files', f.id)}
+            <td>${esc(f.label || f.s3Key || '—')}</td>
+            <td>${esc(f.kind || '—')}</td>
+            <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
+            <td><button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button></td>
+          </tr>`).join('') || '<tr><td colspan="5">No files on file.</td></tr>'}
+        </table>
+      </div>
     </div>
   `);
+  document.querySelectorAll('[data-child-tab]').forEach((btn) => {
+    btn.onclick = () => {
+      state.childDetailTab = btn.getAttribute('data-child-tab') || 'basic';
+      sessionStorage.setItem('tmsChildDetailTab', state.childDetailTab);
+      adminChildDetail(studentId, { backTo: state.childDetailBack });
+    };
+  });
   const refreshChild = () => adminChildDetail(studentId, { backTo: state.childDetailBack });
   bindOpenProviderLinks();
   bindBulkDelete('child-mandates', {
@@ -2354,177 +3142,207 @@ async function adminProviderDetail(providerId) {
     if (sessTo && d > sessTo) return false;
     return true;
   });
+  const provTab = ['basic', 'pay', 'caseload', 'sessions', 'reports', 'notes'].includes(state.providerDetailTab)
+    ? state.providerDetailTab
+    : 'basic';
+  const provTabBtn = (id, label) =>
+    `<button type="button" class="pane-tab${provTab === id ? ' on' : ''}" data-provider-tab="${id}" role="tab">${label}</button>`;
   view(`
     <div class="card">
       <button type="button" class="btn" id="backProviders">← Providers</button>
       <h2>${esc(`${p.firstName || ''} ${p.lastName || ''}`.trim() || 'Provider')}</h2>
       <p class="muted">Linked account: ${esc(user?.email || '—')} · Cognito: ${esc(user?.cognitoSub || '—')}</p>
       ${detail.redirectedFromProviderId ? `<p class="muted">Caseload from a duplicate profile was merged into this linked provider.</p>` : ''}
-      <div class="row">
-        <label>First name <input id="pFirst" value="${esc(p.firstName || '')}" /></label>
-        <label>Last name <input id="pLast" value="${esc(p.lastName || '')}" /></label>
+      <div class="pane-tabs" role="tablist">
+        ${provTabBtn('basic', 'Basic info')}
+        ${provTabBtn('pay', 'Pay rates')}
+        ${provTabBtn('caseload', 'Caseload')}
+        ${provTabBtn('sessions', 'Sessions')}
+        ${provTabBtn('reports', 'Upload reports')}
+        ${provTabBtn('notes', 'Internal notes')}
       </div>
-      <div class="row">
-        <label>Email <input id="pEmail" type="email" value="${esc(user?.email || '')}" /></label>
-        <label>Discipline
-          <select id="pDisc">
-            ${['OT', 'PT', 'SLP'].map((d) => `<option ${p.discipline === d ? 'selected' : ''}>${d}</option>`).join('')}
+
+      <div class="detail-pane"${provTab === 'basic' ? '' : ' hidden'}>
+        <h3>Basic information</h3>
+        <div class="row">
+          <label>First name <input id="pFirst" value="${esc(p.firstName || '')}" /></label>
+          <label>Last name <input id="pLast" value="${esc(p.lastName || '')}" /></label>
+        </div>
+        <div class="row">
+          <label>Email <input id="pEmail" type="email" value="${esc(user?.email || '')}" /></label>
+          <label>Discipline
+            <select id="pDisc">
+              ${['OT', 'PT', 'SLP'].map((d) => `<option ${p.discipline === d ? 'selected' : ''}>${d}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>HHA caregiver code <input id="pHha" value="${esc(p.hhaCaregiverCode || '')}" /></label>
+          <label>Status
+            <select id="pActive">
+              <option value="true"${p.active !== false ? ' selected' : ''}>Active</option>
+              <option value="false"${p.active === false ? ' selected' : ''}>Inactive</option>
+            </select>
+          </label>
+        </div>
+        <button type="button" class="btn-primary" id="saveProvider">Save provider</button>
+        <button type="button" class="btn" id="deleteProvider">Delete provider</button>
+      </div>
+
+      <div class="detail-pane"${provTab === 'pay' ? '' : ' hidden'}>
+        <h3>Pay rates</h3>
+        ${payRatesFieldset(p, 'pRate')}
+        <button type="button" class="btn-primary" id="saveProviderPay">Save pay rates</button>
+      </div>
+
+      <div class="detail-pane"${provTab === 'caseload' ? '' : ' hidden'}>
+        <h3>Caseload (${esc(detail.caseloadCount || 0)} children)</h3>
+        <p class="muted">Drawn from this provider’s mandates (a child may appear under more than one provider).</p>
+        ${bulkBar('prov-mandates')}
+        <table>
+          <tr>${bulkTh('prov-mandates')}<th>Child</th><th>Service</th><th>Group size</th><th>Duration</th><th>Freq</th><th></th></tr>
+          ${mandates.map((m) => {
+            const billing = m.billingServiceName
+              ? `<div class="muted" style="font-size:0.85rem">${esc(m.billingServiceName)}</div>`
+              : '';
+            return `<tr>
+            ${bulkTd('prov-mandates', m.id)}
+            <td>${childNameLink(m.studentId, m.studentName || '—')}</td>
+            <td>${esc(m.serviceType || '—')}${billing}</td>
+            <td>${esc(mandateGroupSizeLabel(m))}</td>
+            <td>${esc(mandateDurationLabel(m))}</td>
+            <td>${esc(mandateFreqLabel(m))}</td>
+            <td>
+              <button type="button" class="btn" data-edit-mandate="${esc(m.id)}">Edit</button>
+              <button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete mandate</button>
+            </td>
+          </tr>`;
+          }).join('') || '<tr><td colspan="7">No mandates assigned.</td></tr>'}
+        </table>
+        <div id="editMandatePanel" class="entry-card" hidden style="margin-top:1rem"></div>
+      </div>
+
+      <div class="detail-pane"${provTab === 'sessions' ? '' : ' hidden'}>
+        <h3>Sessions</h3>
+        <p class="muted">All sessions for this provider (newest first). Filter by date of service as needed.</p>
+        <div class="row">
+          <label>From <input id="pSessFrom" type="date" value="${esc(sessFrom)}" /></label>
+          <label>To <input id="pSessTo" type="date" value="${esc(sessTo)}" /></label>
+          <button type="button" class="btn" id="pSessFilter">Filter</button>
+          <button type="button" class="btn" id="pSessClear">Clear</button>
+        </div>
+        ${bulkBar('prov-sessions')}
+        <table>
+          <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Child</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
+          ${filteredSessions.map((x) => `<tr>
+            ${bulkTd('prov-sessions', x.id)}
+            <td>${esc(x.dateOfService)}</td>
+            <td>${childNameLink(x.studentId, x.studentName || '—')}</td>
+            <td>${esc(x.weekStart || '—')}</td>
+            <td>${esc(x.weekStatus || '—')}</td>
+            <td>${esc(x.attendance)}</td>
+            <td>${esc(x.notes || '')}</td>
+            <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
+          </tr>`).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
+        </table>
+
+        <h3 style="margin-top:1.25rem">Import Frontline / Therapist Activity sessions</h3>
+        <p class="muted">Same as the therapist workspace: upload a Frontline or Therapist Activity PDF (text-based). No week selection needed — each session attaches to the week of its date of service (within the 14-day locker). Children and schools must already exist. Import is all-or-nothing for hard errors; yellow warnings follow the admin screening setting.</p>
+        <input id="pSessionPdf" type="file" accept="application/pdf,.pdf" />
+        <button type="button" class="btn-primary" id="pUploadSessions">Import sessions</button>
+        <div id="pUploadIssues" class="upload-issues" hidden></div>
+
+        <h3 style="margin-top:1.25rem">Generate timesheet</h3>
+        <p class="muted">Open or create a week for this provider, then view the timesheet.</p>
+        <div class="row">
+          <label>Week start (Monday) <input id="pWeekStart" type="date" value="${esc(mondayIso())}" /></label>
+          <button type="button" class="btn-primary" id="pGenTimesheet">View timesheet</button>
+        </div>
+
+        <h3 style="margin-top:1.25rem">Additional services</h3>
+        <p class="muted">Same service types as the therapist workspace, including paid absence.</p>
+        <div class="row">
+          <label>Service type
+            <select id="pAddlType">
+              <option value="">Select…</option>
+              ${additionalServiceOptions()}
+            </select>
+          </label>
+          <label>Child
+            <select id="pAddlStudent">${(mandates || []).map((m) => `<option value="${esc(m.studentId)}">${esc(m.studentName || m.studentId)}</option>`).join('') || '<option value="">No caseload children</option>'}</select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Date of service <input id="pAddlDos" placeholder="MM/DD/YYYY" /></label>
+          <label>Begin / end
+            <div class="row">
+              <input id="pAddlBegin" placeholder="9:00 am" />
+              <input id="pAddlEnd" placeholder="9:30 am" />
+            </div>
+          </label>
+        </div>
+        <label>Notes <textarea id="pAddlNotes" rows="2"></textarea></label>
+        <label>CPT code <input id="pAddlCpt" placeholder="97110x2" /></label>
+        <button type="button" class="btn" id="pAddlSave">Save additional service</button>
+      </div>
+
+      <div class="detail-pane"${provTab === 'reports' ? '' : ' hidden'}>
+        <h3>Upload reports</h3>
+        <p class="muted">Admins can upload provider reports and documents here.</p>
+        <input id="pReportFile" type="file" />
+        <label>Label <input id="pReportLabel" placeholder="IEP / progress / other" /></label>
+        <button type="button" class="btn" id="pUploadReport">Upload report</button>
+        ${bulkBar('prov-files')}
+        <table>
+          <tr>${bulkTh('prov-files')}<th>Label</th><th>When</th><th></th></tr>
+          ${(detail.files || []).map((f) => `<tr>
+            ${bulkTd('prov-files', f.id)}
+            <td>${esc(f.label || f.s3Key)}</td>
+            <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
+            <td><button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button></td>
+          </tr>`).join('') || '<tr><td colspan="4">No files on file.</td></tr>'}
+        </table>
+      </div>
+
+      <div class="detail-pane"${provTab === 'notes' ? '' : ' hidden'}>
+        <h3>Internal notes</h3>
+        <p class="muted">Visible to administrators only. Tag notes to support later filtering.</p>
+        <label>Filter by tag
+          <select id="pNoteFilter">
+            <option value="">All</option>
+            ${(detail.noteTagOptions || ['Session note follow up', 'Gap in service']).map((t) => `<option>${esc(t)}</option>`).join('')}
           </select>
         </label>
+        <label>New note <textarea id="pNoteBody" rows="3"></textarea></label>
+        <div class="row" id="pNoteTags">
+          ${(detail.noteTagOptions || ['Session note follow up', 'Gap in service']).map((t) =>
+            `<label class="chk"><input type="checkbox" data-new-tag value="${esc(t)}" /> ${esc(t)}</label>`,
+          ).join('')}
+        </div>
+        <label>Add tag <input id="pNoteTagCustom" placeholder="New tag name" /></label>
+        <button type="button" class="btn" id="pAddNote">Add note</button>
+        <table>
+          <tr><th>When</th><th>Tags</th><th>Note</th><th></th></tr>
+          ${notes.slice().reverse().map((n) => `<tr data-note-tags="${esc((n.tags || []).join('|').toLowerCase())}">
+            <td>${esc((n.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
+            <td>${(n.tags || []).map((t) => `<span class="status-chip">${esc(t)}</span>`).join(' ') || '—'}</td>
+            <td><textarea data-note-body="${esc(n.id)}" rows="2">${esc(n.body || '')}</textarea></td>
+            <td>
+              <button type="button" class="btn" data-save-note="${esc(n.id)}">Save</button>
+              <button type="button" class="btn" data-del-note="${esc(n.id)}">Delete</button>
+            </td>
+          </tr>`).join('') || '<tr><td colspan="4">No notes yet.</td></tr>'}
+        </table>
       </div>
-      <div class="row">
-        <label>HHA caregiver code <input id="pHha" value="${esc(p.hhaCaregiverCode || '')}" /></label>
-        <label>Status
-          <select id="pActive">
-            <option value="true"${p.active !== false ? ' selected' : ''}>Active</option>
-            <option value="false"${p.active === false ? ' selected' : ''}>Inactive</option>
-          </select>
-        </label>
-      </div>
-      ${payRatesFieldset(p, 'pRate')}
-      <button type="button" class="btn-primary" id="saveProvider">Save provider</button>
-      <button type="button" class="btn" id="deleteProvider">Delete provider</button>
-    </div>
-    <div class="card">
-      <h3>Caseload (${esc(detail.caseloadCount || 0)} children)</h3>
-      <p class="muted">Drawn from this provider’s mandates (a child may appear under more than one provider).</p>
-      ${bulkBar('prov-mandates')}
-      <table>
-        <tr>${bulkTh('prov-mandates')}<th>Child</th><th>Service</th><th>Group size</th><th>Duration</th><th>Freq</th><th></th></tr>
-        ${mandates.map((m) => {
-          const billing = m.billingServiceName
-            ? `<div class="muted" style="font-size:0.85rem">${esc(m.billingServiceName)}</div>`
-            : '';
-          return `<tr>
-          ${bulkTd('prov-mandates', m.id)}
-          <td>${childNameLink(m.studentId, m.studentName || '—')}</td>
-          <td>${esc(m.serviceType || '—')}${billing}</td>
-          <td>${esc(mandateGroupSizeLabel(m))}</td>
-          <td>${esc(mandateDurationLabel(m))}</td>
-          <td>${esc(mandateFreqLabel(m))}</td>
-          <td>
-            <button type="button" class="btn" data-edit-mandate="${esc(m.id)}">Edit</button>
-            <button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete mandate</button>
-          </td>
-        </tr>`;
-        }).join('') || '<tr><td colspan="7">No mandates assigned.</td></tr>'}
-      </table>
-      <div id="editMandatePanel" class="entry-card" hidden style="margin-top:1rem"></div>
-    </div>
-    <div class="card">
-      <h3>Sessions</h3>
-      <p class="muted">All sessions for this provider (newest first). Filter by date of service as needed.</p>
-      <div class="row">
-        <label>From <input id="pSessFrom" type="date" value="${esc(sessFrom)}" /></label>
-        <label>To <input id="pSessTo" type="date" value="${esc(sessTo)}" /></label>
-        <button type="button" class="btn" id="pSessFilter">Filter</button>
-        <button type="button" class="btn" id="pSessClear">Clear</button>
-      </div>
-      ${bulkBar('prov-sessions')}
-      <table>
-        <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Child</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
-        ${filteredSessions.map((x) => `<tr>
-          ${bulkTd('prov-sessions', x.id)}
-          <td>${esc(x.dateOfService)}</td>
-          <td>${childNameLink(x.studentId, x.studentName || '—')}</td>
-          <td>${esc(x.weekStart || '—')}</td>
-          <td>${esc(x.weekStatus || '—')}</td>
-          <td>${esc(x.attendance)}</td>
-          <td>${esc(x.notes || '')}</td>
-          <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
-      </table>
-    </div>
-    <div class="card">
-      <h3>Import Frontline / Therapist Activity sessions</h3>
-      <p class="muted">Same as the therapist workspace: upload a Frontline or Therapist Activity PDF (text-based). No week selection needed — each session attaches to the week of its date of service (within the 14-day locker). Children and schools must already exist. Import is all-or-nothing.</p>
-      <input id="pSessionPdf" type="file" accept="application/pdf,.pdf" />
-      <button type="button" class="btn-primary" id="pUploadSessions">Import sessions</button>
-      <div id="pUploadIssues" class="upload-issues" hidden></div>
-    </div>
-    <div class="card">
-      <h3>Generate timesheet</h3>
-      <p class="muted">Open or create a week for this provider, then view the timesheet.</p>
-      <div class="row">
-        <label>Week start (Monday) <input id="pWeekStart" type="date" value="${esc(mondayIso())}" /></label>
-        <button type="button" class="btn-primary" id="pGenTimesheet">View timesheet</button>
-      </div>
-    </div>
-    <div class="card">
-      <h3>Additional services</h3>
-      <p class="muted">Same service types as the therapist workspace, including paid absence.</p>
-      <div class="row">
-        <label>Service type
-          <select id="pAddlType">
-            <option value="">Select…</option>
-            ${additionalServiceOptions()}
-          </select>
-        </label>
-        <label>Child
-          <select id="pAddlStudent">${(mandates || []).map((m) => `<option value="${esc(m.studentId)}">${esc(m.studentName || m.studentId)}</option>`).join('') || '<option value="">No caseload children</option>'}</select>
-        </label>
-      </div>
-      <div class="row">
-        <label>Date of service <input id="pAddlDos" placeholder="MM/DD/YYYY" /></label>
-        <label>Begin / end
-          <div class="row">
-            <input id="pAddlBegin" placeholder="9:00 am" />
-            <input id="pAddlEnd" placeholder="9:30 am" />
-          </div>
-        </label>
-      </div>
-      <label>Notes <textarea id="pAddlNotes" rows="2"></textarea></label>
-      <label>CPT code <input id="pAddlCpt" placeholder="97110x2" /></label>
-      <button type="button" class="btn" id="pAddlSave">Save additional service</button>
-    </div>
-    <div class="card">
-      <h3>Upload reports</h3>
-      <p class="muted">Admins can upload provider reports and documents here.</p>
-      <input id="pReportFile" type="file" />
-      <label>Label <input id="pReportLabel" placeholder="IEP / progress / other" /></label>
-      <button type="button" class="btn" id="pUploadReport">Upload report</button>
-      ${bulkBar('prov-files')}
-      <table>
-        <tr>${bulkTh('prov-files')}<th>Label</th><th>When</th><th></th></tr>
-        ${(detail.files || []).map((f) => `<tr>
-          ${bulkTd('prov-files', f.id)}
-          <td>${esc(f.label || f.s3Key)}</td>
-          <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
-          <td><button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button></td>
-        </tr>`).join('') || '<tr><td colspan="4">No files on file.</td></tr>'}
-      </table>
-    </div>
-    <div class="card">
-      <h3>Internal notes</h3>
-      <p class="muted">Visible to administrators only. Tag notes to support later filtering.</p>
-      <label>Filter by tag
-        <select id="pNoteFilter">
-          <option value="">All</option>
-          ${(detail.noteTagOptions || ['Session note follow up', 'Gap in service']).map((t) => `<option>${esc(t)}</option>`).join('')}
-        </select>
-      </label>
-      <label>New note <textarea id="pNoteBody" rows="3"></textarea></label>
-      <div class="row" id="pNoteTags">
-        ${(detail.noteTagOptions || ['Session note follow up', 'Gap in service']).map((t) =>
-          `<label class="chk"><input type="checkbox" data-new-tag value="${esc(t)}" /> ${esc(t)}</label>`,
-        ).join('')}
-      </div>
-      <label>Add tag <input id="pNoteTagCustom" placeholder="New tag name" /></label>
-      <button type="button" class="btn" id="pAddNote">Add note</button>
-      <table>
-        <tr><th>When</th><th>Tags</th><th>Note</th><th></th></tr>
-        ${notes.slice().reverse().map((n) => `<tr data-note-tags="${esc((n.tags || []).join('|').toLowerCase())}">
-          <td>${esc((n.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
-          <td>${(n.tags || []).map((t) => `<span class="status-chip">${esc(t)}</span>`).join(' ') || '—'}</td>
-          <td><textarea data-note-body="${esc(n.id)}" rows="2">${esc(n.body || '')}</textarea></td>
-          <td>
-            <button type="button" class="btn" data-save-note="${esc(n.id)}">Save</button>
-            <button type="button" class="btn" data-del-note="${esc(n.id)}">Delete</button>
-          </td>
-        </tr>`).join('') || '<tr><td colspan="4">No notes yet.</td></tr>'}
-      </table>
     </div>
   `);
+  document.querySelectorAll('[data-provider-tab]').forEach((btn) => {
+    btn.onclick = () => {
+      state.providerDetailTab = btn.getAttribute('data-provider-tab') || 'basic';
+      sessionStorage.setItem('tmsProviderDetailTab', state.providerDetailTab);
+      adminProviderDetail(providerId);
+    };
+  });
   const refreshProvider = () => adminProviderDetail(providerId);
   bindBulkDelete('prov-mandates', {
     noun: 'mandates',
@@ -2573,31 +3391,45 @@ async function adminProviderDetail(providerId) {
     });
   });
   document.getElementById('backProviders').onclick = () => adminProviders();
-  document.getElementById('saveProvider').onclick = async () => {
+  const saveProviderBasic = async () => {
+    await api('PATCH', `/admin/providers/${providerId}`, {
+      firstName: document.getElementById('pFirst').value,
+      lastName: document.getElementById('pLast').value,
+      email: document.getElementById('pEmail').value,
+      discipline: document.getElementById('pDisc').value,
+      hhaCaregiverCode: document.getElementById('pHha').value,
+      active: document.getElementById('pActive')?.value !== 'false',
+    });
+  };
+  const saveProviderPayRates = async () => {
+    await api('PATCH', `/admin/providers/${providerId}`, {
+      ...readPayRatesFromIds({
+        min30: 'pRate30',
+        min42: 'pRate42',
+        min45: 'pRate45',
+        hour: 'pRateHour',
+        g30: 'pRateG30',
+        g42: 'pRateG42',
+        g45: 'pRateG45',
+        eval: 'pRateEval',
+        extra: 'pRateExtra',
+      }),
+    });
+  };
+  document.getElementById('saveProvider')?.addEventListener('click', async () => {
     try {
-      await api('PATCH', `/admin/providers/${providerId}`, {
-        firstName: document.getElementById('pFirst').value,
-        lastName: document.getElementById('pLast').value,
-        email: document.getElementById('pEmail').value,
-        discipline: document.getElementById('pDisc').value,
-        ...readPayRatesFromIds({
-          min30: 'pRate30',
-          min42: 'pRate42',
-          min45: 'pRate45',
-          hour: 'pRateHour',
-          g30: 'pRateG30',
-          g42: 'pRateG42',
-          g45: 'pRateG45',
-          eval: 'pRateEval',
-          extra: 'pRateExtra',
-        }),
-        hhaCaregiverCode: document.getElementById('pHha').value,
-        active: document.getElementById('pActive')?.value !== 'false',
-      });
+      await saveProviderBasic();
       setStatus('Provider saved.', 'ok');
       await adminProviders();
     } catch (e) { setStatus(e.message, 'err'); }
-  };
+  });
+  document.getElementById('saveProviderPay')?.addEventListener('click', async () => {
+    try {
+      await saveProviderPayRates();
+      setStatus('Pay rates saved.', 'ok');
+      await refreshProvider();
+    } catch (e) { setStatus(e.message, 'err'); }
+  });
   document.getElementById('deleteProvider').onclick = async () => {
     try {
       if (!confirm('Remove this provider? The profile and internal notes will be deleted, and the linked therapist account will be deactivated. Mandates remain but become unassigned. This cannot be undone.')) return;
@@ -2661,6 +3493,7 @@ async function adminProviderDetail(providerId) {
       const pdfBase64 = await fileToBase64(file);
       const out = await api('POST', '/week/upload-sessions', {
         providerId,
+        fileName: file.name || '',
         pdfBase64,
       });
       const warnList = Array.isArray(out.warnings) ? out.warnings : [];
@@ -2842,10 +3675,27 @@ async function adminSchoolDetail(schoolId) {
     (calendarEmpty
       ? `No school calendar for ${school.name || 'this school'} — falling back to Mon–Fri (weekends excluded; no holiday off-days).`
       : '');
+  const setup = schoolSetupFromApi(
+    school,
+    cal,
+    typeof detail.setupIncomplete === 'boolean'
+      ? {
+          incomplete: detail.setupIncomplete,
+          missingCalendar: detail.setupMissingCalendar,
+          missingAddress: detail.setupMissingAddress,
+          message: detail.setupIncompleteMessage,
+        }
+      : null,
+  );
+  const setupBanner = setup.incomplete
+    ? `<div class="err-box school-setup-banner"><strong>School setup incomplete</strong><p>${esc(setup.message || 'This school needs a calendar and/or address.')}</p>
+        <ul>${setup.missingCalendar ? '<li>Add a school calendar (first day, last day, off days).</li>' : ''}${setup.missingAddress ? '<li>Add a full address (street, city, state, zip) for HHA CreatePatient.</li>' : ''}</ul></div>`
+    : '';
   view(`
     <div class="card">
       <button type="button" class="btn" id="backSchools">← Schools</button>
-      <h2>${esc(school.name || 'School')}</h2>
+      <h2 class="${setup.incomplete ? 'school-name-incomplete' : ''}">${esc(school.name || 'School')}</h2>
+      ${setupBanner}
       <p class="muted">${esc(detail.studentCount || 0)} children on caseload</p>
       <div class="row">
         <label>School name <input id="sname" value="${esc(school.name || '')}" /></label>
@@ -2888,29 +3738,51 @@ async function adminSchoolDetail(schoolId) {
       <label>Paste off days (one YYYY-MM-DD per line)
         <textarea id="calOffDaysPaste" rows="3" placeholder="2026-11-27&#10;2026-12-25"></textarea>
       </label>
+      <div class="cal-pdf-upload">
+        <h4>Upload calendar PDF</h4>
+        <p class="muted">Text-based district calendars that list holidays/closed days (e.g. “Thanksgiving Recess Nov 27–28, 2025”). Scanned image-only PDFs will not work.</p>
+        <div class="row">
+          <label>Calendar PDF <input id="calPdfFile" type="file" accept="application/pdf,.pdf" /></label>
+          <button type="button" class="btn" id="calParsePdf">Parse PDF</button>
+        </div>
+        <div id="calPdfPreview" class="cal-pdf-preview" hidden></div>
+      </div>
       <button type="button" class="btn-primary" id="calSave">Save calendar</button>
       ${calSummary ? `<p class="muted" style="margin-top:0.5rem">Saved: ${esc(calSummary)}</p>` : ''}
     </div>
     <div class="card">
       <h3>Progress-report due dates</h3>
-      <p class="muted">One due date per kind (progress, annual, or reevaluation) applies to this school’s full caseload.</p>
+      <p class="muted">Assign report due dates for this school. Use <strong>Notes</strong> for school-wide context or a specific child name (e.g. “only for child X”). Multiple assignments of the same type are allowed.</p>
+      <input type="hidden" id="dueEditId" value="" />
       <div class="row">
-        <label>Kind
-          <select id="dueKind"><option value="progress">progress</option><option value="annual">annual</option><option value="reeval">reeval</option></select>
+        <label>Type
+          <select id="dueKind">
+            <option value="progress">Progress</option>
+            <option value="annual">Annual</option>
+            <option value="reeval">Reevaluation</option>
+          </select>
         </label>
-        <label>Due on (YYYY-MM-DD) <input id="dueOn" placeholder="2026-10-15" /></label>
+        <label>Due Date <input id="dueOn" type="date" /></label>
       </div>
-      <button type="button" class="btn" id="duebtn">Save due date</button>
+      <label>Notes <input id="dueNotes" placeholder="e.g. only for child X, or school-wide note" /></label>
+      <div class="row">
+        <button type="button" class="btn-primary" id="duebtn">Add due date</button>
+        <button type="button" class="btn" id="dueCancelEdit" hidden>Cancel edit</button>
+      </div>
       ${bulkBar('school-dues')}
       <table>
-        <tr>${bulkTh('school-dues')}<th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
+        <tr>${bulkTh('school-dues')}<th>Type</th><th>Due Date</th><th>Notes</th><th>Status</th><th></th></tr>
         ${dueDates.map((r) => `<tr>
           ${bulkTd('school-dues', r.id)}
-          <td>${esc(r.kind)}</td>
+          <td>${esc(r.kind === 'annual' ? 'Annual' : r.kind === 'reeval' ? 'Reevaluation' : 'Progress')}</td>
           <td>${esc(r.dueOn)}</td>
+          <td>${esc(r.notes || '—')}</td>
           <td>${esc(r.status)}</td>
-          <td><button type="button" class="btn" data-del-due="${esc(r.id)}">Remove</button></td>
-        </tr>`).join('') || '<tr><td colspan="5">None yet</td></tr>'}
+          <td>
+            <button type="button" class="btn" data-edit-due="${esc(r.id)}">Edit</button>
+            <button type="button" class="btn" data-del-due="${esc(r.id)}">Remove</button>
+          </td>
+        </tr>`).join('') || '<tr><td colspan="6">None yet</td></tr>'}
       </table>
     </div>
   `);
@@ -2939,6 +3811,53 @@ async function adminSchoolDetail(schoolId) {
     document.getElementById('calOffDayPick').value = '';
     renderCalOffDays();
   };
+  document.getElementById('calParsePdf').onclick = async () => {
+    const preview = document.getElementById('calPdfPreview');
+    try {
+      const file = document.getElementById('calPdfFile')?.files?.[0];
+      if (!file) {
+        setStatus('Choose a school calendar PDF first.', 'err');
+        return;
+      }
+      setStatus('Reading calendar PDF…', 'ok');
+      const pdfBase64 = await fileToBase64(file);
+      const res = await api('POST', `/admin/schools/${schoolId}/calendar/parse`, { pdfBase64 });
+      const parsed = res.parsed || {};
+      const proposed = res.proposed || {};
+      const extracted = Array.isArray(parsed.offDays) ? parsed.offDays : [];
+      if (proposed.yearStart) document.getElementById('calYearStart').value = proposed.yearStart;
+      if (proposed.yearEnd) document.getElementById('calYearEnd').value = proposed.yearEnd;
+      calOffDays = [...new Set([...(proposed.offDays || []), ...calOffDays])].sort();
+      renderCalOffDays();
+      const warnLines = Array.isArray(parsed.warnings) ? parsed.warnings : [];
+      const sample = extracted.slice(0, 12).map((d) => esc(d)).join(', ');
+      const more = extracted.length > 12 ? ` … (+${extracted.length - 12} more)` : '';
+      if (preview) {
+        preview.hidden = false;
+        preview.className = extracted.length ? 'cal-pdf-preview ok-box' : 'cal-pdf-preview warn-box';
+        preview.innerHTML = `
+          <strong>${esc(res.message || `Parsed ${extracted.length} off day(s).`)}</strong>
+          ${proposed.yearStart || proposed.yearEnd ? `<p>First/last: ${esc(proposed.yearStart || '—')} → ${esc(proposed.yearEnd || '—')}</p>` : ''}
+          ${extracted.length ? `<p>Off days preview: ${sample}${more}</p>` : ''}
+          ${warnLines.length ? `<p>${warnLines.map((w) => esc(w)).join('<br/>')}</p>` : ''}
+          <p class="muted">Review the list above, then click <strong>Save calendar</strong> to keep these dates.</p>
+        `;
+      }
+      setStatus(
+        extracted.length
+          ? `Parsed ${extracted.length} off day(s) from PDF — review and save.`
+          : (res.message || 'No off days found in PDF.'),
+        extracted.length ? 'ok' : 'err',
+      );
+    } catch (e) {
+      if (preview) {
+        preview.hidden = false;
+        preview.className = 'cal-pdf-preview warn-box';
+        preview.innerHTML = `<strong>${esc(e.message || 'PDF parse failed.')}</strong>`;
+      }
+      setStatus(e.message, 'err');
+    }
+  };
   document.getElementById('calSave').onclick = async () => {
     try {
       const paste = document.getElementById('calOffDaysPaste').value || '';
@@ -2951,6 +3870,7 @@ async function adminSchoolDetail(schoolId) {
       });
       setStatus('School calendar saved.', 'ok');
       await adminSchoolDetail(schoolId);
+      void refreshSchoolsSetupBadge();
     } catch (e) { setStatus(e.message, 'err'); }
   };
   document.getElementById('backSchools').onclick = () => adminSchools();
@@ -2969,6 +3889,7 @@ async function adminSchoolDetail(schoolId) {
       });
       setStatus('School saved.', 'ok');
       await adminSchoolDetail(schoolId);
+      void refreshSchoolsSetupBadge();
     } catch (e) { setStatus(e.message, 'err'); }
   };
   document.getElementById('deleteSchool').onclick = async () => {
@@ -2981,16 +3902,50 @@ async function adminSchoolDetail(schoolId) {
   };
   document.getElementById('duebtn').onclick = async () => {
     try {
-      await api('POST', '/admin/due-dates', {
+      const editId = (document.getElementById('dueEditId')?.value || '').trim();
+      const payload = {
         schoolId,
         kind: document.getElementById('dueKind').value,
         dueOn: document.getElementById('dueOn').value,
-      });
-      setStatus('Progress-report due date saved. Alerts remain until marked complete.', 'ok');
+        notes: document.getElementById('dueNotes').value,
+      };
+      if (editId) payload.id = editId;
+      await api('POST', '/admin/due-dates', payload);
+      setStatus(editId ? 'Due date updated.' : 'Progress-report due date saved. Alerts remain until marked complete.', 'ok');
       document.getElementById('dueOn').value = '';
+      document.getElementById('dueNotes').value = '';
+      document.getElementById('dueEditId').value = '';
+      document.getElementById('duebtn').textContent = 'Add due date';
+      const cancelBtn = document.getElementById('dueCancelEdit');
+      if (cancelBtn) cancelBtn.hidden = true;
       await adminSchoolDetail(schoolId);
     } catch (e) { setStatus(e.message, 'err'); }
   };
+  const dueCancelEdit = document.getElementById('dueCancelEdit');
+  if (dueCancelEdit) {
+    dueCancelEdit.onclick = () => {
+      document.getElementById('dueEditId').value = '';
+      document.getElementById('dueOn').value = '';
+      document.getElementById('dueNotes').value = '';
+      document.getElementById('dueKind').value = 'progress';
+      document.getElementById('duebtn').textContent = 'Add due date';
+      dueCancelEdit.hidden = true;
+    };
+  }
+  document.querySelectorAll('[data-edit-due]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-edit-due');
+      const row = dueDates.find((d) => d.id === id);
+      if (!row) return;
+      document.getElementById('dueEditId').value = row.id;
+      document.getElementById('dueKind').value = row.kind === 'annual' || row.kind === 'reeval' ? row.kind : 'progress';
+      document.getElementById('dueOn').value = row.dueOn || '';
+      document.getElementById('dueNotes').value = row.notes || '';
+      document.getElementById('duebtn').textContent = 'Save changes';
+      if (dueCancelEdit) dueCancelEdit.hidden = false;
+      document.getElementById('dueNotes')?.focus();
+    });
+  });
   bindBulkDelete('school-dues', {
     noun: 'due dates',
     deleteOne: (id) => api('DELETE', `/admin/due-dates/${id}`),
@@ -3179,6 +4134,27 @@ async function adminSchools(opts = {}) {
   const schoolsOut = await api('GET', '/admin/schools');
   const schools = schoolsOut.schools || [];
   const calendarsBySchoolId = schoolsOut.calendarsBySchoolId || {};
+  const setupBySchoolId = schoolsOut.setupBySchoolId || {};
+  const incompleteSchools = schools
+    .map((s) => ({
+      school: s,
+      setup: schoolSetupFromApi(s, calendarsBySchoolId[s.id], setupBySchoolId[s.id]),
+    }))
+    .filter((x) => x.setup.incomplete);
+  updateSchoolsSetupBadge(incompleteSchools.length);
+  const setupAlert = incompleteSchools.length
+    ? `<div class="err-box school-setup-banner status-banner">
+        <strong>${incompleteSchools.length === 1 ? '1 school needs setup' : `${incompleteSchools.length} schools need setup`}</strong>
+        <p>Schools stay red until a calendar and full address are saved (address is required for HHA CreatePatient).</p>
+        <ul>${incompleteSchools.map(({ school: s, setup }) => {
+          const needs = [
+            setup.missingCalendar ? 'calendar' : '',
+            setup.missingAddress ? 'address' : '',
+          ].filter(Boolean).join(' + ');
+          return `<li><button type="button" class="linkish school-name-incomplete" data-open-school="${esc(s.id)}">${esc(s.name)}</button> — needs ${esc(needs)}</li>`;
+        }).join('')}</ul>
+      </div>`
+    : '';
   view(`
     <div class="card entry-card">
       <div class="entry-collapsed" id="addSchoolCollapsed">
@@ -3195,26 +4171,35 @@ async function adminSchools(opts = {}) {
         </div>
       </div>
     </div>
+    ${setupAlert}
     <div class="card">
       <h2>Schools</h2>
-      <p class="muted">Open a school to manage the signer, progress-report due dates, and calendar.</p>
+      <p class="muted">Open a school to manage the signer, address, progress-report due dates, and calendar. Incomplete schools are shown in red until calendar and address are set.</p>
       ${bulkBar('schools')}
       <table>
-        <tr>${bulkTh('schools')}<th>School</th><th>Signer</th><th>Calendar</th><th></th></tr>
+        <tr>${bulkTh('schools')}<th>School</th><th>Signer</th><th>Setup</th><th>Calendar</th><th></th></tr>
         ${schools.map((s) => {
           const cal = calendarsBySchoolId[s.id];
           const summary = formatCalendarSummary(cal);
-          return `<tr>
+          const setup = schoolSetupFromApi(s, cal, setupBySchoolId[s.id]);
+          const setupLabel = setup.incomplete
+            ? [
+                setup.missingCalendar ? 'Calendar' : '',
+                setup.missingAddress ? 'Address' : '',
+              ].filter(Boolean).join(' + ') || 'Incomplete'
+            : 'Ready';
+          return `<tr class="${setup.incomplete ? 'school-row-incomplete' : ''}">
           ${bulkTd('schools', s.id)}
-          <td><button type="button" class="linkish" data-open-school="${esc(s.id)}">${esc(s.name)}</button></td>
+          <td><button type="button" class="linkish ${setup.incomplete ? 'school-name-incomplete' : ''}" data-open-school="${esc(s.id)}">${esc(s.name)}</button></td>
           <td>${esc(s.signerName || s.signerEmail || '')}</td>
+          <td>${setup.incomplete ? `<span class="school-setup-flag">${esc(`Needs ${setupLabel}`)}</span>` : '<span class="muted">Ready</span>'}</td>
           <td>${summary ? esc(summary) : '<span class="muted">Not set</span>'}</td>
           <td>
             <button type="button" class="btn" data-open-school="${esc(s.id)}">Open</button>
             <button type="button" class="btn" data-del-school="${esc(s.id)}">Remove</button>
           </td>
         </tr>`;
-        }).join('') || '<tr><td colspan="5">None</td></tr>'}
+        }).join('') || '<tr><td colspan="6">None</td></tr>'}
       </table>
     </div>
   `);
@@ -3465,7 +4450,7 @@ async function adminMandates() {
       </div>
       <div id="addMandateForm" hidden>
         <h2>Add mandate manually</h2>
-        <p class="muted">Kind: <strong>Weekly</strong> (standard frequency), <strong>6-Day Cycle</strong>, <strong>Monthly</strong>, or <strong>Makeup auth</strong> (remaining session pool). Unlinked makeups use Makeup auth; miss-linked makeups do not.</p>
+        <p class="muted">Type: <strong>Weekly</strong> (standard frequency), <strong>6-Day Cycle</strong>, <strong>Monthly</strong>, or <strong>Makeup auth</strong> (remaining session pool). Unlinked makeups use Makeup auth; miss-linked makeups do not.</p>
         <div class="row">
           <label>Student
             <select id="manStudent">${studentOptions(students)}</select>
@@ -3476,7 +4461,7 @@ async function adminMandates() {
         </div>
         <div class="row">
           <label>Service type <input id="manService" placeholder="PT School" /></label>
-          <label>Kind
+          <label>Type
             <select id="manKind">
               <option value="regular">Weekly</option>
               <option value="makeup_auth">Makeup auth</option>
@@ -3602,13 +4587,14 @@ async function adminMandates() {
       const durationRaw = document.getElementById('manDuration').value;
       const groupSizeRaw = document.getElementById('manGroupSize').value;
       const durationMinutes = durationRaw === '' ? null : Number(durationRaw);
-      const groupSize = groupSizeRaw === '' ? null : Number(groupSizeRaw);
+      const ratioGroup = document.getElementById('manRatio').value === 'group';
+      const groupSize = groupSizeRaw === '' ? (ratioGroup ? 2 : 1) : Number(groupSizeRaw);
       if (!studentId) throw new Error('Select a student.');
       if (!Number.isFinite(freq) || freq < 0) throw new Error('Enter frequency or makeup count.');
       if (durationMinutes != null && (!Number.isFinite(durationMinutes) || durationMinutes <= 0)) {
         throw new Error('Duration must be a positive number of minutes.');
       }
-      if (groupSize != null && (!Number.isFinite(groupSize) || groupSize <= 0)) {
+      if (!Number.isFinite(groupSize) || groupSize <= 0) {
         throw new Error('Group size must be a positive number.');
       }
       const out = await api('POST', '/admin/mandates', {
@@ -3616,7 +4602,7 @@ async function adminMandates() {
         providerId: document.getElementById('manProvider').value,
         serviceType: document.getElementById('manService').value || (mandateKind === 'makeup_auth' ? 'Makeup authorization' : ''),
         mandateKind,
-        ratioGroup: document.getElementById('manRatio').value === 'group',
+        ratioGroup,
         durationMinutes,
         groupSize,
         frequencyKind: document.getElementById('manPeriod').value,
@@ -3671,6 +4657,8 @@ function bindReportDetailChrome() {
   document.getElementById('view').onclick = async (e) => {
     const openChild = e.target.closest('[data-open-child]');
     if (openChild) {
+      state.childDetailTab = 'basic';
+      sessionStorage.setItem('tmsChildDetailTab', 'basic');
       adminChildDetail(openChild.getAttribute('data-open-child'), { backTo: 'reports' });
       return;
     }
@@ -3902,8 +4890,8 @@ async function adminReportDueDates() {
         <button type="button" class="btn" id="duesXlsx">Export Excel</button>
       </div>
       ${bulkBar('report-dues')}
-      <table><tr>${bulkTh('report-dues')}<th>School</th><th>Kind</th><th>Due</th><th>Status</th><th></th></tr>
-      <tbody id="duesBody"><tr><td colspan="6">Loading…</td></tr></tbody>
+      <table><tr>${bulkTh('report-dues')}<th>School</th><th>Type</th><th>Due Date</th><th>Notes</th><th>Status</th><th></th></tr>
+      <tbody id="duesBody"><tr><td colspan="7">Loading…</td></tr></tbody>
       </table>
     </div>
   `);
@@ -3915,9 +4903,9 @@ async function adminReportDueDates() {
       (rows || [])
         .map(
           (r) =>
-            `<tr>${bulkTd('report-dues', r.id)}<td>${esc(r.schoolName || r.schoolId)}</td><td>${esc(r.kind)}</td><td>${esc(r.dueOn)}</td><td>${esc(r.status)}</td><td>${r.completedAt ? `<button class="btn" data-del-due="${esc(r.id)}">Remove</button>` : `<button class="btn" data-complete="${esc(r.id)}">Mark complete</button> <button class="btn" data-del-due="${esc(r.id)}">Remove</button>`}</td></tr>`,
+            `<tr>${bulkTd('report-dues', r.id)}<td>${esc(r.schoolName || r.schoolId)}</td><td>${esc(r.kind === 'annual' ? 'Annual' : r.kind === 'reeval' ? 'Reevaluation' : 'Progress')}</td><td>${esc(r.dueOn)}</td><td>${esc(r.notes || '—')}</td><td>${esc(r.status)}</td><td>${r.completedAt ? `<button class="btn" data-del-due="${esc(r.id)}">Remove</button>` : `<button class="btn" data-complete="${esc(r.id)}">Mark complete</button> <button class="btn" data-del-due="${esc(r.id)}">Remove</button>`}</td></tr>`,
         )
-        .join('') || '<tr><td colspan="6">None</td></tr>';
+        .join('') || '<tr><td colspan="7">None</td></tr>';
   };
   const loadDues = async () => {
     const f = document.getElementById('dueFrom')?.value || from;
@@ -3926,14 +4914,14 @@ async function adminReportDueDates() {
     state.reportTo = t;
     const qq = `from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
     const duesBody = document.getElementById('duesBody');
-    if (duesBody) duesBody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
+    if (duesBody) duesBody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
     try {
       const dues = await api('GET', `/admin/reports/due-dates?${qq}`);
       fillDues(dues.rows || []);
       setStatus('', '');
     } catch (e) {
       if (duesBody) {
-        duesBody.innerHTML = `<tr><td colspan="6">${esc(e.message || 'Unable to load due dates.')}</td></tr>`;
+        duesBody.innerHTML = `<tr><td colspan="7">${esc(e.message || 'Unable to load due dates.')}</td></tr>`;
       }
       setStatus(e.message || 'Unable to load due dates.', 'err');
     }
@@ -3971,6 +4959,166 @@ async function adminReportDueDates() {
   }
 }
 
+function formatArchiveWhen(iso) {
+  const s = String(iso || '').trim();
+  if (!s) return '—';
+  const d = s.slice(0, 10);
+  const t = s.length >= 16 ? s.slice(11, 16) : '';
+  return t ? `${d} ${t}` : d;
+}
+
+function archiveSourceLabel(sourceType) {
+  const v = String(sourceType || '');
+  if (v === 'therapist_activity') return 'Therapist Activity';
+  if (v === 'frontline') return 'Frontline';
+  if (v === 'timesheet' || v === 'timesheet_signed') return 'Timesheet';
+  return v || 'Upload';
+}
+
+async function openArchivePdf(archiveId) {
+  const id = String(archiveId || '').trim();
+  if (!id) return;
+  try {
+    setStatus('Opening archived PDF…', '');
+    const raw = await api('GET', `/archive/${encodeURIComponent(id)}/file`);
+    const blob =
+      raw && raw.type && String(raw.type).includes('pdf')
+        ? raw
+        : new Blob([await raw.arrayBuffer()], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const existing = document.getElementById('archivePdfModal');
+    if (existing) existing.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'archivePdfModal';
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal-panel timesheet-print timesheet-pdf-panel">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h2>Archived PDF</h2>
+          <div class="row">
+            <a class="btn" href="${url}" download>Download</a>
+            <button type="button" class="btn" data-close-archive-pdf>Close</button>
+          </div>
+        </div>
+        <iframe class="timesheet-pdf-frame" title="Archived PDF" src="${url}" style="display:block;width:100%;min-height:70vh;border:0"></iframe>
+      </div>`;
+    document.body.appendChild(backdrop);
+    const close = () => {
+      URL.revokeObjectURL(url);
+      backdrop.remove();
+    };
+    backdrop.querySelector('[data-close-archive-pdf]').onclick = close;
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) close();
+    });
+    setStatus('', '');
+  } catch (e) {
+    setStatus(e.message || 'Unable to open archived PDF.', 'error');
+  }
+}
+
+async function adminReportArchive() {
+  const { from, to } = reportDateDefaults();
+  let providers = [];
+  try {
+    const list = await api('GET', '/admin/providers');
+    providers = Array.isArray(list.providers) ? list.providers : Array.isArray(list) ? list : [];
+  } catch {
+    providers = [];
+  }
+  view(`
+    <div class="card">
+      <button type="button" class="btn" id="backReports">← Reports</button>
+      <h2>Uploads &amp; timesheets archive</h2>
+      <p class="muted">All uploaded session PDFs and generated timesheets. Filter by type, provider, or date.</p>
+      <div class="row">
+        <label>Type
+          <select id="archKind">
+            <option value="">All</option>
+            <option value="upload">Uploads</option>
+            <option value="timesheet">Timesheets</option>
+          </select>
+        </label>
+        <label>Provider
+          <select id="archProvider">
+            <option value="">All providers</option>
+            ${providers
+              .map(
+                (p) =>
+                  `<option value="${esc(p.id)}">${esc(`${p.firstName || ''} ${p.lastName || ''}`.trim() || p.id)}</option>`,
+              )
+              .join('')}
+          </select>
+        </label>
+        <label>From <input id="archFrom" type="date" value="${esc(from)}" /></label>
+        <label>To <input id="archTo" type="date" value="${esc(to)}" /></label>
+        <button type="button" class="btn-primary" id="archLoad">Load</button>
+      </div>
+      <div class="table-wrap"><table>
+        <tr>
+          <th>When</th>
+          <th>Kind</th>
+          <th>Type</th>
+          <th>Provider</th>
+          <th>Week</th>
+          <th>Status</th>
+          <th>File</th>
+          <th></th>
+        </tr>
+        <tbody id="archBody"><tr><td colspan="8">Loading…</td></tr></tbody>
+      </table></div>
+    </div>
+  `);
+  bindReportDetailChrome();
+  const load = async () => {
+    const tbody = document.getElementById('archBody');
+    const kind = document.getElementById('archKind')?.value || '';
+    const providerId = document.getElementById('archProvider')?.value || '';
+    const nextFrom = document.getElementById('archFrom')?.value || from;
+    const nextTo = document.getElementById('archTo')?.value || to;
+    state.reportFrom = nextFrom;
+    state.reportTo = nextTo;
+    const q = new URLSearchParams();
+    if (kind) q.set('kind', kind);
+    if (providerId) q.set('providerId', providerId);
+    if (nextFrom) q.set('from', nextFrom);
+    if (nextTo) q.set('to', nextTo);
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
+    try {
+      const out = await api('GET', `/admin/archive?${q.toString()}`);
+      const items = Array.isArray(out.items) ? out.items : [];
+      if (tbody) {
+        tbody.innerHTML =
+          items
+            .map(
+              (a) => `<tr>
+            <td>${esc(formatArchiveWhen(a.createdAt))}</td>
+            <td>${esc(a.kind || '—')}</td>
+            <td>${esc(archiveSourceLabel(a.sourceType))}</td>
+            <td>${esc(a.providerName || a.providerId || '—')}</td>
+            <td>${esc(a.weekStart || '—')}</td>
+            <td>${esc(a.status || '—')}</td>
+            <td>${esc(a.filename || '—')}</td>
+            <td>${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : '—'}</td>
+          </tr>`,
+            )
+            .join('') || '<tr><td colspan="8">No archive items match these filters.</td></tr>';
+      }
+      document.querySelectorAll('[data-open-archive]').forEach((btn) => {
+        btn.onclick = () => openArchivePdf(btn.getAttribute('data-open-archive'));
+      });
+      setStatus('', '');
+    } catch (e) {
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="8">${esc(e.message || 'Unable to load archive.')}</td></tr>`;
+      }
+      setStatus(e.message || 'Unable to load archive.', 'err');
+    }
+  };
+  document.getElementById('archLoad')?.addEventListener('click', () => load());
+  await load();
+}
+
 async function adminReports() {
   const id = state.reportView || '';
   if (!id) {
@@ -3987,6 +5135,10 @@ async function adminReports() {
   }
   if (id === 'due-dates') {
     await adminReportDueDates();
+    return;
+  }
+  if (id === 'archive') {
+    await adminReportArchive();
     return;
   }
   adminReportsLanding();
@@ -4014,16 +5166,18 @@ function cognitoType(data) {
 function loginErrorMessage(data) {
   const type = cognitoType(data);
   const plain = {
-    NotAuthorizedException: 'Incorrect email or password. Please try again.',
+    NotAuthorizedException: 'Incorrect email or password.',
     UserNotFoundException: 'No account exists for that email. Contact the office for an invitation.',
-    UserNotConfirmedException: 'This account is not ready yet. Contact the office for assistance.',
+    UserNotConfirmedException: 'This account is not confirmed yet. Contact the office for assistance.',
     PasswordResetRequiredException: 'Your password must be reset. Use Forgot password below, or contact the office for assistance.',
     InvalidPasswordException: 'That password does not meet requirements. Use at least 8 characters with an uppercase letter, a lowercase letter, and a number.',
+    InvalidParameterException: 'Verify the email address and try again.',
     TooManyRequestsException: 'Too many attempts. Wait a minute and try again.',
     LimitExceededException: 'Too many attempts. Wait a minute and try again.',
     CodeMismatchException: 'Invalid confirmation code. Please try again.',
     ExpiredCodeException: 'That code has expired. Request a new code with Forgot password.',
-    InvalidParameterException: 'Verify the email address and try again.',
+    EnableSoftwareTokenMFAException: 'That authenticator code was not accepted. Check the time on your device and try again.',
+    SoftwareTokenMFANotFoundException: 'Authenticator MFA is not set up on this account yet.',
     ResourceNotFoundException: 'Sign-in is misconfigured (incorrect app client). Contact the office for assistance.',
   };
   if (plain[type]) return plain[type];
@@ -4051,6 +5205,8 @@ function changePasswordErrorMessage(data) {
 const COGNITO_NETFREE_HINT =
   'Unable to reach Cognito. If you use NetFree, allowlist cognito-idp.us-east-1.amazonaws.com, then try again.';
 
+const DEVICE_STORE_KEY = 'tmsCognitoDevice';
+
 async function cognitoCall(target, body, errorFn = loginErrorMessage) {
   const url = `https://cognito-idp.${cognitoRegion()}.amazonaws.com/`;
   let res;
@@ -4068,7 +5224,6 @@ async function cognitoCall(target, body, errorFn = loginErrorMessage) {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    // Cognito uses HTTP 400 for wrong password etc. Empty/opaque bodies often mean a filter mangled the call.
     if (!data.__type && !data.message) {
       throw new Error(
         `Sign-in service returned ${res.status}. If you use NetFree, allowlist cognito-idp.us-east-1.amazonaws.com.`,
@@ -4098,6 +5253,514 @@ function tokenStillGood(token) {
   return Boolean(payload && payload.exp && payload.exp * 1000 > Date.now() + 30000);
 }
 
+function cognitoUsernameFromToken(idToken) {
+  const payload = decodeJwtPayload(idToken) || {};
+  return String(payload['cognito:username'] || payload.email || state.email || '').trim();
+}
+
+function loadDeviceRecord(username) {
+  try {
+    const raw = localStorage.getItem(DEVICE_STORE_KEY);
+    if (!raw) return null;
+    const all = JSON.parse(raw);
+    const key = String(username || '').toLowerCase();
+    return all && key && all[key] ? all[key] : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveDeviceRecord(username, record) {
+  try {
+    const key = String(username || '').toLowerCase();
+    if (!key) return;
+    const all = JSON.parse(localStorage.getItem(DEVICE_STORE_KEY) || '{}') || {};
+    all[key] = record;
+    localStorage.setItem(DEVICE_STORE_KEY, JSON.stringify(all));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function clearDeviceRecord(username) {
+  try {
+    const key = String(username || '').toLowerCase();
+    const all = JSON.parse(localStorage.getItem(DEVICE_STORE_KEY) || '{}') || {};
+    if (key && all[key]) {
+      delete all[key];
+      localStorage.setItem(DEVICE_STORE_KEY, JSON.stringify(all));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function deviceAuthParams(username) {
+  const rec = loadDeviceRecord(username);
+  return rec?.deviceKey ? { DEVICE_KEY: rec.deviceKey } : {};
+}
+
+/** Cognito SRP-6a N (device password verifier) — amazon-cognito-identity-js INIT_N. */
+const COGNITO_SRP_N = BigInt(
+  '0x' +
+    'FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1' +
+    '29024E088A67CC74020BBEA63B139B22514A08798E3404DD' +
+    'EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245' +
+    'E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED' +
+    'EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D' +
+    'C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F' +
+    '83655D23DCA3AD961C62F356208552BB9ED529077096966D' +
+    '670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B' +
+    'E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9' +
+    'DE2BCBF6955817183995497CEA956AE515D2261898FA0510' +
+    '15728E5A8AAAC42DAD33170D04507A33A85521ABDF1CBA64' +
+    'ECFB850458DBEF0A8AEA71575D060C7DB3970F85A6E1E4C7' +
+    'ABF5AE8CDB0933D71E8C94E04A25619DCEE3D2261AD2EE6B' +
+    'F12FFA06D98A0864D87602733EC86A64521F2B18177B200C' +
+    'BBE117577A615D6C770988C0BAD946E208E24FA074E5AB31' +
+    '43DB5BFCE0FD108E4B82D120A93AD2CAFFFFFFFFFFFFFFFF',
+);
+const COGNITO_SRP_G = BigInt(2);
+
+function bytesToHex(bytes) {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function hexToBytes(hex) {
+  const clean = String(hex || '').replace(/^0x/i, '');
+  const out = new Uint8Array(Math.ceil(clean.length / 2));
+  for (let i = 0; i < out.length; i += 1) {
+    out[i] = parseInt(clean.substr(i * 2, 2), 16) || 0;
+  }
+  return out;
+}
+
+function padHexCognito(hex) {
+  let h = String(hex || '').replace(/^0x/i, '');
+  if (h.length % 2 === 1) h = `0${h}`;
+  else if ('89ABCDEFabcdef'.includes(h[0])) h = `00${h}`;
+  return h;
+}
+
+function modPow(base, exp, mod) {
+  let result = BigInt(1);
+  let b = base % mod;
+  let e = exp;
+  while (e > 0n) {
+    if (e & 1n) result = (result * b) % mod;
+    b = (b * b) % mod;
+    e >>= 1n;
+  }
+  return result;
+}
+
+async function sha256HexFromUtf8(str) {
+  const data = new TextEncoder().encode(str);
+  const dig = await crypto.subtle.digest('SHA-256', data);
+  return bytesToHex(new Uint8Array(dig));
+}
+
+async function sha256HexFromHex(hex) {
+  const dig = await crypto.subtle.digest('SHA-256', hexToBytes(hex));
+  return bytesToHex(new Uint8Array(dig));
+}
+
+function randomHex(byteLen) {
+  const bytes = crypto.getRandomValues(new Uint8Array(byteLen));
+  return bytesToHex(bytes);
+}
+
+function b64FromHex(hex) {
+  const bytes = hexToBytes(hex);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+async function buildDeviceSecretVerifier(deviceGroupKey, username) {
+  const devicePassword = randomHex(20);
+  const saltRandom = randomHex(16);
+  const combined = `${deviceGroupKey}${username}:${devicePassword}`;
+  const hashedPassword = await sha256HexFromUtf8(combined);
+  const saltHex = padHexCognito(BigInt(`0x${saltRandom}`).toString(16));
+  const xHex = await sha256HexFromHex(saltHex + hashedPassword);
+  const verifier = modPow(COGNITO_SRP_G, BigInt(`0x${xHex}`), COGNITO_SRP_N);
+  const verifierHex = padHexCognito(verifier.toString(16));
+  return {
+    devicePassword,
+    DeviceSecretVerifierConfig: {
+      PasswordVerifier: b64FromHex(verifierHex),
+      Salt: b64FromHex(saltHex),
+    },
+  };
+}
+
+async function rememberDeviceIfRequested(authResult, username, trustDevice) {
+  if (!trustDevice || !authResult) return;
+  const meta = authResult.NewDeviceMetadata;
+  if (!meta?.DeviceKey || !meta?.DeviceGroupKey) return;
+  try {
+    const { devicePassword, DeviceSecretVerifierConfig } = await buildDeviceSecretVerifier(
+      meta.DeviceGroupKey,
+      username,
+    );
+    await cognitoCall('ConfirmDevice', {
+      AccessToken: authResult.AccessToken,
+      DeviceKey: meta.DeviceKey,
+      DeviceName: `White Glove TMS · ${navigator.platform || 'browser'}`,
+      DeviceSecretVerifierConfig,
+    });
+    await cognitoCall('UpdateDeviceStatus', {
+      AccessToken: authResult.AccessToken,
+      DeviceKey: meta.DeviceKey,
+      DeviceRememberedStatus: 'remembered',
+    });
+    saveDeviceRecord(username, {
+      deviceKey: meta.DeviceKey,
+      deviceGroupKey: meta.DeviceGroupKey,
+      devicePassword,
+      username,
+      rememberedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('[mfa] remember device failed', err);
+  }
+}
+
+function trustDeviceChecked() {
+  const el = document.getElementById('trustDevice');
+  return Boolean(el && el.checked);
+}
+
+function trustDeviceCheckboxHtml(checked = true) {
+  return `<label class="trust-device"><input type="checkbox" id="trustDevice" ${checked ? 'checked' : ''} /> ${esc(t('mfa.trustDevice'))}</label>`;
+}
+
+async function getCognitoUserMfa(accessToken) {
+  const out = await cognitoCall('GetUser', { AccessToken: accessToken });
+  const list = Array.isArray(out.UserMFASettingList) ? out.UserMFASettingList : [];
+  const attrs = Array.isArray(out.UserAttributes) ? out.UserAttributes : [];
+  const phone = attrs.find((a) => a.Name === 'phone_number')?.Value || '';
+  const phoneVerified = attrs.find((a) => a.Name === 'phone_number_verified')?.Value === 'true';
+  const email = attrs.find((a) => a.Name === 'email')?.Value || '';
+  let passkeyCount = 0;
+  try {
+    const creds = await cognitoCall('ListWebAuthnCredentials', { AccessToken: accessToken });
+    passkeyCount = Array.isArray(creds.Credentials) ? creds.Credentials.length : 0;
+  } catch {
+    passkeyCount = 0;
+  }
+  return {
+    hasSoftware: list.includes('SOFTWARE_TOKEN_MFA'),
+    hasSms: list.includes('SMS_MFA'),
+    hasEmail: list.includes('EMAIL_OTP'),
+    preferred: out.PreferredMfaSetting || '',
+    phone,
+    phoneVerified,
+    email,
+    passkeyCount,
+    hasPasskey: passkeyCount > 0,
+    hasAny: list.length > 0 || passkeyCount > 0,
+  };
+}
+
+function b64urlToBuf(value) {
+  const s = String(value || '')
+    .replace(/-/g, '+')
+    .replace(/_/g, '/');
+  const pad = '='.repeat((4 - (s.length % 4)) % 4);
+  const raw = atob(s + pad);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out.buffer;
+}
+
+function bufToB64url(buf) {
+  const bytes = buf instanceof ArrayBuffer ? new Uint8Array(buf) : new Uint8Array(buf.buffer || buf);
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function publicKeyCreateOptionsFromCognito(options) {
+  const o = options && typeof options === 'object' ? structuredClone(options) : {};
+  if (o.challenge) o.challenge = b64urlToBuf(o.challenge);
+  if (o.user?.id) o.user.id = b64urlToBuf(o.user.id);
+  if (Array.isArray(o.excludeCredentials)) {
+    o.excludeCredentials = o.excludeCredentials.map((c) => ({
+      ...c,
+      id: typeof c.id === 'string' ? b64urlToBuf(c.id) : c.id,
+    }));
+  }
+  return o;
+}
+
+function publicKeyRequestOptionsFromCognito(options) {
+  const o = options && typeof options === 'object' ? structuredClone(options) : {};
+  if (o.challenge) o.challenge = b64urlToBuf(o.challenge);
+  if (Array.isArray(o.allowCredentials)) {
+    o.allowCredentials = o.allowCredentials.map((c) => ({
+      ...c,
+      id: typeof c.id === 'string' ? b64urlToBuf(c.id) : c.id,
+    }));
+  }
+  return o;
+}
+
+function credentialToJson(cred) {
+  if (!cred) return null;
+  const response = cred.response || {};
+  const json = {
+    id: cred.id,
+    rawId: bufToB64url(cred.rawId),
+    type: cred.type || 'public-key',
+    response: {},
+    clientExtensionResults: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
+  };
+  if (response.clientDataJSON) json.response.clientDataJSON = bufToB64url(response.clientDataJSON);
+  if (response.attestationObject) json.response.attestationObject = bufToB64url(response.attestationObject);
+  if (response.authenticatorData) json.response.authenticatorData = bufToB64url(response.authenticatorData);
+  if (response.signature) json.response.signature = bufToB64url(response.signature);
+  if (response.userHandle) json.response.userHandle = bufToB64url(response.userHandle);
+  if (cred.authenticatorAttachment) json.authenticatorAttachment = cred.authenticatorAttachment;
+  return json;
+}
+
+function passkeySupported() {
+  return Boolean(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+}
+
+function readCachedRequireMfa() {
+  try {
+    const raw = localStorage.getItem('tmsRequireMfa');
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function cacheRequireMfa(requireMfa) {
+  try {
+    localStorage.setItem('tmsRequireMfa', requireMfa ? 'true' : 'false');
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Coerce API/settings value; only default when the field is truly missing. */
+function coerceRequireMfa(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  if (value === 'true' || value === 1 || value === '1') return true;
+  if (value === 'false' || value === 0 || value === '0') return false;
+  return fallback;
+}
+
+/**
+ * Load org MFA policy. Never invent requireMfa=true on network blips —
+ * that was forcing enroll every login even when Dynamo already had OFF.
+ */
+async function fetchAppMfaSettings() {
+  const cached = readCachedRequireMfa();
+  try {
+    let settings = {};
+    let fromServer = false;
+    if (state.role === 'admin') {
+      try {
+        const out = await api('GET', '/admin/settings');
+        settings = out.settings || {};
+        fromServer = true;
+      } catch {
+        const me = await api('GET', '/me');
+        settings = me.settings || {};
+        fromServer = true;
+      }
+    } else {
+      const me = await api('GET', '/me');
+      settings = me.settings || {};
+      fromServer = true;
+    }
+    const requireMfa = coerceRequireMfa(
+      settings.requireMfa,
+      // Prefer last known OFF over inventing ON when the field is missing.
+      cached != null ? cached : false,
+    );
+    const allowSmsMfa = settings.allowSmsMfa === true;
+    cacheRequireMfa(requireMfa);
+    state.meSettings = { ...(state.meSettings || {}), ...settings, requireMfa, allowSmsMfa };
+    return { requireMfa, allowSmsMfa, fromServer };
+  } catch {
+    const requireMfa =
+      cached != null ? cached : coerceRequireMfa(state.meSettings?.requireMfa, false);
+    return {
+      requireMfa,
+      allowSmsMfa: state.meSettings?.allowSmsMfa === true,
+      fromServer: false,
+    };
+  }
+}
+
+async function enforceMfaIfRequired() {
+  if (!COGNITO_MODE || !state.accessToken) return false;
+  const { requireMfa, fromServer } = await fetchAppMfaSettings();
+  state.meSettings = { ...(state.meSettings || {}), requireMfa, allowSmsMfa: false };
+  // Only force enroll when the server explicitly says ON. Stale cache / failed /me must not lock users out.
+  if (!fromServer || requireMfa !== true) return false;
+  try {
+    const mfa = await getCognitoUserMfa(state.accessToken);
+    if (mfa.hasAny) return false;
+  } catch {
+    return false;
+  }
+  showMfaSetup({ forced: true });
+  return true;
+}
+
+function otpauthUri(secret, email) {
+  const label = encodeURIComponent(`White Glove TMS:${email || 'user'}`);
+  const issuer = encodeURIComponent('White Glove TMS');
+  return `otpauth://totp/${label}?secret=${encodeURIComponent(secret)}&issuer=${issuer}`;
+}
+
+function qrImgHtml(otpauth) {
+  const src = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(otpauth)}`;
+  return `<img class="mfa-qr" src="${src}" width="180" height="180" alt="Authenticator QR code" />`;
+}
+
+async function completeAuthSuccess(authResult, opts = {}) {
+  const idToken = authResult?.IdToken;
+  if (!idToken) throw new Error('Sign-in was unsuccessful. Please try again.');
+  const accessToken = authResult.AccessToken || '';
+  applyToken(idToken, accessToken);
+  const username = cognitoUsernameFromToken(idToken) || opts.email || state.email;
+  if (opts.trustDevice) await rememberDeviceIfRequested(authResult, username, true);
+  state.schoolConfirmed = false;
+  sessionStorage.removeItem('tmsSchoolConfirmed');
+  openingAccountView();
+  // Prefer Dynamo/API role (admin) over Cognito groups alone — fixes Admin invite left in Therapist group.
+  try {
+    const me = await api('GET', '/me');
+    if (me?.user?.role === 'admin' || me?.user?.role === 'therapist') {
+      state.role = me.user.role;
+    }
+  } catch {
+    /* keep token-derived role */
+  }
+  await showRole();
+}
+
+async function handleAuthResponse(out, ctx) {
+  const challenge = out?.ChallengeName;
+  if (!challenge) {
+    await completeAuthSuccess(out.AuthenticationResult || {}, ctx);
+    return;
+  }
+  if (challenge === 'NEW_PASSWORD_REQUIRED') {
+    showNewPassword(ctx.email, out.Session);
+    return;
+  }
+  if (challenge === 'SOFTWARE_TOKEN_MFA' || challenge === 'SMS_MFA' || challenge === 'EMAIL_OTP') {
+    showMfaChallenge(ctx.email, out.Session, challenge, ctx);
+    return;
+  }
+  if (challenge === 'SELECT_MFA_TYPE') {
+    showSelectMfaType(ctx.email, out.Session, out.ChallengeParameters || {}, ctx);
+    return;
+  }
+  if (challenge === 'WEB_AUTHN') {
+    await completeWebAuthnChallenge(ctx.email, out.Session, out.ChallengeParameters || {}, ctx);
+    return;
+  }
+  if (challenge === 'SELECT_CHALLENGE') {
+    await handleSelectChallenge(out, ctx);
+    return;
+  }
+  if (challenge === 'MFA_SETUP') {
+    showMfaSetup({ forced: true, session: out.Session, email: ctx.email, fromChallenge: true });
+    return;
+  }
+  throw new Error(`Unsupported sign-in step (${challenge}). Contact the office for assistance.`);
+}
+
+/** Cognito puts choice-based factors on AvailableChallenges (top-level array), not ChallengeParameters. */
+function availableAuthChallenges(out) {
+  const top = Array.isArray(out?.AvailableChallenges) ? out.AvailableChallenges : [];
+  const params = out?.ChallengeParameters || {};
+  const raw = params.AVAILABLE_CHALLENGES || params.MFAS_CAN_CHOOSE || '';
+  let fromParams = [];
+  if (Array.isArray(raw)) fromParams = raw;
+  else if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      fromParams = Array.isArray(parsed) ? parsed : String(raw).split(/[,\s]+/);
+    } catch {
+      fromParams = String(raw).split(/[,\s]+/);
+    }
+  }
+  return [
+    ...new Set(
+      [...top, ...fromParams]
+        .map((s) => String(s || '').trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+async function handleSelectChallenge(out, ctx) {
+  const params = out.ChallengeParameters || {};
+  const available = availableAuthChallenges(out);
+  if (available.includes('WEB_AUTHN') && ctx.preferPasskey) {
+    const credParam = params.CREDENTIAL_REQUEST_OPTIONS || params.credentialRequestOptions;
+    if (credParam) {
+      await completeWebAuthnChallenge(ctx.email, out.Session, params, ctx);
+      return;
+    }
+    const next = await cognitoCall('RespondToAuthChallenge', {
+      ChallengeName: 'SELECT_CHALLENGE',
+      ClientId: CLIENT_ID,
+      Session: out.Session,
+      ChallengeResponses: { USERNAME: ctx.email, ANSWER: 'WEB_AUTHN' },
+    });
+    await handleAuthResponse(next, ctx);
+    return;
+  }
+  if (ctx.preferPasskey) {
+    throw new Error(t('mfa.passkeyNotRegistered'));
+  }
+  throw new Error('Unsupported sign-in choice. Try password sign-in.');
+}
+
+async function completeWebAuthnChallenge(email, session, params, ctx = {}) {
+  if (!passkeySupported()) throw new Error(t('mfa.passkeyNeedSecure'));
+  let optionsRaw = params.CREDENTIAL_REQUEST_OPTIONS || params.credentialRequestOptions || '';
+  if (typeof optionsRaw === 'string' && optionsRaw) {
+    try {
+      optionsRaw = JSON.parse(optionsRaw);
+    } catch {
+      /* keep string */
+    }
+  }
+  if (!optionsRaw || typeof optionsRaw !== 'object') {
+    throw new Error('Passkey challenge missing options. Try again.');
+  }
+  const publicKey = publicKeyRequestOptionsFromCognito(optionsRaw.publicKey || optionsRaw);
+  const assertion = await navigator.credentials.get({ publicKey });
+  const credential = JSON.stringify(credentialToJson(assertion));
+  const out = await cognitoCall('RespondToAuthChallenge', {
+    ChallengeName: 'WEB_AUTHN',
+    ClientId: CLIENT_ID,
+    Session: session,
+    ChallengeResponses: {
+      USERNAME: email,
+      CREDENTIAL: credential,
+    },
+  });
+  await handleAuthResponse(out, { email, ...ctx });
+}
+
 function signOut(message) {
   state.idToken = '';
   state.accessToken = '';
@@ -4125,57 +5788,84 @@ function showLogin(message) {
   }
   hideAppChrome();
   setStatus('', '');
+  applyStaticI18n();
   view(`
     <div class="card login-card">
-      <h2>Sign in</h2>
-      <p>Use the email and temporary password from your White Glove invitation.</p>
+      ${langSwitcherHtml(false)}
+      <h2>${esc(t('login.title'))}</h2>
+      <p>${esc(t('login.blurb'))}</p>
       <div id="loginErr" class="err-box" ${message ? '' : 'hidden'}>${esc(message || '')}</div>
-      <label>Email <input id="loginEmail" type="email" autocomplete="username" placeholder="you@example.com" /></label>
-      <label>Password <input id="loginPassword" type="password" autocomplete="current-password" /></label>
-      <button class="btn-primary big" id="loginBtn">Sign in</button>
-      <p class="login-footer-link"><button type="button" class="linkish" id="forgotPasswordBtn">Forgot password?</button></p>
+      <label>${esc(t('login.email'))} <input id="loginEmail" type="email" autocomplete="username" placeholder="you@example.com" /></label>
+      <label>${esc(t('login.password'))} <input id="loginPassword" type="password" autocomplete="current-password" /></label>
+      <button class="btn-primary big" id="loginBtn">${esc(t('login.submit'))}</button>
+      ${
+        passkeySupported()
+          ? `<button type="button" class="btn big" id="passkeyLoginBtn" style="margin-top:.5rem">${esc(t('mfa.passkeySignIn'))}</button>
+      <p class="muted" style="margin:.35rem 0 0;font-size:.85rem">${esc(t('mfa.passkeyHint'))}</p>`
+          : ''
+      }
+      <p class="login-footer-link"><button type="button" class="linkish" id="forgotPasswordBtn">${esc(t('login.forgot'))}</button></p>
     </div>
   `);
+  bindLangSwitcher(document.getElementById('view'), () => showLogin(message || ''));
   const submit = async () => {
     const btn = document.getElementById('loginBtn');
     const email = document.getElementById('loginEmail').value.trim();
     const password = document.getElementById('loginPassword').value;
     loginError('');
     if (!email || !password) {
-      loginError('Enter your email and password.');
+      loginError(t('login.needBoth'));
       return;
     }
     btn.disabled = true;
-    btn.textContent = 'Signing in…';
+    btn.textContent = t('login.signingIn');
     try {
       const out = await cognitoCall('InitiateAuth', {
         AuthFlow: 'USER_PASSWORD_AUTH',
         ClientId: CLIENT_ID,
-        AuthParameters: { USERNAME: email, PASSWORD: password },
+        AuthParameters: {
+          USERNAME: email,
+          PASSWORD: password,
+          ...deviceAuthParams(email),
+        },
       });
-      if (out.ChallengeName === 'NEW_PASSWORD_REQUIRED') {
-        showNewPassword(email, out.Session);
-        return;
-      }
-      const auth = out.AuthenticationResult || {};
-      const idToken = auth.IdToken;
-      if (!idToken) throw new Error('Sign-in was unsuccessful. Please try again.');
-      applyToken(idToken, auth.AccessToken || '');
-      // Force school picker after each sign-in when the provider has multiple schools.
-      state.schoolConfirmed = false;
-      sessionStorage.removeItem('tmsSchoolConfirmed');
-      openingAccountView();
-      await showRole();
+      await handleAuthResponse(out, { email });
     } catch (e) {
       loginError(e.message);
       btn.disabled = false;
-      btn.textContent = 'Sign in';
+      btn.textContent = t('login.submit');
     }
   };
   document.getElementById('loginBtn').onclick = submit;
   document.getElementById('loginPassword').onkeydown = (e) => {
     if (e.key === 'Enter') submit();
   };
+  document.getElementById('passkeyLoginBtn')?.addEventListener('click', async () => {
+    const email = document.getElementById('loginEmail').value.trim();
+    loginError('');
+    if (!email) {
+      loginError(t('mfa.passkeyNeedEmail'));
+      return;
+    }
+    const btn = document.getElementById('passkeyLoginBtn');
+    btn.disabled = true;
+    btn.textContent = t('mfa.passkeyWorking');
+    try {
+      const out = await cognitoCall('InitiateAuth', {
+        AuthFlow: 'USER_AUTH',
+        ClientId: CLIENT_ID,
+        AuthParameters: {
+          USERNAME: email,
+          PREFERRED_CHALLENGE: 'WEB_AUTHN',
+        },
+      });
+      await handleAuthResponse(out, { email, preferPasskey: true });
+    } catch (e) {
+      loginError(e.message);
+      btn.disabled = false;
+      btn.textContent = t('mfa.passkeySignIn');
+    }
+  });
   document.getElementById('forgotPasswordBtn').onclick = () => {
     const email = document.getElementById('loginEmail').value.trim();
     showForgotPassword(email);
@@ -4183,30 +5873,593 @@ function showLogin(message) {
   document.getElementById('loginEmail').focus();
 }
 
+function showMfaChallenge(email, session, challengeName, ctx = {}) {
+  hideAppChrome();
+  setStatus('', '');
+  const sms = challengeName === 'SMS_MFA';
+  const emailOtp = challengeName === 'EMAIL_OTP';
+  const blurb = sms ? t('mfa.challengeSms') : emailOtp ? t('mfa.challengeEmail') : t('mfa.challengeTotp');
+  view(`
+    <div class="card login-card">
+      ${langSwitcherHtml(false)}
+      <h2>${esc(t('mfa.challengeTitle'))}</h2>
+      <p>${esc(blurb)}</p>
+      <div id="loginErr" class="err-box" hidden></div>
+      <label>${esc(t('mfa.code'))} <input id="mfaCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" /></label>
+      ${trustDeviceCheckboxHtml(true)}
+      <button class="btn-primary big" id="mfaBtn">${esc(t('mfa.verify'))}</button>
+      <p><button type="button" class="btn" id="mfaBackBtn">${esc(t('mfa.backLogin'))}</button></p>
+    </div>
+  `);
+  bindLangSwitcher(document.getElementById('view'), () => showMfaChallenge(email, session, challengeName, ctx));
+  const submit = async () => {
+    const btn = document.getElementById('mfaBtn');
+    const code = document.getElementById('mfaCode').value.trim().replace(/\s+/g, '');
+    loginError('');
+    if (!code) {
+      loginError(t('mfa.needCode'));
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = t('mfa.verifying');
+    try {
+      const responses = { USERNAME: email };
+      if (sms) responses.SMS_MFA_CODE = code;
+      else if (emailOtp) responses.EMAIL_OTP_CODE = code;
+      else responses.SOFTWARE_TOKEN_MFA_CODE = code;
+      const device = loadDeviceRecord(email);
+      if (device?.deviceKey) responses.DEVICE_KEY = device.deviceKey;
+      const out = await cognitoCall('RespondToAuthChallenge', {
+        ChallengeName: challengeName,
+        ClientId: CLIENT_ID,
+        Session: session,
+        ChallengeResponses: responses,
+      });
+      await handleAuthResponse(out, { email, trustDevice: trustDeviceChecked(), ...ctx });
+    } catch (e) {
+      loginError(e.message);
+      btn.disabled = false;
+      btn.textContent = t('mfa.verify');
+    }
+  };
+  document.getElementById('mfaBtn').onclick = submit;
+  document.getElementById('mfaBackBtn').onclick = () => showLogin('');
+  document.getElementById('mfaCode').onkeydown = (e) => {
+    if (e.key === 'Enter') submit();
+  };
+  document.getElementById('mfaCode').focus();
+}
+
+function showSelectMfaType(email, session, params, ctx = {}) {
+  hideAppChrome();
+  const types = String(params.MFAS_CAN_CHOOSE || params.MFAS_CAN_SELECT || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const hasTotp = types.includes('SOFTWARE_TOKEN_MFA') || !types.length;
+  const hasEmail = types.includes('EMAIL_OTP') || types.includes('EMAIL_MFA');
+  const hasSms = types.includes('SMS_MFA');
+  view(`
+    <div class="card login-card">
+      ${langSwitcherHtml(false)}
+      <h2>${esc(t('mfa.selectTitle'))}</h2>
+      <p>${esc(t('mfa.selectBlurb'))}</p>
+      <div id="loginErr" class="err-box" hidden></div>
+      ${hasTotp ? `<button type="button" class="btn-primary big" id="pickTotp">${esc(t('mfa.pickTotp'))}</button>` : ''}
+      ${hasEmail ? `<button type="button" class="btn big" id="pickEmail" style="margin-top:.5rem">${esc(t('mfa.pickEmail'))}</button>` : ''}
+      ${hasSms ? `<button type="button" class="btn big" id="pickSms" style="margin-top:.5rem">${esc(t('mfa.pickSms'))}</button>` : ''}
+      <p><button type="button" class="btn" id="mfaBackBtn">${esc(t('mfa.backLogin'))}</button></p>
+    </div>
+  `);
+  bindLangSwitcher(document.getElementById('view'), () => showSelectMfaType(email, session, params, ctx));
+  const pick = async (answer) => {
+    loginError('');
+    try {
+      const out = await cognitoCall('RespondToAuthChallenge', {
+        ChallengeName: 'SELECT_MFA_TYPE',
+        ClientId: CLIENT_ID,
+        Session: session,
+        ChallengeResponses: { USERNAME: email, ANSWER: answer },
+      });
+      await handleAuthResponse(out, { email, ...ctx });
+    } catch (e) {
+      loginError(e.message);
+    }
+  };
+  document.getElementById('pickTotp')?.addEventListener('click', () => pick('SOFTWARE_TOKEN_MFA'));
+  document.getElementById('pickEmail')?.addEventListener('click', () =>
+    pick(types.includes('EMAIL_MFA') && !types.includes('EMAIL_OTP') ? 'EMAIL_MFA' : 'EMAIL_OTP'),
+  );
+  document.getElementById('pickSms')?.addEventListener('click', () => pick('SMS_MFA'));
+  document.getElementById('mfaBackBtn').onclick = () => showLogin('');
+}
+
+function showMfaSetup(opts = {}) {
+  hideAppChrome();
+  setStatus('', '');
+  const forced = Boolean(opts.forced);
+  view(`
+    <div class="card login-card mfa-setup-card">
+      ${langSwitcherHtml(false)}
+      <h2>${esc(forced ? t('mfa.setupForcedTitle') : t('mfa.setupTitle'))}</h2>
+      <p>${esc(forced ? t('mfa.setupForcedBlurb') : t('mfa.setupBlurb'))}</p>
+      <div id="loginErr" class="err-box" hidden></div>
+      <div class="mfa-method-list">
+        <button type="button" class="btn-primary big" id="mfaEnrollTotp">${esc(t('mfa.enrollTotp'))}</button>
+        <button type="button" class="btn big" id="mfaEnrollEmail" style="margin-top:.5rem">${esc(t('mfa.enrollEmail'))}</button>
+        <button type="button" class="btn big" id="mfaEnrollPasskey" style="margin-top:.5rem">${esc(t('mfa.enrollPasskey'))}</button>
+      </div>
+      <div id="mfaEnrollPanel" hidden></div>
+      ${forced ? '' : `<p><button type="button" class="btn" id="mfaSetupBack">${esc(t('mfa.back'))}</button></p>`}
+    </div>
+  `);
+  bindLangSwitcher(document.getElementById('view'), () => showMfaSetup(opts));
+  document.getElementById('mfaSetupBack')?.addEventListener('click', () => showRole());
+  document.getElementById('mfaEnrollTotp').onclick = () => startTotpEnroll({ forced });
+  document.getElementById('mfaEnrollEmail').onclick = () => startEmailEnroll({ forced });
+  document.getElementById('mfaEnrollPasskey').onclick = () => startPasskeyEnroll({ forced });
+}
+
+async function startEmailEnroll({ forced }) {
+  const panel = document.getElementById('mfaEnrollPanel');
+  loginError('');
+  if (!state.accessToken) {
+    loginError(t('mfa.needResignSetup'));
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = `
+    <h3>${esc(t('mfa.emailTitle'))}</h3>
+    <p>${esc(t('mfa.emailBlurb'))}</p>
+    <button type="button" class="btn-primary" id="emailEnableBtn">${esc(t('mfa.confirmEnable'))}</button>
+  `;
+  document.getElementById('emailEnableBtn').onclick = async () => {
+    const btn = document.getElementById('emailEnableBtn');
+    btn.disabled = true;
+    btn.textContent = t('mfa.confirming');
+    loginError('');
+    try {
+      await cognitoCall('SetUserMFAPreference', {
+        AccessToken: state.accessToken,
+        EmailMfaSettings: { Enabled: true, PreferredMfa: true },
+      });
+      setStatus(t('mfa.emailOn'), 'ok');
+      if (forced) await showRole();
+      else await showSecurityMfa();
+    } catch (e) {
+      loginError(e.message);
+      btn.disabled = false;
+      btn.textContent = t('mfa.confirmEnable');
+    }
+  };
+}
+
+async function startPasskeyEnroll({ forced }) {
+  const panel = document.getElementById('mfaEnrollPanel');
+  loginError('');
+  if (!state.accessToken) {
+    loginError(t('mfa.needResignSetup'));
+    return;
+  }
+  if (!passkeySupported()) {
+    loginError(t('mfa.passkeyNeedSecure'));
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = `
+    <h3>${esc(t('mfa.passkeyTitle'))}</h3>
+    <p>${esc(t('mfa.passkeyBlurb'))}</p>
+    <button type="button" class="btn-primary" id="passkeyRegisterBtn">${esc(t('mfa.passkeyRegister'))}</button>
+  `;
+  document.getElementById('passkeyRegisterBtn').onclick = async () => {
+    const btn = document.getElementById('passkeyRegisterBtn');
+    btn.disabled = true;
+    btn.textContent = t('mfa.passkeyWorking');
+    loginError('');
+    try {
+      const start = await cognitoCall('StartWebAuthnRegistration', { AccessToken: state.accessToken });
+      let options = start.CredentialCreationOptions || start.credentialCreationOptions;
+      if (typeof options === 'string') options = JSON.parse(options);
+      const publicKey = publicKeyCreateOptionsFromCognito(options.publicKey || options);
+      const cred = await navigator.credentials.create({ publicKey });
+      await cognitoCall('CompleteWebAuthnRegistration', {
+        AccessToken: state.accessToken,
+        Credential: credentialToJson(cred),
+      });
+      try {
+        await cognitoCall('SetUserMFAPreference', {
+          AccessToken: state.accessToken,
+          WebAuthnMfaSettings: { Enabled: true },
+        });
+      } catch {
+        /* optional on older pool configs */
+      }
+      setStatus(t('mfa.passkeyOn'), 'ok');
+      if (forced) await showRole();
+      else await showSecurityMfa();
+    } catch (e) {
+      loginError(e.message || t('common.error'));
+      btn.disabled = false;
+      btn.textContent = t('mfa.passkeyRegister');
+    }
+  };
+}
+
+async function startTotpEnroll({ forced }) {
+  const panel = document.getElementById('mfaEnrollPanel');
+  loginError('');
+  if (!state.accessToken) {
+    loginError(t('mfa.needResignSetup'));
+    return;
+  }
+  try {
+    const assoc = await cognitoCall('AssociateSoftwareToken', { AccessToken: state.accessToken });
+    const secret = assoc.SecretCode;
+    if (!secret) throw new Error('Unable to start authenticator setup.');
+    const uri = otpauthUri(secret, state.email);
+    panel.hidden = false;
+    panel.innerHTML = `
+      <h3>${esc(t('mfa.totpTitle'))}</h3>
+      <p>${esc(t('mfa.totpBlurb'))}</p>
+      ${qrImgHtml(uri)}
+      <p class="mfa-secret"><code id="mfaSecret">${esc(secret)}</code>
+        <button type="button" class="linkish" id="copyMfaSecret">${esc(t('mfa.copyKey'))}</button></p>
+      <p class="muted"><a href="${esc(uri)}">${esc(t('mfa.openApp'))}</a> (mobile)</p>
+      <label>${esc(t('mfa.confirmCode'))} <input id="totpVerifyCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" /></label>
+      <button type="button" class="btn-primary" id="totpVerifyBtn">${esc(t('mfa.confirmEnable'))}</button>
+    `;
+    document.getElementById('copyMfaSecret').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(secret);
+        setStatus('Authenticator key copied.', 'ok');
+      } catch {
+        setStatus('Copy the key manually.', 'err');
+      }
+    };
+    document.getElementById('totpVerifyBtn').onclick = async () => {
+      const code = document.getElementById('totpVerifyCode').value.trim().replace(/\s+/g, '');
+      loginError('');
+      if (!/^\d{6}$/.test(code)) {
+        loginError(t('mfa.needSix'));
+        return;
+      }
+      const btn = document.getElementById('totpVerifyBtn');
+      btn.disabled = true;
+      btn.textContent = t('mfa.confirming');
+      try {
+        await cognitoCall('VerifySoftwareToken', {
+          AccessToken: state.accessToken,
+          UserCode: code,
+          FriendlyDeviceName: 'Authenticator app',
+        });
+        await cognitoCall('SetUserMFAPreference', {
+          AccessToken: state.accessToken,
+          SoftwareTokenMfaSettings: { Enabled: true, PreferredMfa: true },
+        });
+        setStatus(t('mfa.totpOn'), 'ok');
+        if (forced) await showRole();
+        else await showSecurityMfa();
+      } catch (e) {
+        loginError(e.message);
+        btn.disabled = false;
+        btn.textContent = t('mfa.confirmEnable');
+      }
+    };
+  } catch (e) {
+    loginError(e.message);
+  }
+}
+
+async function startSmsEnroll({ forced }) {
+  const panel = document.getElementById('mfaEnrollPanel');
+  loginError('');
+  if (!state.accessToken) {
+    loginError(t('mfa.needResignSetup'));
+    return;
+  }
+  panel.hidden = false;
+  panel.innerHTML = `
+    <h3>${esc(t('mfa.smsTitle'))}</h3>
+    <p class="muted">${esc(t('mfa.smsBlurb'))}</p>
+    <label>${esc(t('mfa.phone'))} <input id="smsPhone" type="tel" autocomplete="tel" placeholder="+1…" /></label>
+    <button type="button" class="btn-primary" id="smsSendCode">${esc(t('mfa.sendSms'))}</button>
+    <div id="smsVerifyWrap" hidden>
+      <label>${esc(t('mfa.smsCode'))} <input id="smsVerifyCode" type="text" inputmode="numeric" autocomplete="one-time-code" /></label>
+      <button type="button" class="btn-primary" id="smsConfirmBtn">${esc(t('mfa.smsConfirm'))}</button>
+    </div>
+  `;
+  document.getElementById('smsSendCode').onclick = async () => {
+    const phone = document.getElementById('smsPhone').value.trim();
+    loginError('');
+    if (!/^\+[1-9]\d{7,14}$/.test(phone)) {
+      loginError(t('mfa.needPhone'));
+      return;
+    }
+    try {
+      await cognitoCall('UpdateUserAttributes', {
+        AccessToken: state.accessToken,
+        UserAttributes: [{ Name: 'phone_number', Value: phone }],
+      });
+      await cognitoCall('GetUserAttributeVerificationCode', {
+        AccessToken: state.accessToken,
+        AttributeName: 'phone_number',
+      });
+      document.getElementById('smsVerifyWrap').hidden = false;
+      setStatus(t('mfa.smsSent'), 'ok');
+    } catch (e) {
+      loginError(e.message);
+    }
+  };
+  document.getElementById('smsConfirmBtn').onclick = async () => {
+    const code = document.getElementById('smsVerifyCode').value.trim();
+    loginError('');
+    if (!code) {
+      loginError(t('mfa.needSmsCode'));
+      return;
+    }
+    try {
+      await cognitoCall('VerifyUserAttribute', {
+        AccessToken: state.accessToken,
+        AttributeName: 'phone_number',
+        Code: code,
+      });
+      await cognitoCall('SetUserMFAPreference', {
+        AccessToken: state.accessToken,
+        SMSMfaSettings: { Enabled: true, PreferredMfa: true },
+      });
+      setStatus(t('mfa.smsOn'), 'ok');
+      if (forced) await showRole();
+      else await showSecurityMfa();
+    } catch (e) {
+      loginError(e.message);
+    }
+  };
+}
+
+function mfaOrgPolicyHtml(settings) {
+  const req = coerceRequireMfa(settings?.requireMfa, false);
+  return `
+    <div class="mfa-advanced-panel" id="mfaOrgPolicy">
+      <p class="muted">${esc(t('mfa.policyBlurb'))}</p>
+      <div class="row">
+        <label>${esc(t('mfa.requireLabel'))}
+          <select id="requireMfa">
+            <option value="true" ${req ? 'selected' : ''}>${esc(t('mfa.on'))}</option>
+            <option value="false" ${!req ? 'selected' : ''}>${esc(t('mfa.off'))}</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted">${esc(t('mfa.smsOffNote'))}</p>
+      <button type="button" class="btn-primary" id="saveMfaSettings">${esc(t('mfa.savePolicy'))}</button>
+      <p class="muted" id="mfaSettingsStatus"></p>
+    </div>
+  `;
+}
+
+function bindMfaOrgPolicySave(onSaved) {
+  document.getElementById('saveMfaSettings')?.addEventListener('click', async () => {
+    const statusEl = document.getElementById('mfaSettingsStatus');
+    try {
+      const requested = document.getElementById('requireMfa').value === 'true';
+      const wantOff = !requested;
+      const out = await api(
+        'POST',
+        '/admin/settings',
+        {
+          requireMfa: requested,
+          allowSmsMfa: false,
+        },
+        { timeoutMs: 20000 },
+      );
+      // Re-GET for confirmation — but Scan hydrate can lag; trust POST when it matches
+      // the value we just sent (that path uses strongly consistent persist + echo).
+      let verified = out.settings || {};
+      try {
+        const fresh = await api('GET', '/admin/settings');
+        if (fresh?.settings) verified = fresh.settings;
+      } catch {
+        /* keep POST body */
+      }
+      const fromGet = coerceRequireMfa(verified.requireMfa, false);
+      const postedMatches =
+        typeof out.settings?.requireMfa === 'boolean' && out.settings.requireMfa === requested;
+      const req = postedMatches ? out.settings.requireMfa : fromGet;
+      const sel = document.getElementById('requireMfa');
+      if (sel) sel.value = req ? 'true' : 'false';
+      state.meSettings = { ...(state.meSettings || {}), requireMfa: req, allowSmsMfa: false };
+      cacheRequireMfa(req);
+      // Keep the Security page org-status line in sync without waiting for a full re-render.
+      const orgStatus = document.getElementById('mfaOrgRequires');
+      if (orgStatus) orgStatus.textContent = req ? t('mfa.yes') : t('mfa.no');
+      const pending = out.mfaClear?.pending;
+      const clearErr = out.mfaClear?.error;
+      let msg = t('mfa.policySaved');
+      if (!req && pending) {
+        msg = `${t('mfa.policySaved')} (Cognito MFA clear still running — policy is OFF)`;
+      } else if (!req && clearErr) {
+        msg = `${t('mfa.policySaved')} (Cognito MFA clear had an error — policy is still OFF)`;
+      } else if (wantOff && req) {
+        msg = 'Save reported Require MFA still ON — try again.';
+        if (statusEl) statusEl.textContent = msg;
+        setStatus(msg, 'err');
+        return;
+      }
+      if (statusEl) statusEl.textContent = msg;
+      setStatus(msg, 'ok');
+      if (typeof onSaved === 'function') onSaved({ requireMfa: req, allowSmsMfa: false });
+    } catch (err) {
+      // On failure, re-read so the select shows Dynamo — not a stale local Off/On.
+      try {
+        const fresh = await api('GET', '/admin/settings');
+        const req = coerceRequireMfa(fresh.settings?.requireMfa, false);
+        const sel = document.getElementById('requireMfa');
+        if (sel) sel.value = req ? 'true' : 'false';
+        cacheRequireMfa(req);
+        const orgStatus = document.getElementById('mfaOrgRequires');
+        if (orgStatus) orgStatus.textContent = req ? t('mfa.yes') : t('mfa.no');
+      } catch {
+        /* ignore */
+      }
+      if (statusEl) statusEl.textContent = err.message || t('common.error');
+      setStatus(err.message || t('common.error'), 'err');
+    }
+  });
+}
+
+async function showAdvancedMfaPolicy() {
+  if (state.role !== 'admin') {
+    setStatus('Admin only.', 'err');
+    return;
+  }
+  hideAppChrome();
+  document.body.classList.remove('is-auth');
+  document.body.classList.add('is-app');
+  const whoBar = document.getElementById('whoBar');
+  whoBar.hidden = false;
+  const settings = await fetchAppMfaSettings();
+  view(`
+    <div class="card login-card mfa-setup-card">
+      <h2>${esc(t('mfa.advancedHint'))}</h2>
+      ${mfaOrgPolicyHtml(settings)}
+      <p><button type="button" class="btn" id="mfaAdvBack">${esc(t('mfa.back'))}</button></p>
+    </div>
+  `);
+  bindMfaOrgPolicySave();
+  document.getElementById('mfaAdvBack').onclick = () => showRole();
+}
+
+async function showSecurityMfa() {
+  if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
+    signOut(t('session.ended'));
+    return;
+  }
+  if (!state.accessToken) {
+    view(`
+      <div class="card login-card">
+        <h2>${esc(t('mfa.securityTitle'))}</h2>
+        <div class="err-box">${esc(t('mfa.needResign'))}</div>
+        <button type="button" class="btn" id="mfaBack">${esc(t('mfa.back'))}</button>
+      </div>
+    `);
+    document.getElementById('mfaBack').onclick = () => showRole();
+    return;
+  }
+  const settings = await fetchAppMfaSettings();
+  let mfa = { hasSoftware: false, hasSms: false, hasEmail: false, hasPasskey: false, hasAny: false, phone: '' };
+  try {
+    mfa = await getCognitoUserMfa(state.accessToken);
+  } catch (e) {
+    /* show below */
+  }
+  const canDisable = settings.requireMfa !== true;
+  const isAdmin = state.role === 'admin';
+  const uname = state.email || cognitoUsernameFromToken(state.idToken);
+  const trusted = Boolean(loadDeviceRecord(uname));
+  view(`
+    <div class="card login-card mfa-setup-card">
+      ${langSwitcherHtml(false)}
+      <h2>${esc(t('mfa.securityTitle'))}</h2>
+      <p>${esc(t('mfa.securityBlurb'))}</p>
+      <div id="loginErr" class="err-box" hidden></div>
+      <ul class="mfa-status-list">
+        <li>${esc(t('mfa.statusTotp'))}: <strong>${mfa.hasSoftware ? esc(t('mfa.on')) : esc(t('mfa.off'))}</strong></li>
+        <li>${esc(t('mfa.statusEmail'))}: <strong>${mfa.hasEmail ? esc(t('mfa.on')) : esc(t('mfa.off'))}</strong></li>
+        <li>${esc(t('mfa.statusPasskey'))}: <strong>${mfa.hasPasskey ? esc(t('mfa.on')) : esc(t('mfa.off'))}</strong></li>
+        <li>${esc(t('mfa.statusOrg'))}: <strong id="mfaOrgRequires">${settings.requireMfa === true ? esc(t('mfa.yes')) : esc(t('mfa.no'))}</strong></li>
+      </ul>
+      <button type="button" class="btn-primary" id="mfaAddMethods">${esc(t('mfa.addMethods'))}</button>
+      ${!canDisable ? `<p class="muted">${esc(t('mfa.requiredNote'))}</p>` : ''}
+      <p class="muted">${esc(t('mfa.trustedLabel'))}: ${trusted ? esc(t('mfa.trustedYes')) : esc(t('mfa.trustedNo'))}
+        ${trusted ? ` <button type="button" class="linkish" id="forgetDevice">${esc(t('mfa.forgetDevice'))}</button>` : ''}
+      </p>
+      <details class="mfa-advanced-details">
+        <summary class="mfa-advanced-summary">${esc(t('mfa.advanced'))}</summary>
+        ${
+          canDisable && mfa.hasAny
+            ? `<p><button type="button" class="btn" id="mfaDisable">${esc(t('mfa.disableMine'))}</button></p>`
+            : ''
+        }
+        ${isAdmin ? `<h3 class="mfa-adv-h">${esc(t('mfa.advancedHint'))}</h3>${mfaOrgPolicyHtml(settings)}` : ''}
+      </details>
+      <p><button type="button" class="btn" id="mfaBack">${esc(t('mfa.back'))}</button></p>
+    </div>
+  `);
+  bindLangSwitcher(document.getElementById('view'), () => showSecurityMfa());
+  document.getElementById('mfaBack').onclick = () => showRole();
+  document.getElementById('mfaAddMethods').onclick = () => showMfaSetup({ forced: false });
+  document.getElementById('forgetDevice')?.addEventListener('click', () => {
+    clearDeviceRecord(uname);
+    setStatus(t('mfa.forgotDeviceOk'), 'ok');
+    showSecurityMfa();
+  });
+  document.getElementById('mfaDisable')?.addEventListener('click', async () => {
+    loginError('');
+    try {
+      // Do not send WebAuthnMfaSettings — Cognito SetUserMFAPreference rejects it and
+      // would leave EMAIL_OTP / TOTP still preferred (login keeps challenging).
+      await cognitoCall('SetUserMFAPreference', {
+        AccessToken: state.accessToken,
+        SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false },
+        SMSMfaSettings: { Enabled: false, PreferredMfa: false },
+        EmailMfaSettings: { Enabled: false, PreferredMfa: false },
+      });
+      try {
+        const creds = await cognitoCall('ListWebAuthnCredentials', { AccessToken: state.accessToken });
+        for (const c of creds.Credentials || []) {
+          const id = c.CredentialId || c.credentialId;
+          if (!id) continue;
+          await cognitoCall('DeleteWebAuthnCredential', {
+            AccessToken: state.accessToken,
+            CredentialId: id,
+          });
+        }
+      } catch {
+        /* passkeys optional */
+      }
+      setStatus(t('mfa.disabledOk'), 'ok');
+      await showSecurityMfa();
+    } catch (e) {
+      loginError(e.message);
+    }
+  });
+  if (isAdmin) {
+    bindMfaOrgPolicySave(async (saved) => {
+      // Re-render from the verified server value (already cached) so Advanced stays open on Off.
+      state.meSettings = { ...(state.meSettings || {}), ...saved };
+      cacheRequireMfa(saved.requireMfa === true);
+      await showSecurityMfa();
+      const details = document.querySelector('.mfa-advanced-details');
+      if (details) details.open = true;
+    });
+  }
+}
+
 function showForgotPassword(prefillEmail) {
   hideAppChrome();
   setStatus('', '');
   view(`
     <div class="card login-card">
-      <h2>Forgot password</h2>
-      <p>We will email a confirmation code. Then choose a new password.</p>
+      ${langSwitcherHtml(false)}
+      <h2>${esc(t('forgot.title'))}</h2>
+      <p>${esc(t('forgot.blurb'))}</p>
       <div id="loginErr" class="err-box" hidden></div>
-      <label>Email <input id="forgotEmail" type="email" autocomplete="username" placeholder="you@example.com" value="${esc(prefillEmail || '')}" /></label>
-      <button class="btn-primary big" id="forgotSendBtn">Send reset code</button>
-      <p><button type="button" class="btn" id="forgotBackBtn">Back to sign in</button></p>
+      <label>${esc(t('login.email'))} <input id="forgotEmail" type="email" autocomplete="username" placeholder="you@example.com" value="${esc(prefillEmail || '')}" /></label>
+      <button class="btn-primary big" id="forgotSendBtn">${esc(t('forgot.send'))}</button>
+      <p><button type="button" class="btn" id="forgotBackBtn">${esc(t('mfa.backLogin'))}</button></p>
     </div>
   `);
+  bindLangSwitcher(document.getElementById('view'), () => showForgotPassword(prefillEmail));
   document.getElementById('forgotBackBtn').onclick = () => showLogin('');
   document.getElementById('forgotSendBtn').onclick = async () => {
     const btn = document.getElementById('forgotSendBtn');
     const email = document.getElementById('forgotEmail').value.trim();
     loginError('');
     if (!email) {
-      loginError('Enter your email address.');
+      loginError(t('forgot.needEmail'));
       return;
     }
     btn.disabled = true;
-    btn.textContent = 'Sending…';
+    btn.textContent = t('forgot.sending');
     try {
       await cognitoCall('ForgotPassword', {
         ClientId: CLIENT_ID,
@@ -4216,7 +6469,7 @@ function showForgotPassword(prefillEmail) {
     } catch (e) {
       loginError(e.message);
       btn.disabled = false;
-      btn.textContent = 'Send reset code';
+      btn.textContent = t('forgot.send');
     }
   };
   document.getElementById('forgotEmail').focus();
@@ -4312,14 +6565,7 @@ function showNewPassword(email, session) {
         Session: session,
         ChallengeResponses: { USERNAME: email, NEW_PASSWORD: p1 },
       });
-      const auth = out.AuthenticationResult || {};
-      const idToken = auth.IdToken;
-      if (!idToken) throw new Error('Sign-in was unsuccessful. Please sign in again.');
-      applyToken(idToken, auth.AccessToken || '');
-      state.schoolConfirmed = false;
-      sessionStorage.removeItem('tmsSchoolConfirmed');
-      openingAccountView();
-      await showRole();
+      await handleAuthResponse(out, { email });
     } catch (e) {
       loginError(e.message);
       btn.disabled = false;
@@ -4428,6 +6674,10 @@ document.getElementById('role').onchange = (e) => {
 
 document.getElementById('changePassword').onclick = () => {
   showChangePassword();
+};
+
+document.getElementById('securityMfa').onclick = () => {
+  showSecurityMfa();
 };
 
 document.getElementById('signout').onclick = () => {
@@ -4599,10 +6849,15 @@ async function lunaChat(userText) {
   if (sendBtn) sendBtn.disabled = true;
   syncLunaHandoffBar();
   try {
-    const out = await api('POST', '/support/luna/chat', {
-      messages: lunaState.messages.map((m) => ({ role: m.role, content: m.content })),
-      pageUrl: typeof location !== 'undefined' ? location.href : '',
-    });
+    const out = await api(
+      'POST',
+      '/support/luna/chat',
+      {
+        messages: lunaState.messages.map((m) => ({ role: m.role, content: m.content })),
+        pageUrl: typeof location !== 'undefined' ? location.href : '',
+      },
+      lunaApiOpts(),
+    );
     const reply = String(out.reply || '').trim() || 'Thanks — could you share a bit more detail?';
     lunaState.messages.push({ role: 'assistant', content: reply });
     if (String(out.action || '').toLowerCase() === 'handoff') {
@@ -4624,13 +6879,13 @@ async function lunaHandoff() {
   if (lunaState.busy || !lunaState.readyForHandoff) return;
   const { contactName, contactEmail } = readLunaContact();
   if (!contactName) {
-    setLunaStatus('Enter your name before sending to Moshe.');
+    setLunaStatus('Enter your name before sending to our team.');
     document.getElementById('lunaContactName')?.focus();
     syncLunaHandoffBar();
     return;
   }
   if (!lunaEmailLooksOk(contactEmail)) {
-    setLunaStatus('Enter a valid email before sending to Moshe.');
+    setLunaStatus('Enter a valid email before sending to our team.');
     document.getElementById('lunaContactEmail')?.focus();
     syncLunaHandoffBar();
     return;
@@ -4641,16 +6896,24 @@ async function lunaHandoff() {
   if (btn) btn.disabled = true;
   renderLunaMessages(true);
   try {
-    const out = await api('POST', '/support/luna/handoff', {
-      messages: lunaState.messages.map((m) => ({ role: m.role, content: m.content })),
-      summary: lunaState.pendingSummary,
-      pageUrl: typeof location !== 'undefined' ? location.href : '',
-      contactName,
-      contactEmail,
-    });
+    const out = await api(
+      'POST',
+      '/support/luna/handoff',
+      {
+        messages: lunaState.messages.map((m) => ({ role: m.role, content: m.content })),
+        summary: lunaState.pendingSummary,
+        pageUrl: typeof location !== 'undefined' ? location.href : '',
+        contactName,
+        contactEmail,
+      },
+      lunaApiOpts(),
+    );
+    const herEmail = String(out.contactEmail || contactEmail || '').trim();
     const reply =
       String(out.reply || '').trim() ||
-      'Thanks — I sent this to support. Moshe will follow up by email.';
+      (herEmail
+        ? `Thanks — I’ve sent this to our team. We’ll follow up with you at ${herEmail}.`
+        : 'Thanks — I’ve sent this to our team. We’ll follow up at the email you provided.');
     lunaState.messages.push({ role: 'assistant', content: reply });
     lunaState.readyForHandoff = false;
     lunaState.pendingSummary = '';
@@ -4684,13 +6947,28 @@ function initLuna() {
   if (nameEl) nameEl.addEventListener('input', onContactEdit);
   if (emailEl) emailEl.addEventListener('input', onContactEdit);
   if (form) {
-    form.onsubmit = (e) => {
-      e.preventDefault();
+    const sendLunaMessage = () => {
       const input = document.getElementById('lunaInput');
       const text = input?.value || '';
       if (input) input.value = '';
       lunaChat(text);
     };
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      sendLunaMessage();
+    };
+    const input = document.getElementById('lunaInput');
+    if (input) {
+      input.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        // Shift+Enter keeps newline in the textarea; bare Enter sends.
+        if (e.shiftKey) return;
+        e.preventDefault();
+        e.stopPropagation();
+        sendLunaMessage();
+      });
+    }
   }
   setLunaOpen(lunaState.open);
 }
@@ -4698,24 +6976,39 @@ function initLuna() {
 function hideAppChrome() {
   document.body.classList.add('is-auth');
   document.body.classList.remove('is-app');
+  // Language control stays visible in the header (outside whoBar).
+  applyStaticI18n();
   document.getElementById('whoBar').hidden = true;
   document.getElementById('rolePick').hidden = true;
   document.getElementById('adminNav').hidden = true;
   document.getElementById('therapistNav').hidden = true;
   document.getElementById('changePassword').hidden = true;
+  document.getElementById('securityMfa').hidden = true;
   document.getElementById('signout').hidden = true;
   document.getElementById('whoami').textContent = '';
-  setLunaVisible(false);
+  initLuna();
+  setLunaVisible(true);
 }
 
 async function showRole() {
   if (COGNITO_MODE && !tokenStillGood(state.idToken)) {
-    signOut('Your session has ended. Please sign in again.');
+    signOut(t('session.ended'));
     return;
+  }
+  if (COGNITO_MODE && state.idToken) {
+    try {
+      const me = await api('GET', '/me');
+      if (me?.user?.role === 'admin' || me?.user?.role === 'therapist') {
+        state.role = me.user.role;
+      }
+    } catch {
+      /* keep token-derived role */
+    }
   }
   const admin = state.role === 'admin';
   document.body.classList.remove('is-auth');
   document.body.classList.add('is-app');
+  applyStaticI18n();
   // Always show whoBar after login for both therapist and admin
   const whoBar = document.getElementById('whoBar');
   whoBar.hidden = false;
@@ -4723,18 +7016,24 @@ async function showRole() {
   // Therapists get one page — never show therapist tab nav
   document.getElementById('therapistNav').hidden = true;
   document.getElementById('adminNav').hidden = !admin;
+  if (admin) void refreshSchoolsSetupBadge();
+  else updateSchoolsSetupBadge(0);
   document.getElementById('rolePick').hidden = COGNITO_MODE;
-  const label = admin ? 'Admin' : 'Therapist';
+  const label = admin ? t('nav.admin') : t('nav.therapist');
   document.getElementById('whoami').textContent = COGNITO_MODE && state.email ? `${state.email} — ${label}` : label;
   const changePw = document.getElementById('changePassword');
+  const securityMfa = document.getElementById('securityMfa');
   const signOutBtn = document.getElementById('signout');
   if (COGNITO_MODE) {
     changePw.hidden = false;
     changePw.removeAttribute('hidden');
+    securityMfa.hidden = false;
+    securityMfa.removeAttribute('hidden');
     signOutBtn.hidden = false;
     signOutBtn.removeAttribute('hidden');
   } else {
     changePw.hidden = true;
+    securityMfa.hidden = true;
     signOutBtn.hidden = true;
   }
   initLuna();
@@ -4743,6 +7042,10 @@ async function showRole() {
   // shows "signed in" while the login form is still stuck on Signing in…
   openingAccountView();
   try {
+    if (COGNITO_MODE && state.accessToken) {
+      const blocked = await enforceMfaIfRequired();
+      if (blocked) return;
+    }
     if (admin) await adminDash();
     else await therapistHome();
   } catch (e) {
@@ -4752,6 +7055,8 @@ async function showRole() {
 
 if (COGNITO_MODE) {
   hideAppChrome();
+  applyStaticI18n();
+  bindFooterAdvancedSecurity();
   if (tokenStillGood(state.idToken)) {
     applyToken(state.idToken);
     showRole();
@@ -4759,5 +7064,35 @@ if (COGNITO_MODE) {
     showLogin('');
   }
 } else {
+  applyStaticI18n();
+  bindFooterAdvancedSecurity();
   showRole();
+}
+
+function bindFooterAdvancedSecurity() {
+  const footer = document.getElementById('siteFooter');
+  if (!footer || footer.dataset.mfaHoldBound) return;
+  footer.dataset.mfaHoldBound = '1';
+  let holdTimer = null;
+  const start = (e) => {
+    if (state.role !== 'admin' || !state.accessToken) return;
+    if (e.type === 'mousedown' && e.button !== 0) return;
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      showAdvancedMfaPolicy();
+    }, 1600);
+  };
+  const clear = () => {
+    if (holdTimer) {
+      clearTimeout(holdTimer);
+      holdTimer = null;
+    }
+  };
+  footer.addEventListener('mousedown', start);
+  footer.addEventListener('touchstart', start, { passive: true });
+  footer.addEventListener('mouseup', clear);
+  footer.addEventListener('mouseleave', clear);
+  footer.addEventListener('touchend', clear);
+  footer.addEventListener('touchcancel', clear);
+  footer.title = t('mfa.footerHold');
 }

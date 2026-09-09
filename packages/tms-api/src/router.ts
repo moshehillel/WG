@@ -28,7 +28,9 @@ import {
   sessionSlotLabel,
   cptDurationError,
   notesLookCopyPasted,
+  noteIsCopyPasteSource,
   noteCopyPasteError,
+  missedSessionReasonError,
   sessionSignatureError,
   sessionOverlapError,
   providerDaySessions,
@@ -48,8 +50,13 @@ import {
   isAdditionalServiceType,
   emptySchoolCalendar,
   isIsoDate,
+  mergeSchoolCalendarParse,
   normalizeOffDays,
   parseOffDaysCsv,
+  parseSchoolCalendarPdfText,
+  SCHOOL_CALENDAR_PDF_HINT,
+  SCHOOL_CALENDAR_PDF_NO_TEXT_ERROR,
+  schoolSetupIncomplete,
   blankProviderPay,
   sessionPayAmount,
   DEFAULT_ADMIN_NOTE_TAGS,
@@ -74,13 +81,31 @@ import { transferLockedWeek } from './hha-transfer.js';
 import { buildTimesheetPdf } from './timesheet.js';
 import { createSignEnvelope, envelopeCompleted, voidSignEnvelope } from './esign.js';
 import { deactivateCognitoLogin, deleteCognitoLogin, inviteTherapist } from './invite.js';
+import { clearAllCognitoMfaPreferences } from './mfa-clear.js';
 import { PDF_NO_TEXT_ERROR, bodyHasPdfBytes, pdfTextFromBody } from './pdf-text.js';
 import { runDueNags } from './due-nags.js';
 import { runHhaErrorDigest } from './hha-error-digest.js';
-import { putLockerPdf } from './s3-state.js';
+import { getPdfFromS3, putLockerPdf } from './s3-state.js';
 import type { Mailer } from './mail.js';
 import type { HhaClient } from '@white-glove/hha-client';
-import { runLunaChat, sendLunaHandoff } from './luna.js';
+import {
+  buildHandoffConfirmationReply,
+  checkLunaGuestRateLimit,
+  isLunaGuestUser,
+  LUNA_GUEST_USER,
+  lunaClientIp,
+  runLunaChat,
+  sendLunaHandoff,
+} from './luna.js';
+import {
+  archiveListItem,
+  canAccessArchive,
+  detectUploadSourceType,
+  filterArchives,
+  findTimesheetArchive,
+  markTimesheetArchivesStatus,
+  persistArchivePdf,
+} from './archive.js';
 
 export interface HttpRequest {
   method: string;
@@ -116,6 +141,107 @@ function obj(req: HttpRequest): Record<string, unknown> {
     return req.body as Record<string, unknown>;
   }
   return {};
+}
+
+/** Accept real booleans or common string/number encodings from proxies. */
+function coerceOptionalBool(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (value === 'true' || value === 1 || value === '1') return true;
+  if (value === 'false' || value === 0 || value === '0') return false;
+  return undefined;
+}
+
+function authorizationToken(headers: Record<string, string | undefined>): string {
+  const h = Object.fromEntries(
+    Object.entries(headers || {}).map(([k, v]) => [k.toLowerCase(), v]),
+  );
+  const auth = h.authorization || '';
+  return auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
+}
+
+/** Luna works signed-in or as a rate-limited guest (login screen). */
+async function resolveLunaCaller(
+  store: MemoryStore,
+  headers: Record<string, string | undefined>,
+): Promise<{ user: AppUser; guest: boolean }> {
+  if (!authorizationToken(headers)) {
+    return { user: LUNA_GUEST_USER, guest: true };
+  }
+  const auth = await authenticate(store, headers);
+  if ('error' in auth) {
+    // Stale/invalid JWT on the login page — still allow guest support chat.
+    return { user: LUNA_GUEST_USER, guest: true };
+  }
+  return { user: auth.user, guest: false };
+}
+
+async function handleLunaRoutes(
+  store: MemoryStore,
+  req: HttpRequest,
+  path: string,
+  deps: { mail?: Mailer },
+): Promise<HttpResponse | null> {
+  if (req.method !== 'POST') return null;
+  if (path !== '/support/luna/chat' && path !== '/support/luna/handoff') return null;
+
+  const { user, guest } = await resolveLunaCaller(store, req.headers);
+  if (guest) {
+    const ip = lunaClientIp(req.headers);
+    const limited =
+      path === '/support/luna/chat'
+        ? checkLunaGuestRateLimit(`luna-chat:${ip}`, 30, 15 * 60_000)
+        : checkLunaGuestRateLimit(`luna-handoff:${ip}`, 5, 60 * 60_000);
+    if (limited) return json(429, { error: limited });
+  }
+
+  const b = obj(req);
+  if (path === '/support/luna/chat') {
+    try {
+      const out = await runLunaChat({
+        messages: b.messages,
+        pageUrl: String(b.pageUrl || '').trim(),
+        user,
+      });
+      return json(200, out);
+    } catch (err) {
+      const status = Number((err as { status?: number })?.status) || 502;
+      return json(status, {
+        error: err instanceof Error ? err.message : 'Luna is unavailable.',
+      });
+    }
+  }
+
+  if (!deps.mail) return json(503, { error: 'Mailer is not configured.' });
+  try {
+    const out = await sendLunaHandoff({
+      mail: deps.mail,
+      user,
+      messages: b.messages,
+      summary: String(b.summary || '').trim(),
+      pageUrl: String(b.pageUrl || '').trim(),
+      contactName: b.contactName,
+      contactEmail: b.contactEmail,
+    });
+    const actorId = isLunaGuestUser(user) ? 'guest' : user.id;
+    store.audit(actorId, 'luna_handoff', `user:${actorId}`, null, {
+      to: out.to,
+      mailId: out.id,
+      contactName: out.contactName,
+      contactEmail: out.contactEmail,
+      guest,
+    });
+    return json(200, {
+      ok: true,
+      id: out.id,
+      contactEmail: out.contactEmail,
+      reply: buildHandoffConfirmationReply(out.contactEmail),
+    });
+  } catch (err) {
+    const status = Number((err as { status?: number })?.status) || 502;
+    return json(status, {
+      error: err instanceof Error ? err.message : 'Unable to send the support handoff.',
+    });
+  }
 }
 
 /** Child id → "First Last" for mandate over/under messages. */
@@ -165,18 +291,23 @@ function overMandateSummary(errors: string[]): string {
   return `Upload blocked — ${errors.length} sessions exceed the mandate. See details for each child and date/time.`;
 }
 
-/** Identity for upload dedupe / skip-already-saved (child + DOS + times). */
+/** Identity for upload dedupe / skip-already-saved (child + DOS + times + attendance). */
 function uploadSessionKey(s: {
   studentId: string;
   dateOfService: string;
   beginTime: string;
   endTime: string;
+  attendance?: string;
 }): string {
+  const attendance = String(s.attendance || 'attended')
+    .trim()
+    .toLowerCase();
   return [
     String(s.studentId || '').trim().toLowerCase(),
     String(s.dateOfService || '').trim().toLowerCase(),
     String(s.beginTime || '').trim().toLowerCase().replace(/\./g, ''),
     String(s.endTime || '').trim().toLowerCase().replace(/\./g, ''),
+    attendance || 'attended',
   ].join('|');
 }
 
@@ -196,6 +327,8 @@ function formatUploadRowLabel(row: {
 }
 
 function providerFor(store: MemoryStore, user: AppUser) {
+  // Explicit admin role wins over any leftover provider link (therapist chrome).
+  if (user.role === 'admin') return undefined;
   if (user.providerId) {
     return store.data.providers.find((p) => p.id === user.providerId);
   }
@@ -212,10 +345,15 @@ function upsertAppSettings(store: MemoryStore, next: AppSettings): AppSettings {
   return row;
 }
 
-/** Schools on this provider's caseload (via mandates). */
+/**
+ * Schools on this provider's caseload only.
+ * Unique schoolIds from students linked by mandates where providerId matches —
+ * never org-wide schools, never other therapists' caseloads, never unassigned mandates.
+ */
 function schoolsForProvider(store: MemoryStore, providerId: string) {
+  if (!providerId) return [];
   const studentIds = new Set(
-    store.data.mandates.filter((m) => m.providerId === providerId || !m.providerId).map((m) => m.studentId),
+    store.data.mandates.filter((m) => m.providerId === providerId).map((m) => m.studentId),
   );
   const schoolIds = new Set(
     store.data.students.filter((s) => studentIds.has(s.id)).map((s) => s.schoolId).filter(Boolean),
@@ -316,6 +454,9 @@ async function upsertTherapistAsProvider(
 
   let user = store.userByEmail(email);
   let createdUser = false;
+  if (user?.role === 'admin') {
+    throw new Error('That login is an admin. Create a separate therapist account or demote them first.');
+  }
   if (!user) {
     let cognitoSub = `invite-${email}`;
     try {
@@ -412,7 +553,7 @@ function visibleStudents(
   const providerId = provider?.id || '';
   const mandated = new Set(
     store.data.mandates
-      .filter((m) => m.providerId === providerId || !m.providerId)
+      .filter((m) => !!providerId && m.providerId === providerId)
       .map((m) => m.studentId),
   );
   const week = weekStart ? store.weekByProviderStart(providerId, weekStart) : undefined;
@@ -593,16 +734,25 @@ function reportXlsxDueDates(store: MemoryStore, query: Record<string, string | u
     'due-dates.xlsx',
     rowsToXlsxBuffer(
       'Due dates',
-      ['School', 'Kind', 'Due', 'Status'],
-      rows.map((r) => [r.schoolName, r.kind, r.dueOn, r.status]),
+      ['School', 'Type', 'Due Date', 'Notes', 'Status'],
+      rows.map((r) => [r.schoolName, r.kind, r.dueOn, r.notes || '', r.status]),
     ),
   );
 }
 
+export type TmsRequestDeps = {
+  hha?: HhaClient;
+  mail?: Mailer;
+  /** Flush in-memory store to durable state mid-request (e.g. before slow Cognito MFA clear). */
+  persistNow?: () => Promise<void>;
+  /** Fresh Dynamo (or store) settings row — used to avoid stale requireMfa clobbers. */
+  readLiveSettings?: () => Promise<AppSettings | null | undefined>;
+};
+
 export async function handleTmsRequest(
   store: MemoryStore,
   req: HttpRequest,
-  deps: { hha?: HhaClient; mail?: Mailer } = {},
+  deps: TmsRequestDeps = {},
 ): Promise<HttpResponse> {
   if (req.method === 'OPTIONS') return { status: 204, body: '' };
   const path = req.path.replace(/\/+$/, '') || '/';
@@ -613,6 +763,7 @@ export async function handleTmsRequest(
     const week = store.data.weeks.find((w) => w.envelopeId === envelopeId || w.id === envelopeId.replace(/^email:/, ''));
     if (!week) return json(404, { error: 'Envelope week not found.' });
     const locked = store.upsertWeek({ ...week, status: 'locked', signedKey: `tms/signed/${week.id}.pdf` });
+    markTimesheetArchivesStatus(store, week.id, 'locked');
     store.audit('esign', 'sign_and_lock', `week:${week.id}`, week, locked);
     const provider = store.data.providers.find((p) => p.id === week.providerId);
     const therapist = provider ? store.userById(provider.userId) : undefined;
@@ -652,6 +803,9 @@ export async function handleTmsRequest(
     return json(200, out);
   }
 
+  const luna = await handleLunaRoutes(store, req, path, deps);
+  if (luna) return luna;
+
   const auth = await authenticate(store, req.headers);
   if ('error' in auth) return json(auth.status, { error: auth.error });
   const ctx = auth;
@@ -666,10 +820,73 @@ export async function handleTmsRequest(
       settings: {
         sessionImportAgeLockEnabled: getAppSettings(store).sessionImportAgeLockEnabled,
         sessionImportMaxAgeDays: getAppSettings(store).sessionImportMaxAgeDays,
+        yellowWarningsBlockImport: getAppSettings(store).yellowWarningsBlockImport,
+        // Exact stored boolean (appSettingsFromStore already defaults missing → true).
+        requireMfa: getAppSettings(store).requireMfa === true,
+        allowSmsMfa: getAppSettings(store).allowSmsMfa === true,
       },
       alerts: store.openAlerts().slice(0, 20),
       dueDates: dueDatesForUser(store, ctx.user),
     });
+  }
+
+  if (req.method === 'GET' && path === '/archive') {
+    const provider = providerFor(store, ctx.user);
+    const providerId = provider?.id || '';
+    if (!providerId && ctx.user.role !== 'admin') {
+      return json(400, { error: 'No provider profile on this login.' });
+    }
+    const kind = String(req.query.kind || '').trim();
+    const rows = filterArchives(
+      providerId ? store.archivesForProvider(providerId) : store.data.archives,
+      {
+        kind: kind === 'upload' || kind === 'timesheet' ? kind : '',
+        from: String(req.query.from || ''),
+        to: String(req.query.to || ''),
+      },
+    );
+    return json(200, { items: rows.map((r) => archiveListItem(r, store)) });
+  }
+
+  if (req.method === 'GET' && path === '/admin/archive') {
+    const denied = requireAdmin(ctx);
+    if (denied) return json(403, { error: denied });
+    const kind = String(req.query.kind || '').trim();
+    const rows = filterArchives(store.data.archives, {
+      kind: kind === 'upload' || kind === 'timesheet' ? kind : '',
+      providerId: String(req.query.providerId || ''),
+      from: String(req.query.from || ''),
+      to: String(req.query.to || ''),
+    });
+    return json(200, { items: rows.map((r) => archiveListItem(r, store)) });
+  }
+
+  if (req.method === 'GET' && /^\/archive\/[^/]+\/file$/.test(path)) {
+    const id = path.split('/')[2];
+    const row = store.archiveById(id);
+    if (!row) return json(404, { error: 'Archive item not found.' });
+    const provider = providerFor(store, ctx.user);
+    if (
+      !canAccessArchive(row, {
+        role: ctx.user.role,
+        userId: ctx.user.id,
+        providerId: provider?.id,
+      })
+    ) {
+      return json(403, { error: 'You can only open your own archived files.' });
+    }
+    if (!row.s3Key) return json(404, { error: 'No file stored for this archive item.' });
+    const pdf = await getPdfFromS3(row.s3Key);
+    if (!pdf) return json(404, { error: 'Archived file missing from storage.' });
+    const safeName = String(row.filename || 'archive.pdf').replace(/[^\w.\-]+/g, '_');
+    return {
+      status: 200,
+      headers: {
+        'content-type': 'application/pdf',
+        'content-disposition': `inline; filename="${safeName}"`,
+      },
+      body: pdf,
+    };
   }
 
   if (req.method === 'GET' && path === '/dashboard') {
@@ -687,23 +904,58 @@ export async function handleTmsRequest(
   };
 
   if (req.method === 'GET' && path === '/admin/settings') {
-    return adminUser(() => json(200, { settings: getAppSettings(store) }));
+    return adminUser(async () => {
+      // Prefer strongly consistent live row when available (Scan hydrate can lag).
+      if (deps.readLiveSettings) {
+        try {
+          const live = await deps.readLiveSettings();
+          if (live) {
+            upsertAppSettings(store, live);
+            return json(200, { settings: live });
+          }
+        } catch (err) {
+          console.error('[tms-api] readLiveSettings on GET /admin/settings failed', err);
+        }
+      }
+      return json(200, { settings: getAppSettings(store) });
+    });
   }
 
   if (req.method === 'POST' && path === '/admin/settings') {
-    return adminUser(() => {
+    return adminUser(async () => {
       const b = obj(req);
-      const prev = getAppSettings(store);
+      // Re-read live settings immediately before merge. Concurrent writers (age-lock /
+      // yellow / MFA) load a snapshot at request start; a stale requireMfa:true in that
+      // snapshot was overwriting a just-saved requireMfa:false on the next settings PUT.
+      const memPrev = getAppSettings(store);
+      let livePrev = memPrev;
+      if (deps.readLiveSettings) {
+        try {
+          const live = await deps.readLiveSettings();
+          if (live) livePrev = live;
+        } catch (err) {
+          console.error('[tms-api] readLiveSettings failed; using in-memory settings', err);
+        }
+      }
+      const prev = livePrev;
+      const bodyRequireMfa = coerceOptionalBool(b.requireMfa);
+      const bodyAgeLock = coerceOptionalBool(b.sessionImportAgeLockEnabled);
+      const bodyYellow = coerceOptionalBool(b.yellowWarningsBlockImport);
       const next = upsertAppSettings(store, {
         ...prev,
         sessionImportAgeLockEnabled:
-          typeof b.sessionImportAgeLockEnabled === 'boolean'
-            ? b.sessionImportAgeLockEnabled
-            : prev.sessionImportAgeLockEnabled,
+          bodyAgeLock !== undefined ? bodyAgeLock : prev.sessionImportAgeLockEnabled,
         sessionImportMaxAgeDays:
           Number(b.sessionImportMaxAgeDays) > 0
             ? Math.floor(Number(b.sessionImportMaxAgeDays))
             : prev.sessionImportMaxAgeDays,
+        yellowWarningsBlockImport:
+          bodyYellow !== undefined ? bodyYellow : prev.yellowWarningsBlockImport,
+        // Only apply requireMfa when the client explicitly sends a bool-ish value — never invent true.
+        // String "false" must not fall through to prev (was sticky ON behind some proxies).
+        requireMfa: bodyRequireMfa !== undefined ? bodyRequireMfa : prev.requireMfa,
+        // Moshe decision: SMS MFA stays off — ignore client attempts to enable.
+        allowSmsMfa: false,
         unlockedWeekIds: Array.isArray(b.unlockedWeekIds)
           ? b.unlockedWeekIds.map(String)
           : prev.unlockedWeekIds,
@@ -711,8 +963,42 @@ export async function handleTmsRequest(
           ? b.unlockedProviderIds.map(String)
           : prev.unlockedProviderIds,
       });
-      store.audit(ctx.user.id, 'update_settings', 'settings:global', prev, next);
-      return json(200, { settings: next });
+      store.audit(ctx.user.id, 'update_settings', 'settings:global', memPrev, next);
+      // Persist requireMfa OFF *before* any Cognito work so Advanced/login never see sticky ON.
+      if (deps.persistNow) {
+        try {
+          await deps.persistNow();
+        } catch (err) {
+          console.error('[tms-api] persist settings before MFA clear failed', err);
+          return json(500, {
+            error: 'Could not save MFA policy. Try again.',
+            settings: next,
+          });
+        }
+      }
+      // Cognito OPTIONAL MFA still challenges users with PreferredMfaSetting.
+      // Fire-and-forget clear so Netlify's proxy always gets requireMfa:false quickly.
+      let mfaClear:
+        | { cleared: number; errors: number; skipped: boolean; pending?: boolean; error?: string }
+        | undefined;
+      if (next.requireMfa === false) {
+        mfaClear = { cleared: 0, errors: 0, skipped: false, pending: true };
+        void clearAllCognitoMfaPreferences()
+          .then((result) => {
+            store.audit(ctx.user.id, 'clear_cognito_mfa', 'cognito:pool', prev.requireMfa, result);
+          })
+          .catch((err) => {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error('[tms-api] clear Cognito MFA after requireMfa=false failed', err);
+            store.audit(ctx.user.id, 'clear_cognito_mfa_failed', 'cognito:pool', prev.requireMfa, {
+              cleared: 0,
+              errors: 1,
+              skipped: false,
+              error: message,
+            });
+          });
+      }
+      return json(200, { settings: next, mfaClear });
     });
   }
 
@@ -747,6 +1033,7 @@ export async function handleTmsRequest(
       if (!email) return json(400, { error: 'Email is required.' });
 
       // Therapist with profile fields → one-shot user + provider + link (same as /admin/therapists).
+      // Admin invites never take this path (no provider chrome).
       const wantsProvider =
         role === 'therapist' &&
         (b.discipline != null ||
@@ -778,10 +1065,17 @@ export async function handleTmsRequest(
       }
 
       if (store.userByEmail(email)) return json(400, { error: 'User already exists.' });
+      const displayName = String(b.displayName || email);
+      // Admins must never get a providerId from the client body.
+      const providerId = role === 'admin' ? '' : String(b.providerId || '');
       let cognitoSub = String(b.cognitoSub || `invite-${email}`);
+      let cognitoOk = !process.env.TMS_USER_POOL_ID?.trim();
       try {
-        cognitoSub = await inviteTherapist(email, String(b.displayName || email), role);
+        cognitoSub = await inviteTherapist(email, displayName, role);
+        cognitoOk = true;
       } catch (err) {
+        // Pool configured but Cognito failed: still create Dynamo so ops can repair groups,
+        // but surface the failure in the message. inviteTherapist now syncs groups on UsernameExists.
         cognitoSub = `invite-${email}`;
         void err;
       }
@@ -790,18 +1084,21 @@ export async function handleTmsRequest(
         cognitoSub,
         email,
         role,
-        displayName: String(b.displayName || email),
-        providerId: String(b.providerId || ''),
+        displayName,
+        providerId,
         active: true,
         createdAt: nowIso(),
       };
       store.upsertUser(user);
-      if (user.providerId) linkUserToProvider(store, user.id, user.providerId);
+      if (role === 'therapist' && user.providerId) linkUserToProvider(store, user.id, user.providerId);
       store.audit(ctx.user.id, 'invite_user', `user:${user.id}`, null, user);
       const who = role === 'admin' ? 'Admin' : 'Therapist';
+      const cognitoNote = cognitoOk
+        ? 'They will get a Cognito email when the user pool is configured.'
+        : 'App role saved; Cognito invite/group sync failed — repair Cognito groups before they sign in.';
       return json(201, {
         user: store.userById(user.id),
-        message: `${who} invite created. They will get a Cognito email when the user pool is configured.`,
+        message: `${who} invite created. ${cognitoNote}`,
       });
     });
   }
@@ -904,11 +1201,31 @@ export async function handleTmsRequest(
   if (req.method === 'GET' && path === '/admin/schools') {
     return adminUser(() => {
       const calendarsBySchoolId: Record<string, SchoolCalendar> = {};
+      const setupBySchoolId: Record<
+        string,
+        {
+          incomplete: boolean;
+          missingCalendar: boolean;
+          missingAddress: boolean;
+          message: string;
+        }
+      > = {};
       for (const s of store.data.schools) {
-        calendarsBySchoolId[s.id] =
-          store.schoolCalendarForSchool(s.id) ?? emptySchoolCalendar(s.id);
+        const cal = store.schoolCalendarForSchool(s.id) ?? emptySchoolCalendar(s.id);
+        calendarsBySchoolId[s.id] = cal;
+        const setup = schoolSetupIncomplete(s, cal);
+        setupBySchoolId[s.id] = {
+          incomplete: setup.incomplete,
+          missingCalendar: setup.missingCalendar,
+          missingAddress: setup.missingAddress,
+          message: setup.message,
+        };
       }
-      return json(200, { schools: store.data.schools, calendarsBySchoolId });
+      return json(200, {
+        schools: store.data.schools,
+        calendarsBySchoolId,
+        setupBySchoolId,
+      });
     });
   }
 
@@ -930,6 +1247,66 @@ export async function handleTmsRequest(
       const calendar =
         store.schoolCalendarForSchool(schoolId) ?? emptySchoolCalendar(schoolId);
       return json(200, { calendar });
+    });
+  }
+
+  if (req.method === 'POST' && /^\/admin\/schools\/[^/]+\/calendar\/parse$/.test(path)) {
+    return adminUser(() => {
+      const schoolId = path.split('/')[3];
+      const school = store.data.schools.find((s) => s.id === schoolId);
+      if (!school) return json(404, { error: 'School not found.' });
+      const b = obj(req);
+      const text = pdfTextFromBody(b);
+      if (!text.trim()) {
+        return json(400, {
+          error: bodyHasPdfBytes(b)
+            ? SCHOOL_CALENDAR_PDF_NO_TEXT_ERROR
+            : 'Upload a school calendar PDF (text-based) or paste calendar text.',
+          hint: SCHOOL_CALENDAR_PDF_HINT,
+        });
+      }
+      const parsed = parseSchoolCalendarPdfText(text);
+      const existing = store.schoolCalendarForSchool(schoolId) ?? emptySchoolCalendar(schoolId);
+      const proposed = mergeSchoolCalendarParse(existing, parsed);
+      const apply = b.apply === true || b.apply === 'true' || b.save === true;
+      if (apply) {
+        if (proposed.yearStart && !isIsoDate(proposed.yearStart)) {
+          return json(400, { error: 'yearStart must be YYYY-MM-DD.' });
+        }
+        if (proposed.yearEnd && !isIsoDate(proposed.yearEnd)) {
+          return json(400, { error: 'yearEnd must be YYYY-MM-DD.' });
+        }
+        if (proposed.yearStart && proposed.yearEnd && proposed.yearStart > proposed.yearEnd) {
+          return json(400, { error: 'yearStart must be on or before yearEnd.' });
+        }
+        const before = store.schoolCalendarForSchool(schoolId) ?? null;
+        const calendar = store.upsertSchoolCalendar({
+          schoolId,
+          yearStart: proposed.yearStart,
+          yearEnd: proposed.yearEnd,
+          offDays: proposed.offDays,
+        });
+        store.audit(ctx.user.id, 'parse_school_calendar_pdf', `school:${schoolId}`, before, {
+          parsed,
+          calendar,
+        });
+        return json(200, {
+          calendar,
+          parsed,
+          proposed,
+          applied: true,
+          message: `Saved calendar from PDF: ${parsed.offDays.length} off day(s) extracted, ${proposed.offDays.length} total after merge.`,
+          hint: SCHOOL_CALENDAR_PDF_HINT,
+        });
+      }
+      return json(200, {
+        parsed,
+        proposed,
+        applied: false,
+        message: `Parsed ${parsed.offDays.length} off day(s) from PDF. Review and save to apply.`,
+        hint: SCHOOL_CALENDAR_PDF_HINT,
+        warnings: parsed.warnings,
+      });
     });
   }
 
@@ -1344,6 +1721,8 @@ export async function handleTmsRequest(
         discipline,
         durationMinutes,
         mandateKind,
+        ratioGroup: Boolean(b.ratioGroup),
+        groupSize: groupSize ?? (Boolean(b.ratioGroup) ? 2 : 1),
       });
       const mandate = store.upsertMandate({
         id: newId(),
@@ -1360,7 +1739,7 @@ export async function handleTmsRequest(
         ratioGroup: Boolean(b.ratioGroup),
         durationMinutes,
         billingServiceName,
-        groupSize: groupSize ?? (Boolean(b.ratioGroup) ? null : 1),
+        groupSize: groupSize ?? (Boolean(b.ratioGroup) ? 2 : 1),
         location: String(b.location || ''),
         sourcePdfKey: 'manual',
         parsedAt: nowIso(),
@@ -1402,12 +1781,20 @@ export async function handleTmsRequest(
       const ratioGroup = b.ratioGroup == null ? existing.ratioGroup : Boolean(b.ratioGroup);
       const durationMinutes =
         b.durationMinutes === undefined ? existing.durationMinutes ?? null : parseNullableNumber(b.durationMinutes);
-      const groupSize =
+      const groupSizeRaw =
         b.groupSize === undefined ? existing.groupSize ?? null : parseNullableNumber(b.groupSize);
+      const groupSize =
+        groupSizeRaw != null && Number.isFinite(groupSizeRaw) && groupSizeRaw > 0
+          ? groupSizeRaw
+          : ratioGroup
+            ? 2
+            : 1;
       const billingServiceName = schoolBillingServiceNameForMandate({
         discipline,
         durationMinutes,
         mandateKind,
+        ratioGroup,
+        groupSize,
       });
       const mandate = store.upsertMandate({
         ...existing,
@@ -1464,36 +1851,45 @@ export async function handleTmsRequest(
   if (req.method === 'POST' && path === '/admin/due-dates') {
     return adminUser(() => {
       const b = obj(req);
-      const schoolId = String(b.schoolId || '').trim();
+      const idIn = String(b.id || '').trim();
+      const existing = idIn ? store.data.dueDates.find((d) => d.id === idIn) : undefined;
+      const schoolId = String(b.schoolId || existing?.schoolId || '').trim();
       if (!schoolId) return json(400, { error: 'schoolId is required.' });
       const school = store.data.schools.find((s) => s.id === schoolId);
       if (!school) return json(404, { error: 'School not found.' });
-      const kind = b.kind === 'annual' || b.kind === 'reeval' ? b.kind : 'progress';
-      const dueOn = String(b.dueOn || '').trim();
+      const typeRaw = String(b.reportType || b.kind || existing?.kind || 'progress').trim();
+      const kind = typeRaw === 'annual' || typeRaw === 'reeval' ? typeRaw : 'progress';
+      const dueOn = String(b.dueDate || b.dueOn || '').trim();
       if (!dueOn) return json(400, { error: 'dueOn is required.' });
-      const existing = store.data.dueDates.find(
-        (d) => d.schoolId === schoolId && d.kind === kind && !d.completedAt,
-      );
+      const notes =
+        b.notes !== undefined ? String(b.notes || '').trim() : String(existing?.notes || '').trim();
+      // Create a new assignment unless editing by id — same type + different notes allowed.
       const row = store.upsertDueDate({
-        id: String(b.id || existing?.id || newId()),
+        id: existing?.id || newId(),
         schoolId,
         kind,
         dueOn,
-        completedAt: String(b.completedAt || ''),
-        lastNagOn: existing && existing.dueOn === dueOn ? existing.lastNagOn : '',
+        notes,
+        completedAt: String(b.completedAt ?? existing?.completedAt ?? ''),
+        lastNagOn:
+          existing && existing.dueOn === dueOn ? existing.lastNagOn || '' : '',
       });
       const label = school.name || schoolId;
+      const noteBit = row.notes ? ` — ${row.notes}` : '';
+      for (const a of store.data.alerts) {
+        if (a.entityRef === `due:${row.id}` && !a.resolved) a.resolved = true;
+      }
       store.addAlert({
         id: newId(),
         userId: '',
         kind: `due_${row.kind}`,
         severity: 'warning',
-        body: `${label}: ${row.kind} due ${row.dueOn}`,
+        body: `${label}: ${row.kind} due ${row.dueOn}${noteBit}`,
         entityRef: `due:${row.id}`,
         resolved: Boolean(row.completedAt),
         createdAt: nowIso(),
       });
-      return json(201, { dueDate: row });
+      return json(existing ? 200 : 201, { dueDate: row });
     });
   }
 
@@ -1622,6 +2018,9 @@ export async function handleTmsRequest(
       return json(403, { error: 'You can only list your own weeks.' });
     }
     const currentStart = weekStartFromDos(nowIso().slice(0, 10));
+    const payProvider =
+      store.data.providers.find((p) => p.id === providerId) ||
+      (provider?.id === providerId ? provider : undefined);
     const weeks = store.data.weeks
       .filter((w) => w.providerId === providerId)
       .map((w) => ({
@@ -1633,7 +2032,43 @@ export async function handleTmsRequest(
         processed: w.status === 'signed' || w.status === 'locked',
       }))
       .sort((a, b) => String(b.weekStart).localeCompare(String(a.weekStart)));
-    return json(200, { weeks, currentWeekStart: currentStart });
+    const processedSessions = weeks
+      .filter((w) => w.processed)
+      .flatMap((w) => {
+        const weekRow = store.data.weeks.find((x) => x.id === w.id);
+        if (!weekRow) return [];
+        return store.sessionsForWeek(w.id).map((s) => {
+          const dayPeers = providerDaySessions(
+            store.data.sessions,
+            store.data.weeks,
+            providerId,
+            s.dateOfService,
+            s.id,
+          );
+          const payOpts = {
+            presentGroupPeerCount: presentGroupPeerCount({
+              candidate: s,
+              peers: dayPeers,
+              mandates: store.data.mandates,
+            }),
+            mandateDurationMinutes: mandateDurationMinutesForSession(s, store.data.mandates),
+          };
+          return {
+            id: s.id,
+            dateOfService: s.dateOfService,
+            attendance: s.attendance,
+            beginTime: s.beginTime || '',
+            endTime: s.endTime || '',
+            payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
+          };
+        });
+      })
+      .sort((a, b) => {
+        const da = String(b.dateOfService || '').localeCompare(String(a.dateOfService || ''));
+        if (da) return da;
+        return String(b.beginTime || '').localeCompare(String(a.beginTime || ''));
+      });
+    return json(200, { weeks, currentWeekStart: currentStart, processedSessions });
   }
 
   if (req.method === 'GET' && path === '/week') {
@@ -1855,8 +2290,10 @@ export async function handleTmsRequest(
     const failed: UploadFail[] = [];
     const pending: Array<{ session: SessionRow; studentName: string }> = [];
     const skipped: UploadSaved[] = [];
+    const softWarns: string[] = [];
     const names = studentNameById(store);
     const settings = getAppSettings(store);
+    const yellowBlocks = settings.yellowWarningsBlockImport !== false;
     const existingKeys = new Map<string, SessionRow>();
     for (const s of store.data.sessions) {
       const sw = store.data.weeks.find((w) => w.id === s.weekId);
@@ -1976,10 +2413,12 @@ export async function handleTmsRequest(
         dateOfService: row.dateOfService,
         beginTime: row.beginTime,
         endTime: row.endTime,
+        attendance: row.attendance,
       });
       const already = existingKeys.get(key);
       if (already) {
-        // Exact duplicate of an already-saved (including processed) session → skip, never overwrite.
+        // Exact duplicate (same child+DOS+times+attendance) of an already-saved session → skip.
+        // Missed vs attended at the same slot are different records and must not collide.
         skipped.push({
           id: already.id,
           studentId: already.studentId,
@@ -2000,8 +2439,8 @@ export async function handleTmsRequest(
         weekId: targetWeek.id,
         studentId: student.id,
         dateOfService: row.dateOfService,
-        beginTime: row.beginTime,
-        endTime: row.endTime,
+        beginTime: row.attendance === 'missed' ? '' : row.beginTime,
+        endTime: row.attendance === 'missed' ? '' : row.endTime,
         attendance: row.attendance,
         cancelReason: row.cancelReason,
         makeupOfSessionId: '',
@@ -2051,6 +2490,22 @@ export async function handleTmsRequest(
           });
           continue;
         }
+      }
+
+      const missedReasonErr = missedSessionReasonError(
+        session.attendance,
+        session.cancelReason,
+        session.notes,
+      );
+      if (missedReasonErr) {
+        failed.push({
+          studentName,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: ${missedReasonErr}`,
+        });
+        continue;
       }
 
       const cptErr = cptDurationError(
@@ -2111,36 +2566,49 @@ export async function handleTmsRequest(
         continue;
       }
 
-      const notePeers: Array<{ studentId: string; studentName: string; notes: string; dateOfService: string }> =
-        [
-          ...pending.map((p) => ({
-            studentId: p.session.studentId,
-            studentName: p.studentName,
-            notes: p.session.notes,
-            dateOfService: p.session.dateOfService,
+      const notePeers: Array<{
+        studentId: string;
+        studentName: string;
+        notes: string;
+        dateOfService: string;
+        attendance: string;
+      }> = [
+        ...pending.map((p) => ({
+          studentId: p.session.studentId,
+          studentName: p.studentName,
+          notes: p.session.notes,
+          dateOfService: p.session.dateOfService,
+          attendance: p.session.attendance,
+        })),
+        ...store
+          .sessionsForWeek(targetWeek.id)
+          .filter((s) => s.studentId !== student.id)
+          .map((s) => ({
+            studentId: s.studentId,
+            studentName: names.get(s.studentId) || s.studentId,
+            notes: s.notes,
+            dateOfService: s.dateOfService,
+            attendance: s.attendance,
           })),
-          ...store
-            .sessionsForWeek(targetWeek.id)
-            .filter((s) => s.studentId !== student.id)
-            .map((s) => ({
-              studentId: s.studentId,
-              studentName: names.get(s.studentId) || s.studentId,
-              notes: s.notes,
-              dateOfService: s.dateOfService,
-            })),
-        ];
-      const peer = notePeers.find(
-        (p) => p.studentId !== student.id && notesLookCopyPasted(session.notes, p.notes),
-      );
-      if (peer) {
-        failed.push({
-          studentName,
-          dateOfService: row.dateOfService,
-          beginTime: row.beginTime,
-          endTime: row.endTime,
-          error: `${label}: ${noteCopyPasteError(studentName, peer.studentName, peer.dateOfService)}`,
-        });
-        continue;
+      ];
+      // Copy-paste checks apply to attended & makeup only — never treat missed notes as sources.
+      if (session.attendance === 'attended' || session.attendance === 'makeup') {
+        const peer = notePeers.find(
+          (p) =>
+            p.studentId !== student.id &&
+            noteIsCopyPasteSource(p.attendance, p.notes) &&
+            notesLookCopyPasted(session.notes, p.notes),
+        );
+        if (peer) {
+          failed.push({
+            studentName,
+            dateOfService: row.dateOfService,
+            beginTime: row.beginTime,
+            endTime: row.endTime,
+            error: `${label}: ${noteCopyPasteError(studentName, peer.studentName, peer.dateOfService)}`,
+          });
+          continue;
+        }
       }
 
       const screened = screenServiceNote(session);
@@ -2149,16 +2617,30 @@ export async function handleTmsRequest(
         aiFlags: screened.flags,
         aiBlock: screened.block,
       };
-      // Red (block) or yellow (warn) both reject the whole import.
-      if (screened.block || screened.warnFlags.length) {
+      // Red/hard always rejects. Yellow rejects only when admin setting is on (default).
+      if (screened.block) {
         failed.push({
           studentName,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
-          error: `${label}: ${(screened.blockFlags.length ? screened.blockFlags : screened.warnFlags).join('; ') || 'Note screening failed'}`,
+          error: `${label}: ${screened.blockFlags.join('; ') || 'Note screening failed'}`,
         });
         continue;
+      }
+      if (screened.warnFlags.length) {
+        const warnMsg = `${label}: ${screened.warnFlags.join('; ')}`;
+        if (yellowBlocks) {
+          failed.push({
+            studentName,
+            dateOfService: row.dateOfService,
+            beginTime: row.beginTime,
+            endTime: row.endTime,
+            error: warnMsg,
+          });
+          continue;
+        }
+        softWarns.push(warnMsg);
       }
 
       const check = checkMandatesForWeek(
@@ -2231,9 +2713,83 @@ export async function handleTmsRequest(
       }
     }
 
-    // Any issue → save nothing.
+    const rawUploadName = String(b.fileName || b.filename || b.label || '').trim();
+    const uploadSourceType = detectUploadSourceType(text);
+    const defaultUploadFilename =
+      rawUploadName ||
+      (uploadSourceType === 'therapist_activity'
+        ? `therapist-activity-${week.weekStart || 'upload'}.pdf`
+        : `frontline-${week.weekStart || 'upload'}.pdf`);
+
+    /** Best-effort: keep the PDF even when import is blocked so admins can audit later. */
+    const archiveUploadPdf = async (
+      status: 'imported' | 'blocked',
+      schoolIdHint?: string,
+    ): Promise<string | null> => {
+      const uploadPdf = pdfBufferFromBody(b);
+      if (!uploadPdf?.length) return null;
+      const archiveId = newId();
+      const schoolId =
+        String(b.schoolId || '').trim() ||
+        String(schoolIdHint || '').trim() ||
+        (() => {
+          const firstStudent = pending[0]?.session.studentId;
+          return firstStudent
+            ? String(store.data.students.find((s) => s.id === firstStudent)?.schoolId || '')
+            : '';
+        })();
+      const row = await persistArchivePdf({
+        store,
+        kind: 'upload',
+        sourceType: uploadSourceType,
+        userId: ctx.user.id,
+        providerId,
+        schoolId,
+        weekId: week.id,
+        weekStart: week.weekStart,
+        filename: defaultUploadFilename,
+        s3Key: `tms/archive/uploads/${providerId}/${archiveId}.pdf`,
+        status,
+        pdf: uploadPdf,
+        replaceId: archiveId,
+      });
+      return row?.id || null;
+    };
+
+    // Any issue → save nothing (but still archive + log for audit).
     if (failed.length) {
       const errors = failed.map((f) => f.error);
+      const archiveId = await archiveUploadPdf('blocked');
+      const attendanceCounts = parsed.reduce(
+        (acc, r) => {
+          acc[r.attendance] = (acc[r.attendance] || 0) + 1;
+          return acc;
+        },
+        {} as Record<string, number>,
+      );
+      console.warn('upload-sessions blocked', {
+        providerId,
+        filename: defaultUploadFilename,
+        parsed: parsed.length,
+        failed: failed.length,
+        skipped: skipped.length,
+        attendanceCounts,
+        archiveId,
+        sampleErrors: errors.slice(0, 5),
+      });
+      store.audit(ctx.user.id, 'upload_sessions', `provider:${providerId}`, null, {
+        ok: false,
+        filename: defaultUploadFilename,
+        weekId: week.id,
+        weekStart: week.weekStart,
+        parsed: parsed.length,
+        imported: 0,
+        failed: failed.length,
+        skipped: skipped.length,
+        attendanceCounts,
+        archiveId,
+        errors: errors.slice(0, 20),
+      });
       return json(200, {
         ok: false,
         partial: false,
@@ -2275,6 +2831,43 @@ export async function handleTmsRequest(
       mandateWeekOpts(store),
     );
 
+    const archiveId = await archiveUploadPdf(
+      'imported',
+      saved[0]?.studentId
+        ? String(store.data.students.find((s) => s.id === saved[0]!.studentId)?.schoolId || '')
+        : '',
+    );
+    const attendanceCounts = parsed.reduce(
+      (acc, r) => {
+        acc[r.attendance] = (acc[r.attendance] || 0) + 1;
+        return acc;
+      },
+      {} as Record<string, number>,
+    );
+    console.info('upload-sessions imported', {
+      providerId,
+      filename: defaultUploadFilename,
+      parsed: parsed.length,
+      imported: saved.length,
+      skipped: skipped.length,
+      attendanceCounts,
+      archiveId,
+      weekId: week.id,
+      weekStart: week.weekStart,
+    });
+    store.audit(ctx.user.id, 'upload_sessions', `provider:${providerId}`, null, {
+      ok: true,
+      filename: defaultUploadFilename,
+      weekId: week.id,
+      weekStart: week.weekStart,
+      parsed: parsed.length,
+      imported: saved.length,
+      failed: 0,
+      skipped: skipped.length,
+      attendanceCounts,
+      archiveId,
+    });
+
     return json(200, {
       ok: true,
       partial: false,
@@ -2283,7 +2876,7 @@ export async function handleTmsRequest(
       saved,
       failed: [],
       skipped,
-      warnings: weekCheck.warnings,
+      warnings: [...new Set([...softWarns, ...weekCheck.warnings])],
       errors: [],
       parsed: parsed.length,
       imported: saved.length,
@@ -2380,6 +2973,16 @@ export async function handleTmsRequest(
     };
     if (additionalServiceType && !b.serviceType) {
       session.serviceType = serviceTypeFromAdditional;
+    }
+    if (session.attendance === 'missed') {
+      session.beginTime = '';
+      session.endTime = '';
+      const missedReasonErr = missedSessionReasonError(
+        session.attendance,
+        session.cancelReason,
+        session.notes,
+      );
+      if (missedReasonErr) return json(400, { error: missedReasonErr, errors: [missedReasonErr] });
     }
     if (session.attendance === 'makeup') {
       const resolved = resolveMakeupOfSessionId(
@@ -2590,7 +3193,24 @@ export async function handleTmsRequest(
       weekId: next.id,
       pdf,
     });
-    store.upsertWeek({ ...next, envelopeId: envelope.envelopeId, timesheetKey: `tms/timesheets/${next.id}.pdf` });
+    const timesheetKey = `tms/timesheets/${next.id}.pdf`;
+    store.upsertWeek({ ...next, envelopeId: envelope.envelopeId, timesheetKey });
+    const existingTs = findTimesheetArchive(store, next.id);
+    await persistArchivePdf({
+      store,
+      kind: 'timesheet',
+      sourceType: 'timesheet',
+      userId: ctx.user.id,
+      providerId: next.providerId,
+      schoolId: String(b.schoolId || '').trim(),
+      weekId: next.id,
+      weekStart: next.weekStart,
+      filename: `timesheet-${next.weekStart}.pdf`,
+      s3Key: timesheetKey,
+      status: 'submitted',
+      pdf: Buffer.from(pdf),
+      replaceId: existingTs?.id,
+    });
     // DocuSign emails the principal; only SES-attach the PDF on email fallback.
     if (deps.mail && next.signerEmail && envelope.vendor === 'email') {
       try {
@@ -2654,6 +3274,22 @@ export async function handleTmsRequest(
       }),
     });
     store.upsertWeek({ ...week, timesheetKey: `tms/timesheets/${week.id}.pdf` });
+    const existingTs = findTimesheetArchive(store, week.id);
+    await persistArchivePdf({
+      store,
+      kind: 'timesheet',
+      sourceType: 'timesheet',
+      userId: ctx.user.id,
+      providerId: week.providerId,
+      schoolId,
+      weekId: week.id,
+      weekStart: week.weekStart,
+      filename: `timesheet-${week.weekStart}.pdf`,
+      s3Key: `tms/timesheets/${week.id}.pdf`,
+      status: week.status || 'draft',
+      pdf: Buffer.from(pdf),
+      replaceId: existingTs?.id,
+    });
     return {
       status: 200,
       headers: {
@@ -2686,6 +3322,7 @@ export async function handleTmsRequest(
       timesheetKey: '',
       signedKey: '',
     });
+    markTimesheetArchivesStatus(store, week.id, 'draft');
     store.audit(ctx.user.id, 'cancel_approval', `week:${week.id}`, week, next);
     return json(200, {
       week: next,
@@ -2772,56 +3409,6 @@ export async function handleTmsRequest(
   if (req.method === 'GET' && path === '/alerts') {
     const rows = store.openAlerts();
     return json(200, { alerts: rows, dueDates: dueDatesForUser(store, ctx.user) });
-  }
-
-  if (req.method === 'POST' && path === '/support/luna/chat') {
-    const b = obj(req);
-    try {
-      const out = await runLunaChat({
-        messages: b.messages,
-        pageUrl: String(b.pageUrl || '').trim(),
-        user: ctx.user,
-      });
-      return json(200, out);
-    } catch (err) {
-      const status = Number((err as { status?: number })?.status) || 502;
-      return json(status, {
-        error: err instanceof Error ? err.message : 'Luna is unavailable.',
-      });
-    }
-  }
-
-  if (req.method === 'POST' && path === '/support/luna/handoff') {
-    if (!deps.mail) return json(503, { error: 'Mailer is not configured.' });
-    const b = obj(req);
-    try {
-      const out = await sendLunaHandoff({
-        mail: deps.mail,
-        user: ctx.user,
-        messages: b.messages,
-        summary: String(b.summary || '').trim(),
-        pageUrl: String(b.pageUrl || '').trim(),
-        contactName: b.contactName,
-        contactEmail: b.contactEmail,
-      });
-      store.audit(ctx.user.id, 'luna_handoff', `user:${ctx.user.id}`, null, {
-        to: out.to,
-        mailId: out.id,
-        contactName: out.contactName,
-        contactEmail: out.contactEmail,
-      });
-      return json(200, {
-        ok: true,
-        to: out.to,
-        id: out.id,
-        reply: `Thanks — I sent this to ${out.to}. Moshe will follow up at ${out.contactEmail}.`,
-      });
-    } catch (err) {
-      const status = Number((err as { status?: number })?.status) || 502;
-      return json(status, {
-        error: err instanceof Error ? err.message : 'Unable to send the support handoff.',
-      });
-    }
   }
 
   return json(404, { error: `No route ${req.method} ${path}` });
