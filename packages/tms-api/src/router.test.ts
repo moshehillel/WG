@@ -1068,6 +1068,70 @@ describe('TMS API weekly loop', () => {
     expect(rows[0]?.belowMandate).toBe(true);
   });
 
+  it('admin internal notes report filters by date and provider', async () => {
+    const { store } = storeWithTherapist();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Note',
+      lastName: 'Prov',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const author = store.data.users[0];
+    store.addAdminNote({
+      id: newId(),
+      providerId: provider.id,
+      authorId: author.id,
+      body: 'Follow up with school',
+      tags: ['Gap in service'],
+      createdAt: '2026-09-05T14:00:00.000Z',
+    });
+    store.addAdminNote({
+      id: newId(),
+      providerId: provider.id,
+      authorId: author.id,
+      body: 'Old note outside range',
+      tags: [],
+      createdAt: '2026-01-01T10:00:00.000Z',
+    });
+
+    const all = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/internal-notes',
+      headers: adminH,
+      query: { from: '2026-09-01', to: '2026-09-30', providerId: provider.id },
+      body: {},
+    });
+    expect(all.status).toBe(200);
+    const rows = (all.body as { rows: Array<{ body: string; providerName: string; authorName: string }> }).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.body).toBe('Follow up with school');
+    expect(rows[0]?.providerName).toBe('Note Prov');
+    expect(rows[0]?.authorName).toBeTruthy();
+
+    const empty = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/internal-notes',
+      headers: adminH,
+      query: { from: '2026-09-01', to: '2026-09-30', providerId: 'missing' },
+      body: {},
+    });
+    expect(empty.status).toBe(200);
+    expect((empty.body as { rows: unknown[] }).rows).toHaveLength(0);
+  });
+
   it('caseload CSV/Excel import commits immediately; dryRun stays unused unless set', async () => {
     const { store } = storeWithTherapist();
     const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider

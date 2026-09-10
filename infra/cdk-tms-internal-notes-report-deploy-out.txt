@@ -1,0 +1,23 @@
+TMS admin Internal notes report (all providers)
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+{
+    "CodeSha256": "rWE9QJFFBQoWZ6a4Ln458Rsfo3UZtYY79z5Hb/HjYtc=",
+    "LastModified": "2026-09-10T16:19:21.000+0000",
+    "CodeSize": 2014629
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA: env preserved as configured
+
+IMPORTANT: rebuilds packages/tms-db + shared dist before esbuild (keeps solo-group mandate fix).
+
+Changes:
+1. GET /admin/reports/internal-notes — filter by from/to + providerId
+2. GET /admin/reports/internal-notes.xlsx — Excel export
+3. FE: Admin → Reports → Internal notes (app.js?v=93)
+4. Columns: When, Provider, Author, Tags, Note

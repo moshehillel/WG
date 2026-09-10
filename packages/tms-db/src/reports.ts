@@ -403,6 +403,51 @@ export function lastServiceByStudent(
     );
 }
 
+/**
+ * Admin internal notes across providers (Admin → Providers → Internal notes).
+ * Filter by note createdAt date (YYYY-MM-DD) and optional providerId.
+ */
+export function adminInternalNotesReport(
+  store: MemoryStore,
+  opts: { from?: string; to?: string; providerId?: string } = {},
+) {
+  const from = String(opts.from || '').trim();
+  const to = String(opts.to || '').trim();
+  const providerId = String(opts.providerId || '').trim();
+  return store.data.adminNotes
+    .filter((n) => {
+      if (providerId && n.providerId !== providerId) return false;
+      const day = String(n.createdAt || '').slice(0, 10);
+      if (from && (!day || day < from)) return false;
+      if (to && (!day || day > to)) return false;
+      return true;
+    })
+    .map((n) => {
+      const provider = store.data.providers.find((p) => p.id === n.providerId);
+      const author = store.userById(n.authorId) || store.data.users.find((u) => u.id === n.authorId);
+      return {
+        id: n.id,
+        providerId: n.providerId,
+        providerName: provider
+          ? `${provider.firstName} ${provider.lastName}`.trim() || provider.id
+          : n.providerId || '—',
+        body: n.body || '',
+        tags: Array.isArray(n.tags) ? n.tags : [],
+        createdAt: n.createdAt || '',
+        authorId: n.authorId || '',
+        authorName: author
+          ? String(author.displayName || author.email || '').trim() || author.id
+          : n.authorId || '—',
+      };
+    })
+    .sort((a, b) => {
+      const ca = String(a.createdAt || '');
+      const cb = String(b.createdAt || '');
+      if (ca !== cb) return cb.localeCompare(ca);
+      return a.providerName.localeCompare(b.providerName);
+    });
+}
+
 export function dueDateReport(store: MemoryStore, today = new Date(), opts: { from?: string; to?: string } = {}) {
   const from = String(opts.from || '').trim();
   const to = String(opts.to || '').trim();

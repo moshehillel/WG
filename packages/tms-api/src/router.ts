@@ -14,6 +14,7 @@ import {
   providerDisplayNameKey,
   purgeOrphanProviders,
   lastServiceByStudent,
+  adminInternalNotesReport,
   mappingName,
   missingNotes,
   weekProgressReport,
@@ -900,6 +901,33 @@ function reportXlsxDueDates(store: MemoryStore, query: Record<string, string | u
   );
 }
 
+function reportXlsxInternalNotes(
+  store: MemoryStore,
+  query: Record<string, string | undefined>,
+): HttpResponse {
+  const { from, to } = reportRange(query);
+  const providerId = String(query.providerId || '').trim();
+  const rows = adminInternalNotesReport(store, {
+    from,
+    to,
+    providerId: providerId || undefined,
+  });
+  return xlsxResponse(
+    'internal-notes.xlsx',
+    rowsToXlsxBuffer(
+      'Internal notes',
+      ['When', 'Provider', 'Author', 'Tags', 'Note'],
+      rows.map((r) => [
+        String(r.createdAt || '').slice(0, 16).replace('T', ' '),
+        r.providerName,
+        r.authorName,
+        (r.tags || []).join(', '),
+        r.body,
+      ]),
+    ),
+  );
+}
+
 export type TmsRequestDeps = {
   hha?: HhaClient;
   mail?: Mailer;
@@ -1024,8 +1052,8 @@ export async function handleTmsRequest(
     if (deps.mail && therapist?.email) {
       await deps.mail.send({
         to: [therapist.email],
-        subject: 'Timesheet signed — you will be paid',
-        text: 'Success. This week is signed and locked. You will be paid.',
+        subject: 'Timesheet signed and finalized',
+        text: 'Your submission for this week has been signed and finalized. Payment will be processed accordingly.',
       });
     }
     if (deps.hha && locked.status === 'locked') {
@@ -1044,7 +1072,8 @@ export async function handleTmsRequest(
     }
     return json(200, {
       week: store.data.weeks.find((w) => w.id === week.id),
-      therapistMessage: 'Success. This week is signed and locked. You will be paid.',
+      therapistMessage:
+        'Your submission for this week has been signed and finalized. Payment will be processed accordingly.',
       signedPdfOk,
     });
   }
@@ -2278,6 +2307,23 @@ export async function handleTmsRequest(
   }
   if (req.method === 'GET' && path === '/admin/reports/due-dates.xlsx') {
     return adminUser(() => reportXlsxDueDates(store, req.query));
+  }
+  if (req.method === 'GET' && path === '/admin/reports/internal-notes') {
+    return adminUser(() => {
+      const from = String(req.query.from || '').trim();
+      const to = String(req.query.to || '').trim();
+      const providerId = String(req.query.providerId || '').trim();
+      return json(200, {
+        rows: adminInternalNotesReport(store, {
+          from,
+          to,
+          providerId: providerId || undefined,
+        }),
+      });
+    });
+  }
+  if (req.method === 'GET' && path === '/admin/reports/internal-notes.xlsx') {
+    return adminUser(() => reportXlsxInternalNotes(store, req.query));
   }
 
   if (req.method === 'GET' && path === '/students') {
