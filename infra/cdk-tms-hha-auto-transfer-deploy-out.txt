@@ -1,0 +1,20 @@
+Wednesday TMS→HHA auto-transfer
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+CodeSha256: zStVYqJxdKR2Q3VBed3bYDiPTRbeViAlRBZwX/Nz7jQ=
+LastModified: 2026-09-10T16:57:10.000+0000
+Timeout: 600
+HHA_USE_MOCK: false
+HHA_USE_PRODUCTION: true
+HHA_ALLOW_PRODUCTION: true
+TMS_HHA_AUTO_TRANSFER: true
+
+Schedule: EventBridge WhiteGlove-TmsHhaAutoTransfer cron(0 11 ? * WED *)
+  ~ 7:00 AM Eastern (EDT) / 6:00 AM Eastern (EST)
+Job: { "tmsJob": "hha-auto-transfer" }
+Selects: locked/signed weeks with eligible attended/makeup sessions not fully confirmed
+Manual: admin POST /weeks/:id/hha (Send to HHA) unchanged
+Pause: TMS_HHA_AUTO_TRANSFER=false
+HHA prod flags preserved (not flipped)
+
+RuleArn: arn:aws:events:us-east-1:065194293782:rule/WhiteGlove-TmsHhaAutoTransfer
+Target: TmsApiFn with Input {"tmsJob":"hha-auto-transfer"}

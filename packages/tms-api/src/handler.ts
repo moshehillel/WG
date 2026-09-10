@@ -10,6 +10,7 @@ import { handleTmsRequest, type HttpRequest } from './router.js';
 import { createMailer, type Mailer } from './mail.js';
 import { runDueNags } from './due-nags.js';
 import { runHhaErrorDigest } from './hha-error-digest.js';
+import { runHhaAutoTransfer } from './hha-auto-transfer.js';
 import { deleteCognitoLogin } from './invite.js';
 import { loadTmsState, readLiveAppSettingsEntity, saveTmsState } from './dynamo-state.js';
 
@@ -125,6 +126,18 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     if (rec.tmsJob === 'hha-error-digest') {
       const before = await loadTmsState(store);
       const out = await runHhaErrorDigest(store, await mail());
+      await saveTmsState(before, store);
+      return { statusCode: 200, body: JSON.stringify(out) };
+    }
+    if (rec.tmsJob === 'hha-auto-transfer') {
+      let before = await loadTmsState(store);
+      const out = await runHhaAutoTransfer(store, await resolveHhaClient(), {
+        actorId: 'hha-auto-transfer',
+        afterWeek: async () => {
+          await saveTmsState(before, store);
+          before = store.snapshot();
+        },
+      });
       await saveTmsState(before, store);
       return { statusCode: 200, body: JSON.stringify(out) };
     }
