@@ -107,8 +107,39 @@ describe('phase 2–3', () => {
     );
     expect(res.status).toBe(200);
     expect(store.data.weeks[0]?.status).toBe('locked');
-    expect(mail.sent.some((m) => /will be paid/i.test(m.text))).toBe(true);
+    expect(mail.sent.some((m) => /signed and finalized/i.test(m.text))).toBe(true);
+    expect(mail.sent.some((m) => /Payment will be processed accordingly/i.test(m.text))).toBe(true);
+    expect(mail.sent.some((m) => m.subject === 'Timesheet signed and finalized')).toBe(true);
     expect(envelopeCompleted({ event: 'completed', envelopeId: 'x' }).completed).toBe(true);
+  });
+
+  it('accepts SignNow document_id on the query string (docid_queryparam)', async () => {
+    const store = new MemoryStore();
+    const week = store.upsertWeek({
+      id: 'week-q',
+      providerId: 'p1',
+      weekStart: '2026-08-31',
+      status: 'submitted',
+      signerName: 'Principal',
+      signerEmail: 'p@school.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: 'doc-query-1',
+      hhaStatus: 'none',
+    });
+    const res = await handleTmsRequest(
+      store,
+      {
+        method: 'POST',
+        path: '/webhooks/esign',
+        headers: {},
+        query: { document_id: week.envelopeId },
+        body: { meta: { event: 'document.complete' } },
+      },
+      { hha: new MockHhaClient() },
+    );
+    expect(res.status).toBe(200);
+    expect(store.data.weeks[0]?.status).toBe('locked');
   });
 
   it('builds a PDF timesheet and extracts PDF text', () => {
@@ -133,6 +164,31 @@ describe('phase 2–3', () => {
     expect(pdf.slice(0, 5).toString()).toBe('%PDF-');
     const extracted = extractPdfLatinText(Buffer.from(pdf));
     expect(extracted).toMatch(/Timesheet/);
+  });
+
+  it('stamps provider signature date on the timesheet PDF when provided', () => {
+    const pdf = buildTimesheetPdf({
+      week: {
+        id: 'w',
+        providerId: 'p',
+        weekStart: '2026-08-31',
+        status: 'submitted',
+        signerName: 'A',
+        signerEmail: 'a@b.c',
+        timesheetKey: '',
+        signedKey: '',
+        envelopeId: '',
+        hhaStatus: 'none',
+      },
+      providerLabel: 'Pat Lee',
+      signerName: 'A',
+      signerEmail: 'a@b.c',
+      providerSignDate: '09/09/2026',
+      rows: [],
+    });
+    const extracted = extractPdfLatinText(Buffer.from(pdf));
+    expect(extracted).toMatch(/Provider signature/);
+    expect(extracted).toMatch(/09\/09\/2026/);
   });
 
   it('excludes missed sessions from the timesheet PDF but keeps attended and makeup', () => {
