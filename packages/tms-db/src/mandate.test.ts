@@ -227,6 +227,111 @@ describe('mandate math', () => {
   });
 });
 
+describe('monthly mandate windows', () => {
+  const monthly = (over: Partial<Mandate> = {}): Mandate =>
+    mandate({
+      frequencyKind: 'monthly',
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+      ...over,
+    });
+
+  it('allows one attended session in the calendar month', () => {
+    const rows = [sess({ id: 'a', dateOfService: '09/08/2026' })];
+    const r = checkMandate(monthly(), rows, rows, { studentLabel: 'Aiden' });
+    expect(r.over).toBe(false);
+    expect(r.used).toBe(1);
+    expect(r.allowed).toBe(1);
+  });
+
+  it('blocks a second attended session in the same calendar month', () => {
+    const prior = sess({ id: 'prior', dateOfService: '09/02/2026' });
+    const next = sess({ id: 'next', dateOfService: '09/15/2026' });
+    const r = checkMandate(monthly(), [next], [prior, next], { studentLabel: 'Aiden' });
+    expect(r.over).toBe(true);
+    expect(r.used).toBe(2);
+    expect(r.message).toMatch(/exceeds the monthly mandate for Aiden/i);
+  });
+
+  it('does not count prior months toward this month', () => {
+    const prior = sess({ id: 'aug', dateOfService: '08/20/2026' });
+    const next = sess({ id: 'sep', dateOfService: '09/08/2026' });
+    const r = checkMandate(monthly(), [next], [prior, next]);
+    expect(r.over).toBe(false);
+    expect(r.used).toBe(1);
+  });
+
+  it('does not treat all-time history as this month when mandate week slice is empty', () => {
+    // Regression: dual monthly+weekly — empty monthly assignment used to count every
+    // historical session (monthKey='') and falsely block Frontline import.
+    const history = [
+      sess({ id: 'h1', dateOfService: '07/01/2026' }),
+      sess({ id: 'h2', dateOfService: '08/01/2026' }),
+      sess({ id: 'h3', dateOfService: '08/15/2026' }),
+    ];
+    const r = checkMandate(monthly(), [], history, {
+      studentLabel: 'Aiden',
+      monthAnchorDos: '09/08/2026',
+    });
+    expect(r.over).toBe(false);
+    expect(r.used).toBe(0);
+    expect(r.under).toBe(true);
+  });
+
+  it('dual monthly individual + weekly group: group upload is not blocked by monthly history', () => {
+    const individual = monthly({
+      id: 'm-ind',
+      ratioGroup: false,
+      serviceType: 'PT School',
+    });
+    const group = mandate({
+      id: 'm-grp',
+      ratioGroup: true,
+      serviceType: 'PT School Group',
+      frequencyPerWeek: 2,
+      sessionsPerPeriod: 2,
+    });
+    const history = [
+      sess({
+        id: 'h1',
+        dateOfService: '07/01/2026',
+        serviceType: 'PT School 1:1',
+      }),
+      sess({
+        id: 'h2',
+        dateOfService: '08/01/2026',
+        serviceType: 'PT School 1:1',
+      }),
+    ];
+    const groupWeek = [
+      sess({
+        id: 'g1',
+        dateOfService: '09/08/2026',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        serviceType: 'PT School Group',
+      }),
+    ];
+    const { errors } = checkMandatesForWeek(
+      [individual, group],
+      groupWeek,
+      [...history, ...groupWeek],
+      { st1: 'Aiden Odne' },
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it('still blocks over monthly when the month already has its session', () => {
+    const m = monthly();
+    const prior = sess({ id: 'prior', dateOfService: '09/02/2026' });
+    const next = sess({ id: 'next', dateOfService: '09/15/2026' });
+    const { errors } = checkMandatesForWeek([m], [next], [prior, next], {
+      st1: 'Aiden',
+    });
+    expect(errors.some((e) => /exceeds the monthly mandate/i.test(e))).toBe(true);
+  });
+});
+
 describe('school_day_cycle calendar windows', () => {
   const cycleMandate = (): Mandate =>
     mandate({

@@ -340,6 +340,12 @@ export type MandateCheckOpts = {
   serviceLabel?: string;
   /** Optional school calendar for school_day_cycle windows (defaults to Mon–Fri). */
   calendar?: SchoolCalendar | null;
+  /**
+   * DOS / ISO used to pick the calendar month when this mandate has no sessions
+   * in the current week slice (e.g. dual individual+group — monthly row empty).
+   * Without an anchor, monthly checks must not fall back to all-time history.
+   */
+  monthAnchorDos?: string;
 };
 
 /** True when the row is an eval / report / consult / meeting (not a caseload visit). */
@@ -483,18 +489,32 @@ export function checkMandate(
             : 'No mandate on file for this student — import blocked.',
         };
       }
-      // Anchor month from the newest week session (or any counted DOS).
+      // Anchor month from this mandate's week slice, else sibling-week DOS (dual mandates).
       const anchorDos =
         counted.map((s) => s.dateOfService).sort().slice(-1)[0] ||
         weekSessions.map((s) => s.dateOfService).filter(Boolean).sort().slice(-1)[0] ||
+        String(opts.monthAnchorDos || '').trim() ||
         '';
       const monthKey = dosMonthKey(anchorDos);
+      // No calendar month → never fall back to all-time history (that falsely over-blocks).
+      if (!monthKey) {
+        return {
+          used: 0,
+          allowed,
+          over: false,
+          under: allowed > 0,
+          message:
+            allowed > 0
+              ? `Under monthly mandate${who}: 0 of ${allowed} this month.`
+              : '',
+        };
+      }
       const pool = sessionsCountingTowardWeekly(
         allSessions.filter((s) => s.studentId === mandate.studentId),
       );
       const matched = pool.filter((s) => sessionMatchesMandate(s, mandate));
       const monthPool = (matched.length ? matched : pool).filter(
-        (s) => !monthKey || dosMonthKey(s.dateOfService) === monthKey,
+        (s) => dosMonthKey(s.dateOfService) === monthKey,
       );
       const monthUsed = monthPool.length;
       const over = monthUsed > allowed;
@@ -675,10 +695,19 @@ export function checkMandatesForWeek(
       continue;
     }
 
+    // Shared month/week anchor so empty monthly mandate slices still scope to this upload month.
+    const monthAnchorDos =
+      rows
+        .map((s) => s.dateOfService)
+        .filter(Boolean)
+        .sort()
+        .slice(-1)[0] || '';
+
     if (studentMandates.length === 1) {
       const result = checkMandate(studentMandates[0], rows, allSessions, {
         studentLabel,
         calendar,
+        monthAnchorDos,
       });
       if (result.over || result.missingMandate) errors.push(result.message);
       else if (result.under) warnings.push(result.message);
@@ -703,6 +732,7 @@ export function checkMandatesForWeek(
         studentLabel,
         serviceLabel,
         calendar,
+        monthAnchorDos,
       });
       if (result.over || result.missingMandate) {
         errors.push(result.message);

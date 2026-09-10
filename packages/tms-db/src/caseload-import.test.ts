@@ -114,6 +114,20 @@ describe('caseload CSV parser', () => {
   it('formatFreqDisplay', () => {
     expect(formatFreqDisplay('weekly', 1, 0)).toBe('1 / week');
     expect(formatFreqDisplay('school_day_cycle', 2, 6)).toBe('2 / 6 school days');
+    expect(formatFreqDisplay('monthly', 1, 0)).toBe('1 / month');
+  });
+
+  it('parses Monthly period as frequencyKind monthly', () => {
+    const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
+Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,PT,Individual,1,Monthly,Push-In,Pat Lee
+`;
+    const parsed = parseCaseloadCsv(csv);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows).toHaveLength(1);
+    expect(parsed.rows[0].frequencyKind).toBe('monthly');
+    expect(parsed.rows[0].frequencyPerWeek).toBe(1);
+    expect(parsed.rows[0].sessionsPerPeriod).toBe(1);
+    expect(parsed.rows[0].freqDisplay).toBe('1 / month');
   });
 
   it('emits one structured error per field problem', () => {

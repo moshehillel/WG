@@ -327,6 +327,9 @@ function parsePeriod(raw: string): { kind: FrequencyKind; periodSchoolDays: numb
     const days = cycle ? Number(cycle[1]) : 6;
     return { kind: 'school_day_cycle', periodSchoolDays: Number.isFinite(days) && days > 0 ? days : 6 };
   }
+  if (/\bmonthly\b/.test(s) || /\bper\s+month\b/.test(s) || /^months?$/.test(s)) {
+    return { kind: 'monthly', periodSchoolDays: 0 };
+  }
   return { kind: 'weekly', periodSchoolDays: 0 };
 }
 
@@ -577,22 +580,31 @@ export function parseCaseloadGrid(
       /\bper\s+week\b/i.test(periodRaw);
     const periodLooksCycle =
       /\bcycle\b/i.test(periodRaw) || /\d+\s*school\s*days?/i.test(periodRaw);
+    const periodLooksMonthly =
+      /\bmonthly\b/i.test(periodRaw) ||
+      /\bper\s+month\b/i.test(periodRaw) ||
+      /^months?$/i.test(periodRaw.trim());
     if (!periodRaw) {
       warnings.push(
         caseloadErr(row, {
           field: 'Period',
           student: who || undefined,
           problem: 'Period is empty.',
-          fix: 'Defaulting to Weekly for this row. Prefer filling Period with Weekly or a school-day cycle.',
+          fix: 'Defaulting to Weekly for this row. Prefer filling Period with Weekly, Monthly, or a school-day cycle.',
         }),
       );
-    } else if (kind === 'weekly' && !periodLooksWeekly && !periodLooksCycle) {
+    } else if (
+      kind === 'weekly' &&
+      !periodLooksWeekly &&
+      !periodLooksCycle &&
+      !periodLooksMonthly
+    ) {
       errors.push(
         caseloadErr(row, {
           field: 'Period',
           student: who || undefined,
           problem: `Period "${periodRaw}" is not recognized.`,
-          fix: 'Use Weekly or a school-day cycle (e.g. "6 day cycle").',
+          fix: 'Use Weekly, Monthly, or a school-day cycle (e.g. "6 day cycle").',
         }),
       );
       rowFailed = true;
@@ -630,7 +642,7 @@ export function parseCaseloadGrid(
     const ratioGroup = parseRatioGroup(ratioRaw) || parseRatioGroup(serviceType);
     const durationMinutes = parseDurationMinutes(durationRaw);
     const groupSize = parseGroupSize(groupSizeRaw, ratioRaw || serviceType, ratioGroup);
-    const frequencyPerWeek = kind === 'weekly' ? freqNum! : 0;
+    const frequencyPerWeek = kind === 'weekly' || kind === 'monthly' ? freqNum! : 0;
     const sessionsPerPeriod = freqNum!;
     const days = kind === 'school_day_cycle' ? periodSchoolDays || 6 : 0;
     const billingServiceName = schoolBillingServiceNameForMandate({
@@ -1134,7 +1146,11 @@ export function mandateMatchKey(row: {
     disciplineFromServiceType(String(row.serviceType || '')) ||
     normName(String(row.serviceType || ''));
   const kind: FrequencyKind =
-    row.frequencyKind === 'school_day_cycle' ? 'school_day_cycle' : 'weekly';
+    row.frequencyKind === 'school_day_cycle'
+      ? 'school_day_cycle'
+      : row.frequencyKind === 'monthly'
+        ? 'monthly'
+        : 'weekly';
   const sessions = Number(
     row.sessionsPerPeriod ?? row.frequencyPerWeek ?? 0,
   );
@@ -1416,7 +1432,7 @@ export function applyCaseloadImport(
       ratioGroup: row.ratioGroup,
       durationMinutes: row.durationMinutes,
       billingServiceName: billingServiceName || undefined,
-      groupSize: mandate.groupSize,
+      groupSize: mandate.groupSize ?? null,
       freqDisplay: row.freqDisplay,
       frequencyKind: row.frequencyKind,
       sessionsPerPeriod: row.sessionsPerPeriod,
