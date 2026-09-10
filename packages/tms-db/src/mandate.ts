@@ -297,9 +297,16 @@ export function assignSessionsToMandates(
         candidates.find((m) => !isMakeupAuthMandate(m) && m.ratioGroup) ||
         candidates.find((m) => !isMakeupAuthMandate(m)) ||
         candidates[0];
-    } else if (sessGroup != null) {
+    } else if (sessGroup === false) {
+      // True individual / 1:1 without no-partner note → individual mandate first.
+      // Never force these onto a group mandate when both exist.
       preferred =
-        candidates.find((m) => !isMakeupAuthMandate(m) && Boolean(m.ratioGroup) === sessGroup) ||
+        candidates.find((m) => !isMakeupAuthMandate(m) && !m.ratioGroup) ||
+        candidates.find((m) => !isMakeupAuthMandate(m)) ||
+        candidates[0];
+    } else if (sessGroup === true) {
+      preferred =
+        candidates.find((m) => !isMakeupAuthMandate(m) && m.ratioGroup) ||
         candidates.find((m) => !isMakeupAuthMandate(m)) ||
         candidates[0];
     } else if (candidates.length > 1) {

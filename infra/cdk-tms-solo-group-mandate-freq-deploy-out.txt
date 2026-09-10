@@ -1,9 +1,9 @@
 TMS solo-group / no-partner → group mandate frequency
 Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
 {
-    "CodeSha256": "ghpDrPWxrOg1RoxDg6a7EYTig1L2Ut2ArnWI/n7Csho=",
-    "LastModified": "2026-09-10T14:53:03.000+0000",
-    "CodeSize": 2013062
+    "CodeSha256": "UsqvoFtW4SXQPJ4CVqbefZxgw5U68m+U5ossrV7r/U4=",
+    "LastModified": "2026-09-10T16:36:52.000+0000",
+    "CodeSize": 2015045
 }
 {
     "HHA_USE_MOCK": "false",
@@ -12,7 +12,10 @@ Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
     "Handler": "index.handler",
     "Runtime": "nodejs22.x"
 }
-HHA: env preserved as configured (USE_MOCK=false, USE_PRODUCTION=true, ALLOW_PRODUCTION=true)
+HHA: env preserved as configured (USE_MOCK=false)
+
+IMPORTANT: deploy rebuilds packages/tms-db dist before esbuild.
+Prior 63dcd05 / ghpDrPWxrOg1 deploy bundled STALE dist (no assign-to-group).
 
 Rules:
 1. Solo group with no peer/partner note → individual pay + note locker (unchanged)

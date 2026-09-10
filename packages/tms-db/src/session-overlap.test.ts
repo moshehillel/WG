@@ -534,6 +534,33 @@ describe('solo group → individual pay (absent peers)', () => {
     ).toMatch(/blocked|no peer was available|no partner available/i);
   });
 
+  it('does not demand no-partner note for true 1:1 when child also has individual mandate', () => {
+    const mandates = [
+      mandate({ id: 'm-grp', studentId: 'st1', ratioGroup: true, serviceType: 'PT School Group' }),
+      mandate({ id: 'm-ind', studentId: 'st1', ratioGroup: false, serviceType: 'PT School' }),
+    ];
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: fine motor',
+        serviceType: 'PT School 1:1',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+      }),
+    ).toBeNull();
+    // Group-tagged alone still needs the note even with dual mandates.
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: group game',
+        serviceType: 'PT School Group',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+        presentGroupPeerCount: 0,
+      }),
+    ).toMatch(/no peer was available|no partner available/i);
+  });
+
   it('accepts common no-peer synonym phrasings', () => {
     const ok = [
       'no partner available',

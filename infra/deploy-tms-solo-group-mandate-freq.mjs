@@ -11,6 +11,23 @@ const outfile = path.join(outDir, 'index.mjs');
 const zipPath = path.join(__dirname, 'tms-api-solo-group-mandate-freq.zip');
 const fnName = 'WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ';
 
+// esbuild resolves @white-glove/tms-db via package.json "main" → dist/.
+// Always rebuild dist so src-only mandate fixes are not silently skipped.
+console.log('building @white-glove/shared + @white-glove/tms-db…');
+execSync('npm run build -w @white-glove/shared -w @white-glove/tms-db', {
+  cwd: repoRoot,
+  stdio: 'inherit',
+});
+const mandateDist = fs.readFileSync(
+  path.join(repoRoot, 'packages/tms-db/dist/mandate.js'),
+  'utf8',
+);
+if (!mandateDist.includes('sessionIsSoloGroupViaNote')) {
+  throw new Error(
+    'packages/tms-db/dist/mandate.js missing sessionIsSoloGroupViaNote — build failed or stale',
+  );
+}
+
 fs.mkdirSync(outDir, { recursive: true });
 for (const f of fs.readdirSync(outDir)) {
   fs.unlinkSync(path.join(outDir, f));
@@ -33,6 +50,42 @@ await esbuild.build({
 });
 
 console.log('bundled', outfile);
+// Minified sessionMatchesMandate must prefer group when no-partner note is present.
+const bundled = fs.readFileSync(outfile, 'utf8');
+const matchFn = bundled.match(
+  /function \w+\(e,t\)\{let r=\w+\(e\.serviceType\);if\(t\.discipline&&r&&t\.discipline!==r\)return!1;let o=\w+\(e\.serviceType\);[^}]{0,220}\}/,
+);
+if (!matchFn || !/sessionIsSoloGroupViaNote|ViaNote|\.notes/.test(matchFn[0])) {
+  // Fallback: old broken shape has no notes/solo bridge inside sessionMatchesMandate.
+  const oldBroken =
+    /function \w+\(e,t\)\{let r=\w+\(e\.serviceType\);if\(t\.discipline&&r&&t\.discipline!==r\)return!1;let o=\w+\(e\.serviceType\);return!\(o!=null&&o!==!!t\.ratioGroup\)\}/.test(
+      bundled,
+    );
+  if (oldBroken) {
+    throw new Error(
+      'Bundle still has OLD sessionMatchesMandate without solo-group note bridge — aborting deploy',
+    );
+  }
+}
+console.log('bundle guard: solo-group mandate bridge present (or old shape absent)');
+
+// Dual-mandate fix: soloGroupMandateNoteError must skip the note demand when
+// the child also has an individual mandate (ratioGroup false).
+if (!bundled.includes('ratioGroup') || !/![\w.]+\.ratioGroup/.test(bundled)) {
+  throw new Error(
+    'Bundle missing individual-mandate (ratioGroup) check for solo-group note locker — aborting deploy',
+  );
+}
+const overlapDist = fs.readFileSync(
+  path.join(repoRoot, 'packages/tms-db/dist/session-overlap.js'),
+  'utf8',
+);
+if (!overlapDist.includes('childHasIndividualMandate')) {
+  throw new Error(
+    'packages/tms-db/dist/session-overlap.js missing childHasIndividualMandate — rebuild failed or stale',
+  );
+}
+console.log('bundle guard: dual-mandate individual skip present');
 
 if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
 execSync(
@@ -61,6 +114,9 @@ fs.writeFileSync(
     out.trim(),
     env.trim(),
     'HHA: env preserved as configured (USE_MOCK=false)',
+    '',
+    'IMPORTANT: deploy rebuilds packages/tms-db dist before esbuild.',
+    'Prior 63dcd05 / ghpDrPWxrOg1 deploy bundled STALE dist (no assign-to-group).',
     '',
     'Rules:',
     '1. Solo group with no peer/partner note → individual pay + note locker (unchanged)',
