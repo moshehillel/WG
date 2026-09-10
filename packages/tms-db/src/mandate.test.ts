@@ -1050,6 +1050,7 @@ describe('due dates and dashboard', () => {
     expect(half[0]?.childName).toMatch(/Aiden/);
     expect(half[0]?.mandateLabel).toMatch(/PT/);
     expect(half[0]?.providerName).toBe('Pat Lee');
+    expect(half[0]?.schoolName).toBe('Forest');
     expect(half[0]?.programType).toBe('Baldwin UFSD');
 
     store.upsertSession(
