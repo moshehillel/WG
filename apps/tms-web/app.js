@@ -27,6 +27,7 @@ const state = {
   selectedProgramType: sessionStorage.getItem('tmsProgramType') || '',
   programConfirmed: sessionStorage.getItem('tmsProgramConfirmed') === '1',
   lastServiceProviderId: '',
+  internalNotesProviderId: '',
   childSessionFrom: '',
   childSessionTo: '',
   providerSessionFrom: '',
@@ -58,6 +59,11 @@ const REPORT_LIST = [
     id: 'archive',
     title: 'Uploads & timesheets archive',
     blurb: 'Look up uploaded session PDFs and generated timesheets by provider and date.',
+  },
+  {
+    id: 'internal-notes',
+    title: 'Internal notes',
+    blurb: 'All provider internal notes across the caseload, filterable by date and provider.',
   },
 ];
 
@@ -4905,7 +4911,7 @@ function adminReportsLanding() {
   view(`
     <div class="card">
       <h2>Reports</h2>
-      <p class="muted">Open a report to review caseload progress, last dates of service, or progress-report due dates.</p>
+      <p class="muted">Open a report to review caseload progress, last dates of service, progress-report due dates, or internal notes.</p>
       <ul class="report-pick">
         ${REPORT_LIST.map(
           (r) => `<li>
@@ -5352,6 +5358,117 @@ async function adminReportArchive() {
   await load();
 }
 
+async function adminReportInternalNotes() {
+  const { from, to } = reportDateDefaults();
+  const notesProviderId = state.internalNotesProviderId || '';
+  let providers = [];
+  try {
+    const list = await api('GET', '/admin/providers');
+    providers = Array.isArray(list.providers) ? list.providers : Array.isArray(list) ? list : [];
+  } catch {
+    providers = [];
+  }
+  view(`
+    <div class="card">
+      <button type="button" class="btn" id="backReports">← Reports</button>
+      <h2>Internal notes</h2>
+      <p class="muted">All administrator internal notes across providers. Filter by date range and provider.</p>
+      <div class="row">
+        <label>From <input id="notesFrom" type="date" value="${esc(from)}" /></label>
+        <label>To <input id="notesTo" type="date" value="${esc(to)}" /></label>
+        <label>Provider
+          <select id="notesProvider">
+            <option value="">All providers</option>
+            ${providers
+              .map((p) => {
+                const label = `${p.firstName || ''} ${p.lastName || ''}`.trim() || p.id;
+                const sel = notesProviderId === p.id ? ' selected' : '';
+                return `<option value="${esc(p.id)}"${sel}>${esc(label)}</option>`;
+              })
+              .join('')}
+          </select>
+        </label>
+        <button type="button" class="btn-primary" id="notesLoad">Load</button>
+        <button type="button" class="btn" id="notesXlsx">Export Excel</button>
+      </div>
+      <div class="table-wrap"><table>
+        <tr>
+          <th>When</th>
+          <th>Provider</th>
+          <th>Author</th>
+          <th>Tags</th>
+          <th>Note</th>
+        </tr>
+        <tbody id="notesBody"><tr><td colspan="5">Loading…</td></tr></tbody>
+      </table></div>
+    </div>
+  `);
+  bindReportDetailChrome();
+  const fillNotes = (rows) => {
+    const tbody = document.getElementById('notesBody');
+    if (!tbody) return;
+    tbody.innerHTML =
+      (rows || [])
+        .map((r) => {
+          const when = String(r.createdAt || '').slice(0, 16).replace('T', ' ') || '—';
+          const tags =
+            (r.tags || []).map((t) => `<span class="status-chip">${esc(t)}</span>`).join(' ') || '—';
+          return `<tr>
+            <td>${esc(when)}</td>
+            <td>${esc(r.providerName || '—')}</td>
+            <td>${esc(r.authorName || '—')}</td>
+            <td>${tags}</td>
+            <td style="white-space:pre-wrap">${esc(r.body || '')}</td>
+          </tr>`;
+        })
+        .join('') || '<tr><td colspan="5">No internal notes match these filters.</td></tr>';
+  };
+  const loadNotes = async () => {
+    const nextFrom = document.getElementById('notesFrom')?.value || from;
+    const nextTo = document.getElementById('notesTo')?.value || to;
+    const pid = document.getElementById('notesProvider')?.value || '';
+    state.reportFrom = nextFrom;
+    state.reportTo = nextTo;
+    state.internalNotesProviderId = pid;
+    const q = new URLSearchParams();
+    if (nextFrom) q.set('from', nextFrom);
+    if (nextTo) q.set('to', nextTo);
+    if (pid) q.set('providerId', pid);
+    const tbody = document.getElementById('notesBody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="5">Loading…</td></tr>';
+    try {
+      const out = await api('GET', `/admin/reports/internal-notes?${q.toString()}`);
+      fillNotes(out.rows || []);
+      setStatus('', '');
+    } catch (e) {
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="5">${esc(e.message || 'Unable to load internal notes.')}</td></tr>`;
+      }
+      setStatus(e.message || 'Unable to load internal notes.', 'err');
+    }
+  };
+  document.getElementById('notesLoad')?.addEventListener('click', () => loadNotes());
+  const notesXlsx = document.getElementById('notesXlsx');
+  if (notesXlsx) {
+    notesXlsx.onclick = async () => {
+      try {
+        const f = document.getElementById('notesFrom')?.value || from;
+        const t = document.getElementById('notesTo')?.value || to;
+        const pid = document.getElementById('notesProvider')?.value || '';
+        const q = new URLSearchParams();
+        if (f) q.set('from', f);
+        if (t) q.set('to', t);
+        if (pid) q.set('providerId', pid);
+        await downloadReportXlsx(`/admin/reports/internal-notes.xlsx?${q.toString()}`, 'internal-notes.xlsx');
+        setStatus('Downloaded internal-notes.xlsx.', 'ok');
+      } catch (e) {
+        setStatus(e.message || 'Unable to export.', 'err');
+      }
+    };
+  }
+  await loadNotes();
+}
+
 async function adminReports() {
   const id = state.reportView || '';
   if (!id) {
@@ -5372,6 +5489,10 @@ async function adminReports() {
   }
   if (id === 'archive') {
     await adminReportArchive();
+    return;
+  }
+  if (id === 'internal-notes') {
+    await adminReportInternalNotes();
     return;
   }
   adminReportsLanding();
