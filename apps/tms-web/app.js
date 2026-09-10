@@ -1262,7 +1262,7 @@ function bindMandateEditor(opts) {
           <label>Service type <input id="emService" value="${esc(m.serviceType || '')}" /></label>
           <label>Type
             <select id="emKind">
-              <option value="regular"${kind === 'regular' ? ' selected' : ''}>Weekly</option>
+              <option value="regular"${kind === 'regular' ? ' selected' : ''}>Regular</option>
               <option value="makeup_auth"${kind === 'makeup_auth' ? ' selected' : ''}>Makeup auth</option>
             </select>
           </label>
@@ -1281,7 +1281,7 @@ function bindMandateEditor(opts) {
           <label>Freq / count <input id="emFreq" type="number" min="0" step="1" value="${esc(m.sessionsPerPeriod ?? m.frequencyPerWeek ?? '')}" /></label>
         </div>
         <div class="row">
-          <label>Period
+          <label>Period / frequency
             <select id="emPeriod">${mandatePeriodOptions(period)}</select>
           </label>
           <label>Start / end
@@ -4652,7 +4652,7 @@ async function adminMandates() {
       </div>
       <div id="addMandateForm" hidden>
         <h2>Add mandate manually</h2>
-        <p class="muted">Type: <strong>Weekly</strong> (standard frequency), <strong>6-Day Cycle</strong>, <strong>Monthly</strong>, or <strong>Makeup auth</strong> (remaining session pool). Unlinked makeups use Makeup auth; miss-linked makeups do not.</p>
+        <p class="muted"><strong>Type</strong> is Regular or Makeup auth. <strong>Period / frequency</strong> is <strong>Weekly</strong>, <strong>6-Day Cycle</strong>, or <strong>Monthly</strong>. Makeup auth uses a remaining session pool; unlinked makeups use Makeup auth, miss-linked makeups do not.</p>
         <div class="row">
           <label>Student
             <select id="manStudent">${studentOptions(students)}</select>
@@ -4665,7 +4665,7 @@ async function adminMandates() {
           <label>Service type <input id="manService" placeholder="PT School" /></label>
           <label>Type
             <select id="manKind">
-              <option value="regular">Weekly</option>
+              <option value="regular">Regular</option>
               <option value="makeup_auth">Makeup auth</option>
             </select>
           </label>
@@ -4684,12 +4684,8 @@ async function adminMandates() {
           <label>Freq / count <input id="manFreq" type="number" min="0" step="1" placeholder="2" /></label>
         </div>
         <div class="row">
-          <label>Period
-            <select id="manPeriod">
-              <option value="weekly">Weekly</option>
-              <option value="school_day_cycle">6-Day Cycle</option>
-              <option value="monthly">Monthly</option>
-            </select>
+          <label>Period / frequency
+            <select id="manPeriod">${mandatePeriodOptions('weekly')}</select>
           </label>
           <label>Start / end
             <div class="row">
