@@ -17,6 +17,7 @@ import {
   adminInternalNotesReport,
   mappingName,
   missingNotes,
+  sessionNotesReport,
   weekProgressReport,
   newId,
   nowIso,
@@ -924,6 +925,52 @@ function reportXlsxInternalNotes(
         r.authorName,
         (r.tags || []).join(', '),
         r.body,
+      ]),
+    ),
+  );
+}
+
+function reportXlsxSessionNotes(
+  store: MemoryStore,
+  query: Record<string, string | undefined>,
+): HttpResponse {
+  const { from, to } = reportRange(query);
+  const providerId = String(query.providerId || '').trim();
+  const report = sessionNotesReport(store, {
+    from,
+    to,
+    providerId: providerId || undefined,
+  });
+  const t = report.totals;
+  return xlsxResponse(
+    'session-notes.xlsx',
+    rowsToXlsxBuffer(
+      'Session notes',
+      [
+        'Child',
+        'Provider',
+        'School',
+        'Date of service',
+        'Attendance',
+        'Begin',
+        'End',
+        'Note posted',
+        'Attended total',
+        'Missed total',
+        'Sessions total',
+      ],
+      report.rows.map((r, i) => [
+        r.childName,
+        r.providerName,
+        r.schoolName,
+        r.dateOfService,
+        r.attendance,
+        r.beginTime,
+        r.endTime,
+        r.notesPosted ? 'yes' : 'no',
+        i === 0 ? t.attended : '',
+        i === 0 ? t.missed : '',
+        i === 0 ? t.total : '',
       ]),
     ),
   );
@@ -2321,6 +2368,24 @@ export async function handleTmsRequest(
   }
   if (req.method === 'GET' && path === '/admin/reports/internal-notes.xlsx') {
     return adminUser(() => reportXlsxInternalNotes(store, req.query));
+  }
+  if (req.method === 'GET' && path === '/admin/reports/session-notes') {
+    return adminUser(() => {
+      const from = String(req.query.from || '').trim();
+      const to = String(req.query.to || '').trim();
+      const providerId = String(req.query.providerId || '').trim();
+      return json(
+        200,
+        sessionNotesReport(store, {
+          from,
+          to,
+          providerId: providerId || undefined,
+        }),
+      );
+    });
+  }
+  if (req.method === 'GET' && path === '/admin/reports/session-notes.xlsx') {
+    return adminUser(() => reportXlsxSessionNotes(store, req.query));
   }
 
   if (req.method === 'GET' && path === '/students') {

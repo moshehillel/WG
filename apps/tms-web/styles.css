@@ -394,6 +394,42 @@ body.is-app .brand-tag {
 .report-pick button:hover .report-pick-go {
   color: var(--accent-deep);
 }
+
+.report-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0 1.15rem;
+}
+.report-summary-card {
+  background: linear-gradient(180deg, #f7fbff 0%, #eef5fc 100%);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.report-summary-card-soft {
+  background: var(--surface);
+}
+.report-summary-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.report-summary-value {
+  font-family: var(--font-display);
+  font-size: 1.65rem;
+  font-weight: 700;
+  color: var(--accent-deep);
+  line-height: 1.15;
+}
+.report-summary-hint {
+  font-size: 0.78rem;
+}
 .card > #backReports {
   margin: 0 0 0.75rem;
 }

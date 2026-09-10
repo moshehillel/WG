@@ -403,6 +403,111 @@ export function lastServiceByStudent(
     );
 }
 
+function sessionProviderId(store: MemoryStore, s: SessionRow): string {
+  const week = store.data.weeks.find((w) => w.id === s.weekId);
+  let resolved = String(week?.providerId || '').trim();
+  if (!resolved) {
+    const mandate = store.data.mandates.find(
+      (m) => m.studentId === s.studentId && m.providerId,
+    );
+    resolved = String(mandate?.providerId || '').trim();
+  }
+  return resolved;
+}
+
+/**
+ * Admin Session notes report: attended vs missed totals for a dateOfService range.
+ * Attended includes makeup (same delivered bar as weekly progress / HHA).
+ */
+export function sessionNotesReport(
+  store: MemoryStore,
+  opts: { from?: string; to?: string; providerId?: string } = {},
+) {
+  const from = String(opts.from || '').trim();
+  const to = String(opts.to || '').trim();
+  const providerId = String(opts.providerId || '').trim();
+
+  const rows: Array<{
+    sessionId: string;
+    studentId: string;
+    childName: string;
+    providerId: string;
+    providerName: string;
+    schoolName: string;
+    dateOfService: string;
+    attendance: string;
+    beginTime: string;
+    endTime: string;
+    notesPosted: boolean;
+  }> = [];
+
+  let attendedOnly = 0;
+  let makeup = 0;
+  let missed = 0;
+  let other = 0;
+
+  for (const s of store.data.sessions) {
+    if (!dosInRange(s.dateOfService, from, to)) continue;
+    const resolvedProviderId = sessionProviderId(store, s);
+    if (providerId && resolvedProviderId !== providerId) continue;
+
+    const att = String(s.attendance || '').trim() || 'attended';
+    if (att === 'attended') attendedOnly += 1;
+    else if (att === 'makeup') makeup += 1;
+    else if (att === 'missed') missed += 1;
+    else other += 1;
+
+    const student = store.data.students.find((st) => st.id === s.studentId);
+    const school = student
+      ? store.data.schools.find((sc) => sc.id === student.schoolId)
+      : undefined;
+    const provider = resolvedProviderId
+      ? store.data.providers.find((p) => p.id === resolvedProviderId)
+      : undefined;
+    rows.push({
+      sessionId: s.id,
+      studentId: s.studentId,
+      childName: student
+        ? `${student.firstName} ${student.lastName}`.trim() || s.studentId
+        : s.studentId,
+      providerId: resolvedProviderId,
+      providerName: provider
+        ? `${provider.firstName} ${provider.lastName}`.trim() || provider.id
+        : '—',
+      schoolName: school?.name || '—',
+      dateOfService: s.dateOfService,
+      attendance: att,
+      beginTime: s.beginTime || '',
+      endTime: s.endTime || '',
+      notesPosted: sessionHasPostedNote(s.notes),
+    });
+  }
+
+  rows.sort(
+    (a, b) =>
+      a.dateOfService.localeCompare(b.dateOfService) ||
+      a.childName.localeCompare(b.childName) ||
+      a.providerName.localeCompare(b.providerName),
+  );
+
+  const attended = attendedOnly + makeup;
+  const total = attended + missed + other;
+  return {
+    from: from || null,
+    to: to || null,
+    providerId: providerId || null,
+    totals: {
+      attended,
+      attendedOnly,
+      makeup,
+      missed,
+      other,
+      total,
+    },
+    rows,
+  };
+}
+
 /**
  * Admin internal notes across providers (Admin → Providers → Internal notes).
  * Filter by note createdAt date (YYYY-MM-DD) and optional providerId.

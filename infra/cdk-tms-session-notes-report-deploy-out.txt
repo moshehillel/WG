@@ -1,0 +1,23 @@
+TMS admin Session notes report (attended vs missed by dateOfService)
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+{
+    "CodeSha256": "k3Ea93HV99gA6+OXZKx7rjhqybNt3pozVrKK+zyC5Zo=",
+    "LastModified": "2026-09-10T18:36:52.000+0000",
+    "CodeSize": 2019502
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA: env preserved as configured
+
+IMPORTANT: rebuilds packages/tms-db + shared dist before esbuild (keeps solo-group mandate fix).
+
+Changes:
+1. GET /admin/reports/session-notes — totals + rows; filter by from/to + providerId
+2. GET /admin/reports/session-notes.xlsx — Excel export
+3. Attended = attended + makeup (same delivered bar as weekly progress)
+4. FE: Admin → Reports → Session notes (app.js?v=96, styles.css?v=90)

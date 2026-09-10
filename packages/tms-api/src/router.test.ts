@@ -1137,6 +1137,97 @@ describe('TMS API weekly loop', () => {
     expect((empty.body as { rows: unknown[] }).rows).toHaveLength(0);
   });
 
+  it('admin session notes report totals attended+makeup vs missed by date range', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.data.schools[0];
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Aiden',
+      lastName: 'Odne',
+      dob: '',
+      programId: '',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-09-01',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-02',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: '',
+      notes: 'Worked on gait',
+      aiFlags: [],
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-03',
+      beginTime: '',
+      endTime: '',
+      attendance: 'missed',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: '',
+      notes: 'Student Absence:',
+      aiFlags: [],
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-04',
+      beginTime: '10:00',
+      endTime: '10:30',
+      attendance: 'makeup',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: '',
+      notes: 'Makeup session',
+      aiFlags: [],
+    });
+
+    const res = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/session-notes',
+      headers: adminH,
+      query: { from: '2026-09-01', to: '2026-09-30', providerId: provider.id },
+      body: {},
+    });
+    expect(res.status).toBe(200);
+    const body = res.body as {
+      totals: { attended: number; makeup: number; missed: number; total: number };
+      rows: unknown[];
+    };
+    expect(body.totals.attended).toBe(2);
+    expect(body.totals.makeup).toBe(1);
+    expect(body.totals.missed).toBe(1);
+    expect(body.totals.total).toBe(3);
+    expect(body.rows).toHaveLength(3);
+  });
+
   it('caseload CSV/Excel import commits immediately; dryRun stays unused unless set', async () => {
     const { store } = storeWithTherapist();
     const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
