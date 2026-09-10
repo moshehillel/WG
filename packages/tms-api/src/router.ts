@@ -80,7 +80,7 @@ import {
 import { authenticate, requireAdmin, type AuthContext } from './auth.js';
 import { screenNoteWithOptionalBedrock } from './bedrock.js';
 import { transferLockedWeek } from './hha-transfer.js';
-import { buildTimesheetPdf } from './timesheet.js';
+import { buildTimesheetPdf, formatTimesheetSignDate } from './timesheet.js';
 import {
   createSignEnvelope,
   downloadSignedDocument,
@@ -833,6 +833,8 @@ function reportXlsxWeekProgress(
       'Sessions & notes',
       [
         'Child',
+        'Provider',
+        'Program type',
         'Mandate',
         'Week',
         'Mandate expected',
@@ -844,6 +846,8 @@ function reportXlsxWeekProgress(
       ],
       rows.map((r) => [
         r.childName,
+        r.providerName,
+        r.programType,
         r.mandateLabel,
         r.weekLabel,
         r.mandateExpected,
@@ -3571,6 +3575,8 @@ export async function handleTmsRequest(
       signerName: next.signerName,
       signerEmail: next.signerEmail,
       schoolDistrict,
+      // Therapist dates the timesheet when submitting (before principal signs in SignNow).
+      providerSignDate: formatTimesheetSignDate(),
       rows: sessions.map((session) => {
         const dayPeers = providerDaySessions(
           store.data.sessions,
@@ -3738,6 +3744,10 @@ export async function handleTmsRequest(
       signerName: week.signerName,
       signerEmail: week.signerEmail,
       schoolDistrict,
+      providerSignDate:
+        week.status === 'submitted' || week.status === 'signed' || week.status === 'locked'
+          ? formatTimesheetSignDate()
+          : undefined,
       rows: store.sessionsForWeek(week.id).map((session) => {
         const dayPeers = providerDaySessions(
           store.data.sessions,

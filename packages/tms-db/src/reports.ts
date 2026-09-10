@@ -13,9 +13,54 @@ import {
 } from './mandate.js';
 import { isoDate, parseDos } from './ids.js';
 import { schoolCalendarSummary, hasConfiguredSchoolCalendar, schoolCalendarMonFriFallbackWarning, schoolSetupIncomplete } from './school-calendar.js';
-import type { Mandate, SessionRow } from './types.js';
+import type { HhaTransferStatus, Mandate, SessionRow } from './types.js';
 import { DEFAULT_ADMIN_NOTE_TAGS } from './types.js';
 import type { MemoryStore } from './memory-store.js';
+
+/** Per-week HHA transfer rollup (attended/makeup only — misses are not HHA-eligible). */
+export type WeekHhaRollup = {
+  sessionCount: number;
+  eligible: number;
+  confirmed: number;
+  failed: number;
+  pending: number;
+  unset: number;
+  status: HhaTransferStatus;
+};
+
+/**
+ * HHA only transfers attended/makeup sessions. Week status must reflect those rows,
+ * not the Sessions column (which includes misses).
+ */
+export function weekHhaRollup(store: MemoryStore, weekId: string): WeekHhaRollup {
+  const sessions = store.sessionsForWeek(weekId);
+  const eligibleSessions = sessions.filter(isDeliveredSession);
+  let confirmed = 0;
+  let failed = 0;
+  let pending = 0;
+  let unset = 0;
+  for (const s of eligibleSessions) {
+    const t = store.transferForSession(s.id);
+    const st = t?.status;
+    if (st === 'confirmed') confirmed += 1;
+    else if (st === 'failed') failed += 1;
+    else if (st === 'pending' || st === 'sent') pending += 1;
+    else unset += 1;
+  }
+  let status: HhaTransferStatus = 'none';
+  if (failed > 0) status = 'failed';
+  else if (eligibleSessions.length > 0 && confirmed === eligibleSessions.length) status = 'confirmed';
+  else if (confirmed > 0 || pending > 0) status = 'pending';
+  return {
+    sessionCount: sessions.length,
+    eligible: eligibleSessions.length,
+    confirmed,
+    failed,
+    pending,
+    unset,
+    status,
+  };
+}
 
 /** Same bar as missing-notes: empty notes do not count as posted; short notes do. */
 export function sessionHasPostedNote(notes: string | undefined): boolean {
@@ -130,6 +175,7 @@ export function weekProgressReport(
     studentId: string;
     childName: string;
     schoolName: string;
+    programType: string;
     mandateId: string;
     mandateLabel: string;
     providerName: string;
@@ -170,6 +216,7 @@ export function weekProgressReport(
         ? `${student.firstName} ${student.lastName}`.trim() || studentId
         : studentId;
       const schoolName = school?.name || '—';
+      const programType = String(student?.programType || '').trim() || '—';
       const mandates = store.mandatesForStudent(studentId);
 
       const pushRow = (
@@ -194,6 +241,7 @@ export function weekProgressReport(
           studentId,
           childName,
           schoolName,
+          programType,
           mandateId: mandate?.id || '',
           mandateLabel: mandateLabel(mandate),
           providerName: provider
@@ -261,21 +309,34 @@ export function adminWeeksList(store: MemoryStore) {
   return (store.data.weeks || []).map((w) => {
     const provider = (store.data.providers || []).find((p) => p.id === w.providerId);
     const enriched = enrichWeekHhaError(store, w);
+    const rollup = weekHhaRollup(store, w.id);
+    // Prefer live transfer rollup so a week is never "confirmed" while failures remain.
+    const hhaStatus: HhaTransferStatus =
+      rollup.status !== 'none'
+        ? rollup.status
+        : w.hhaStatus === 'failed' && enriched.hhaError
+          ? 'failed'
+          : w.hhaStatus || 'none';
     return {
       id: w.id,
       weekStart: w.weekStart,
       status: w.status,
       signerName: w.signerName,
       signerEmail: w.signerEmail,
-      hhaStatus: w.hhaStatus,
+      hhaStatus,
       hhaError: enriched.hhaError,
+      hhaConfirmed: rollup.confirmed,
+      hhaFailed: rollup.failed,
+      hhaPending: rollup.pending,
+      hhaEligible: rollup.eligible,
       providerId: w.providerId,
       providerName: provider
         ? `${provider.firstName} ${provider.lastName}`.trim() || '—'
         : w.providerId?.trim()
           ? w.providerId
           : '—',
-      sessionCount: store.sessionsForWeek(w.id).length,
+      /** All sessions (attended + missed + makeup). HHA uses hhaEligible only. */
+      sessionCount: rollup.sessionCount,
     };
   });
 }
@@ -367,6 +428,10 @@ export function dashboard(store: MemoryStore) {
   const count = (status: string) => weeks.filter((w) => w.status === status).length;
   const hhaFail = transfers.filter((t) => t.status === 'failed').length;
   const hhaPending = transfers.filter((t) => t.status === 'pending' || t.status === 'sent').length;
+  // Eligible = attended/makeup on signed/locked weeks (same set HHA can transfer).
+  const hhaEligible = weeks
+    .filter((w) => w.status === 'signed' || w.status === 'locked')
+    .reduce((n, w) => n + weekHhaRollup(store, w.id).eligible, 0);
   return {
     timesheet: {
       draft: count('draft') + count('reopened'),
@@ -378,6 +443,7 @@ export function dashboard(store: MemoryStore) {
       pending: hhaPending,
       failed: hhaFail,
       confirmed: transfers.filter((t) => t.status === 'confirmed').length,
+      eligible: hhaEligible,
     },
     missingNotes: missingNotes(store).length,
     openAlerts: store.openAlerts().length,
