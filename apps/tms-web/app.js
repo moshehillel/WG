@@ -28,6 +28,7 @@ const state = {
   programConfirmed: sessionStorage.getItem('tmsProgramConfirmed') === '1',
   lastServiceProviderId: '',
   internalNotesProviderId: '',
+  sessionNotesProviderId: '',
   childSessionFrom: '',
   childSessionTo: '',
   providerSessionFrom: '',
@@ -64,6 +65,11 @@ const REPORT_LIST = [
     id: 'internal-notes',
     title: 'Internal notes',
     blurb: 'All provider internal notes across the caseload, filterable by date and provider.',
+  },
+  {
+    id: 'session-notes',
+    title: 'Session notes',
+    blurb: 'Totals of attended (incl. makeup) and missed session notes for a date range.',
   },
 ];
 
@@ -4908,7 +4914,7 @@ function adminReportsLanding() {
   view(`
     <div class="card">
       <h2>Reports</h2>
-      <p class="muted">Open a report to review caseload progress, last dates of service, progress-report due dates, or internal notes.</p>
+      <p class="muted">Open a report to review caseload progress, last dates of service, progress-report due dates, internal notes, or session note totals.</p>
       <ul class="report-pick">
         ${REPORT_LIST.map(
           (r) => `<li>
@@ -5466,6 +5472,141 @@ async function adminReportInternalNotes() {
   await loadNotes();
 }
 
+async function adminReportSessionNotes() {
+  const { from, to } = reportDateDefaults();
+  const notesProviderId = state.sessionNotesProviderId || '';
+  let providers = [];
+  try {
+    const list = await api('GET', '/admin/providers');
+    providers = Array.isArray(list.providers) ? list.providers : Array.isArray(list) ? list : [];
+  } catch {
+    providers = [];
+  }
+  view(`
+    <div class="card">
+      <button type="button" class="btn" id="backReports">← Reports</button>
+      <h2>Session notes</h2>
+      <p class="muted">Count of session notes by attendance for a date of service range. Attended includes makeup (same as weekly progress “delivered”). Optional provider filter.</p>
+      <div class="row">
+        <label>From <input id="snFrom" type="date" value="${esc(from)}" /></label>
+        <label>To <input id="snTo" type="date" value="${esc(to)}" /></label>
+        <label>Provider
+          <select id="snProvider">
+            <option value="">All providers</option>
+            ${providers
+              .map((p) => {
+                const label = `${p.firstName || ''} ${p.lastName || ''}`.trim() || p.id;
+                const sel = notesProviderId === p.id ? ' selected' : '';
+                return `<option value="${esc(p.id)}"${sel}>${esc(label)}</option>`;
+              })
+              .join('')}
+          </select>
+        </label>
+        <button type="button" class="btn-primary" id="snLoad">Load</button>
+        <button type="button" class="btn" id="snXlsx">Export Excel</button>
+      </div>
+      <div class="report-summary" id="snSummary" aria-live="polite">
+        <div class="report-summary-card"><span class="report-summary-label">Attended</span><strong class="report-summary-value" id="snAttended">—</strong><span class="muted report-summary-hint">incl. makeup</span></div>
+        <div class="report-summary-card"><span class="report-summary-label">Missed</span><strong class="report-summary-value" id="snMissed">—</strong></div>
+        <div class="report-summary-card"><span class="report-summary-label">Total sessions</span><strong class="report-summary-value" id="snTotal">—</strong></div>
+        <div class="report-summary-card report-summary-card-soft"><span class="report-summary-label">Breakdown</span><span class="muted" id="snBreakdown">—</span></div>
+      </div>
+      <div class="table-wrap"><table>
+        <tr>
+          <th>Child</th>
+          <th>Provider</th>
+          <th>School</th>
+          <th>Date of service</th>
+          <th>Attendance</th>
+          <th>Begin</th>
+          <th>End</th>
+        </tr>
+        <tbody id="snBody"><tr><td colspan="7">Loading…</td></tr></tbody>
+      </table></div>
+    </div>
+  `);
+  bindReportDetailChrome();
+  const fillSummary = (totals) => {
+    const t = totals || {};
+    const elA = document.getElementById('snAttended');
+    const elM = document.getElementById('snMissed');
+    const elT = document.getElementById('snTotal');
+    const elB = document.getElementById('snBreakdown');
+    if (elA) elA.textContent = String(t.attended ?? 0);
+    if (elM) elM.textContent = String(t.missed ?? 0);
+    if (elT) elT.textContent = String(t.total ?? 0);
+    if (elB) {
+      elB.textContent = `Attended only ${t.attendedOnly ?? 0} · Makeup ${t.makeup ?? 0}${
+        t.other ? ` · Other ${t.other}` : ''
+      }`;
+    }
+  };
+  const fillRows = (rows) => {
+    const tbody = document.getElementById('snBody');
+    if (!tbody) return;
+    tbody.innerHTML =
+      (rows || [])
+        .map(
+          (r) => `<tr>
+            <td>${esc(r.childName || '—')}</td>
+            <td>${esc(r.providerName || '—')}</td>
+            <td>${esc(r.schoolName || '—')}</td>
+            <td>${esc(r.dateOfService || '—')}</td>
+            <td>${esc(r.attendance || '—')}</td>
+            <td>${esc(r.beginTime || '—')}</td>
+            <td>${esc(r.endTime || '—')}</td>
+          </tr>`,
+        )
+        .join('') || '<tr><td colspan="7">No session notes match these filters.</td></tr>';
+  };
+  const loadSessionNotes = async () => {
+    const nextFrom = document.getElementById('snFrom')?.value || from;
+    const nextTo = document.getElementById('snTo')?.value || to;
+    const pid = document.getElementById('snProvider')?.value || '';
+    state.reportFrom = nextFrom;
+    state.reportTo = nextTo;
+    state.sessionNotesProviderId = pid;
+    const q = new URLSearchParams();
+    if (nextFrom) q.set('from', nextFrom);
+    if (nextTo) q.set('to', nextTo);
+    if (pid) q.set('providerId', pid);
+    const tbody = document.getElementById('snBody');
+    if (tbody) tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+    try {
+      const out = await api('GET', `/admin/reports/session-notes?${q.toString()}`);
+      fillSummary(out.totals || {});
+      fillRows(out.rows || []);
+      setStatus('', '');
+    } catch (e) {
+      fillSummary({ attended: 0, missed: 0, total: 0, attendedOnly: 0, makeup: 0 });
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="7">${esc(e.message || 'Unable to load session notes.')}</td></tr>`;
+      }
+      setStatus(e.message || 'Unable to load session notes.', 'err');
+    }
+  };
+  document.getElementById('snLoad')?.addEventListener('click', () => loadSessionNotes());
+  const snXlsx = document.getElementById('snXlsx');
+  if (snXlsx) {
+    snXlsx.onclick = async () => {
+      try {
+        const f = document.getElementById('snFrom')?.value || from;
+        const t = document.getElementById('snTo')?.value || to;
+        const pid = document.getElementById('snProvider')?.value || '';
+        const q = new URLSearchParams();
+        if (f) q.set('from', f);
+        if (t) q.set('to', t);
+        if (pid) q.set('providerId', pid);
+        await downloadReportXlsx(`/admin/reports/session-notes.xlsx?${q.toString()}`, 'session-notes.xlsx');
+        setStatus('Downloaded session-notes.xlsx.', 'ok');
+      } catch (e) {
+        setStatus(e.message || 'Unable to export.', 'err');
+      }
+    };
+  }
+  await loadSessionNotes();
+}
+
 async function adminReports() {
   const id = state.reportView || '';
   if (!id) {
@@ -5490,6 +5631,10 @@ async function adminReports() {
   }
   if (id === 'internal-notes') {
     await adminReportInternalNotes();
+    return;
+  }
+  if (id === 'session-notes') {
+    await adminReportSessionNotes();
     return;
   }
   adminReportsLanding();

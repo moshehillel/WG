@@ -11,6 +11,7 @@ import {
   dashboard,
   lastServiceByStudent,
   missingNotes,
+  sessionNotesReport,
   weekProgressReport,
 } from './reports.js';
 import { attendanceFromNotes, parseWeeklySessionText } from './session-parse.js';
@@ -1222,6 +1223,46 @@ describe('due dates and dashboard', () => {
     expect(mixed[0]?.belowMandate).toBe(true);
     expect(mixed[0]?.progressPct).toBe(50);
     expect(weekProgressReport(store, { from: '2026-09-07', to: '2026-09-07' })).toHaveLength(0);
+
+    // Session notes report filters by dateOfService (sess default 09/01/2026 → 2026-09-01).
+    const notes = sessionNotesReport(store, { from: '2026-09-01', to: '2026-09-01' });
+    // attended + makeup = delivered; missed separate. Current fixtures: 1 attended + 1 missed.
+    expect(notes.totals.attended).toBe(1);
+    expect(notes.totals.attendedOnly).toBe(1);
+    expect(notes.totals.makeup).toBe(0);
+    expect(notes.totals.missed).toBe(1);
+    expect(notes.totals.total).toBe(2);
+    expect(notes.rows).toHaveLength(2);
+
+    store.upsertSession(
+      sess({
+        id: 'c',
+        weekId: 'w',
+        studentId: 'st',
+        attendance: 'makeup',
+        notes: 'Makeup session',
+        dateOfService: '09/02/2026',
+      }),
+    );
+    const withMakeup = sessionNotesReport(store, { from: '2026-09-01', to: '2026-09-02' });
+    expect(withMakeup.totals.attended).toBe(2);
+    expect(withMakeup.totals.makeup).toBe(1);
+    expect(withMakeup.totals.missed).toBe(1);
+    expect(withMakeup.totals.total).toBe(3);
+
+    const byProv = sessionNotesReport(store, {
+      from: '2026-09-01',
+      to: '2026-09-02',
+      providerId: 'p1',
+    });
+    expect(byProv.totals.total).toBe(3);
+    expect(
+      sessionNotesReport(store, {
+        from: '2026-09-01',
+        to: '2026-09-02',
+        providerId: 'missing',
+      }).totals.total,
+    ).toBe(0);
   });
 });
 
