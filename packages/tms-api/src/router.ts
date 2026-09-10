@@ -834,7 +834,7 @@ function reportXlsxWeekProgress(
       [
         'Child',
         'Provider',
-        'Program type',
+        'School',
         'Mandate',
         'Week',
         'Mandate expected',
@@ -847,7 +847,7 @@ function reportXlsxWeekProgress(
       rows.map((r) => [
         r.childName,
         r.providerName,
-        r.programType,
+        r.schoolName,
         r.mandateLabel,
         r.weekLabel,
         r.mandateExpected,

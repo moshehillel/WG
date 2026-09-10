@@ -1,0 +1,20 @@
+TMS weekly session progress: School column (was Program type)
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+{
+    "CodeSha256": "YC/oJZ4Rgd13V13C480fVs7QRb4/6yNkZueO40Fv1wY=",
+    "LastModified": "2026-09-10T16:08:07.000+0000",
+    "CodeSize": 2013344
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA: env preserved as configured
+
+Changes:
+1. week-progress.xlsx: Program type → School (schoolName)
+2. Provider column kept
+3. FE: app.js?v=92 School column
