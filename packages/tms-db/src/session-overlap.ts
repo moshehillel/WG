@@ -1,6 +1,13 @@
-import { isAdditionalServiceSession, sessionLooksGroup, sessionSlotLabel } from './mandate.js';
+import {
+  isAdditionalServiceSession,
+  notesMentionNoPeerAvailable,
+  sessionLooksGroup,
+  sessionSlotLabel,
+} from './mandate.js';
 import { clockToMinutes } from './provider-pay.js';
 import type { Mandate, SessionRow } from './types.js';
+
+export { notesMentionNoPeerAvailable };
 
 export type OverlapSession = Pick<
   SessionRow,
@@ -106,30 +113,6 @@ function occupiesProviderTime(s: OverlapSession): boolean {
 function sessionIsIndividualForPay(s: Pick<OverlapSession, 'serviceType'>): boolean {
   // Explicit individual / 1:1, or unknown (not group) — treat as individual for the lock.
   return sessionLooksGroup(s.serviceType) !== true;
-}
-
-/**
- * True when notes clearly say no peer/partner was available (or clear synonym).
- * Used by the solo-group / group-mandate→individual hard locker.
- */
-export function notesMentionNoPeerAvailable(notes: string): boolean {
-  const n = String(notes || '');
-  if (!n.trim()) return false;
-  // peer | partner | classmate | groupmate (optional plural)
-  const who = 'peers?|partners?|classmates?|groupmates?';
-  const otherWho = 'student|child|peer|partner|member|participant';
-  if (
-    new RegExp(
-      `\\bno\\s+(?:other\\s+)?(?:${who})\\b` +
-        `|\\b(?:${who})\\s+(?:were\\s+|was\\s+)?(?:not\\s+|un)?available\\b` +
-        `|\\bno\\s+other\\s+(?:${otherWho})s?\\b` +
-        `|\\bother\\s+(?:${otherWho}).{0,24}(?:absent|unavailable|missing)\\b`,
-      'i',
-    ).test(n)
-  ) {
-    return true;
-  }
-  return false;
 }
 
 /**

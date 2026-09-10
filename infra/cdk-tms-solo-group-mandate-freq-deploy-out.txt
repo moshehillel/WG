@@ -1,0 +1,21 @@
+TMS solo-group / no-partner → group mandate frequency
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+{
+    "CodeSha256": "ghpDrPWxrOg1RoxDg6a7EYTig1L2Ut2ArnWI/n7Csho=",
+    "LastModified": "2026-09-10T14:53:03.000+0000",
+    "CodeSize": 2013062
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA: env preserved as configured (USE_MOCK=false, USE_PRODUCTION=true, ALLOW_PRODUCTION=true)
+
+Rules:
+1. Solo group with no peer/partner note → individual pay + note locker (unchanged)
+2. Same sessions count against GROUP mandate frequency, not individual
+3. True 1:1 without no-partner note still consumes individual mandate
+4. Two solo-group no-partner visits in one week still over the group mandate
