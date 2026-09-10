@@ -992,7 +992,7 @@ describe('TMS API weekly loop', () => {
       lastName: 'Odne',
       dob: '',
       programId: '',
-      programType: '',
+      programType: 'Baldwin UFSD',
       hhaPatientId: '',
       createdAt: nowIso(),
     });
@@ -1047,6 +1047,8 @@ describe('TMS API weekly loop', () => {
     expect(report.status).toBe(200);
     const rows = (report.body as { rows: Array<{
       childName: string;
+      providerName: string;
+      programType: string;
       progressPct: number;
       sessionsProvided: number;
       sessionsDeliveredPct: number;
@@ -1056,6 +1058,8 @@ describe('TMS API weekly loop', () => {
     }> }).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0]?.childName).toMatch(/Aiden/);
+    expect(rows[0]?.providerName).toBe('Pat Lee');
+    expect(rows[0]?.programType).toBe('Baldwin UFSD');
     expect(rows[0]?.mandateExpected).toBe(2);
     expect(rows[0]?.sessionsProvided).toBe(1);
     expect(rows[0]?.sessionsDeliveredPct).toBe(50);

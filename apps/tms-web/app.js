@@ -2534,10 +2534,22 @@ async function showSchoolPicker(schools, opts = {}) {
 
 function hhaStatusCell(w) {
   const status = String(w.hhaStatus || 'none');
+  const confirmed = Number(w.hhaConfirmed ?? 0);
+  const eligible = Number(w.hhaEligible ?? 0);
+  const failed = Number(w.hhaFailed ?? 0);
+  const ratio =
+    eligible > 0
+      ? status === 'failed'
+        ? `${failed} failed · ${confirmed}/${eligible} ok`
+        : `${confirmed}/${eligible} eligible`
+      : '';
   if (status === 'failed') {
     const reason = String(w.hhaError || '').trim() || 'HHA transfer failed (no detail stored). Use Send to HHA after fixing data.';
-    const tip = 'HHA failed — click for details';
-    return `<button type="button" class="triage-badge" data-triage-week="${esc(w.id)}" data-triage-error="${esc(reason)}" title="${tip}" aria-label="${tip}"><svg class="triage-warn-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg></button>`;
+    const tip = ratio ? `HHA failed (${ratio}) — click for details` : 'HHA failed — click for details';
+    return `<button type="button" class="triage-badge" data-triage-week="${esc(w.id)}" data-triage-error="${esc(reason)}" title="${tip}" aria-label="${tip}"><svg class="triage-warn-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg> <span class="muted">${esc(ratio || 'failed')}</span></button>`;
+  }
+  if (ratio && (status === 'confirmed' || status === 'pending' || status === 'sent')) {
+    return `<span title="HHA transfers attended/makeup only; Sessions column includes misses">${esc(status)} ${esc(ratio)}</span>`;
   }
   return esc(status);
 }
@@ -2643,7 +2655,8 @@ async function adminDash() {
     <div class="card">
       <h2>Dashboard</h2>
       <p>Timesheets — draft ${d?.timesheet?.draft ?? 0} · submitted ${d?.timesheet?.submitted ?? 0} · signed ${d?.timesheet?.signed ?? 0} · locked ${d?.timesheet?.locked ?? 0}</p>
-      <p>HHA — pending ${d?.hha?.pending ?? 0} · confirmed ${d?.hha?.confirmed ?? 0} · failed ${d?.hha?.failed ?? 0}</p>
+      <p>HHA — confirmed ${d?.hha?.confirmed ?? 0} of ${d?.hha?.eligible ?? 0} eligible · pending ${d?.hha?.pending ?? 0} · failed ${d?.hha?.failed ?? 0}</p>
+      <p class="muted">HHA counts attended/makeup visits only. The Weeks “Sessions” column includes misses.</p>
     </div>
     <div class="card">
       <h2>14-day session import locker</h2>
@@ -4822,13 +4835,15 @@ function weekProgressRowsHtml(progressRows) {
         : `${notes} (${notesPct}%)`;
       return `<tr class="${below ? 'row-warn' : ''}">
             <td><button type="button" class="linkish" data-open-child="${esc(r.studentId)}">${esc(r.childName)}</button></td>
+            <td>${esc(r.providerName || '—')}</td>
+            <td>${esc(r.programType || '—')}</td>
             <td>${esc(r.mandateLabel || '—')}</td>
             <td>${esc(r.weekLabel || r.weekStart || '—')}</td>
             <td>${esc(deliveredLabel)}</td>
             <td>${esc(notesLabel)}</td>
           </tr>`;
     })
-    .join('') || '<tr><td colspan="5">No sessions in this week range.</td></tr>';
+    .join('') || '<tr><td colspan="7">No sessions in this week range.</td></tr>';
 }
 
 function reportDateDefaults() {
@@ -4931,12 +4946,14 @@ async function adminReportWeekProgress() {
       <table>
         <tr>
           <th>Child</th>
+          <th>Provider</th>
+          <th>Program type</th>
           <th>Mandate</th>
           <th>Week</th>
           <th>Sessions delivered %</th>
           <th>Notes posted %</th>
         </tr>
-        <tbody id="progBody"><tr><td colspan="5">Loading…</td></tr></tbody>
+        <tbody id="progBody"><tr><td colspan="7">Loading…</td></tr></tbody>
       </table>
     </div>
   `);
@@ -4954,14 +4971,14 @@ async function adminReportWeekProgress() {
       loadBtn.disabled = true;
       loadBtn.textContent = 'Loading…';
     }
-    if (tbody) tbody.innerHTML = '<tr><td colspan="5">Loading…</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
     try {
       const progress = await api('GET', `/admin/reports/week-progress?${qq}`);
       if (tbody) tbody.innerHTML = weekProgressRowsHtml(progress.rows || []);
       setStatus('', '');
     } catch (e) {
       if (tbody) {
-        tbody.innerHTML = `<tr><td colspan="5">${esc(e.message || 'Unable to load progress.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7">${esc(e.message || 'Unable to load progress.')}</td></tr>`;
       }
       setStatus(e.message || 'Unable to load progress.', 'err');
     } finally {
@@ -4993,7 +5010,7 @@ async function adminReportWeekProgress() {
   } catch (e) {
     const progBody = document.getElementById('progBody');
     if (progBody) {
-      progBody.innerHTML = `<tr><td colspan="5">${esc(e.message || 'Unable to load progress.')}</td></tr>`;
+      progBody.innerHTML = `<tr><td colspan="7">${esc(e.message || 'Unable to load progress.')}</td></tr>`;
     }
     setStatus(e.message || 'Unable to load progress.', 'err');
   } finally {

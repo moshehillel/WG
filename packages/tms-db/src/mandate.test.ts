@@ -1001,7 +1001,7 @@ describe('due dates and dashboard', () => {
       lastName: 'Odne',
       dob: '',
       programId: '',
-      programType: '',
+      programType: 'Baldwin UFSD',
       hhaPatientId: '',
       createdAt: '',
     });
@@ -1049,6 +1049,8 @@ describe('due dates and dashboard', () => {
     expect(half[0]?.belowMandate).toBe(true);
     expect(half[0]?.childName).toMatch(/Aiden/);
     expect(half[0]?.mandateLabel).toMatch(/PT/);
+    expect(half[0]?.providerName).toBe('Pat Lee');
+    expect(half[0]?.programType).toBe('Baldwin UFSD');
 
     store.upsertSession(
       sess({
