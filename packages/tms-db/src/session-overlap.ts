@@ -1,5 +1,6 @@
 import {
   isAdditionalServiceSession,
+  isMakeupAuthMandate,
   notesMentionNoPeerAvailable,
   sessionLooksGroup,
   sessionSlotLabel,
@@ -66,6 +67,14 @@ export function childHasGroupMandate(studentId: string, mandates?: Mandate[]): b
   return mandates.some((m) => m.studentId === studentId && mandateLooksGroup(m));
 }
 
+/** True when the child has a regular (non-makeup) individual mandate (`ratioGroup` false). */
+export function childHasIndividualMandate(studentId: string, mandates?: Mandate[]): boolean {
+  if (!studentId || !mandates?.length) return false;
+  return mandates.some(
+    (m) => m.studentId === studentId && !m.ratioGroup && !isMakeupAuthMandate(m),
+  );
+}
+
 /**
  * Strictest positive groupSize among the child's group mandates.
  * Unspecified / Small Group (fewer than 3) → max 2.
@@ -119,6 +128,10 @@ function sessionIsIndividualForPay(s: Pick<OverlapSession, 'serviceType'>): bool
  * Hard locker when a group-mandate child is documented individually / alone:
  * note must say no peer/partner was available (or clear equivalent).
  * Covers individual/1:1 tags and group-tagged sessions with no present peers.
+ *
+ * Dual mandate (individual + group): a normal 1:1 / individual visit without a
+ * no-partner note covers the individual mandate — do not demand the note.
+ * Group-tagged sessions with zero present peers still require the note.
  */
 export function soloGroupMandateNoteError(opts: {
   notes: string;
@@ -134,8 +147,11 @@ export function soloGroupMandateNoteError(opts: {
   const peers = opts.presentGroupPeerCount ?? 0;
   // Group with other present peers → no special note.
   if (looksGroup && peers >= 1) return null;
-  // Individual / unknown / solo-group → require peer note.
   if (notesMentionNoPeerAvailable(opts.notes)) return null;
+  // True individual visit when the child also has an individual mandate.
+  if (!looksGroup && childHasIndividualMandate(opts.studentId, opts.mandates)) {
+    return null;
+  }
   return (
     'Group-mandate child seen individually — note must say no peer was available ' +
     '(or no partner available / equivalent). This session is blocked until the note is clear.'

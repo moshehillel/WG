@@ -137,7 +137,8 @@ describe('mandate math', () => {
         'Service Provided: Observing how physical limitations impact daily activities. no partner available',
     });
     const { errors, warnings } = checkMandatesForWeek(
-      [individual, group],
+      // Group listed first — must still assign true 1:1 to individual.
+      [group, individual],
       [tue, wed],
       [tue, wed],
       { st1: 'Dylan Santos-Santiago' },
@@ -146,6 +147,42 @@ describe('mandate math', () => {
     expect(errors.filter((e) => /exceeds the mandate/i.test(e))).toEqual([]);
     // Individual still under or exactly filled (1 of 1); group exactly filled — no over errors.
     expect(warnings.some((w) => /Under mandate/i.test(w))).toBe(false);
+  });
+
+  it('single true individual with both mandates covers individual (no no-partner required)', () => {
+    const individual = mandate({
+      id: 'm-ind',
+      ratioGroup: false,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+    });
+    const group = mandate({
+      id: 'm-grp',
+      ratioGroup: true,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+      serviceType: 'PT School Group',
+      groupSize: 2,
+    });
+    const only = sess({
+      id: 's-only',
+      dateOfService: '09/02/2026',
+      beginTime: '11:00 am',
+      endTime: '11:30 am',
+      serviceType: 'PT School 1:1',
+      notes: 'Service Provided: gait training',
+    });
+    const { errors, warnings } = checkMandatesForWeek(
+      [group, individual],
+      [only],
+      [only],
+      { st1: 'Jason Dual' },
+    );
+    expect(errors.filter((e) => /exceeds the mandate/i.test(e))).toEqual([]);
+    expect(errors.filter((e) => /no partner available|no peer was available/i.test(e))).toEqual([]);
+    // Group unused → under warning; individual filled (under copy may omit service label).
+    expect(warnings.some((w) => /Under mandate/i.test(w) && /0 of 1/i.test(w))).toBe(true);
+    expect(warnings.filter((w) => /Under mandate/i.test(w)).length).toBe(1);
   });
 
   it('two solo-group / no-partner 1:1s still over the group mandate', () => {
