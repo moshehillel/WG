@@ -1222,15 +1222,32 @@ function mandateFreqLabel(m) {
   return `${n} / week`;
 }
 
-function mandatePeriodOptions(selected) {
+/** Type dropdown: Weekly / 6-Day / Monthly / Makeup auth (old Madison UX). */
+function mandateTypeOptions(selected) {
   const cur = String(selected || 'weekly');
   return [
     ['weekly', 'Weekly'],
     ['school_day_cycle', '6-Day Cycle'],
     ['monthly', 'Monthly'],
+    ['makeup_auth', 'Makeup auth'],
   ]
     .map(([v, label]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${label}</option>`)
     .join('');
+}
+
+/** Map Type select → mandateKind + frequencyKind. */
+function parseMandateTypeValue(typeVal) {
+  const v = String(typeVal || 'weekly');
+  if (v === 'makeup_auth') return { mandateKind: 'makeup_auth', frequencyKind: 'weekly' };
+  if (v === 'school_day_cycle' || v === 'monthly') return { mandateKind: 'regular', frequencyKind: v };
+  return { mandateKind: 'regular', frequencyKind: 'weekly' };
+}
+
+function mandateTypeValueFromMandate(m) {
+  if (m?.mandateKind === 'makeup_auth') return 'makeup_auth';
+  if (m?.frequencyKind === 'school_day_cycle') return 'school_day_cycle';
+  if (m?.frequencyKind === 'monthly') return 'monthly';
+  return 'weekly';
 }
 
 function bindMandateEditor(opts) {
@@ -1241,12 +1258,7 @@ function bindMandateEditor(opts) {
       const m = (mandates || []).find((x) => x.id === id);
       const panel = document.getElementById(panelId);
       if (!m || !panel) return;
-      const kind = m.mandateKind === 'makeup_auth' ? 'makeup_auth' : 'regular';
-      const period = m.frequencyKind === 'school_day_cycle'
-        ? 'school_day_cycle'
-        : m.frequencyKind === 'monthly'
-          ? 'monthly'
-          : 'weekly';
+      const typeVal = mandateTypeValueFromMandate(m);
       panel.hidden = false;
       panel.innerHTML = `
         <h3>Edit mandate</h3>
@@ -1261,10 +1273,7 @@ function bindMandateEditor(opts) {
         <div class="row">
           <label>Service type <input id="emService" value="${esc(m.serviceType || '')}" /></label>
           <label>Type
-            <select id="emKind">
-              <option value="regular"${kind === 'regular' ? ' selected' : ''}>Regular</option>
-              <option value="makeup_auth"${kind === 'makeup_auth' ? ' selected' : ''}>Makeup auth</option>
-            </select>
+            <select id="emKind">${mandateTypeOptions(typeVal)}</select>
           </label>
         </div>
         <div class="row">
@@ -1281,9 +1290,6 @@ function bindMandateEditor(opts) {
           <label>Freq / count <input id="emFreq" type="number" min="0" step="1" value="${esc(m.sessionsPerPeriod ?? m.frequencyPerWeek ?? '')}" /></label>
         </div>
         <div class="row">
-          <label>Period / frequency
-            <select id="emPeriod">${mandatePeriodOptions(period)}</select>
-          </label>
           <label>Start / end
             <div class="row">
               <input id="emStart" type="date" value="${esc(m.startOn || '')}" />
@@ -1305,14 +1311,14 @@ function bindMandateEditor(opts) {
           const freq = Number(document.getElementById('emFreq').value);
           const durationRaw = document.getElementById('emDuration').value;
           const groupSizeRaw = document.getElementById('emGroupSize').value;
-          const frequencyKind = document.getElementById('emPeriod').value;
+          const { mandateKind, frequencyKind } = parseMandateTypeValue(document.getElementById('emKind').value);
           const ratioGroup = document.getElementById('emRatio').value === 'group';
           const groupSize = groupSizeRaw === '' ? (ratioGroup ? 2 : 1) : Number(groupSizeRaw);
           await api('PATCH', `/admin/mandates/${id}`, {
             studentId: document.getElementById('emStudent').value,
             providerId: document.getElementById('emProvider').value,
             serviceType: document.getElementById('emService').value,
-            mandateKind: document.getElementById('emKind').value,
+            mandateKind,
             ratioGroup,
             durationMinutes: durationRaw === '' ? null : Number(durationRaw),
             groupSize,
@@ -4652,7 +4658,7 @@ async function adminMandates() {
       </div>
       <div id="addMandateForm" hidden>
         <h2>Add mandate manually</h2>
-        <p class="muted"><strong>Type</strong> is Regular or Makeup auth. <strong>Period / frequency</strong> is <strong>Weekly</strong>, <strong>6-Day Cycle</strong>, or <strong>Monthly</strong>. Makeup auth uses a remaining session pool; unlinked makeups use Makeup auth, miss-linked makeups do not.</p>
+        <p class="muted"><strong>Type</strong> is <strong>Weekly</strong>, <strong>6-Day Cycle</strong>, <strong>Monthly</strong>, or <strong>Makeup auth</strong>. Makeup auth uses a remaining session pool; unlinked makeups use Makeup auth, miss-linked makeups do not.</p>
         <div class="row">
           <label>Student
             <select id="manStudent">${studentOptions(students)}</select>
@@ -4664,10 +4670,7 @@ async function adminMandates() {
         <div class="row">
           <label>Service type <input id="manService" placeholder="PT School" /></label>
           <label>Type
-            <select id="manKind">
-              <option value="regular">Regular</option>
-              <option value="makeup_auth">Makeup auth</option>
-            </select>
+            <select id="manKind">${mandateTypeOptions('weekly')}</select>
           </label>
         </div>
         <div class="row">
@@ -4684,9 +4687,6 @@ async function adminMandates() {
           <label>Freq / count <input id="manFreq" type="number" min="0" step="1" placeholder="2" /></label>
         </div>
         <div class="row">
-          <label>Period / frequency
-            <select id="manPeriod">${mandatePeriodOptions('weekly')}</select>
-          </label>
           <label>Start / end
             <div class="row">
               <input id="manStart" type="date" />
@@ -4780,7 +4780,7 @@ async function adminMandates() {
   document.getElementById('manSave').onclick = async () => {
     try {
       const studentId = document.getElementById('manStudent').value;
-      const mandateKind = document.getElementById('manKind').value;
+      const { mandateKind, frequencyKind } = parseMandateTypeValue(document.getElementById('manKind').value);
       const freq = Number(document.getElementById('manFreq').value);
       const durationRaw = document.getElementById('manDuration').value;
       const groupSizeRaw = document.getElementById('manGroupSize').value;
@@ -4803,10 +4803,10 @@ async function adminMandates() {
         ratioGroup,
         durationMinutes,
         groupSize,
-        frequencyKind: document.getElementById('manPeriod').value,
+        frequencyKind,
         frequencyPerWeek: freq,
         sessionsPerPeriod: freq,
-        periodSchoolDays: document.getElementById('manPeriod').value === 'school_day_cycle' ? 6 : undefined,
+        periodSchoolDays: frequencyKind === 'school_day_cycle' ? 6 : undefined,
         startOn: document.getElementById('manStart').value,
         endOn: document.getElementById('manEnd').value,
       });
