@@ -1057,20 +1057,7 @@ export async function handleTmsRequest(
         text: 'Your submission for this week has been signed and finalized. Payment will be processed accordingly.',
       });
     }
-    if (deps.hha && locked.status === 'locked') {
-      const hhaResult = await transferLockedWeek({
-        store,
-        week: locked,
-        hha: deps.hha,
-        actorId: 'esign',
-      });
-      console.info('[tms-hha] post-sign transfer', {
-        weekId: week.id,
-        ok: hhaResult.ok,
-        transferred: hhaResult.transferred,
-        errors: hhaResult.errors,
-      });
-    }
+    // HHA transfer is NOT done on sign — only Wednesday auto-transfer or admin Send to HHA.
     return json(200, {
       week: store.data.weeks.find((w) => w.id === week.id),
       therapistMessage:
@@ -3923,7 +3910,7 @@ export async function handleTmsRequest(
     return adminUser(() =>
       json(410, {
         error:
-          'Manual Sign is disabled. After the therapist sends the timesheet, the school principal signs via SignNow; completion auto-locks and sends to HHA. Use Send to HHA to retry a failed transfer.',
+          'Manual Sign is disabled. After the therapist sends the timesheet, the school principal signs via SignNow; completion auto-locks the week. HHA transfer runs Wednesday morning or via Send to HHA.',
       }),
     );
   }

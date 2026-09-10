@@ -222,14 +222,15 @@ describe('TMS API weekly loop', () => {
     );
     expect(esign.status).toBe(200);
     expect(store.data.weeks.find((w) => w.id === weekId)?.status).toBe('locked');
-    expect(hha.calls.includes('locateOrScheduleVisit')).toBe(true);
-    expect(hha.calls.includes('approveVisit')).toBe(true);
+    // Sign webhook locks + archives only — does not transfer to HHA.
+    expect(hha.calls.includes('locateOrScheduleVisit')).toBe(false);
+    expect(hha.calls.includes('approveVisit')).toBe(false);
 
     const existingAttended = store.data.sessions.find(
       (s) => s.weekId === weekId && s.attendance === 'attended',
     );
     expect(existingAttended).toBeTruthy();
-    // Processed session rows are view-only for therapists.
+    // Locked session rows are view-only for therapists (even before HHA transfer).
     const lockedEditExisting = await handleTmsRequest(store, {
       method: 'POST',
       path: '/week/sessions',
@@ -246,9 +247,11 @@ describe('TMS API weekly loop', () => {
       },
     });
     expect(lockedEditExisting.status).toBe(409);
-    expect((lockedEditExisting.body as { error: string }).error).toMatch(/already processed/i);
+    expect((lockedEditExisting.body as { error: string }).error).toMatch(
+      /signed\/locked|already processed|reopen/i,
+    );
 
-    // Resync (Send to HHA) remains available on processed weeks.
+    // Admin Send to HHA transfers locked weeks (same path as Wednesday auto-transfer).
     const hhaOut = await handleTmsRequest(
       store,
       { method: 'POST', path: `/weeks/${weekId}/hha`, headers: adminH, query: {}, body: {} },
@@ -256,6 +259,8 @@ describe('TMS API weekly loop', () => {
     );
     expect(hhaOut.status).toBe(200);
     expect((hhaOut.body as { ok: boolean }).ok).toBe(true);
+    expect(hha.calls.includes('locateOrScheduleVisit')).toBe(true);
+    expect(hha.calls.includes('approveVisit')).toBe(true);
 
     // New sessions on a processed week are blocked for therapists (Madison: cancel/reopen first).
     const lockedAddNew = await handleTmsRequest(store, {
