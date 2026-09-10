@@ -4557,7 +4557,7 @@ async function adminMandates() {
       <h2>Import caseload</h2>
       <p class="muted">Use the KU export <strong>Related Service by serviceschool (WG)</strong> (Listing Results sheet) as CSV or Excel (.xls / .xlsx). Import saves immediately.</p>
       <p class="muted" style="margin-top:0.35rem">Columns: CR Recommended School, Student Last/First Name, CR Expected Grade, CR Decision/Status, Related Service, RS Start/End, RS Ratio, RS Frequency, RS Period, <strong>RS Duration</strong>, RS Location, RS Provider. Optional when present: Group Size, Program ID, Program Type, Date of Birth. (Older short headers still work.)</p>
-      <p class="muted" style="margin-top:0.35rem">Frequency: <em>Weekly</em> = sessions per week; <em>6 day cycle</em> = N sessions per 6 school days. Providers must already exist in TMS and match “Last, First” or “First Last”. Agency labels such as “White Glove” or “White, Glove” are invalid — use the therapist name. Unmatched RS Provider rows are skipped (no empty-provider mandates).</p>
+      <p class="muted" style="margin-top:0.35rem">Frequency: <em>Weekly</em> = sessions per week; <em>Monthly</em> = sessions per calendar month; <em>6 day cycle</em> = N sessions per 6 school days. Providers must already exist in TMS and match “Last, First” or “First Last”. Agency labels such as “White Glove” or “White, Glove” are invalid — use the therapist name. Unmatched RS Provider rows are skipped (no empty-provider mandates).</p>
       <input id="caseloadFile" type="file" accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
       <div class="row" style="margin-top:0.6rem">
         <button class="btn-primary" id="caseloadImportBtn">Import caseload</button>
