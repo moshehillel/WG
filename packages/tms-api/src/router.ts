@@ -95,6 +95,7 @@ import { clearAllCognitoMfaPreferences } from './mfa-clear.js';
 import { PDF_NO_TEXT_ERROR, bodyHasPdfBytes, pdfTextFromBody } from './pdf-text.js';
 import { runDueNags } from './due-nags.js';
 import { runHhaErrorDigest } from './hha-error-digest.js';
+import { runHhaAutoTransfer } from './hha-auto-transfer.js';
 import { getPdfFromS3, putLockerPdf, deletePdfFromS3 } from './s3-state.js';
 import type { Mailer } from './mail.js';
 import type { HhaClient } from '@white-glove/hha-client';
@@ -1095,6 +1096,15 @@ export async function handleTmsRequest(
     if (!key || provided !== key) return json(401, { error: 'Unauthorized HHA digest job.' });
     if (!deps.mail) return json(503, { error: 'Mailer missing.' });
     const out = await runHhaErrorDigest(store, deps.mail);
+    return json(200, out);
+  }
+
+  if (req.method === 'POST' && path === '/internal/hha-auto-transfer') {
+    const key = process.env.TMS_INTERNAL_KEY || '';
+    const provided = req.headers['x-tms-internal'] || obj(req).key;
+    if (!key || provided !== key) return json(401, { error: 'Unauthorized HHA auto-transfer job.' });
+    if (!deps.hha) return json(503, { error: 'HHA client is not configured.' });
+    const out = await runHhaAutoTransfer(store, deps.hha, { actorId: 'hha-auto-transfer' });
     return json(200, out);
   }
 

@@ -2663,6 +2663,7 @@ async function adminDash() {
       <p>Timesheets — draft ${d?.timesheet?.draft ?? 0} · submitted ${d?.timesheet?.submitted ?? 0} · signed ${d?.timesheet?.signed ?? 0} · locked ${d?.timesheet?.locked ?? 0}</p>
       <p>HHA — confirmed ${d?.hha?.confirmed ?? 0} of ${d?.hha?.eligible ?? 0} eligible · pending ${d?.hha?.pending ?? 0} · failed ${d?.hha?.failed ?? 0}</p>
       <p class="muted">HHA counts attended/makeup visits only. The Weeks “Sessions” column includes misses.</p>
+      <p class="muted">Auto-transfer runs Wed mornings (~7am ET); use Send to HHA for early payroll or exceptions.</p>
     </div>
     <div class="card">
       <h2>14-day session import locker</h2>

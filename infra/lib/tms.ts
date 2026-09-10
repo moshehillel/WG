@@ -162,7 +162,8 @@ export function addTherapyManagement(
     entry: path.join(repoRoot, 'packages/tms-api/src/handler.ts'),
     handler: 'handler',
     runtime: lambda.Runtime.NODEJS_22_X,
-    timeout: cdk.Duration.minutes(2),
+    // 10m: Wednesday HHA auto-transfer may push many locked weeks in one invoke.
+    timeout: cdk.Duration.minutes(10),
     memorySize: 1024,
     environment: {
       REPORTS_BUCKET: props.reportsBucket.bucketName,
@@ -173,11 +174,13 @@ export function addTherapyManagement(
       TMS_USER_POOL_ID: userPool.userPoolId,
       TMS_CLIENT_ID: webClient.userPoolClientId,
       TMS_INTERNAL_KEY: props.internalKey || '',
-      /** Real SOAP client; sandbox until Moshe says otherwise (do not force production). */
+      /** Real SOAP client. Moshe 2026-09-09: switched TMS timesheet HHA path to production. */
       HHA_USE_MOCK: 'false',
       HHA_PRODUCTION_BASE_URL: 'https://app.hhaexchange.com/Integration/ENT/V1.8/ws.asmx',
-      HHA_USE_PRODUCTION: 'false',
-      HHA_ALLOW_PRODUCTION: 'false',
+      HHA_USE_PRODUCTION: 'true',
+      HHA_ALLOW_PRODUCTION: 'true',
+      /** Set to "false" / "0" to pause Wednesday auto-transfer without removing the rule. */
+      TMS_HHA_AUTO_TRANSFER: 'true',
       OPENAI_SECRET_ARN: lunaOpenAiSecret.secretArn,
       TMS_DOCUSIGN_SECRET_ARN: docusignSecret.secretArn,
       LUNA_SUPPORT_EMAIL: props.lunaSupportEmail || 'moshe@advancedautomations.net',
@@ -236,6 +239,30 @@ export function addTherapyManagement(
     targets: [
       new targets.LambdaFunction(fn, {
         event: events.RuleTargetInput.fromObject({ tmsJob: 'hha-error-digest' }),
+      }),
+    ],
+  });
+
+  /**
+   * Wednesday payroll auto-transfer.
+   * 11:00 UTC = 7:00 AM Eastern (EDT) / 6:00 AM Eastern (EST).
+   * Override schedule hour via context `-c tmsHhaAutoTransferHourUtc=12` if needed.
+   * Pause with Lambda env TMS_HHA_AUTO_TRANSFER=false (admin Send to HHA still works).
+   */
+  const autoTransferHourUtc = String(
+    (scope.node.tryGetContext('tmsHhaAutoTransferHourUtc') as string | undefined) || '11',
+  ).replace(/\D/g, '') || '11';
+  new events.Rule(scope, 'TmsHhaAutoTransferRule', {
+    ruleName: 'WhiteGlove-TmsHhaAutoTransfer',
+    schedule: events.Schedule.cron({
+      minute: '0',
+      hour: autoTransferHourUtc,
+      weekDay: 'WED',
+    }),
+    description: `Weekly TMS to HHA auto-transfer for locked weeks needing transfer (Wed ${autoTransferHourUtc}:00 UTC ~ 7am ET EDT)`,
+    targets: [
+      new targets.LambdaFunction(fn, {
+        event: events.RuleTargetInput.fromObject({ tmsJob: 'hha-auto-transfer' }),
       }),
     ],
   });
