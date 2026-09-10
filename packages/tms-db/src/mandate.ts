@@ -158,6 +158,41 @@ export function sessionLooksGroup(serviceType: string): boolean | null {
   return null;
 }
 
+/**
+ * True when notes clearly say no peer/partner was available (or clear synonym).
+ * Solo-group Frontline rows often arrive as 1:1 with this note.
+ */
+export function notesMentionNoPeerAvailable(notes: string): boolean {
+  const n = String(notes || '');
+  if (!n.trim()) return false;
+  // peer | partner | classmate | groupmate (optional plural)
+  const who = 'peers?|partners?|classmates?|groupmates?';
+  const otherWho = 'student|child|peer|partner|member|participant';
+  if (
+    new RegExp(
+      `\\bno\\s+(?:other\\s+)?(?:${who})\\b` +
+        `|\\b(?:${who})\\s+(?:were\\s+|was\\s+)?(?:not\\s+|un)?available\\b` +
+        `|\\bno\\s+other\\s+(?:${otherWho})s?\\b` +
+        `|\\bother\\s+(?:${otherWho}).{0,24}(?:absent|unavailable|missing)\\b`,
+      'i',
+    ).test(n)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Solo group documented as individual/1:1 with a no-partner note.
+ * Pay stays individual; mandate frequency still consumes the group mandate.
+ */
+export function sessionIsSoloGroupViaNote(session: Pick<SessionRow, 'serviceType' | 'notes'>): boolean {
+  return (
+    sessionLooksGroup(session.serviceType) !== true &&
+    notesMentionNoPeerAvailable(session.notes || '')
+  );
+}
+
 export function mandateKindOf(mandate: Mandate | undefined): MandateKind {
   if (!mandate) return 'regular';
   if (mandate.mandateKind === 'makeup_auth') return 'makeup_auth';
@@ -179,7 +214,12 @@ export function sessionMatchesMandate(session: SessionRow, mandate: Mandate): bo
   const sessDisc = disciplineFromServiceType(session.serviceType);
   if (mandate.discipline && sessDisc && mandate.discipline !== sessDisc) return false;
   const sessGroup = sessionLooksGroup(session.serviceType);
-  if (sessGroup != null && sessGroup !== Boolean(mandate.ratioGroup)) return false;
+  if (sessGroup != null && sessGroup !== Boolean(mandate.ratioGroup)) {
+    // 1:1 / individual tag with "no partner available" still matches the group mandate
+    // for frequency (pay remains individual via presentGroupPeerCount).
+    if (mandate.ratioGroup && sessionIsSoloGroupViaNote(session)) return true;
+    return false;
+  }
   return true;
 }
 
@@ -232,16 +272,29 @@ export function assignSessionsToMandates(
       continue;
     }
     const sessGroup = sessionLooksGroup(s.serviceType);
+    const soloGroupViaNote = sessionIsSoloGroupViaNote(s);
     let preferred = candidates[0];
     if (s.attendance === 'makeup' && !s.makeupOfSessionId) {
       // Unlinked makeups consume leftover makeup-auth; miss-linked makeups do not.
       preferred =
         candidates.find((m) => isMakeupAuthMandate(m)) ||
+        (soloGroupViaNote
+          ? candidates.find((m) => m.ratioGroup)
+          : undefined) ||
         candidates.find((m) => Boolean(m.ratioGroup) === Boolean(sessGroup)) ||
         candidates[0];
     } else if (s.attendance === 'makeup' && s.makeupOfSessionId) {
       preferred =
+        (soloGroupViaNote
+          ? candidates.find((m) => !isMakeupAuthMandate(m) && m.ratioGroup)
+          : undefined) ||
         candidates.find((m) => !isMakeupAuthMandate(m) && Boolean(m.ratioGroup) === Boolean(sessGroup)) ||
+        candidates.find((m) => !isMakeupAuthMandate(m)) ||
+        candidates[0];
+    } else if (soloGroupViaNote) {
+      // Solo group / no-partner note → group mandate frequency (not individual).
+      preferred =
+        candidates.find((m) => !isMakeupAuthMandate(m) && m.ratioGroup) ||
         candidates.find((m) => !isMakeupAuthMandate(m)) ||
         candidates[0];
     } else if (sessGroup != null) {

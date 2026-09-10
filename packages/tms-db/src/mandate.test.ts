@@ -100,6 +100,94 @@ describe('mandate math', () => {
     expect(r.used).toBe(1);
     expect(r.under).toBe(true);
   });
+
+  it('solo-group / no-partner 1:1 counts against group mandate, not individual', () => {
+    const individual = mandate({
+      id: 'm-ind',
+      ratioGroup: false,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+      serviceType: 'PT School',
+    });
+    const group = mandate({
+      id: 'm-grp',
+      ratioGroup: true,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+      serviceType: 'PT School Group',
+      groupSize: 2,
+    });
+    // True individual visit earlier in the week.
+    const tue = sess({
+      id: 's-tue',
+      dateOfService: '09/02/2026',
+      beginTime: '11:00 am',
+      endTime: '11:30 am',
+      serviceType: 'PT School 1:1',
+      notes: 'Service Provided: evaluation of balance',
+    });
+    // Solo group documented as 1:1 with no partner available.
+    const wed = sess({
+      id: 's-wed',
+      dateOfService: '09/03/2026',
+      beginTime: '11:00 am',
+      endTime: '11:30 am',
+      serviceType: 'PT School 1:1',
+      notes:
+        'Service Provided: Observing how physical limitations impact daily activities. no partner available',
+    });
+    const { errors, warnings } = checkMandatesForWeek(
+      [individual, group],
+      [tue, wed],
+      [tue, wed],
+      { st1: 'Dylan Santos-Santiago' },
+    );
+    expect(errors.filter((e) => /PT individual/i.test(e))).toEqual([]);
+    expect(errors.filter((e) => /exceeds the mandate/i.test(e))).toEqual([]);
+    // Individual still under or exactly filled (1 of 1); group exactly filled — no over errors.
+    expect(warnings.some((w) => /Under mandate/i.test(w))).toBe(false);
+  });
+
+  it('two solo-group / no-partner 1:1s still over the group mandate', () => {
+    const individual = mandate({
+      id: 'm-ind',
+      ratioGroup: false,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+    });
+    const group = mandate({
+      id: 'm-grp',
+      ratioGroup: true,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+      serviceType: 'PT School Group',
+      groupSize: 2,
+    });
+    const a = sess({
+      id: 'a',
+      dateOfService: '09/02/2026',
+      beginTime: '8:30 am',
+      endTime: '9:00 am',
+      serviceType: 'PT School 1:1',
+      notes: 'Service Provided: assessment. no partner available',
+    });
+    const b = sess({
+      id: 'b',
+      dateOfService: '09/03/2026',
+      beginTime: '8:30 am',
+      endTime: '9:00 am',
+      serviceType: 'PT School 1:1',
+      notes: 'Service Provided: continued assessment. no partner available.',
+    });
+    const { errors } = checkMandatesForWeek(
+      [individual, group],
+      [a, b],
+      [a, b],
+      { st1: 'Chauncey Watt' },
+    );
+    expect(errors.some((e) => /PT group/i.test(e) && /exceeds the mandate/i.test(e))).toBe(true);
+    expect(errors.some((e) => /PT individual/i.test(e))).toBe(false);
+  });
 });
 
 describe('school_day_cycle calendar windows', () => {
@@ -550,6 +638,145 @@ describe('due dates and dashboard', () => {
     });
     expect(dashboard(store).timesheet.submitted).toBe(1);
     expect(lastServiceByStudent(store)).toEqual([]);
+  });
+
+  it('dashboard HHA confirmed counts transfers; eligible is attended/makeup on locked weeks', () => {
+    const store = new MemoryStore();
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p',
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'confirmed',
+    });
+    store.upsertSession({
+      id: 's-att',
+      weekId: 'w',
+      studentId: 'st',
+      dateOfService: '2026-09-01',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: '',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.upsertSession({
+      id: 's-miss',
+      weekId: 'w',
+      studentId: 'st',
+      dateOfService: '2026-09-02',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'missed',
+      cancelReason: 'absent',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: '',
+      notes: '',
+      aiFlags: [],
+    });
+    store.upsertTransfer({
+      id: 't1',
+      sessionId: 's-att',
+      weekId: 'w',
+      status: 'confirmed',
+      hhaVisitId: '1',
+      lastError: '',
+      payloadHash: '',
+      updatedAt: '',
+    });
+    const d = dashboard(store);
+    expect(d.hha.confirmed).toBe(1);
+    expect(d.hha.eligible).toBe(1);
+    expect(d.hha.failed).toBe(0);
+    const weeks = adminWeeksList(store);
+    expect(weeks[0]?.sessionCount).toBe(2);
+    expect(weeks[0]?.hhaEligible).toBe(1);
+    expect(weeks[0]?.hhaConfirmed).toBe(1);
+    expect(weeks[0]?.hhaStatus).toBe('confirmed');
+  });
+
+  it('admin weeks HHA status stays failed when any eligible transfer failed', () => {
+    const store = new MemoryStore();
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p',
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      // Misleading stored status — rollup must override.
+      hhaStatus: 'confirmed',
+      hhaError: '',
+    });
+    store.upsertSession({
+      id: 's1',
+      weekId: 'w',
+      studentId: 'st',
+      dateOfService: '2026-09-01',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: '',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.upsertSession({
+      id: 's2',
+      weekId: 'w',
+      studentId: 'st',
+      dateOfService: '2026-09-02',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: '',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.upsertTransfer({
+      id: 't1',
+      sessionId: 's1',
+      weekId: 'w',
+      status: 'confirmed',
+      hhaVisitId: '1',
+      lastError: '',
+      payloadHash: '',
+      updatedAt: '',
+    });
+    store.upsertTransfer({
+      id: 't2',
+      sessionId: 's2',
+      weekId: 'w',
+      status: 'failed',
+      hhaVisitId: '',
+      lastError: 'HHA GetVisitInfoV2 failed (ErrorID=-415)',
+      payloadHash: '',
+      updatedAt: '',
+    });
+    const row = adminWeeksList(store)[0];
+    expect(row?.hhaStatus).toBe('failed');
+    expect(row?.hhaConfirmed).toBe(1);
+    expect(row?.hhaFailed).toBe(1);
+    expect(row?.hhaEligible).toBe(2);
+    expect(row?.hhaError).toContain('ErrorID=-415');
   });
 
   it('last service filters by provider and returns school', () => {
