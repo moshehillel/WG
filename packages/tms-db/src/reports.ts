@@ -317,10 +317,37 @@ export function adminWeeksList(store: MemoryStore) {
         : w.hhaStatus === 'failed' && enriched.hhaError
           ? 'failed'
           : w.hhaStatus || 'none';
+    const schoolId =
+      String(w.schoolId || '').trim() ||
+      (() => {
+        const sessions = store.sessionsForWeek(w.id);
+        const counts = new Map<string, number>();
+        for (const s of sessions) {
+          const student = store.data.students.find((st) => st.id === s.studentId);
+          const sid = String(student?.schoolId || '').trim();
+          if (!sid) continue;
+          counts.set(sid, (counts.get(sid) || 0) + 1);
+        }
+        let best = '';
+        let bestN = 0;
+        for (const [id, n] of counts) {
+          if (n > bestN) {
+            best = id;
+            bestN = n;
+          }
+        }
+        return best;
+      })();
+    const school = schoolId
+      ? store.data.schools.find((s) => s.id === schoolId)
+      : undefined;
     return {
       id: w.id,
       weekStart: w.weekStart,
       status: w.status,
+      schoolId: schoolId || '',
+      schoolName: school?.name || '',
+      district: school?.district || '',
       signerName: w.signerName,
       signerEmail: w.signerEmail,
       hhaStatus,
@@ -421,11 +448,14 @@ function sessionProviderId(store: MemoryStore, s: SessionRow): string {
  */
 export function sessionNotesReport(
   store: MemoryStore,
-  opts: { from?: string; to?: string; providerId?: string } = {},
+  opts: { from?: string; to?: string; providerId?: string; district?: string } = {},
 ) {
   const from = String(opts.from || '').trim();
   const to = String(opts.to || '').trim();
   const providerId = String(opts.providerId || '').trim();
+  const districtKey = String(opts.district || '')
+    .trim()
+    .toLowerCase();
 
   const rows: Array<{
     sessionId: string;
@@ -434,6 +464,7 @@ export function sessionNotesReport(
     providerId: string;
     providerName: string;
     schoolName: string;
+    district: string;
     dateOfService: string;
     attendance: string;
     beginTime: string;
@@ -451,16 +482,19 @@ export function sessionNotesReport(
     const resolvedProviderId = sessionProviderId(store, s);
     if (providerId && resolvedProviderId !== providerId) continue;
 
+    const student = store.data.students.find((st) => st.id === s.studentId);
+    const school = student
+      ? store.data.schools.find((sc) => sc.id === student.schoolId)
+      : undefined;
+    const district = String(school?.district || '').trim();
+    if (districtKey && district.toLowerCase() !== districtKey) continue;
+
     const att = String(s.attendance || '').trim() || 'attended';
     if (att === 'attended') attendedOnly += 1;
     else if (att === 'makeup') makeup += 1;
     else if (att === 'missed') missed += 1;
     else other += 1;
 
-    const student = store.data.students.find((st) => st.id === s.studentId);
-    const school = student
-      ? store.data.schools.find((sc) => sc.id === student.schoolId)
-      : undefined;
     const provider = resolvedProviderId
       ? store.data.providers.find((p) => p.id === resolvedProviderId)
       : undefined;
@@ -475,6 +509,7 @@ export function sessionNotesReport(
         ? `${provider.firstName} ${provider.lastName}`.trim() || provider.id
         : '—',
       schoolName: school?.name || '—',
+      district: district || '—',
       dateOfService: s.dateOfService,
       attendance: att,
       beginTime: s.beginTime || '',
@@ -496,6 +531,7 @@ export function sessionNotesReport(
     from: from || null,
     to: to || null,
     providerId: providerId || null,
+    district: opts.district ? String(opts.district).trim() : null,
     totals: {
       attended,
       attendedOnly,
@@ -761,17 +797,55 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
     });
   const weeks = store.data.weeks
     .filter((w) => aliasIds.has(w.providerId) || w.providerId === provider.id)
-    .map((w) => enrichWeekHhaError(store, w));
+    .map((w) => {
+      const enriched = enrichWeekHhaError(store, w);
+      const schoolId =
+        String(w.schoolId || '').trim() ||
+        (() => {
+          const sess = store.sessionsForWeek(w.id);
+          const counts = new Map<string, number>();
+          for (const s of sess) {
+            const student = store.data.students.find((st) => st.id === s.studentId);
+            const sid = String(student?.schoolId || '').trim();
+            if (!sid) continue;
+            counts.set(sid, (counts.get(sid) || 0) + 1);
+          }
+          let best = '';
+          let bestN = 0;
+          for (const [id, n] of counts) {
+            if (n > bestN) {
+              best = id;
+              bestN = n;
+            }
+          }
+          return best;
+        })();
+      const school = schoolId
+        ? store.data.schools.find((s) => s.id === schoolId)
+        : undefined;
+      return {
+        ...enriched,
+        schoolId: schoolId || '',
+        schoolName: school?.name || '',
+        district: school?.district || '',
+      };
+    });
   const weekById = new Map(weeks.map((w) => [w.id, w]));
   const sessions = store.data.sessions
     .filter((s) => weekById.has(s.weekId))
     .map((s) => {
       const w = weekById.get(s.weekId);
       const student = store.data.students.find((st) => st.id === s.studentId);
+      const school = student
+        ? store.data.schools.find((sc) => sc.id === student.schoolId)
+        : undefined;
       return {
         ...s,
         weekStart: w?.weekStart || '',
         weekStatus: w?.status || '',
+        schoolId: student?.schoolId || w?.schoolId || '',
+        schoolName: school?.name || '',
+        district: school?.district || '',
         studentName: student
           ? `${student.firstName} ${student.lastName}`.trim()
           : s.studentId,

@@ -68,6 +68,12 @@ import {
   sessionImportAgeError,
   defaultAppSettings,
   schoolBillingServiceNameForMandate,
+  splitWeekBySchoolBins,
+  timesheetBinKeyForWeek,
+  weeksMatchingSchoolBin,
+  weekMatchesSchoolBin,
+  resolveWeekSchoolId,
+  dominantSchoolIdForSessions,
   type AppSettings,
   type AppUser,
   type Discipline,
@@ -374,19 +380,70 @@ function weeksForProviderStart(
   );
 }
 
-/** Fold duplicate Monday weeks (alias / clash) onto one row so the therapist GET sees admin sessions. */
+/** Fold duplicate Monday weeks in the *same* school/signer bin onto one row. */
 function foldWeeksOnto(
   store: MemoryStore,
   target: (typeof store.data.weeks)[number],
   extras: Array<(typeof store.data.weeks)[number]>,
 ): void {
+  const targetBin = timesheetBinKeyForWeek(store, target);
   for (const extra of extras) {
     if (!extra || extra.id === target.id) continue;
+    if (timesheetBinKeyForWeek(store, extra) !== targetBin) continue;
     for (const s of store.sessionsForWeek(extra.id)) {
       store.upsertSession({ ...s, weekId: target.id });
     }
     store.removeWeek(extra.id);
   }
+}
+
+/** Prefer school-scoped week; never fold different signer/school bins together. */
+function pickWeekForScope(
+  store: MemoryStore,
+  matchedWeeks: WeeklyPeriod[],
+  opts?: { providerId?: string; schoolId?: string },
+): WeeklyPeriod | undefined {
+  if (!matchedWeeks.length) return undefined;
+  const providerId = String(opts?.providerId || '').trim();
+  const schoolId = String(opts?.schoolId || '').trim();
+  let candidates = matchedWeeks;
+  if (schoolId) {
+    const scoped = weeksMatchingSchoolBin(store, matchedWeeks, schoolId);
+    // Empty scoped list means no existing bin for this signer/school — caller should create one.
+    candidates = scoped;
+  }
+  if (!candidates.length) return undefined;
+  let week =
+    (providerId ? candidates.find((w) => w.providerId === providerId) : undefined) ||
+    candidates[0];
+  if (!week) return undefined;
+  if (providerId && week.providerId !== providerId) {
+    week = store.upsertWeek({ ...week, providerId });
+  }
+  const sameBin = matchedWeeks.filter(
+    (w) =>
+      w.id !== week!.id &&
+      timesheetBinKeyForWeek(store, w) === timesheetBinKeyForWeek(store, week!),
+  );
+  if (sameBin.length) foldWeeksOnto(store, week, sameBin);
+  // Repair mixed-signer weeks left over from pre-split imports.
+  const split = splitWeekBySchoolBins(store, week, () => newId());
+  if (schoolId) {
+    const match = split.find((w) => weekMatchesSchoolBin(store, w, schoolId));
+    if (match) week = match;
+  } else {
+    week = split[0] || week;
+  }
+  if (schoolId && therapistCanEdit(week.status) && !String(week.schoolId || '').trim()) {
+    const school = store.data.schools.find((s) => s.id === schoolId);
+    week = store.upsertWeek({
+      ...week,
+      schoolId,
+      signerName: school?.signerName || week.signerName,
+      signerEmail: school?.signerEmail || week.signerEmail,
+    });
+  }
+  return week;
 }
 
 function getAppSettings(store: MemoryStore): AppSettings {
@@ -436,23 +493,7 @@ function programTypeKey(v: string): string {
 
 /** Majority student.schoolId among sessions on this week (child's school, not picker). */
 function dominantSchoolIdForWeek(store: MemoryStore, weekId: string): string {
-  const sessions = store.sessionsForWeek(weekId);
-  const counts = new Map<string, number>();
-  for (const s of sessions) {
-    const student = store.data.students.find((st) => st.id === s.studentId);
-    const sid = String(student?.schoolId || '').trim();
-    if (!sid) continue;
-    counts.set(sid, (counts.get(sid) || 0) + 1);
-  }
-  let best = '';
-  let bestN = 0;
-  for (const [id, n] of counts) {
-    if (n > bestN) {
-      best = id;
-      bestN = n;
-    }
-  }
-  return best;
+  return dominantSchoolIdForSessions(store, store.sessionsForWeek(weekId));
 }
 
 /**
@@ -700,8 +741,10 @@ function visibleStudents(
       .filter((m) => !!providerId && m.providerId === providerId)
       .map((m) => m.studentId),
   );
-  const week = weekStart ? store.weekByProviderStart(providerId, weekStart) : undefined;
-  const fromWeek = new Set((week ? store.sessionsForWeek(week.id) : []).map((s) => s.studentId));
+  const weekRows = weekStart ? weeksForProviderStart(store, providerId, weekStart) : [];
+  const fromWeek = new Set(
+    weekRows.flatMap((w) => store.sessionsForWeek(w.id).map((s) => s.studentId)),
+  );
   let students = store.data.students.filter((s) => mandated.has(s.id) || fromWeek.has(s.id));
   const pt = String(programType || '').trim();
   // Prefer program-type scope (district/payer) over building-level schoolId.
@@ -936,10 +979,12 @@ function reportXlsxSessionNotes(
 ): HttpResponse {
   const { from, to } = reportRange(query);
   const providerId = String(query.providerId || '').trim();
+  const district = String(query.district || '').trim();
   const report = sessionNotesReport(store, {
     from,
     to,
     providerId: providerId || undefined,
+    district: district || undefined,
   });
   const t = report.totals;
   return xlsxResponse(
@@ -950,6 +995,7 @@ function reportXlsxSessionNotes(
         'Child',
         'Provider',
         'School',
+        'District',
         'Date of service',
         'Attendance',
         'Begin',
@@ -963,6 +1009,7 @@ function reportXlsxSessionNotes(
         r.childName,
         r.providerName,
         r.schoolName,
+        r.district,
         r.dateOfService,
         r.attendance,
         r.beginTime,
@@ -2374,12 +2421,14 @@ export async function handleTmsRequest(
       const from = String(req.query.from || '').trim();
       const to = String(req.query.to || '').trim();
       const providerId = String(req.query.providerId || '').trim();
+      const district = String(req.query.district || '').trim();
       return json(
         200,
         sessionNotesReport(store, {
           from,
           to,
           providerId: providerId || undefined,
+          district: district || undefined,
         }),
       );
     });
@@ -2507,21 +2556,43 @@ export async function handleTmsRequest(
     const schoolId = String(req.query.schoolId || '').trim();
     const programType = String(req.query.programType || '').trim();
     const matchedWeeks = weeksForProviderStart(store, providerId, weekStart);
-    let week =
-      matchedWeeks.find((w) => w.providerId === providerId) ||
-      matchedWeeks[0] ||
-      (weekStart ? undefined : store.data.weeks.find((w) => w.providerId === providerId));
-    if (week && week.providerId !== providerId) {
-      week = store.upsertWeek({ ...week, providerId });
-    }
-    if (week && matchedWeeks.length > 1) {
-      foldWeeksOnto(
-        store,
-        week,
-        matchedWeeks.filter((w) => w.id !== week.id),
+    // When therapist scopes by program type (Madison multi-building), prefer a school
+    // that belongs to that program so we land on the right signer bin if several exist.
+    let scopeSchoolId = schoolId;
+    if (!scopeSchoolId && programType && matchedWeeks.length > 1) {
+      const ptKey = programTypeKey(programType);
+      const programSchoolIds = new Set(
+        store.data.students
+          .filter((s) => programTypeKey(s.programType) === ptKey)
+          .map((s) => s.schoolId)
+          .filter(Boolean),
       );
+      const withProgramSessions = matchedWeeks.find((w) =>
+        store.sessionsForWeek(w.id).some((s) => {
+          const st = store.data.students.find((x) => x.id === s.studentId);
+          return st && programSchoolIds.has(st.schoolId);
+        }),
+      );
+      if (withProgramSessions) {
+        scopeSchoolId = resolveWeekSchoolId(store, withProgramSessions);
+      }
     }
-    // Keep every session on this provider week. Program/school picker only scopes the caseload
+    let week = pickWeekForScope(store, matchedWeeks, {
+      providerId,
+      schoolId: scopeSchoolId || undefined,
+    });
+    // Therapist school picker is metadata — if that bin is empty/missing, surface the sibling
+    // week that actually has sessions so admin-imported rows remain visible.
+    if (ctx.user.role !== 'admin') {
+      const emptyOrMissing = !week || store.sessionsForWeek(week.id).length === 0;
+      if (emptyOrMissing && matchedWeeks.length) {
+        const withSessions =
+          matchedWeeks.find((w) => store.sessionsForWeek(w.id).length > 0) ||
+          matchedWeeks.find((w) => w.id !== week?.id && store.sessionsForWeek(w.id).length > 0);
+        if (withSessions) week = withSessions;
+      }
+    }
+    // Keep every session on this school-scoped week. Program/school picker only scopes the caseload
     // dropdown — hiding rows made admin-added sessions disappear for the therapist.
     const sessions = week ? store.sessionsForWeek(week.id) : [];
     const nameMap = studentNameById(store);
@@ -2585,21 +2656,44 @@ export async function handleTmsRequest(
       };
     });
     const schoolDistrict = week
-      ? schoolDistrictForWeek(store, week.id, schoolId || undefined)
+      ? schoolDistrictForWeek(store, week.id, schoolId || week.schoolId || undefined)
       : '';
     if (week && therapistCanEdit(week.status)) {
       const signerSchool = resolveWeekSchool(store, providerId, {
         weekId: week.id,
-        preferredSchoolId: schoolId || undefined,
+        preferredSchoolId: schoolId || week.schoolId || undefined,
       });
       week = stampWeekSignerFromSchool(store, week, signerSchool);
+      if (signerSchool?.id && week.schoolId !== signerSchool.id) {
+        week = store.upsertWeek({ ...week, schoolId: signerSchool.id });
+      }
     }
+    const siblingWeeks = weekStart
+      ? weeksForProviderStart(store, providerId, weekStart)
+          .filter((w) => w.id !== week?.id)
+          .map((w) => {
+            const sid = resolveWeekSchoolId(store, w);
+            const school = sid ? store.data.schools.find((s) => s.id === sid) : undefined;
+            return {
+              id: w.id,
+              weekStart: w.weekStart,
+              status: w.status,
+              schoolId: sid,
+              schoolName: school?.name || '',
+              district: school?.district || '',
+              signerName: w.signerName,
+              signerEmail: w.signerEmail,
+              sessionCount: store.sessionsForWeek(w.id).length,
+            };
+          })
+      : [];
     return json(200, {
       week,
       sessions: sessionsOut,
       students,
       schoolDistrict,
       programType: programType || '',
+      siblingWeeks,
       mandates: store.data.mandates.filter((m) => students.some((s) => s.id === m.studentId) || ctx.user.role === 'admin'),
       warnings: [...new Set([...check.warnings, ...ai.warnings])],
       errors: [...new Set([...check.errors, ...ai.errors, ...soloNoteErrors])],
@@ -2613,18 +2707,11 @@ export async function handleTmsRequest(
     const weekStart = String(b.weekStart || '');
     const schoolId = String(b.schoolId || '').trim();
     if (!providerId || !weekStart) return json(400, { error: 'providerId and weekStart are required.' });
-    let week = store.weekByProviderStart(providerId, weekStart);
     const aliasWeeks = weeksForProviderStart(store, providerId, weekStart);
-    if (!week && aliasWeeks[0]) {
-      week = store.upsertWeek({ ...aliasWeeks[0]!, providerId });
-    }
-    if (week) {
-      foldWeeksOnto(
-        store,
-        week,
-        aliasWeeks.filter((w) => w.id !== week!.id),
-      );
-    }
+    let week = pickWeekForScope(store, aliasWeeks, {
+      providerId,
+      schoolId: schoolId || undefined,
+    });
     // Signer from session children's school when present; picker/caseload only if empty week.
     const preferredSchool = resolveWeekSchool(store, providerId, {
       weekId: week?.id,
@@ -2635,6 +2722,7 @@ export async function handleTmsRequest(
         id: newId(),
         providerId,
         weekStart,
+        schoolId: preferredSchool?.id || schoolId || '',
         status: 'draft',
         signerName: preferredSchool?.signerName || '',
         signerEmail: preferredSchool?.signerEmail || '',
@@ -2646,6 +2734,12 @@ export async function handleTmsRequest(
       });
     } else {
       week = stampWeekSignerFromSchool(store, week, preferredSchool);
+      if (preferredSchool?.id && therapistCanEdit(week.status)) {
+        const stampedId = String(week.schoolId || '').trim();
+        if (!stampedId || stampedId === preferredSchool.id) {
+          week = store.upsertWeek({ ...week, schoolId: preferredSchool.id });
+        }
+      }
     }
     return json(200, { week, school: preferredSchool || null });
   }
@@ -2705,32 +2799,29 @@ export async function handleTmsRequest(
       }
     }
 
-    // Attach each session to the Monday week of its date of service (no calendar picker required).
+    // Attach each session to the Monday week of its date of service (no calendar picker required),
+    // scoped by the child's school/signer so multi-school imports become separate timesheets.
     const weekCache = new Map<string, (typeof store.data.weeks)[number]>();
     const uploadSchoolId = String(b.schoolId || '').trim();
-    const ensureWeek = (weekStart: string) => {
-      let w = weekCache.get(weekStart);
+    const ensureWeek = (weekStart: string, sessionSchoolId?: string) => {
+      const scopeSchoolId = String(sessionSchoolId || uploadSchoolId || '').trim();
+      const cacheKey = `${weekStart}::${scopeSchoolId || '_'}`;
+      let w = weekCache.get(cacheKey);
       if (w) return w;
       const matched = weeksForProviderStart(store, providerId, weekStart);
-      w = matched.find((x) => x.providerId === providerId) || matched[0];
-      if (w && w.providerId !== providerId) {
-        w = store.upsertWeek({ ...w, providerId });
-      }
-      if (w && matched.length > 1) {
-        foldWeeksOnto(
-          store,
-          w,
-          matched.filter((x) => x.id !== w!.id),
-        );
-      }
+      w = pickWeekForScope(store, matched, {
+        providerId,
+        schoolId: scopeSchoolId || undefined,
+      });
       if (!w) {
         const school = resolveWeekSchool(store, providerId, {
-          preferredSchoolId: uploadSchoolId || undefined,
+          preferredSchoolId: scopeSchoolId || undefined,
         });
         w = store.upsertWeek({
           id: newId(),
           providerId,
           weekStart,
+          schoolId: school?.id || scopeSchoolId || '',
           status: 'draft',
           signerName: String(b.signerName || school?.signerName || ''),
           signerEmail: String(b.signerEmail || school?.signerEmail || ''),
@@ -2740,8 +2831,16 @@ export async function handleTmsRequest(
           hhaStatus: 'none',
           hhaError: '',
         });
+      } else if (scopeSchoolId && therapistCanEdit(w.status) && !String(w.schoolId || '').trim()) {
+        const school = store.data.schools.find((s) => s.id === scopeSchoolId);
+        w = store.upsertWeek({
+          ...w,
+          schoolId: scopeSchoolId,
+          signerName: school?.signerName || w.signerName,
+          signerEmail: school?.signerEmail || w.signerEmail,
+        });
       }
-      weekCache.set(weekStart, w);
+      weekCache.set(cacheKey, w);
       return w;
     };
     const fallbackWeekStart = String(
@@ -2826,7 +2925,7 @@ export async function handleTmsRequest(
         `${student.firstName} ${student.lastName}`.trim() || display;
 
       const rowWeekStart = weekStartFromDos(row.dateOfService) || fallbackWeekStart;
-      const targetWeek = ensureWeek(rowWeekStart);
+      const targetWeek = ensureWeek(rowWeekStart, student.schoolId);
       week = targetWeek;
       if (!therapistCanImportOrAddServices(targetWeek.status) && ctx.user.role !== 'admin') {
         const lockMsg =
@@ -3450,9 +3549,54 @@ export async function handleTmsRequest(
       isAdmin: ctx.user.role === 'admin',
     });
     if (ageErr) return json(400, { error: ageErr, errors: [ageErr] });
+    // Route new sessions onto the child's school/signer timesheet bin (not a sibling school's week).
+    let targetWeek = week;
+    const childSchoolId = String(
+      store.data.students.find((st) => st.id === pickStr(b.studentId, existing?.studentId || ''))
+        ?.schoolId || '',
+    ).trim();
+    if (
+      !existing &&
+      childSchoolId &&
+      !weekMatchesSchoolBin(store, week, childSchoolId)
+    ) {
+      const matched = weeksForProviderStart(store, week.providerId, week.weekStart);
+      let scoped = pickWeekForScope(store, matched, {
+        providerId: week.providerId,
+        schoolId: childSchoolId,
+      });
+      if (!scoped || !weekMatchesSchoolBin(store, scoped, childSchoolId)) {
+        const school = store.data.schools.find((s) => s.id === childSchoolId);
+        scoped = store.upsertWeek({
+          id: newId(),
+          providerId: week.providerId,
+          weekStart: week.weekStart,
+          schoolId: childSchoolId,
+          status: 'draft',
+          signerName: school?.signerName || '',
+          signerEmail: school?.signerEmail || '',
+          timesheetKey: '',
+          signedKey: '',
+          envelopeId: '',
+          hhaStatus: 'none',
+          hhaError: '',
+        });
+      }
+      targetWeek = scoped;
+      if (!therapistCanImportOrAddServices(targetWeek.status) && ctx.user.role !== 'admin') {
+        return json(409, {
+          error:
+            targetWeek.status === 'submitted'
+              ? 'This school week is awaiting signature. Cancel the approval request before adding sessions.'
+              : weekIsProcessed(targetWeek.status)
+                ? 'This school week is signed/locked. Ask an admin to reopen it before adding sessions.'
+                : 'This school week cannot accept new sessions.',
+        });
+      }
+    }
     const session: SessionRow = {
       id: String(b.id || existing?.id || newId()),
-      weekId: week.id,
+      weekId: targetWeek.id,
       studentId: pickStr(b.studentId, existing?.studentId || ''),
       dateOfService,
       beginTime: pickStr(b.beginTime, existing?.beginTime || ''),
@@ -3534,9 +3678,19 @@ export async function handleTmsRequest(
     session.aiFlags = screenedLocal.flags;
     session.aiBlock = screenedLocal.block;
     store.upsertSession(session);
+    if (therapistCanEdit(targetWeek.status)) {
+      const signerSchool = resolveWeekSchool(store, targetWeek.providerId, {
+        weekId: targetWeek.id,
+        preferredSchoolId: childSchoolId || targetWeek.schoolId || undefined,
+      });
+      targetWeek = stampWeekSignerFromSchool(store, targetWeek, signerSchool);
+      if (signerSchool?.id && targetWeek.schoolId !== signerSchool.id) {
+        targetWeek = store.upsertWeek({ ...targetWeek, schoolId: signerSchool.id });
+      }
+    }
     const check = checkMandatesForWeek(
       store.data.mandates,
-      store.sessionsForWeek(week.id),
+      store.sessionsForWeek(targetWeek.id),
       store.data.sessions,
       studentNameById(store),
       mandateWeekOpts(store),
@@ -3668,6 +3822,7 @@ export async function handleTmsRequest(
     const next = store.upsertWeek({
       ...week,
       status: 'submitted',
+      schoolId: week.schoolId || signerSchool?.id || '',
       signerName,
       signerEmail,
     });

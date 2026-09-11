@@ -293,6 +293,26 @@ export class MemoryStore {
     return this.data.weeks.find((w) => w.providerId === providerId && w.weekStart === weekStart);
   }
 
+  /** Prefer exact schoolId match; fall back to any week for that Monday (legacy). */
+  weekByProviderStartSchool(
+    providerId: string,
+    weekStart: string,
+    schoolId?: string,
+  ): WeeklyPeriod | undefined {
+    const start = String(weekStart || '').trim();
+    const sid = String(schoolId || '').trim();
+    const matched = this.data.weeks.filter(
+      (w) => w.providerId === providerId && (!start || w.weekStart === start),
+    );
+    if (!matched.length) return undefined;
+    if (!sid) return matched[0];
+    return (
+      matched.find((w) => String(w.schoolId || '').trim() === sid) ||
+      matched.find((w) => !String(w.schoolId || '').trim()) ||
+      matched[0]
+    );
+  }
+
   upsertWeek(row: WeeklyPeriod): WeeklyPeriod {
     const i = this.data.weeks.findIndex((s) => s.id === row.id);
     if (i >= 0) this.data.weeks[i] = row;

@@ -141,6 +141,12 @@ export interface WeeklyPeriod {
   id: string;
   providerId: string;
   weekStart: string;
+  /**
+   * Signer-school scope for this timesheet bin.
+   * Same provider + Monday may have multiple weeks when schools (or school signers) differ.
+   * Buildings that share the same signer email stay on one bin (Madison multi-building).
+   */
+  schoolId?: string;
   status: WeekStatus;
   signerName: string;
   signerEmail: string;

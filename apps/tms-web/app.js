@@ -33,6 +33,8 @@ const state = {
   childSessionTo: '',
   providerSessionFrom: '',
   providerSessionTo: '',
+  providerSessionDistrict: '',
+  sessionNotesDistrict: '',
   therapistPane: sessionStorage.getItem('tmsTherapistPane') || 'current',
   childDetailTab: sessionStorage.getItem('tmsChildDetailTab') || 'basic',
   providerDetailTab: sessionStorage.getItem('tmsProviderDetailTab') || 'basic',
@@ -844,7 +846,7 @@ function showActionToast(message, kind = 'neutral', { sticky = false } = {}) {
 }
 
 function timesheetSendBlockReason({ week, sessions, locked, errors, signerEmail }) {
-  if (locked) return 'This week is already submitted and cannot be sent again.';
+  if (locked) return 'This school\'s timesheet for the week is already submitted and cannot be sent again. Choose a different school/signer to send another timesheet for the same week.';
   if (!week) return 'Your provider profile is not ready yet. Contact the office.';
   if (!sessions.length) return 'Add at least one session before submitting.';
   if (errors.length) {
@@ -1607,11 +1609,12 @@ async function openTimesheetModal(opts) {
   }
 }
 
-async function fetchAndShowTimesheet({ weekId, weekStart, providerId, providerName, status }) {
+async function fetchAndShowTimesheet({ weekId, weekStart, providerId, providerName, status, schoolId }) {
   const q = new URLSearchParams();
   if (weekStart) q.set('weekStart', weekStart);
   if (providerId) q.set('providerId', providerId);
-  if (state.selectedProgramType) q.set('programType', state.selectedProgramType);
+  if (schoolId) q.set('schoolId', schoolId);
+  else if (state.selectedProgramType) q.set('programType', state.selectedProgramType);
   else if (state.selectedSchoolId) q.set('schoolId', state.selectedSchoolId);
   const data = await api('GET', `/week?${q.toString()}`);
   const id = data.week?.id || weekId;
@@ -2715,17 +2718,18 @@ async function adminDash() {
       ${bulkBar('weeks')}
       <div class="table-wrap">
       <table>
-        <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
+        <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>School</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
         ${weeks.map((w) => `<tr data-week-row="${esc(w.id)}" class="${String(w.hhaStatus) === 'failed' ? 'hha-failed-row' : ''}">
           ${bulkTd('weeks', w.id)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.providerName || '—')}</td>
+          <td>${esc(w.schoolName || w.district || '—')}</td>
           <td>${esc(w.sessionCount)}</td>
           <td>${esc(w.status)}</td>
           <td>${esc(w.signerName || w.signerEmail || '—')}</td>
           <td>${hhaStatusCell(w)}</td>
           <td class="week-actions">${weekActions(w)}</td>
-        </tr>`).join('') || `<tr><td colspan="8">No weeks yet.</td></tr>`}
+        </tr>`).join('') || `<tr><td colspan="9">No weeks yet.</td></tr>`}
       </table>
       </div>
     </div>
@@ -3287,9 +3291,36 @@ async function adminProviderDetail(providerId) {
   if (p?.id && String(p.id) !== String(providerId)) providerId = p.id;
   const sessFrom = state.providerSessionFrom || '';
   const sessTo = state.providerSessionTo || '';
-  const filteredSessions = sessions.filter((x) =>
-    sessionDosInRange(x.dateOfService, sessFrom, sessTo),
-  );
+  const sessDistrict = state.providerSessionDistrict || '';
+  const districtOptions = [...new Set(
+    sessions.map((x) => String(x.district || '').trim()).filter(Boolean),
+  )].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  const filteredSessions = sessions.filter((x) => {
+    if (!sessionDosInRange(x.dateOfService, sessFrom, sessTo)) return false;
+    if (sessDistrict && String(x.district || '').trim() !== sessDistrict) return false;
+    return true;
+  });
+  const timesheetSchools = (() => {
+    const byId = new Map();
+    for (const x of sessions) {
+      const sid = String(x.schoolId || '').trim();
+      if (!sid || byId.has(sid)) continue;
+      byId.set(sid, {
+        id: sid,
+        label: [x.schoolName, x.district].filter(Boolean).join(' · ') || sid,
+      });
+    }
+    for (const w of weeks) {
+      const sid = String(w.schoolId || '').trim();
+      if (!sid || byId.has(sid)) continue;
+      const school = detail.schools?.find?.((s) => s.id === sid);
+      byId.set(sid, {
+        id: sid,
+        label: [w.schoolName || school?.name, w.district || school?.district].filter(Boolean).join(' · ') || sid,
+      });
+    }
+    return [...byId.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+  })();
   const provTab = ['basic', 'pay', 'caseload', 'sessions', 'reports', 'notes'].includes(state.providerDetailTab)
     ? state.providerDetailTab
     : 'basic';
@@ -3372,16 +3403,22 @@ async function adminProviderDetail(providerId) {
 
       <div class="detail-pane"${provTab === 'sessions' ? '' : ' hidden'}>
         <h3>Sessions</h3>
-        <p class="muted">All sessions for this provider (newest first). Filter by date of service as needed.</p>
+        <p class="muted">All sessions for this provider (newest first). Filter by date of service or district as needed. Sessions from different school signers land on separate timesheets for the same week.</p>
         <div class="row">
           <label>From <input id="pSessFrom" type="date" value="${esc(sessFrom)}" /></label>
           <label>To <input id="pSessTo" type="date" value="${esc(sessTo)}" /></label>
+          <label>District
+            <select id="pSessDistrict">
+              <option value="">All districts</option>
+              ${districtOptions.map((d) => `<option value="${esc(d)}"${d === sessDistrict ? ' selected' : ''}>${esc(d)}</option>`).join('')}
+            </select>
+          </label>
           <button type="button" class="btn" id="pSessFilter">Filter</button>
           <button type="button" class="btn" id="pSessClear">Clear</button>
         </div>
         ${bulkBar('prov-sessions')}
         <table>
-          <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Child</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
+          <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Child</th><th>School</th><th>District</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
           ${filteredSessions.map((x) => {
             const hard = Boolean(x.aiBlock);
             const flags = x.aiFlags || [];
@@ -3390,25 +3427,33 @@ async function adminProviderDetail(providerId) {
             ${bulkTd('prov-sessions', x.id)}
             <td>${esc(x.dateOfService)}</td>
             <td>${childNameLink(x.studentId, x.studentName || '—')}</td>
+            <td>${esc(x.schoolName || '—')}</td>
+            <td>${esc(x.district || '—')}</td>
             <td>${esc(x.weekStart || '—')}</td>
             <td>${esc(x.weekStatus || '—')}</td>
             <td>${esc(x.attendance)}</td>
             <td>${esc(x.notes || '')}${flags.length ? `<div class="muted">${esc(flags.join('; '))}</div>` : ''}</td>
             <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
           </tr>`;
-          }).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
+          }).join('') || '<tr><td colspan="9">No sessions in this date range.</td></tr>'}
         </table>
 
         <h3 style="margin-top:1.25rem">Import Frontline / Therapist Activity sessions</h3>
-        <p class="muted">Same as the therapist workspace: upload a Frontline or Therapist Activity PDF (text-based). No week selection needed — each session attaches to the week of its date of service (within the 14-day locker). Children and schools must already exist. Import is all-or-nothing for hard errors; yellow warnings follow the admin screening setting.</p>
+        <p class="muted">Same as the therapist workspace: upload a Frontline or Therapist Activity PDF (text-based). No week selection needed — each session attaches to the week of its date of service (within the 14-day locker), split by school signer when schools differ. Children and schools must already exist. Import is all-or-nothing for hard errors; yellow warnings follow the admin screening setting.</p>
         <input id="pSessionPdf" type="file" accept="application/pdf,.pdf" />
         <button type="button" class="btn-primary" id="pUploadSessions">Import sessions</button>
         <div id="pUploadIssues" class="upload-issues" hidden></div>
 
         <h3 style="margin-top:1.25rem">Generate timesheet</h3>
-        <p class="muted">Open or create a week for this provider, then view or send the timesheet (same SignNow flow as the therapist).</p>
+        <p class="muted">Open or create a week for this provider, choose the school/signer when there is more than one, then view or send the timesheet. You can send another timesheet for the same calendar week when it is for a different school signer.</p>
         <div class="row">
           <label>Week start (Monday) <input id="pWeekStart" type="date" value="${esc(mondayIso())}" /></label>
+          <label>School / signer
+            <select id="pTimesheetSchool">
+              <option value="">Auto (from sessions)</option>
+              ${timesheetSchools.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('')}
+            </select>
+          </label>
           <button type="button" class="btn-primary" id="pGenTimesheet">View timesheet</button>
           <button type="button" class="btn-primary" id="pSendTimesheet">Send timesheet</button>
         </div>
@@ -3528,11 +3573,13 @@ async function adminProviderDetail(providerId) {
   document.getElementById('pSessFilter')?.addEventListener('click', () => {
     state.providerSessionFrom = document.getElementById('pSessFrom')?.value || '';
     state.providerSessionTo = document.getElementById('pSessTo')?.value || '';
+    state.providerSessionDistrict = document.getElementById('pSessDistrict')?.value || '';
     refreshProvider();
   });
   document.getElementById('pSessClear')?.addEventListener('click', () => {
     state.providerSessionFrom = '';
     state.providerSessionTo = '';
+    state.providerSessionDistrict = '';
     refreshProvider();
   });
   document.querySelectorAll('[data-del-session]').forEach((btn) => {
@@ -3714,12 +3761,18 @@ async function adminProviderDetail(providerId) {
   document.getElementById('pGenTimesheet').onclick = async () => {
     try {
       const weekStart = document.getElementById('pWeekStart').value;
+      const schoolId = document.getElementById('pTimesheetSchool')?.value || '';
       if (!weekStart) throw new Error('Select a week start date.');
-      await api('POST', '/week/ensure', { providerId, weekStart });
+      await api('POST', '/week/ensure', {
+        providerId,
+        weekStart,
+        schoolId: schoolId || undefined,
+      });
       await fetchAndShowTimesheet({
         weekStart,
         providerId,
         providerName: `${p.firstName || ''} ${p.lastName || ''}`.trim(),
+        schoolId: schoolId || undefined,
       });
     } catch (e) { setStatus(e.message, 'err'); }
   };
@@ -3728,14 +3781,21 @@ async function adminProviderDetail(providerId) {
     const hint = document.getElementById('pSendTimesheetHint');
     try {
       const weekStart = document.getElementById('pWeekStart').value;
+      const schoolId = document.getElementById('pTimesheetSchool')?.value || '';
       if (!weekStart) throw new Error('Select a week start date.');
-      const ensured = await api('POST', '/week/ensure', { providerId, weekStart });
+      const ensured = await api('POST', '/week/ensure', {
+        providerId,
+        weekStart,
+        schoolId: schoolId || undefined,
+      });
       const weekId = ensured.week?.id;
       if (!weekId) throw new Error('Could not open this provider week.');
-      const detail = await api(
-        'GET',
-        `/week?weekStart=${encodeURIComponent(weekStart)}&providerId=${encodeURIComponent(providerId)}`,
-      );
+      const q = new URLSearchParams({
+        weekStart,
+        providerId,
+      });
+      if (schoolId) q.set('schoolId', schoolId);
+      const detail = await api('GET', `/week?${q.toString()}`);
       const signerEmail = detail.week?.signerEmail || ensured.week?.signerEmail || '';
       const signerName = detail.week?.signerName || ensured.week?.signerName || '';
       const sessions = detail.sessions || [];
@@ -3766,7 +3826,7 @@ async function adminProviderDetail(providerId) {
       const out = await api(
         'POST',
         `/weeks/${weekId}/submit`,
-        { signerName, signerEmail },
+        { signerName, signerEmail, schoolId: schoolId || detail.week?.schoolId || undefined },
         { timeoutMs: 120000 },
       );
       const okMsg = out.message || 'Timesheet sent. Status is now Pending.';
@@ -3797,7 +3857,16 @@ async function adminProviderDetail(providerId) {
       if (!studentId) throw new Error('Select a child.');
       if (!dateOfService) throw new Error('Enter the date of service.');
       const weekStart = mondayFromDos(dateOfService) || mondayIso();
-      const ensured = await api('POST', '/week/ensure', { providerId, weekStart });
+      const childSchoolId = String(
+        sessions.find((x) => x.studentId === studentId)?.schoolId
+          || mandates.find((m) => m.studentId === studentId)?.schoolId
+          || '',
+      ).trim();
+      const ensured = await api('POST', '/week/ensure', {
+        providerId,
+        weekStart,
+        schoolId: childSchoolId || undefined,
+      });
       await api('POST', '/week/sessions', {
         weekId: ensured.week?.id,
         studentId,
@@ -5475,18 +5544,28 @@ async function adminReportInternalNotes() {
 async function adminReportSessionNotes() {
   const { from, to } = reportDateDefaults();
   const notesProviderId = state.sessionNotesProviderId || '';
+  const notesDistrict = state.sessionNotesDistrict || '';
   let providers = [];
+  let districts = [];
   try {
     const list = await api('GET', '/admin/providers');
     providers = Array.isArray(list.providers) ? list.providers : Array.isArray(list) ? list : [];
   } catch {
     providers = [];
   }
+  try {
+    const schoolsOut = await api('GET', '/admin/schools');
+    districts = [...new Set(
+      (schoolsOut.schools || []).map((s) => String(s.district || '').trim()).filter(Boolean),
+    )].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  } catch {
+    districts = [];
+  }
   view(`
     <div class="card">
       <button type="button" class="btn" id="backReports">← Reports</button>
       <h2>Session notes</h2>
-      <p class="muted">Count of session notes by attendance for a date of service range. Attended includes makeup (same as weekly progress “delivered”). Optional provider filter.</p>
+      <p class="muted">Count of session notes by attendance for a date of service range. Attended includes makeup (same as weekly progress “delivered”). Optional provider and district filters.</p>
       <div class="row">
         <label>From <input id="snFrom" type="date" value="${esc(from)}" /></label>
         <label>To <input id="snTo" type="date" value="${esc(to)}" /></label>
@@ -5500,6 +5579,12 @@ async function adminReportSessionNotes() {
                 return `<option value="${esc(p.id)}"${sel}>${esc(label)}</option>`;
               })
               .join('')}
+          </select>
+        </label>
+        <label>District
+          <select id="snDistrict">
+            <option value="">All districts</option>
+            ${districts.map((d) => `<option value="${esc(d)}"${d === notesDistrict ? ' selected' : ''}>${esc(d)}</option>`).join('')}
           </select>
         </label>
         <button type="button" class="btn-primary" id="snLoad">Load</button>
@@ -5516,12 +5601,13 @@ async function adminReportSessionNotes() {
           <th>Child</th>
           <th>Provider</th>
           <th>School</th>
+          <th>District</th>
           <th>Date of service</th>
           <th>Attendance</th>
           <th>Begin</th>
           <th>End</th>
         </tr>
-        <tbody id="snBody"><tr><td colspan="7">Loading…</td></tr></tbody>
+        <tbody id="snBody"><tr><td colspan="8">Loading…</td></tr></tbody>
       </table></div>
     </div>
   `);
@@ -5551,27 +5637,31 @@ async function adminReportSessionNotes() {
             <td>${esc(r.childName || '—')}</td>
             <td>${esc(r.providerName || '—')}</td>
             <td>${esc(r.schoolName || '—')}</td>
+            <td>${esc(r.district || '—')}</td>
             <td>${esc(r.dateOfService || '—')}</td>
             <td>${esc(r.attendance || '—')}</td>
             <td>${esc(r.beginTime || '—')}</td>
             <td>${esc(r.endTime || '—')}</td>
           </tr>`,
         )
-        .join('') || '<tr><td colspan="7">No session notes match these filters.</td></tr>';
+        .join('') || '<tr><td colspan="8">No session notes match these filters.</td></tr>';
   };
   const loadSessionNotes = async () => {
     const nextFrom = document.getElementById('snFrom')?.value || from;
     const nextTo = document.getElementById('snTo')?.value || to;
     const pid = document.getElementById('snProvider')?.value || '';
+    const district = document.getElementById('snDistrict')?.value || '';
     state.reportFrom = nextFrom;
     state.reportTo = nextTo;
     state.sessionNotesProviderId = pid;
+    state.sessionNotesDistrict = district;
     const q = new URLSearchParams();
     if (nextFrom) q.set('from', nextFrom);
     if (nextTo) q.set('to', nextTo);
     if (pid) q.set('providerId', pid);
+    if (district) q.set('district', district);
     const tbody = document.getElementById('snBody');
-    if (tbody) tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
     try {
       const out = await api('GET', `/admin/reports/session-notes?${q.toString()}`);
       fillSummary(out.totals || {});
@@ -5580,7 +5670,7 @@ async function adminReportSessionNotes() {
     } catch (e) {
       fillSummary({ attended: 0, missed: 0, total: 0, attendedOnly: 0, makeup: 0 });
       if (tbody) {
-        tbody.innerHTML = `<tr><td colspan="7">${esc(e.message || 'Unable to load session notes.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8">${esc(e.message || 'Unable to load session notes.')}</td></tr>`;
       }
       setStatus(e.message || 'Unable to load session notes.', 'err');
     }
@@ -5593,10 +5683,12 @@ async function adminReportSessionNotes() {
         const f = document.getElementById('snFrom')?.value || from;
         const t = document.getElementById('snTo')?.value || to;
         const pid = document.getElementById('snProvider')?.value || '';
+        const district = document.getElementById('snDistrict')?.value || '';
         const q = new URLSearchParams();
         if (f) q.set('from', f);
         if (t) q.set('to', t);
         if (pid) q.set('providerId', pid);
+        if (district) q.set('district', district);
         await downloadReportXlsx(`/admin/reports/session-notes.xlsx?${q.toString()}`, 'session-notes.xlsx');
         setStatus('Downloaded session-notes.xlsx.', 'ok');
       } catch (e) {

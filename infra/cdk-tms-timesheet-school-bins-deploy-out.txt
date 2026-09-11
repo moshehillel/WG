@@ -1,0 +1,25 @@
+TMS timesheets: split by school/signer; allow second send same week
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+{
+    "CodeSha256": "nDUgMH/rHuhSMArSiUgRxTMlCsJgz0YtGFhpHeKPYZ4=",
+    "LastModified": "2026-09-11T16:27:46.000+0000",
+    "CodeSize": 2031645
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA: env preserved as configured
+
+IMPORTANT: rebuilds packages/tms-db dist before esbuild (week-school bins).
+
+Changes:
+1. WeeklyPeriod.schoolId — multiple timesheet bins per provider+Monday
+2. Same signer email across buildings stays one timesheet (Madison)
+3. Different school signers → separate weeks/envelopes; second send allowed
+4. Import routes sessions by child school; mixed weeks auto-split
+5. Admin district filter on provider sessions + session-notes report
+6. FE: app.js?v=97 school selector for View/Send timesheet
