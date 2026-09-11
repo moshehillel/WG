@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import {
+  inferCreateScheduleType,
   isInvalidHhaPatientError,
+  isInvalidHhaVisitError,
   isTrustedHhaPatientId,
   type HhaClient,
 } from '@white-glove/hha-client';
@@ -9,9 +11,12 @@ import {
   buildSchoolBillingServiceName,
   extractDisciplineFromServiceType,
   isIndividualSchoolBillingServiceName,
+  mapMandateFrequencyToPeriod,
+  parseAuthMaximum,
 } from '@white-glove/shared';
 import {
   mandateDurationMinutesForSession,
+  mandateFrequencyKind,
   newId,
   nowIso,
   preferredMandateForSession,
@@ -21,6 +26,8 @@ import {
   sessionDurationMinutes,
   sessionPayCodeRate,
   sessionUsesGroupPayRate,
+  weekHhaRollup,
+  type Mandate,
   type MemoryStore,
   type SessionRow,
   type WeeklyPeriod,
@@ -40,6 +47,8 @@ type StudentForHha = {
   dob?: string;
   programId?: string;
   hhaPatientId?: string;
+  /** Mandate / billing service or discipline — sets CreatePatient AcceptedServices. */
+  serviceCode?: string;
 };
 
 /**
@@ -85,6 +94,7 @@ export async function resolveHhaPatientId(options: {
     dateOfBirth: student.dob || undefined,
     caseId: programId,
     externalId: programId,
+    serviceCode: student.serviceCode?.trim() || undefined,
     address1: schoolAddress?.address1?.trim() || undefined,
     city: schoolAddress?.city?.trim() || undefined,
     state: schoolAddress?.state?.trim() || undefined,
@@ -120,8 +130,141 @@ function persistStudentHhaPatientId(
 }
 
 /**
+ * Attach the school program-type contract as a patient placement before CreateSchedule.
+ * CreatePatient does not set Primary ContractID; without AddPatientContract, HHA returns
+ * ErrorID=-74 Invalid "Primary ContractID". Contract comes from student.programType
+ * (caseload mandate program), never a stale/default placement on another contract.
+ */
+export async function ensurePatientProgramContract(options: {
+  hha: HhaClient;
+  patientId: string;
+  programType: string | undefined;
+  /** Mandate start when known; else visit / session date. */
+  startDate?: string;
+  /** School billing ServiceCodeID (e.g. PT School 30) — set on placement when HHA allows. */
+  serviceCodeId?: string;
+  serviceCode?: string;
+}): Promise<number> {
+  const { hha, patientId, programType } = options;
+  const contractNum = await hha.resolveContractId(programType);
+  if (!contractNum) {
+    throw new Error(
+      `No HHA ContractID for program type "${programType?.trim() || '(missing)'}" — needed for patient primary contract / CreateSchedule`,
+    );
+  }
+  await hha.upsertContract({
+    patientId,
+    contractExternalId: String(contractNum),
+    startDate: options.startDate?.trim() || undefined,
+    serviceCodeId: options.serviceCodeId,
+    serviceCode: options.serviceCode,
+  });
+  return contractNum;
+}
+
+/** Stable HHA AuthorizationNumber for TMS pushes (idempotent CreatePatientAuthorization). */
+export function tmsAuthorizationNumber(options: {
+  programId?: string;
+  patientId: string;
+  serviceCodeId: string;
+}): string {
+  const scope = (options.programId?.trim() || options.patientId).replace(/[^\w-]+/g, '');
+  const sc = String(options.serviceCodeId).replace(/[^\w-]+/g, '');
+  return `TMS-${scope}-${sc}`.slice(0, 50);
+}
+
+/** Mandate frequency → HHA Period / Maximum (mirrors opened-processor). */
+export function mandateToAuthPeriodMaximum(mandate: Mandate | undefined): {
+  period: string;
+  maximum: number;
+} {
+  if (!mandate) {
+    // No caseload mandate (eval / additional): one visit unit for the DOS day.
+    return { period: 'Daily', maximum: 1 };
+  }
+  const kind = mandateFrequencyKind(mandate);
+  const period =
+    mapMandateFrequencyToPeriod(kind) ||
+    mapMandateFrequencyToPeriod(String(mandate.frequencyKind || 'weekly')) ||
+    'Weekly';
+  const rawTimes =
+    kind === 'monthly'
+      ? mandate.sessionsPerPeriod ?? mandate.frequencyPerWeek
+      : kind === 'school_day_cycle'
+        ? mandate.sessionsPerPeriod ?? mandate.frequencyPerWeek
+        : mandate.frequencyPerWeek || mandate.sessionsPerPeriod;
+  const maximum = parseAuthMaximum(rawTimes);
+  if (!maximum) {
+    throw new Error(
+      `Invalid auth mandate for HHA — frequency "${kind}" / times "${rawTimes ?? ''}" (need Period + Maximum like opened CreatePatientAuthorization)`,
+    );
+  }
+  return { period, maximum };
+}
+
+function authDateIso(raw: string | undefined, fallback: string): string {
+  const t = (raw || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(t)) {
+    const [mm, dd, yyyy] = t.split('/');
+    return `${yyyy}-${mm!.padStart(2, '0')}-${dd!.padStart(2, '0')}`;
+  }
+  const fb = fallback.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fb)) return fb;
+  return fb.slice(0, 10);
+}
+
+/**
+ * Ensure patient has usable HHA authorization for this visit’s billing service
+ * before CreateSchedule (same CreatePatientAuthorization path as opened/new_services).
+ * Prefers existing auth by AuthorizationNumber; otherwise creates from mandate Period/Maximum.
+ * HHA auto-allocates patient-level auth units onto visits — no visit-level AuthID on CreateSchedule.
+ */
+export async function ensurePatientAuthorizationForVisit(options: {
+  hha: HhaClient;
+  patientId: string;
+  contractId: string;
+  serviceCodeId: string;
+  serviceCode: string;
+  programType?: string;
+  programId?: string;
+  mandate?: Mandate;
+  /** Visit / session DOS — used when mandate dates are blank. */
+  visitDate: string;
+}): Promise<{ id: string; created: boolean; authorizationNumber: string }> {
+  const { hha, patientId, contractId, serviceCodeId, serviceCode } = options;
+  const { period, maximum } = mandateToAuthPeriodMaximum(options.mandate);
+  const authorizationNumber = tmsAuthorizationNumber({
+    programId: options.programId,
+    patientId,
+    serviceCodeId,
+  });
+  const startDate = authDateIso(options.mandate?.startOn, options.visitDate);
+  let endDate = authDateIso(options.mandate?.endOn, '');
+  if (!endDate || endDate < startDate) {
+    const d = new Date(`${startDate}T12:00:00Z`);
+    d.setUTCFullYear(d.getUTCFullYear() + 1);
+    endDate = d.toISOString().slice(0, 10);
+  }
+  const result = await hha.upsertAuthorization({
+    patientId,
+    authorizationNumber,
+    serviceCode,
+    serviceCodeId,
+    programType: options.programType,
+    contractId,
+    startDate,
+    endDate,
+    period,
+    maximum,
+  });
+  return { ...result, authorizationNumber };
+}
+
+/**
  * CreateSchedule / visit resolve. On ErrorID=-56 (bad stored PatientID):
- * clear → search HHA → CreatePatient only if missing → save new ID → retry once.
+ * clear → search HHA → CreatePatient only if missing → save new ID →
+ * re-attach program-type contract → retry CreateSchedule once.
  */
 async function locateOrScheduleVisitWithPatientRecovery(options: {
   store: MemoryStore;
@@ -148,7 +291,11 @@ async function locateOrScheduleVisitWithPatientRecovery(options: {
     // 2) Search first; 3) CreatePatient only if not found; then persist.
     const recovered = await resolveHhaPatientId({
       hha,
-      student: { ...live, hhaPatientId: '' },
+      student: {
+        ...live,
+        hhaPatientId: '',
+        serviceCode: options.visit.serviceCode || live.programType,
+      },
       schoolAddress: schoolAddressForStudent(store, live),
       forceResearch: true,
     });
@@ -159,6 +306,29 @@ async function locateOrScheduleVisitWithPatientRecovery(options: {
     }
     persistStudentHhaPatientId(store, live.id, recovered);
     patientId = recovered;
+
+    // New/recovered patients have no placement — attach program-type contract before retry.
+    await ensurePatientProgramContract({
+      hha,
+      patientId,
+      programType: options.visit.programType ?? live.programType,
+      startDate: options.visit.visitDate,
+    });
+
+
+    // Auth was created against the invalid PatientID; recreate on the recovered patient.
+    if (options.visit.contractId && options.visit.serviceCodeId && options.visit.serviceCode) {
+      await ensurePatientAuthorizationForVisit({
+        hha,
+        patientId,
+        contractId: options.visit.contractId,
+        serviceCodeId: options.visit.serviceCodeId,
+        serviceCode: options.visit.serviceCode,
+        programType: options.visit.programType ?? live.programType,
+        programId: live.programId,
+        visitDate: options.visit.visitDate || '',
+      });
+    }
 
     // 4) Retry CreateSchedule once with the recovered ID.
     const result = await hha.locateOrScheduleVisit({ ...options.visit, patientId });
@@ -206,18 +376,8 @@ export async function transferLockedWeek(options: {
     const existing = store.transferForSession(session.id);
     if (existing?.status === 'confirmed') continue;
     const student = store.data.students.find((s) => s.id === session.studentId);
+    let scheduledVisitId = '';
     try {
-      let patientId = await resolveHhaPatientId({
-        hha,
-        student,
-        schoolAddress: schoolAddressForStudent(store, student),
-      });
-      if (!patientId) {
-        throw new Error(`No HHA patient for ${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim());
-      }
-      persistStudentHhaPatientId(store, student?.id, patientId);
-      if (student) student.hhaPatientId = patientId;
-
       if (!provider) {
         throw new Error('No provider on week for HHA pay/service codes');
       }
@@ -255,13 +415,36 @@ export async function transferLockedWeek(options: {
         );
       }
 
+      // CreatePatient AcceptedServices must match therapy discipline (not silent OT default).
+      const createServiceHint =
+        billingServiceName ||
+        matchedMandate?.serviceType ||
+        discipline ||
+        session.serviceType ||
+        undefined;
+      let patientId = await resolveHhaPatientId({
+        hha,
+        student: student
+          ? { ...student, serviceCode: createServiceHint }
+          : undefined,
+        schoolAddress: schoolAddressForStudent(store, student),
+      });
+      if (!patientId) {
+        throw new Error(`No HHA patient for ${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim());
+      }
+      persistStudentHhaPatientId(store, student?.id, patientId);
+      if (student) student.hhaPatientId = patientId;
+
+      // Program-type contract from caseload (student.programType) → AddPatientContract
+      // so CreateSchedule PrimaryBillTo is a valid primary placement (avoids -74).
+      // Resolve billing ServiceCodeID first so the placement can carry PT/OT school code
+      // (peers have ServiceCode on placement; blank placement → OT inconsistency -310).
       const contractNum = await hha.resolveContractId(student?.programType);
       if (!contractNum) {
         throw new Error(
-          `No HHA ContractID for program type "${student?.programType?.trim() || '(missing)'}" — needed to look up billing code "${billingServiceName}"`,
+          `No HHA ContractID for program type "${student?.programType?.trim() || '(missing)'}" — needed for patient primary contract / CreateSchedule`,
         );
       }
-
       const serviceCodeId = await hha.resolveServiceCodeId(
         billingServiceName,
         contractNum,
@@ -272,6 +455,30 @@ export async function transferLockedWeek(options: {
           `Service code "${billingServiceName}" not found in HHA billing codes for this contract — create it under the contract (case-insensitive name match)`,
         );
       }
+      const contractStart =
+        matchedMandate?.startOn?.trim() || session.dateOfService || undefined;
+      await ensurePatientProgramContract({
+        hha,
+        patientId,
+        programType: student?.programType,
+        startDate: contractStart,
+        serviceCodeId,
+        serviceCode: billingServiceName,
+      });
+
+      // Patient-level auth (Period + Maximum from mandate) so HHA can pay the visit.
+      // Mirror opened/new_services CreatePatientAuthorization — CreateSchedule has no AuthID field.
+      await ensurePatientAuthorizationForVisit({
+        hha,
+        patientId,
+        contractId: String(contractNum),
+        serviceCodeId,
+        serviceCode: billingServiceName,
+        programType: student?.programType,
+        programId: student?.programId,
+        mandate: matchedMandate,
+        visitDate: session.dateOfService,
+      });
 
       const ratePeers = providerDaySessions(
         store.data.sessions,
@@ -319,6 +526,14 @@ export async function transferLockedWeek(options: {
         provider.hhaCaregiverCode = caregiverId;
       }
 
+      // Therapy (PT/OT/ST) must be Skilled — Non-Skilled yields false ErrorID=-310.
+      const scheduleType =
+        inferCreateScheduleType(billingServiceName) === 'Skilled' ||
+        inferCreateScheduleType(discipline) === 'Skilled'
+          ? 'Skilled'
+          : 'Non-Skilled';
+
+      const priorVisitId = existing?.hhaVisitId?.trim() || '';
       const scheduled = await locateOrScheduleVisitWithPatientRecovery({
         store,
         hha,
@@ -326,7 +541,9 @@ export async function transferLockedWeek(options: {
         patientId,
         visit: {
           patientId,
-          visitExternalId: session.id,
+          // Prior HHA VisitID for rematch — never TMS session UUID (UUIDs are not VisitIDs).
+          // findExistingVisit ignores -415 on this id and falls through to SearchVisits/CreateSchedule.
+          visitExternalId: /^\d+$/.test(priorVisitId) ? priorVisitId : undefined,
           visitDate: session.dateOfService,
           startTime: session.beginTime,
           endTime: session.endTime,
@@ -335,6 +552,7 @@ export async function transferLockedWeek(options: {
           contractId: String(contractNum),
           caregiverId,
           payCodeId,
+          scheduleType,
           programType: student?.programType,
           providerName: `${provider.firstName} ${provider.lastName}`,
           payRate: String(rate),
@@ -344,6 +562,9 @@ export async function transferLockedWeek(options: {
       });
       patientId = scheduled.patientId;
       const result = scheduled.result;
+      scheduledVisitId = result.id;
+      // Pay path requires ConfirmVisits with TimesheetApproved=Yes (Auth + Confirmed + Timesheet).
+      // Do not soft-skip Timesheet Required / -415 — those left visits unpaid while TMS marked confirmed.
       await hha.approveVisit(result.id);
       store.upsertTransfer({
         id: existing?.id || newId(),
@@ -357,24 +578,50 @@ export async function transferLockedWeek(options: {
       });
       transferred += 1;
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const raw = err instanceof Error ? err.message : String(err);
+      // Surface clearer admin text for overloaded ErrorID=-310 variants.
+      let message = raw;
+      if (/Overlapping shifts are not allowed/i.test(raw) || /Your shift is overlapping with Patient/i.test(raw)) {
+        const peer =
+          raw.match(/overlapping with Patient:\s*\[([^\]]+)\]/i)?.[1]?.trim() ||
+          raw.match(/Patient:\s*\[([^\]]+)\]/i)?.[1]?.trim();
+        message =
+          `HHA caregiver shift overlaps an existing visit` +
+          (peer ? ` for ${peer}` : '') +
+          ` at this time — cancel/reschedule the conflicting HHA visit or change the TMS session time, then re-send. (${raw})`;
+      } else if (/only select OT Service Code/i.test(raw) || /Service code inconsistency/i.test(raw)) {
+        message =
+          `HHA patient AcceptedServices does not allow this visit’s service code (often OT-only patient + PT visit). ` +
+          `Recreate/update the patient with the correct discipline, then re-send. (${raw})`;
+      } else if (/Timesheet Required from Configuration/i.test(raw)) {
+        message =
+          `HHA visit was scheduled but ConfirmVisits could not set Timesheet Approved (office timesheet configuration). ` +
+          `Re-send after office config allows ConfirmVisits with TimesheetApproved=Yes. (${raw})`;
+      } else if (isInvalidHhaVisitError(err)) {
+        message =
+          `HHA visit was scheduled but ConfirmVisits could not read the VisitID yet (ErrorID=-415). ` +
+          `Re-send to confirm + approve timesheet — VisitID ${scheduledVisitId || '(unknown)'}. (${raw})`;
+      }
+      const visitFromErr = scheduledVisitId || raw.match(/visit\s+(\d{6,})/i)?.[1] || '';
       errors.push(message);
       store.upsertTransfer({
         id: existing?.id || newId(),
         sessionId: session.id,
         weekId: week.id,
         status: 'failed',
-        hhaVisitId: '',
+        hhaVisitId: visitFromErr,
         lastError: message,
         payloadHash: hashSession(session),
         updatedAt: nowIso(),
       });
     }
   }
+  const rollup = weekHhaRollup(store, week.id);
   store.upsertWeek({
     ...week,
-    hhaStatus: errors.length ? 'failed' : transferred ? 'confirmed' : week.hhaStatus,
-    hhaError: errors.length ? errors.join('\n') : '',
+    // Derive from all eligible sessions — never mark the week confirmed while failures remain.
+    hhaStatus: rollup.status,
+    hhaError: errors.length ? errors.join('\n') : rollup.status === 'failed' ? week.hhaError || '' : '',
   });
   store.audit(options.actorId, 'hha_transfer', `week:${week.id}`, null, {
     transferred,

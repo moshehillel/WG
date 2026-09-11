@@ -5,6 +5,8 @@ export function mapMandateFrequencyToPeriod(frequency: string | undefined): stri
   if (n === 'weekly') return 'Weekly';
   if (n === 'monthly') return 'Monthly';
   if (n === 'daily') return 'Daily';
+  // TMS school-day cycle (e.g. 2 per 6 school days) → Weekly with Maximum = cycle Freq.
+  if (n === 'school_day_cycle' || n === 'school day cycle') return 'Weekly';
   if (n === 'authorization' || n === 'entire period' || n === 'entire') return 'Entire Period';
   return undefined;
 }
