@@ -1,6 +1,6 @@
 /**
  * Deploy TMS→HHA pay path: CreatePatientAuthorization + ConfirmVisits with
- * TimesheetApproved=Yes (no soft-skip of pay-blocking confirm failures).
+ * TimesheetApproved=Yes. Re-send re-runs auth/confirm on prior transfers (no skip).
  */
 import * as esbuild from 'esbuild';
 import * as fs from 'node:fs';
@@ -105,7 +105,7 @@ console.log(env);
 fs.writeFileSync(
   path.join(__dirname, 'cdk-tms-hha-pay-flags-deploy-out.txt'),
   [
-    'TMS→HHA pay flags: Auth (CreatePatientAuthorization) + ConfirmVisits with TimesheetApproved=Yes (no soft-skip)',
+    'TMS→HHA pay flags: Auth + ConfirmVisits TimesheetApproved=Yes; re-send re-confirms prior transfers',
     `Function: ${fnName}`,
     out.trim(),
     env.trim(),

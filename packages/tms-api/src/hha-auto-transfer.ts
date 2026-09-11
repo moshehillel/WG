@@ -41,7 +41,7 @@ export function weeksNeedingHhaTransfer(store: MemoryStore): WeeklyPeriod[] {
 
 /**
  * Wednesday-morning payroll job: same path as admin POST /weeks/:id/hha.
- * Idempotent — confirmed sessions are skipped inside transferLockedWeek.
+ * Idempotent — re-send re-asserts Auth + ConfirmVisits (TimesheetApproved=Yes) on existing visits.
  */
 export async function runHhaAutoTransfer(
   store: MemoryStore,
