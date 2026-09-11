@@ -3622,7 +3622,7 @@ describe('TMS MFA org policy', () => {
     expect(sessions.some((s) => s.notes === 'admin eval')).toBe(true);
   });
 
-  it('week signer comes from session child school, not selected sibling school filter', async () => {
+  it('week signer comes from session child school; different signer schools stay separate bins', async () => {
     const { store, provider } = storeWithTherapist();
     const hegarty = store.upsertSchool({
       id: newId(),
@@ -3681,7 +3681,7 @@ describe('TMS MFA org policy', () => {
       });
     }
     const weekStart = '2026-08-31';
-    // Empty week stamped from Carle Place picker (no signer) — reproduces multi-school bug.
+    // Empty week stamped from Carle Place picker (no signer).
     const ensured = await handleTmsRequest(store, {
       method: 'POST',
       path: '/week/ensure',
@@ -3693,7 +3693,7 @@ describe('TMS MFA org policy', () => {
     const weekId = (ensured.body as { week: { id: string; signerEmail: string } }).week.id;
     expect((ensured.body as { week: { signerEmail: string } }).week.signerEmail).toBe('');
 
-    await handleTmsRequest(store, {
+    const added = await handleTmsRequest(store, {
       method: 'POST',
       path: '/week/sessions',
       headers: thH,
@@ -3709,6 +3709,15 @@ describe('TMS MFA org policy', () => {
         serviceType: 'PT School',
       },
     });
+    expect(added.status).toBe(200);
+    // Hegarty child is routed onto a Hegarty signer bin (not left on empty Carle week).
+    const hegWeek = store.data.weeks.find(
+      (w) =>
+        w.weekStart === weekStart &&
+        store.sessionsForWeek(w.id).some((s) => s.studentId === hegChild.id),
+    );
+    expect(hegWeek?.signerEmail).toBe('mgluck@whiteglovecare.net');
+    expect(hegWeek?.schoolId).toBe(hegarty.id);
 
     // Ensure with Carle Place still selected must NOT wipe Hegarty Madison signer.
     const reensure = await handleTmsRequest(store, {
@@ -3719,11 +3728,9 @@ describe('TMS MFA org policy', () => {
       body: { providerId: provider.id, weekStart, schoolId: carle.id },
     });
     expect(reensure.status).toBe(200);
-    const stamped = (reensure.body as { week: { signerName: string; signerEmail: string }; school: { id: string } })
-      .week;
-    expect(stamped.signerEmail).toBe('mgluck@whiteglovecare.net');
-    expect(stamped.signerName).toBe('Madison Gluck');
-    expect((reensure.body as { school: { id: string } }).school.id).toBe(hegarty.id);
+    const stillHeg = store.data.weeks.find((w) => w.id === hegWeek!.id);
+    expect(stillHeg?.signerEmail).toBe('mgluck@whiteglovecare.net');
+    expect(stillHeg?.signerName).toBe('Madison Gluck');
 
     const got = await handleTmsRequest(store, {
       method: 'GET',
@@ -3733,10 +3740,145 @@ describe('TMS MFA org policy', () => {
       body: undefined,
     });
     expect(got.status).toBe(200);
+    // Therapist empty Carle picker falls back to the sibling week that has sessions.
     expect((got.body as { week: { signerEmail: string }; schoolDistrict: string }).week.signerEmail).toBe(
       'mgluck@whiteglovecare.net',
     );
     expect((got.body as { schoolDistrict: string }).schoolDistrict).toMatch(/Hegarty/i);
+  });
+
+  it('admin can import two signer schools and send a second timesheet the same week', async () => {
+    const { store, provider } = storeWithTherapist();
+    const schoolA = store.upsertSchool({
+      id: newId(),
+      name: 'School A',
+      district: 'District A',
+      signerName: 'Signer A',
+      signerEmail: 'a@school.test',
+      createdAt: nowIso(),
+    });
+    const schoolB = store.upsertSchool({
+      id: newId(),
+      name: 'School B',
+      district: 'District B',
+      signerName: 'Signer B',
+      signerEmail: 'b@school.test',
+      createdAt: nowIso(),
+    });
+    const childA = store.upsertStudent({
+      id: newId(),
+      schoolId: schoolA.id,
+      firstName: 'Ann',
+      lastName: 'Alpha',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const childB = store.upsertStudent({
+      id: newId(),
+      schoolId: schoolB.id,
+      firstName: 'Bea',
+      lastName: 'Beta',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    for (const studentId of [childA.id, childB.id]) {
+      store.upsertMandate({
+        id: newId(),
+        studentId,
+        providerId: provider.id,
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 2,
+        frequencyKind: 'weekly',
+        sessionsPerPeriod: 2,
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: nowIso(),
+        startOn: '',
+        endOn: '',
+        createdAt: nowIso(),
+      });
+    }
+    const weekStart = '2026-09-07';
+    const ensuredA = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: adminH,
+      query: {},
+      body: { providerId: provider.id, weekStart, schoolId: schoolA.id },
+    });
+    const weekA = (ensuredA.body as { week: { id: string } }).week.id;
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: adminH,
+      query: {},
+      body: {
+        weekId: weekA,
+        studentId: childA.id,
+        dateOfService: '09/08/2026',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        attendance: 'attended',
+        notes: 'School A session with enough clinical detail for screening.',
+        serviceType: 'PT School',
+      },
+    });
+    const ensuredB = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: adminH,
+      query: {},
+      body: { providerId: provider.id, weekStart, schoolId: schoolB.id },
+    });
+    const weekB = (ensuredB.body as { week: { id: string } }).week.id;
+    expect(weekB).not.toBe(weekA);
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: adminH,
+      query: {},
+      body: {
+        weekId: weekB,
+        studentId: childB.id,
+        dateOfService: '09/09/2026',
+        beginTime: '10:00 am',
+        endTime: '10:30 am',
+        attendance: 'attended',
+        notes: 'School B session with enough clinical detail for screening.',
+        serviceType: 'PT School',
+      },
+    });
+
+    store.upsertWeek({
+      ...store.data.weeks.find((w) => w.id === weekA)!,
+      status: 'submitted',
+      signerEmail: schoolA.signerEmail,
+      signerName: schoolA.signerName,
+    });
+
+    const gotB = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/week',
+      headers: adminH,
+      query: { weekStart, providerId: provider.id, schoolId: schoolB.id },
+      body: undefined,
+    });
+    expect(gotB.status).toBe(200);
+    const bodyB = gotB.body as {
+      week: { id: string; status: string; signerEmail: string };
+      sessions: unknown[];
+    };
+    expect(bodyB.week.id).toBe(weekB);
+    expect(bodyB.week.status).toBe('draft');
+    expect(bodyB.week.signerEmail).toBe(schoolB.signerEmail);
+    expect(bodyB.sessions).toHaveLength(1);
   });
 
   it('GET /me returns programTypes and archive delete works for therapist', async () => {
@@ -3860,8 +4002,8 @@ describe('TMS MFA org policy', () => {
       id: newId(),
       name: 'Building B',
       district: '',
-      signerName: 'S',
-      signerEmail: 's@test.com',
+      signerName: schoolA.signerName,
+      signerEmail: schoolA.signerEmail,
       createdAt: nowIso(),
     });
     const baldwin = store.upsertStudent({
@@ -3910,8 +4052,8 @@ describe('TMS MFA org policy', () => {
       providerId: provider.id,
       weekStart,
       status: 'draft',
-      signerName: 'S',
-      signerEmail: 's@test.com',
+      signerName: schoolA.signerName,
+      signerEmail: schoolA.signerEmail,
       timesheetKey: '',
       signedKey: '',
       envelopeId: '',

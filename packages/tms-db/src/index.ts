@@ -3,6 +3,7 @@ export * from './ids.js';
 export * from './mandate.js';
 export * from './makeup.js';
 export * from './week-state.js';
+export * from './week-school.js';
 export * from './mandate-parse.js';
 export * from './session-parse.js';
 export * from './caseload-import.js';
