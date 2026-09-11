@@ -374,9 +374,10 @@ export async function transferLockedWeek(options: {
   let transferred = 0;
   for (const session of sessions) {
     const existing = store.transferForSession(session.id);
-    if (existing?.status === 'confirmed') continue;
+    // Do not skip prior confirmed transfers — older pushes could be TMS-confirmed while HHA
+    // still lacked Auth / Confirmed / TimesheetApproved. Re-send re-runs auth + ConfirmVisits.
     const student = store.data.students.find((s) => s.id === session.studentId);
-    let scheduledVisitId = '';
+    let scheduledVisitId = existing?.hhaVisitId?.trim() || '';
     try {
       if (!provider) {
         throw new Error('No provider on week for HHA pay/service codes');

@@ -1,9 +1,9 @@
-TMS→HHA pay flags: Auth (CreatePatientAuthorization) + ConfirmVisits with TimesheetApproved=Yes (no soft-skip)
+TMS→HHA pay flags: Auth + ConfirmVisits TimesheetApproved=Yes; re-send re-confirms prior transfers
 Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
 {
-    "CodeSha256": "IE6URreo7WYPZggxVMFM/BtMaau7mm79P+78zGq5Ukw=",
-    "LastModified": "2026-09-11T16:27:22.000+0000",
-    "CodeSize": 537427
+    "CodeSha256": "efFo4I4gWUiVLvoJRJcp1Buf+0pyrvuO9nnJ0ZJCxlM=",
+    "LastModified": "2026-09-11T16:32:07.000+0000",
+    "CodeSize": 537415
 }
 {
     "HHA_USE_MOCK": "false",

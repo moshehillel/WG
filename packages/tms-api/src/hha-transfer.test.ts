@@ -1256,5 +1256,101 @@ describe('transferLockedWeek GetVisitInfoV2 -415 after schedule', () => {
     expect(tr?.hhaVisitId).toBeTruthy();
     expect(tr?.lastError).toMatch(/ConfirmVisits|VisitID|-415/i);
   });
+
+  it('re-send re-runs auth + approveVisit on already-confirmed transfers (pay flags)', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Nee',
+      lastName: 'Patel',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Valerie',
+      lastName: 'Eley',
+      dob: '2018-01-01',
+      programId: '909062926',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '24745304',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'confirmed',
+    });
+    const session = store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-04',
+      beginTime: '10:05 am',
+      endTime: '10:35 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.upsertTransfer({
+      id: newId(),
+      sessionId: session.id,
+      weekId: week.id,
+      status: 'confirmed',
+      hhaVisitId: '1331688458',
+      lastError: '',
+      payloadHash: 'old',
+      updatedAt: nowIso(),
+    });
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+      serviceType: 'PT School',
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+    hha.payCodes.set('PT $70', 'pay-pt-70');
+    hha.visits.set('1331688458', {
+      id: '1331688458',
+      patientId: '24745304',
+      visitDate: '2026-09-04',
+      startTime: '10:05 am',
+      endTime: '10:35 am',
+      approved: false,
+    });
+
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+    expect(result.ok).toBe(true);
+    expect(result.transferred).toBe(1);
+    expect(hha.calls).toContain('upsertAuthorization');
+    expect(hha.calls).toContain('approveVisit');
+    expect(store.transferForSession(session.id)?.status).toBe('confirmed');
+  });
 });
 
