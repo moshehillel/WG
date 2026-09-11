@@ -1,11 +1,9 @@
 TMS HHA: CreatePatientAuthorization (Period+Maximum from mandate) before CreateSchedule
 Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
-GitSHA: a721e7089f8a124f252e5bce57c4f6f4d42ce617
-{
-    "CodeSha256": "TTCwuQp+4KCUAovCBUMjbsf14LYi7YzDeSw052isZR4=",
-    "LastModified": "2026-09-11T16:25:15.000+0000",
-    "CodeSize": 2031332
-}
+GitSHA: d8f4cffdeafe26efe62297f28c44f8013d58af50
+CodeSha256: pJDtIk5DBPDK2WnxF1IG7kf537sfQLFMlyaZzrDtyMQ=
+LastModified: 2026-09-11T16:26:39.000+0000
+CodeSize: 2031645
 {
     "HHA_USE_MOCK": "false",
     "HHA_USE_PRODUCTION": "true",
