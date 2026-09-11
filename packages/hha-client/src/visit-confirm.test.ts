@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  parseTimesheetFlags,
   parseVisitConfirmTimes,
   parseVisitEditReasonPairs,
   toConfirmIso,
@@ -37,5 +38,11 @@ describe('visit-confirm', () => {
     expect(attempts[0]).toEqual({ timesheetRequired: 'Yes', timesheetApproved: 'Yes' });
     expect(attempts.every((a) => a.timesheetApproved === 'Yes')).toBe(true);
     expect(attempts.length).toBeGreaterThan(1);
+  });
+
+  it('reads nested Timesheet Required/Approved from GetVisitInfoV2', () => {
+    expect(
+      parseTimesheetFlags('<Timesheet><Required>Yes</Required><Approved>Yes</Approved></Timesheet>'),
+    ).toEqual({ timesheetRequired: 'Yes', timesheetApproved: 'Yes' });
   });
 });

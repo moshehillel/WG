@@ -31,76 +31,55 @@ function seedSchoolMandate(
 }
 
 describe('mandateToAuthPeriodMaximum / tmsAuthorizationNumber', () => {
-  it('maps weekly mandate to Weekly Period + Maximum from frequencyPerWeek', () => {
+  it('uses same-day Entire Period with visit/mandate duration minutes (WG school pattern)', () => {
     expect(
-      mandateToAuthPeriodMaximum({
-        id: 'm1',
-        studentId: 's1',
-        providerId: 'p1',
-        serviceType: 'PT School',
-        discipline: 'PT',
-        frequencyPerWeek: 2,
-        frequencyKind: 'weekly',
-        ratioGroup: false,
-        sourcePdfKey: '',
-        parsedAt: '',
-        startOn: '2026-09-01',
-        endOn: '2027-06-30',
-        createdAt: '',
-      }),
-    ).toEqual({ period: 'Weekly', maximum: 2 });
+      mandateToAuthPeriodMaximum(
+        {
+          id: 'm1',
+          studentId: 's1',
+          providerId: 'p1',
+          serviceType: 'PT School',
+          discipline: 'PT',
+          frequencyPerWeek: 2,
+          frequencyKind: 'weekly',
+          durationMinutes: 30,
+          ratioGroup: false,
+          sourcePdfKey: '',
+          parsedAt: '',
+          startOn: '2026-09-01',
+          endOn: '2027-06-30',
+          createdAt: '',
+        },
+        { visitDurationMinutes: 30 },
+      ),
+    ).toEqual({ period: 'Entire Period', maximum: 15 });
   });
 
-  it('maps monthly and school_day_cycle; falls back to Daily/1 without mandate', () => {
-    expect(
-      mandateToAuthPeriodMaximum({
-        id: 'm2',
-        studentId: 's1',
-        providerId: 'p1',
-        serviceType: 'PT School',
-        discipline: 'PT',
-        frequencyPerWeek: 0,
-        frequencyKind: 'monthly',
-        sessionsPerPeriod: 4,
-        ratioGroup: false,
-        sourcePdfKey: '',
-        parsedAt: '',
-        startOn: '',
-        endOn: '',
-        createdAt: '',
-      }),
-    ).toEqual({ period: 'Monthly', maximum: 4 });
-    expect(
-      mandateToAuthPeriodMaximum({
-        id: 'm3',
-        studentId: 's1',
-        providerId: 'p1',
-        serviceType: 'PT School',
-        discipline: 'PT',
-        frequencyPerWeek: 0,
-        frequencyKind: 'school_day_cycle',
-        sessionsPerPeriod: 2,
-        periodSchoolDays: 6,
-        ratioGroup: false,
-        sourcePdfKey: '',
-        parsedAt: '',
-        startOn: '',
-        endOn: '',
-        createdAt: '',
-      }),
-    ).toEqual({ period: 'Weekly', maximum: 2 });
-    expect(mandateToAuthPeriodMaximum(undefined)).toEqual({ period: 'Daily', maximum: 1 });
+  it('falls back to Entire Period max 15 when duration missing', () => {
+    expect(mandateToAuthPeriodMaximum(undefined)).toEqual({ period: 'Entire Period', maximum: 15 });
+    expect(mandateToAuthPeriodMaximum(undefined, { visitDurationMinutes: 45 })).toEqual({
+      period: 'Entire Period',
+      maximum: 15,
+    });
   });
 
-  it('builds stable TMS AuthorizationNumber from programId + serviceCodeId', () => {
+  it('builds TMS AuthorizationNumber from programId + serviceCodeId + visit day', () => {
     expect(
       tmsAuthorizationNumber({ programId: '1012074', patientId: '999', serviceCodeId: 'sc-pt-30' }),
-    ).toBe('TMS-1012074-sc-pt-30');
+    ).toBe('TMS2-1012074-sc-pt-30');
+    expect(
+      tmsAuthorizationNumber({
+        programId: '1012074',
+        patientId: '999',
+        serviceCodeId: 'sc-pt-30',
+        visitDate: '2026-09-04',
+      }),
+    ).toBe('TMS2-1012074-sc-pt-30-2026-09-04');
   });
 });
 
 describe('ensurePatientAuthorizationForVisit', () => {
-  it('calls upsertAuthorization with Period/Maximum from mandate', async () => {
+  it('calls upsertAuthorization with same-day Entire Period from visit duration', async () => {
     const hha = new MockHhaClient();
     const result = await ensurePatientAuthorizationForVisit({
       hha,
@@ -118,6 +97,7 @@ describe('ensurePatientAuthorizationForVisit', () => {
         discipline: 'PT',
         frequencyPerWeek: 1,
         frequencyKind: 'weekly',
+        durationMinutes: 30,
         ratioGroup: false,
         sourcePdfKey: '',
         parsedAt: '',
@@ -125,11 +105,16 @@ describe('ensurePatientAuthorizationForVisit', () => {
         endOn: '2027-06-30',
         createdAt: '',
       },
-      visitDate: '2026-09-01',
+      visitDate: '2026-09-04',
+      visitDurationMinutes: 30,
     });
     expect(hha.calls).toContain('upsertAuthorization');
     expect(result.created).toBe(true);
-    expect(result.authorizationNumber).toBe('TMS-1012074-sc-pt-school-30');
+    expect(result.authorizationNumber).toBe('TMS2-1012074-sc-pt-school-30-2026-09-04');
+    expect(mandateToAuthPeriodMaximum(undefined, { visitDurationMinutes: 30 })).toEqual({
+      period: 'Entire Period',
+      maximum: 15,
+    });
   });
 });
 

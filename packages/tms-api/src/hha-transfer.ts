@@ -11,12 +11,9 @@ import {
   buildSchoolBillingServiceName,
   extractDisciplineFromServiceType,
   isIndividualSchoolBillingServiceName,
-  mapMandateFrequencyToPeriod,
-  parseAuthMaximum,
 } from '@white-glove/shared';
 import {
   mandateDurationMinutesForSession,
-  mandateFrequencyKind,
   newId,
   nowIso,
   preferredMandateForSession,
@@ -167,39 +164,32 @@ export function tmsAuthorizationNumber(options: {
   programId?: string;
   patientId: string;
   serviceCodeId: string;
+  /** Include DOS so each school day gets its own Entire-Period auth (matches WG office). */
+  visitDate?: string;
 }): string {
   const scope = (options.programId?.trim() || options.patientId).replace(/[^\w-]+/g, '');
   const sc = String(options.serviceCodeId).replace(/[^\w-]+/g, '');
-  return `TMS-${scope}-${sc}`.slice(0, 50);
+  const day = (options.visitDate || '').trim().slice(0, 10).replace(/[^\d-]/g, '');
+  const base = day ? `TMS2-${scope}-${sc}-${day}` : `TMS2-${scope}-${sc}`;
+  return base.slice(0, 50);
 }
 
-/** Mandate frequency → HHA Period / Maximum (mirrors opened-processor). */
-export function mandateToAuthPeriodMaximum(mandate: Mandate | undefined): {
+/**
+ * School/office HHA auths are same-day Entire Period.
+ * Peer auths use EntirePeriodMaxAuthorization=15 for PT School 30 — pass that as MaxHoursPeriod.
+ */
+export function mandateToAuthPeriodMaximum(
+  mandate: Mandate | undefined,
+  options?: { visitDurationMinutes?: number | null },
+): {
   period: string;
   maximum: number;
 } {
-  if (!mandate) {
-    // No caseload mandate (eval / additional): one visit unit for the DOS day.
-    return { period: 'Daily', maximum: 1 };
-  }
-  const kind = mandateFrequencyKind(mandate);
-  const period =
-    mapMandateFrequencyToPeriod(kind) ||
-    mapMandateFrequencyToPeriod(String(mandate.frequencyKind || 'weekly')) ||
-    'Weekly';
-  const rawTimes =
-    kind === 'monthly'
-      ? mandate.sessionsPerPeriod ?? mandate.frequencyPerWeek
-      : kind === 'school_day_cycle'
-        ? mandate.sessionsPerPeriod ?? mandate.frequencyPerWeek
-        : mandate.frequencyPerWeek || mandate.sessionsPerPeriod;
-  const maximum = parseAuthMaximum(rawTimes);
-  if (!maximum) {
-    throw new Error(
-      `Invalid auth mandate for HHA — frequency "${kind}" / times "${rawTimes ?? ''}" (need Period + Maximum like opened CreatePatientAuthorization)`,
-    );
-  }
-  return { period, maximum };
+  const duration = Math.max(1, Number(options?.visitDurationMinutes) || Number(mandate?.durationMinutes) || 30);
+  // Match working WG school auths (EntirePeriodMaxAuthorization ≈ 15 for 30-min school).
+  // Value is sent as MaxHoursPeriod (hours/units per HHA WSDL), not minutes.
+  const maximum = duration <= 30 ? 15 : Math.max(15, Math.round((duration / 60) * 100) / 100);
+  return { period: 'Entire Period', maximum };
 }
 
 function authDateIso(raw: string | undefined, fallback: string): string {
@@ -231,21 +221,23 @@ export async function ensurePatientAuthorizationForVisit(options: {
   mandate?: Mandate;
   /** Visit / session DOS — used when mandate dates are blank. */
   visitDate: string;
+  /** Frontline / mandate duration minutes — Entire Period Maximum. */
+  visitDurationMinutes?: number | null;
 }): Promise<{ id: string; created: boolean; authorizationNumber: string }> {
   const { hha, patientId, contractId, serviceCodeId, serviceCode } = options;
-  const { period, maximum } = mandateToAuthPeriodMaximum(options.mandate);
+  const { period, maximum } = mandateToAuthPeriodMaximum(options.mandate, {
+    visitDurationMinutes: options.visitDurationMinutes ?? options.mandate?.durationMinutes,
+  });
+  const visitDay = authDateIso(options.visitDate, options.visitDate);
   const authorizationNumber = tmsAuthorizationNumber({
     programId: options.programId,
     patientId,
     serviceCodeId,
+    visitDate: visitDay,
   });
-  const startDate = authDateIso(options.mandate?.startOn, options.visitDate);
-  let endDate = authDateIso(options.mandate?.endOn, '');
-  if (!endDate || endDate < startDate) {
-    const d = new Date(`${startDate}T12:00:00Z`);
-    d.setUTCFullYear(d.getUTCFullYear() + 1);
-    endDate = d.toISOString().slice(0, 10);
-  }
+  // Same-day Entire Period (office pattern) so units apply to this DOS.
+  const startDate = visitDay;
+  const endDate = visitDay;
   const result = await hha.upsertAuthorization({
     patientId,
     authorizationNumber,
@@ -479,6 +471,7 @@ export async function transferLockedWeek(options: {
         programId: student?.programId,
         mandate: matchedMandate,
         visitDate: session.dateOfService,
+        visitDurationMinutes: clockMinutes ?? matchedMandate?.durationMinutes ?? undefined,
       });
 
       const ratePeers = providerDaySessions(
