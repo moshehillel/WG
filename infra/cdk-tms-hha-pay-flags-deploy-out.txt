@@ -1,9 +1,9 @@
 TMS→HHA pay flags: Auth + ConfirmVisits TimesheetApproved=Yes; re-send re-confirms prior transfers
 Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
 {
-    "CodeSha256": "efFo4I4gWUiVLvoJRJcp1Buf+0pyrvuO9nnJ0ZJCxlM=",
-    "LastModified": "2026-09-11T16:32:07.000+0000",
-    "CodeSize": 537415
+    "CodeSha256": "kf1mRkvxNg8fWKDz1cdieQXmwZeCvEKepUVl4+zArzg=",
+    "LastModified": "2026-09-11T16:40:13.000+0000",
+    "CodeSize": 537228
 }
 {
     "HHA_USE_MOCK": "false",

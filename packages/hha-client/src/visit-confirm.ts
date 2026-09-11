@@ -66,9 +66,14 @@ export function parseTimesheetFlags(xml: string): {
   timesheetRequired: 'Yes' | 'No';
   timesheetApproved: 'Yes' | 'No';
 } {
-  const req = xml.match(/<TimesheetRequired>([^<]+)/i)?.[1]?.trim().toLowerCase();
-  const appr = xml.match(/<TimesheetApproved>([^<]+)/i)?.[1]?.trim().toLowerCase();
   const yes = (v: string | undefined) => v === 'yes' || v === 'y' || v === 'true' || v === '1';
+  // Flat tags (ConfirmVisits / older shapes) OR nested <Timesheet><Required/><Approved/>.
+  const req =
+    xml.match(/<TimesheetRequired>([^<]+)/i)?.[1]?.trim().toLowerCase() ??
+    xml.match(/<Timesheet>\s*<Required>([^<]+)/i)?.[1]?.trim().toLowerCase();
+  const appr =
+    xml.match(/<TimesheetApproved>([^<]+)/i)?.[1]?.trim().toLowerCase() ??
+    xml.match(/<Timesheet>[\s\S]*?<Approved>([^<]+)/i)?.[1]?.trim().toLowerCase();
   return {
     timesheetRequired: yes(req) ? 'Yes' : 'No',
     timesheetApproved: yes(appr) ? 'Yes' : 'No',

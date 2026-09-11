@@ -506,6 +506,16 @@ export class SoapHhaClientAdapter implements HhaClient {
     }
     const fromDate = psDateToIso(auth.startDate) ?? auth.startDate ?? '';
     const toDate = psDateToIso(auth.endDate) ?? auth.endDate ?? '';
+    // WSDL: MaxHoursPeriod for Entire Period; HoursPerAuthPeriod only for Daily/Weekly/Monthly.
+    // Sending Maximum is accepted but stores 0 units → prebilling "No Authorization".
+    const maxNum = Number(maximum);
+    const maxHoursXml = Number.isFinite(maxNum) ? maxNum.toFixed(2) : String(maximum);
+    const periodNorm = period.trim().toLowerCase();
+    const isEntire = periodNorm === 'entire period' || periodNorm === 'entire';
+    const hoursTag = isEntire
+      ? `<MaxHoursPeriod>${escape(maxHoursXml)}</MaxHoursPeriod>`
+      : `<HoursPerAuthPeriod>${escape(maxHoursXml)}</HoursPerAuthPeriod>
+  <MaxHoursPeriod>${escape(maxHoursXml)}</MaxHoursPeriod>`;
     const buildAuthXml = (serviceId: string) =>
       `<CreateAuthorizationInfo>
   <PatientID>${escape(auth.patientId)}</PatientID>
@@ -516,7 +526,7 @@ export class SoapHhaClientAdapter implements HhaClient {
   <FromDate>${escape(fromDate)}</FromDate>
   <ToDate>${escape(toDate)}</ToDate>
   <Period>${escape(period)}</Period>
-  <Maximum>${escape(String(maximum))}</Maximum>
+  ${hoursTag}
   <IsAdditionalRules>False</IsAdditionalRules>
 </CreateAuthorizationInfo>`;
 
