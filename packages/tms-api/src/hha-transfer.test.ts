@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { MockHhaClient } from '@white-glove/hha-client';
 import { MemoryStore, newId, nowIso } from '@white-glove/tms-db';
-import { resolveHhaPatientId, transferLockedWeek } from './hha-transfer.js';
+import {
+  ensurePatientAuthorizationForVisit,
+  mandateToAuthPeriodMaximum,
+  resolveHhaPatientId,
+  tmsAuthorizationNumber,
+  transferLockedWeek,
+} from './hha-transfer.js';
 
 function seedSchoolMandate(
   store: MemoryStore,
@@ -23,6 +29,109 @@ function seedSchoolMandate(
     createdAt: nowIso(),
   });
 }
+
+describe('mandateToAuthPeriodMaximum / tmsAuthorizationNumber', () => {
+  it('maps weekly mandate to Weekly Period + Maximum from frequencyPerWeek', () => {
+    expect(
+      mandateToAuthPeriodMaximum({
+        id: 'm1',
+        studentId: 's1',
+        providerId: 'p1',
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 2,
+        frequencyKind: 'weekly',
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: '',
+        startOn: '2026-09-01',
+        endOn: '2027-06-30',
+        createdAt: '',
+      }),
+    ).toEqual({ period: 'Weekly', maximum: 2 });
+  });
+
+  it('maps monthly and school_day_cycle; falls back to Daily/1 without mandate', () => {
+    expect(
+      mandateToAuthPeriodMaximum({
+        id: 'm2',
+        studentId: 's1',
+        providerId: 'p1',
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 0,
+        frequencyKind: 'monthly',
+        sessionsPerPeriod: 4,
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: '',
+        startOn: '',
+        endOn: '',
+        createdAt: '',
+      }),
+    ).toEqual({ period: 'Monthly', maximum: 4 });
+    expect(
+      mandateToAuthPeriodMaximum({
+        id: 'm3',
+        studentId: 's1',
+        providerId: 'p1',
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 0,
+        frequencyKind: 'school_day_cycle',
+        sessionsPerPeriod: 2,
+        periodSchoolDays: 6,
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: '',
+        startOn: '',
+        endOn: '',
+        createdAt: '',
+      }),
+    ).toEqual({ period: 'Weekly', maximum: 2 });
+    expect(mandateToAuthPeriodMaximum(undefined)).toEqual({ period: 'Daily', maximum: 1 });
+  });
+
+  it('builds stable TMS AuthorizationNumber from programId + serviceCodeId', () => {
+    expect(
+      tmsAuthorizationNumber({ programId: '1012074', patientId: '999', serviceCodeId: 'sc-pt-30' }),
+    ).toBe('TMS-1012074-sc-pt-30');
+  });
+});
+
+describe('ensurePatientAuthorizationForVisit', () => {
+  it('calls upsertAuthorization with Period/Maximum from mandate', async () => {
+    const hha = new MockHhaClient();
+    const result = await ensurePatientAuthorizationForVisit({
+      hha,
+      patientId: 'p-1',
+      contractId: '74',
+      serviceCodeId: 'sc-pt-school-30',
+      serviceCode: 'PT school 30',
+      programType: 'Baldwin UFSD',
+      programId: '1012074',
+      mandate: {
+        id: 'm1',
+        studentId: 's1',
+        providerId: 'p1',
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 1,
+        frequencyKind: 'weekly',
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: '',
+        startOn: '2026-09-01',
+        endOn: '2027-06-30',
+        createdAt: '',
+      },
+      visitDate: '2026-09-01',
+    });
+    expect(hha.calls).toContain('upsertAuthorization');
+    expect(result.created).toBe(true);
+    expect(result.authorizationNumber).toBe('TMS-1012074-sc-pt-school-30');
+  });
+});
 
 describe('resolveHhaPatientId', () => {
   it('uses trusted hhaPatientId without calling find', async () => {
@@ -203,6 +312,99 @@ describe('transferLockedWeek Program Id', () => {
     expect(store.data.students.find((s) => s.id === student.id)?.hhaPatientId).toBe(existing.id);
     expect(hha.calls).toContain('resolvePayCodeId');
     expect(hha.calls).toContain('resolveServiceCodeId');
+    expect(hha.calls).toContain('upsertContract');
+    expect(hha.calls).toContain('upsertAuthorization');
+    const authIdx = hha.calls.indexOf('upsertAuthorization');
+    const schedIdx = hha.calls.indexOf('locateOrScheduleVisit');
+    expect(authIdx).toBeGreaterThan(-1);
+    expect(schedIdx).toBeGreaterThan(authIdx);
+  });
+
+  it('attaches program-type contract before CreateSchedule (avoids -74)', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Ana',
+      lastName: 'Binaj',
+      dob: '',
+      programId: '49247',
+      programType: 'Island Park UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+      serviceType: 'PT School',
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.transferred).toBe(1);
+    expect(hha.calls.indexOf('upsertContract')).toBeGreaterThanOrEqual(0);
+    expect(hha.calls.indexOf('upsertContract')).toBeLessThan(
+      hha.calls.indexOf('locateOrScheduleVisit'),
+    );
+    const patientId = store.data.students.find((s) => s.id === student.id)?.hhaPatientId;
+    expect(patientId).toBeTruthy();
+    const placements = hha.placementsByPatient.get(patientId!) ?? [];
+    expect(placements.some((p) => p.contractId === '73268')).toBe(true);
   });
 
   it('uses mandate duration for pay/billing — not Frontline nearest (40 min clock + 30 mandate)', async () => {
@@ -965,6 +1167,94 @@ describe('transferLockedWeek ErrorID=-56 patient recovery', () => {
     const saved = store.data.students.find((s) => s.id === student.id)?.hhaPatientId;
     expect(saved).toBeTruthy();
     expect(hha.calls).toContain('upsertPatient');
+  });
+});
+
+describe('transferLockedWeek GetVisitInfoV2 -415 after schedule', () => {
+  it('keeps VisitID but fails transfer when approveVisit returns -415 (pay needs confirm)', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Nee',
+      lastName: 'Patel',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Valerie',
+      lastName: 'Eley',
+      dob: '2018-01-01',
+      programId: '909062926',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '24745304',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    const session = store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-04',
+      beginTime: '10:05 am',
+      endTime: '10:35 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+      serviceType: 'PT School',
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+    hha.payCodes.set('PT $70', 'pay-pt-70');
+    hha.approveVisit = async () => {
+      hha.calls.push('approveVisit');
+      throw new Error(
+        'HHA GetVisitInfoV2 failed: Invalid VisitID for current agency (ErrorID=-415)',
+      );
+    };
+
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+    expect(result.ok).toBe(false);
+    expect(result.transferred).toBe(0);
+    expect(result.errors.some((e) => /ErrorID=-415|could not read the VisitID/i.test(e))).toBe(true);
+    const tr = store.transferForSession(session.id);
+    expect(tr?.status).toBe('failed');
+    expect(tr?.hhaVisitId).toBeTruthy();
+    expect(tr?.lastError).toMatch(/ConfirmVisits|VisitID|-415/i);
   });
 });
 

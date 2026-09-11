@@ -69,7 +69,7 @@ import {
 } from './pay-code-resolve.js';
 import { activePlacements, parsePatientPlacements } from './placements.js';
 import { resolvePlacementForService } from './resolve-placement.js';
-import { resolveServiceCodeIdFromRows } from './resolve-service-code-order.js';
+import { resolveServiceCodeIdsFromRows } from './resolve-service-code-order.js';
 import {
   buildConfirmVisitsBody,
   buildConfirmVisitsEvvBody,
@@ -432,7 +432,12 @@ export class SoapHhaClientAdapter implements HhaClient {
       `<PatientContractInfo>
   <PatientID>${escape(contract.patientId)}</PatientID>
   <ContractID>${escape(contract.contractExternalId)}</ContractID>
-  <StartDate>${escape(startIso)}</StartDate>
+  <StartDate>${escape(startIso)}</StartDate>${
+        contract.serviceCodeId
+          ? `
+  <ServiceCodeID>${escape(contract.serviceCodeId)}</ServiceCodeID>`
+          : ''
+      }
 </PatientContractInfo>`,
     );
     assertOk(result, 'AddPatientContract');
@@ -483,18 +488,18 @@ export class SoapHhaClientAdapter implements HhaClient {
     if (!disciplineId) {
       throw new Error('CreatePatientAuthorization requires DisciplineID from service type');
     }
+    // Prefer an existing auth with the same Authorization Number (idempotent re-push).
+    const existingByNumber = await this.findAuthorizationByNumber(
+      auth.patientId,
+      auth.authorizationNumber!,
+      contractId,
+    );
+    if (existingByNumber) {
+      return { id: existingByNumber, created: false };
+    }
     let period = auth.period?.trim();
     let maximum = auth.maximum;
     if (!period || maximum === undefined) {
-      // Reuse only the SAME Authorization Number — never copy Period/Maximum from a sibling auth.
-      const existingId = await this.findAuthorizationByNumber(
-        auth.patientId,
-        auth.authorizationNumber!,
-        contractId,
-      );
-      if (existingId) {
-        return { id: existingId, created: false };
-      }
       throw new Error(
         'CreatePatientAuthorization requires Period and Maximum from the ProviderSoft report row (Basic Mandate Frequency / Times per Basic Mandate). No sibling-auth fallback.',
       );
@@ -555,6 +560,8 @@ export class SoapHhaClientAdapter implements HhaClient {
 
   /** SOAP SearchVisits + EVV time match — does not create a visit. */
   async findExistingVisit(visit: HhaVisit): Promise<UpsertResult | undefined> {
+    // Numeric visitExternalId is a prior HHA VisitID (not TMS session UUID).
+    // On -415 / not ok: ignore the stale ID and fall through to SearchVisits / CreateSchedule.
     if (visit.visitExternalId && /^\d+$/.test(visit.visitExternalId)) {
       const info = await this.soap.getVisitInfoV2(Number(visit.visitExternalId));
       if (info.ok) {
@@ -575,12 +582,18 @@ export class SoapHhaClientAdapter implements HhaClient {
     const visitIds = xmlIds(found.bodyXml, 'VisitID');
     for (const vid of visitIds) {
       const info = await this.soap.getVisitInfoV2(vid);
+      // Skip VisitIDs HHA rejects for this agency (-415) or otherwise unreadable.
       if (!info.ok) continue;
+      // Prefer EVV / visit clock; fall back to scheduled window (pre-EVV / just-created visits).
       const cmp = compareSessionClock(
         visit.startTime,
         visit.endTime,
-        xmlFirstTag(info.bodyXml, 'EVVStartTime') ?? xmlFirstTag(info.bodyXml, 'VisitStartTime'),
-        xmlFirstTag(info.bodyXml, 'EVVEndTime') ?? xmlFirstTag(info.bodyXml, 'VisitEndTime'),
+        xmlFirstTag(info.bodyXml, 'EVVStartTime') ??
+          xmlFirstTag(info.bodyXml, 'VisitStartTime') ??
+          xmlFirstTag(info.bodyXml, 'ScheduleStartTime'),
+        xmlFirstTag(info.bodyXml, 'EVVEndTime') ??
+          xmlFirstTag(info.bodyXml, 'VisitEndTime') ??
+          xmlFirstTag(info.bodyXml, 'ScheduleEndTime'),
       );
       if (cmp.matches) return { id: String(vid), created: false };
     }
@@ -700,12 +713,14 @@ export class SoapHhaClientAdapter implements HhaClient {
     const attempts = caregiverSearchNameOrders(providerName);
     if (attempts.length === 0) return undefined;
     const providerTokens = new Set(
-      (providerName ?? '')
-        .trim()
-        .replace(/[,.;:/\\|]+/g, ' ')
-        .toUpperCase()
-        .split(/\s+/)
-        .filter(Boolean),
+      attempts.flatMap((a) =>
+        [a.firstName, a.lastName]
+          .join(' ')
+          .trim()
+          .toUpperCase()
+          .split(/\s+/)
+          .filter(Boolean),
+      ),
     );
 
     for (const { firstName, lastName } of attempts) {
@@ -826,7 +841,17 @@ export class SoapHhaClientAdapter implements HhaClient {
     contractId?: number,
     programType?: string,
   ): Promise<string | undefined> {
-    if (!serviceType?.trim()) return undefined;
+    const ids = await this.resolveServiceCodeIds(serviceType, contractId, programType);
+    return ids[0];
+  }
+
+  /** All matching billing ServiceCodeIDs on the contract (duplicate HHA names included). */
+  async resolveServiceCodeIds(
+    serviceType: string | undefined,
+    contractId?: number,
+    programType?: string,
+  ): Promise<string[]> {
+    if (!serviceType?.trim()) return [];
 
     if (contractId) {
       // Excel program aliases (e.g. OT HC Eval → OT) must resolve against the
@@ -846,19 +871,19 @@ export class SoapHhaClientAdapter implements HhaClient {
           serviceType,
         );
         if (cached && rows.some((r) => r.id === cached)) {
-          return cached;
+          return [cached];
         }
       }
 
-      const id = resolveServiceCodeIdFromRows({
+      const ids = resolveServiceCodeIdsFromRows({
         serviceType,
         programType,
         rows,
       });
-      if (!id) return undefined;
+      if (!ids.length) return [];
 
       if (programType?.trim()) {
-        await this.referenceCache?.putProgramServiceCodeId(programType, serviceType, id, {
+        await this.referenceCache?.putProgramServiceCodeId(programType, serviceType, ids[0]!, {
           ...(alias?.hhaServiceCodeName
             ? { hhaServiceName: alias.hhaServiceCodeName }
             : {}),
@@ -867,11 +892,18 @@ export class SoapHhaClientAdapter implements HhaClient {
       // Flat service cache is program-agnostic; do not store aliased resolutions
       // (Americare OT ≠ Extended "OT SOC/ROC OASIS" for the same PS label).
       if (!alias) {
-        await this.referenceCache?.putServiceCodeId(serviceType, id);
+        await this.referenceCache?.putServiceCodeId(serviceType, ids[0]!);
       }
-      return id;
+      return ids;
     }
 
+    const single = await this.resolveServiceCodeIdWithoutContract(serviceType);
+    return single ? [single] : [];
+  }
+
+  private async resolveServiceCodeIdWithoutContract(
+    serviceType: string,
+  ): Promise<string | undefined> {
     const key = normalizeRefName(serviceType);
 
     // Without a contract, static IDs are only safe when no Excel alias exists
@@ -953,7 +985,16 @@ export class SoapHhaClientAdapter implements HhaClient {
         else fallbackRows.push(row);
       }
     }
-    const rows = skilledRows.length ? skilledRows : fallbackRows;
+    const rowsById = new Map<string, { id: string; name: string }>();
+    for (const row of [...skilledRows, ...fallbackRows]) {
+      // Keep first name for an ID; include both Skilled and Non-Skilled.
+      // School contracts often list PT/OT School codes under Non-Skilled while
+      // also having Skilled therapy rows — preferring Skilled-only dropped
+      // "PT School 30" and fuzzy-matched OT codes → CreateSchedule -310
+      // "You should only select OT Service Code".
+      if (!rowsById.has(row.id)) rowsById.set(row.id, row);
+    }
+    const rows = [...rowsById.values()];
     if (!rows.length && attempt < 2) {
       await new Promise((r) => setTimeout(r, 750));
       return this.loadServiceCodesForContract(contractId, attempt + 1);
@@ -1114,7 +1155,12 @@ export class SoapHhaClientAdapter implements HhaClient {
       throw new Error(`approveVisit requires numeric VisitID, got ${visitId}`);
     }
 
-    const info = await this.soap.getVisitInfoV2(numericId);
+    // Brief retries: CreateSchedule VisitIDs are sometimes not readable for a moment (-415).
+    let info = await this.soap.getVisitInfoV2(numericId);
+    for (let attempt = 0; !info.ok && info.errorId === '-415' && attempt < 3; attempt += 1) {
+      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      info = await this.soap.getVisitInfoV2(numericId);
+    }
     assertOk(info, 'GetVisitInfoV2');
 
     const times =
@@ -1245,15 +1291,22 @@ export class SoapHhaClientAdapter implements HhaClient {
       await this.listPatientPlacements(patientId, update.dischargeDate),
     );
     const contractId = await this.resolveContractId(update.programType);
-    const resolvedServiceCodeId =
+    // Must pass programType so Excel aliases (e.g. PT HC Eval → PT SOC/ROC OASIS)
+    // resolve against this contract — not the flat SERVICE_CODE_MAP GHI ID.
+    const resolvedServiceCodeIds =
       update.serviceCode && contractId
-        ? await this.resolveServiceCodeId(update.serviceCode, contractId)
-        : undefined;
+        ? await this.resolveServiceCodeIds(
+            update.serviceCode,
+            Number(contractId),
+            update.programType,
+          )
+        : [];
     const placementId = resolvePlacementForService({
       serviceCode: update.serviceCode,
       startDate: update.startDate,
       contractId,
-      resolvedServiceCodeId,
+      resolvedServiceCodeId: resolvedServiceCodeIds[0],
+      resolvedServiceCodeIds,
       active,
     });
     await this.dischargePlacement({
