@@ -1,0 +1,14 @@
+TMS→HHA pay flags: Auth (CreatePatientAuthorization) + ConfirmVisits with TimesheetApproved=Yes (no soft-skip)
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+{
+    "CodeSha256": "IE6URreo7WYPZggxVMFM/BtMaau7mm79P+78zGq5Ukw=",
+    "LastModified": "2026-09-11T16:27:22.000+0000",
+    "CodeSize": 537427
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}

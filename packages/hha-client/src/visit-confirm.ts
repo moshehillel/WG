@@ -123,14 +123,18 @@ function escapeXml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** Timesheet flag combos to try (sandbox-proven order). */
+/**
+ * Timesheet flag combos for ConfirmVisits.
+ * Always prefer TimesheetApproved=Yes — payroll/prebilling requires it.
+ * Never accept Approved=No first (that left visits "confirmed" but unpaid).
+ */
 export function timesheetConfirmAttempts(
   visitFlags: { timesheetRequired: 'Yes' | 'No'; timesheetApproved: 'Yes' | 'No' },
 ): Array<{ timesheetRequired: 'Yes' | 'No'; timesheetApproved: 'Yes' | 'No' }> {
   const attempts: Array<{ timesheetRequired: 'Yes' | 'No'; timesheetApproved: 'Yes' | 'No' }> = [
-    { timesheetRequired: 'No', timesheetApproved: 'No' },
-    { timesheetRequired: visitFlags.timesheetRequired, timesheetApproved: 'Yes' },
     { timesheetRequired: 'Yes', timesheetApproved: 'Yes' },
+    { timesheetRequired: visitFlags.timesheetRequired, timesheetApproved: 'Yes' },
+    { timesheetRequired: 'No', timesheetApproved: 'Yes' },
   ];
   const seen = new Set<string>();
   return attempts.filter((a) => {
