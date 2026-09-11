@@ -1,0 +1,16 @@
+TMS HHA: CreatePatientAuthorization (Period+Maximum from mandate) before CreateSchedule
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+GitSHA: a721e7089f8a124f252e5bce57c4f6f4d42ce617
+{
+    "CodeSha256": "TTCwuQp+4KCUAovCBUMjbsf14LYi7YzDeSw052isZR4=",
+    "LastModified": "2026-09-11T16:25:15.000+0000",
+    "CodeSize": 2031332
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA prod preserved (USE_MOCK=false, USE_PRODUCTION=true, ALLOW_PRODUCTION=true)
