@@ -496,7 +496,7 @@ export async function transferLockedWeek(options: {
         mandateDurationMinutes: mandateMinutes,
       };
       const rate = sessionPayCodeRate(provider, session, payOpts);
-      const pay = buildPayCodeName(discipline, rate, {
+      const pay = buildPayCodeName(discipline, rate ?? undefined, {
         group: sessionUsesGroupPayRate(session, payOpts),
       });
       if (!pay) {
