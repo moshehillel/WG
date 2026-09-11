@@ -29,12 +29,13 @@ describe('visit-confirm', () => {
     });
   });
 
-  it('dedupes timesheet confirm attempts', () => {
+  it('prefers TimesheetApproved=Yes for payroll (never Approved=No first)', () => {
     const attempts = timesheetConfirmAttempts({
       timesheetRequired: 'No',
       timesheetApproved: 'No',
     });
-    expect(attempts[0]).toEqual({ timesheetRequired: 'No', timesheetApproved: 'No' });
+    expect(attempts[0]).toEqual({ timesheetRequired: 'Yes', timesheetApproved: 'Yes' });
+    expect(attempts.every((a) => a.timesheetApproved === 'Yes')).toBe(true);
     expect(attempts.length).toBeGreaterThan(1);
   });
 });
