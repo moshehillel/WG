@@ -23,6 +23,7 @@ import { Construct } from 'constructs';
 import { ProviderSoftBotImage } from './providersoft-bot-image.js';
 import { HhaSessionsBotImage } from './hha-sessions-bot-image.js';
 import { addTherapyManagement } from './tms.js';
+import { lockOutOfBandLambdaCode } from './lock-outofband-lambda-code.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '../..');
@@ -31,6 +32,13 @@ export class WhiteGloveStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
+    /**
+     * Alert recipients: prefer `node infra/deploy-alert-emails.mjs` (SNS + ALERT_EMAILS env)
+     * over a full `cdk deploy` — config-only CDK used to republish stale Lambda code
+     * (Sep 14 cdk-alert-miris). If you must CDK-deploy, use `npm run cdk:deploy` so
+     * after-cdk-deploy-restore-lambdas re-applies git code. Hotfixed fns lock Code out
+     * of CFN when context lockHotfixLambdaCode is true (default).
+     */
     const alertEmailRaw =
       (this.node.tryGetContext('alertEmails') as string | undefined) ??
       (this.node.tryGetContext('alertEmail') as string | undefined);
@@ -403,6 +411,13 @@ export class WhiteGloveStack extends cdk.Stack {
       {},
       cdk.Duration.minutes(15),
     );
+    /**
+     * Opened/Closed/Sessions/Validate/Notify are hotfixed via infra/deploy-*.mjs
+     * (and deploy-proc-restore-after-miris.mjs). Lock Code so CDK config deploys
+     * cannot wipe those packages on CFN update or rollback.
+     */
+    lockOutOfBandLambdaCode(openedFn);
+    lockOutOfBandLambdaCode(closedFn);
     const sessionsFnEnv: Record<string, string> = {
       HHA_ENT_GRAPHQL_ENABLED: 'true',
       HHA_ENT_AUTO_LOGIN: 'true',
@@ -442,7 +457,9 @@ export class WhiteGloveStack extends cdk.Stack {
     hhaSecret.grantRead(sessionsFn);
     hhaSecret.grantWrite(sessionsFn);
     exceptionTopic.grantPublish(sessionsFn);
+    lockOutOfBandLambdaCode(sessionsFn);
     const validateFn = makeProcessor('ValidateFn', 'packages/processors/src/handlers/validate.ts');
+    lockOutOfBandLambdaCode(validateFn);
 
     const notifyFailureFn = new NodejsFunction(this, 'NotifyFailureFn', {
       entry: path.join(repoRoot, 'packages/processors/src/handlers/notify-failure.ts'),
@@ -456,6 +473,7 @@ export class WhiteGloveStack extends cdk.Stack {
       projectRoot: repoRoot,
     });
     exceptionTopic.grantPublish(notifyFailureFn);
+    lockOutOfBandLambdaCode(notifyFailureFn);
 
     const mergeDefaultsFn = new NodejsFunction(this, 'MergeDefaultsFn', {
       entry: path.join(repoRoot, 'packages/processors/src/handlers/merge-pipeline-input.ts'),

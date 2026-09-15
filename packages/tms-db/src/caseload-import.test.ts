@@ -1075,6 +1075,44 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
     expect(findProviderByName(store.data.providers, 'White Glove')).toBeUndefined();
   });
 
+  it('matches when TMS last name embeds PT* / discipline suffix (Frontline Neelamben)', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-neelamben',
+      userId: 'u-neelamben',
+      firstName: 'NEELAMBEN',
+      lastName: 'Patel PT*',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '5186414',
+      active: true,
+      createdAt: nowIso(),
+    });
+    expect(providerDisplayNameKey(store.data.providers[0]!)).toBe('neelamben patel');
+    expect(personNameTokenKey('Patel PT*, Neelamben')).toBe('neelamben patel');
+    for (const raw of [
+      'Patel PT*, Neelamben',
+      'Neelamben Patel PT*',
+      'NEELAMBEN Patel',
+      'Patel, Neelamben',
+      'neelamben patel pt',
+      'Neelamben Patel PT* PT',
+    ]) {
+      expect(findProviderByName(store.data.providers, raw)?.id).toBe('p-neelamben');
+    }
+    // Different people still rejected.
+    expect(findProviderByName(store.data.providers, 'Patel PT*, Other')).toBeUndefined();
+    expect(findProviderByName(store.data.providers, 'White Glove -Patel, Someone')).toBeUndefined();
+  });
+
   it('matches provider names order-independently and case-insensitively', () => {
     const store = new MemoryStore();
     store.upsertProvider({

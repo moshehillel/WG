@@ -894,6 +894,7 @@ const PROVIDER_NAME_NOISE = new Set([
   'pt',
   'ot',
   'slp',
+  'st',
   'pta',
   'cota',
   'dpt',
@@ -972,8 +973,13 @@ export function preferCanonicalProvider(providers: Provider[]): Provider | undef
   return providers[0];
 }
 
+/**
+ * Profile first+last key — same normalization as PDF Service Provider text
+ * (agency strip + credential noise). So lastName "Patel PT*" matches PDF
+ * "Patel PT*, Neelamben" without forcing admins to rename the profile.
+ */
 export function providerDisplayNameKey(p: { firstName?: string; lastName?: string }): string {
-  return nameTokenKey(`${p.firstName || ''} ${p.lastName || ''}`);
+  return personNameTokenKey(`${p.firstName || ''} ${p.lastName || ''}`);
 }
 
 /** True when the provider has a linked AppUser / login (userId or reverse providerId). */

@@ -12,6 +12,7 @@ import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import { Construct } from 'constructs';
+import { lockOutOfBandLambdaCode } from './lock-outofband-lambda-code.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '../..');
@@ -203,6 +204,14 @@ export function addTherapyManagement(
     depsLockFilePath: path.join(repoRoot, 'package-lock.json'),
     projectRoot: repoRoot,
   });
+  /**
+   * Day-to-day API ships via infra/deploy-tms-*.mjs (UpdateFunctionCode).
+   * Lock Code out of CFN updates so alert/config cdk deploys cannot republish a
+   * stale NodejsFunction asset (Sep 14 cdk-alert-miris → DocuSign-era ~1.97MB).
+   * After any `cdk deploy`, run: node scripts/after-cdk-deploy-restore-lambdas.mjs
+   * (or use `npm run cdk:deploy` which does that automatically).
+   */
+  lockOutOfBandLambdaCode(fn);
   props.reportsBucket.grantReadWrite(fn, 'tms/*');
   stateTable.grantReadWriteData(fn);
   props.hhaSecret.grantRead(fn);
@@ -244,28 +253,12 @@ export function addTherapyManagement(
   });
 
   /**
-   * Wednesday payroll auto-transfer.
-   * 11:00 UTC = 7:00 AM Eastern (EDT) / 6:00 AM Eastern (EST).
-   * Override schedule hour via context `-c tmsHhaAutoTransferHourUtc=12` if needed.
+   * Wednesday payroll auto-transfer schedule is NOT managed by CDK.
+   * Out-of-band rule `WhiteGlove-TmsHhaAutoTransfer` is owned by
+   * infra/deploy-tms-hha-auto-transfer.mjs (put-rule). A prior CDK Rule with the
+   * same ruleName caused CREATE_FAILED → full stack rollback (cdk-alert-miris).
    * Pause with Lambda env TMS_HHA_AUTO_TRANSFER=false (admin Send to HHA still works).
    */
-  const autoTransferHourUtc = String(
-    (scope.node.tryGetContext('tmsHhaAutoTransferHourUtc') as string | undefined) || '11',
-  ).replace(/\D/g, '') || '11';
-  new events.Rule(scope, 'TmsHhaAutoTransferRule', {
-    ruleName: 'WhiteGlove-TmsHhaAutoTransfer',
-    schedule: events.Schedule.cron({
-      minute: '0',
-      hour: autoTransferHourUtc,
-      weekDay: 'WED',
-    }),
-    description: `Weekly TMS to HHA auto-transfer for locked weeks needing transfer (Wed ${autoTransferHourUtc}:00 UTC ~ 7am ET EDT)`,
-    targets: [
-      new targets.LambdaFunction(fn, {
-        event: events.RuleTargetInput.fromObject({ tmsJob: 'hha-auto-transfer' }),
-      }),
-    ],
-  });
 
   const apiUrl = fn.addFunctionUrl({
     authType: lambda.FunctionUrlAuthType.NONE,

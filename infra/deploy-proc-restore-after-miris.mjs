@@ -96,6 +96,12 @@ for (const t of targets) {
     { encoding: 'utf8', cwd: __dirname },
   ).trim();
   console.log(t.id, out);
+  try {
+    const { stampLambdaGitEnv } = await import('./deploy-stamp.mjs');
+    stampLambdaGitEnv(t.fnName);
+  } catch (err) {
+    console.warn(`${t.id} TMS_GIT_SHA stamp skipped:`, err?.message || err);
+  }
   report.push(`${t.id} ${t.fnName}\n${out}`);
 }
 

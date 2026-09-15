@@ -115,11 +115,20 @@ const env = execSync(
 );
 console.log(env);
 
+try {
+  const { stampLambdaGitEnv, readGitSha } = await import('./deploy-stamp.mjs');
+  const stamped = stampLambdaGitEnv(fnName);
+  console.log('stamped', stamped);
+} catch (err) {
+  console.warn('TMS_GIT_SHA stamp skipped:', err?.message || err);
+}
+
 fs.writeFileSync(
   path.join(__dirname, 'cdk-tms-restore-current-deploy-out.txt'),
   [
     'TMS restore current API after accidental old-bundle rollback',
     `Function: ${fnName}`,
+    `TMS_GIT_SHA: ${(() => { try { return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim(); } catch { return 'unknown'; } })()}`,
     out.trim(),
     env.trim(),
     'Restored: HHA_USE_PRODUCTION=true, HHA_ALLOW_PRODUCTION=true, HHA_USE_MOCK=false',

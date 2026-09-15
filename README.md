@@ -55,18 +55,27 @@ npm run local:download -w @white-glove/providersoft-bot -- --stubs --upload
 ## Deploy
 
 1. Put real ProviderSoft / HHA values into the secrets after first deploy (console or CLI).
-2. Optionally set alert email: `cdk deploy -c alertEmail=you@example.com`
-3. From repo root:
-
-```bash
-npm run build
-npm run cdk -w @white-glove/infra -- bootstrap   # once per account/region
-npm run cdk -w @white-glove/infra -- deploy
-```
+2. **Alert emails (preferred — no Lambda code overwrite):**
+   ```bash
+   # edit infra/cdk.json context.alertEmails, then:
+   npm run cdk:alert-emails
+   # or: node infra/deploy-alert-emails.mjs --emails=a@x.com,b@y.com
+   ```
+   Confirm the SNS subscription email. Do **not** use a bare `cdk deploy` just to add an alert recipient (Sep 14 miris incident).
+3. **Full stack deploy** (config / IAM / new resources) — always use the wrapper so hotfixed Lambdas are restored from git afterward:
+   ```bash
+   npm run build
+   npm run cdk -w @white-glove/infra -- bootstrap   # once per account/region
+   npm run cdk:deploy -- --all --require-approval never
+   ```
+   Or: `node infra/cdk-deploy.mjs --all`. Skip restore only with `--skip-lambda-restore` (rare).
+4. Day-to-day **TMS / processor code** still ships via `infra/deploy-tms-*.mjs` and related scripts (`UpdateFunctionCode`), not CDK assets. Those functions have Code locked out of CloudFormation updates (`lockHotfixLambdaCode`, default true). Greenfield create once with `-c lockHotfixLambdaCode=false` if needed.
 
 Pipeline processors and TMS API default to **real** HHA (`HHA_USE_MOCK=false`) and load SOAP creds from `HHA_SECRET_ARN`. Keep `HHA_USE_MOCK=true` (or `TMS_HHA_MOCK=1` on TMS) for local/tests only.
 
 For pipeline dry-runs without a real ProviderSoft UI, set the download Lambda env `PROVIDERSOFT_USE_STUBS=true`.
+
+Wednesday TMS→HHA auto-transfer EventBridge rule (`WhiteGlove-TmsHhaAutoTransfer`) is owned by `infra/deploy-tms-hha-auto-transfer.mjs`, not CDK (avoids duplicate-rule rollback).
 
 ## Manual Step Functions start
 

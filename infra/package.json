@@ -8,8 +8,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "cdk": "cdk",
     "synth": "cdk synth",
-    "deploy": "cdk deploy --all",
+    "deploy": "node cdk-deploy.mjs --all",
+    "deploy:cdk-only": "cdk deploy --all",
     "diff": "cdk diff",
+    "alert-emails": "node deploy-alert-emails.mjs",
+    "after-deploy-restore": "node ../scripts/after-cdk-deploy-restore-lambdas.mjs",
     "test": "echo \"No infra unit tests\""
   },
 
