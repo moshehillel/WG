@@ -373,7 +373,11 @@ export class MemoryStore {
   }
 
   filesForProvider(providerId: string): StoredFile[] {
-    return this.data.files.filter((f) => f.providerId === providerId && !f.studentId);
+    return this.data.files.filter(
+      (f) =>
+        f.providerId === providerId &&
+        (!f.studentId || f.kind === 'session_note' || Boolean(f.sessionId)),
+    );
   }
 
   upsertArchive(row: ArchiveRecord): ArchiveRecord {

@@ -267,6 +267,8 @@ export interface StoredFile {
   studentId: string;
   providerId: string;
   weekId: string;
+  /** When set, file is an attachment for a specific session (manual note upload). */
+  sessionId?: string;
   kind: string;
   s3Key: string;
   label: string;

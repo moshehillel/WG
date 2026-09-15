@@ -85,6 +85,7 @@ import {
   type MemoryStore,
   type SchoolCalendar,
   type SessionRow,
+  type StoredFile,
   type Student,
   type WeeklyPeriod,
 } from '@white-glove/tms-db';
@@ -2651,12 +2652,17 @@ export async function handleTmsRequest(
     } else if (!s3Key) {
       s3Key = String(b.label || 'local');
     }
+    const sessionId = String(b.sessionId || '').trim();
+    const kind = String(
+      b.kind || (sessionId ? 'session_note' : studentId ? 'locker' : 'provider_report'),
+    );
     const file = store.addFile({
       id,
       studentId,
       providerId: String(b.providerId || providerFor(store, ctx.user)?.id || ''),
       weekId: String(b.weekId || ''),
-      kind: String(b.kind || (studentId ? 'locker' : 'provider_report')),
+      ...(sessionId ? { sessionId } : {}),
+      kind,
       s3Key,
       label: String(b.label || 'upload'),
       createdAt: nowIso(),
@@ -2741,7 +2747,13 @@ export async function handleTmsRequest(
           signerEmail: String(w.signerEmail || '').trim(),
         };
       })
-      .sort((a, b) => String(b.weekStart).localeCompare(String(a.weekStart)));
+      .sort((a, b) => {
+        const byWeek = String(b.weekStart).localeCompare(String(a.weekStart));
+        if (byWeek) return byWeek;
+        return String(a.programType || '').localeCompare(String(b.programType || ''), undefined, {
+          sensitivity: 'base',
+        });
+      });
     const mapWeekSessions = (weekIds: Set<string>) =>
       weeks
         .filter((w) => weekIds.has(w.id))
@@ -2790,6 +2802,10 @@ export async function handleTmsRequest(
         .sort((a, b) => {
           const da = String(b.dateOfService || '').localeCompare(String(a.dateOfService || ''));
           if (da) return da;
+          const byPt = String(a.programType || '').localeCompare(String(b.programType || ''), undefined, {
+            sensitivity: 'base',
+          });
+          if (byPt) return byPt;
           return String(b.beginTime || '').localeCompare(String(a.beginTime || ''));
         });
     const processedSessions = mapWeekSessions(
@@ -4010,7 +4026,32 @@ export async function handleTmsRequest(
         errors: check.errors,
       });
     }
-    return json(200, { session, warnings: [...check.warnings, ...screenedLocal.warnFlags] });
+    // Optional attachment: store bytes only (no session-parse / PDF reading).
+    let attachedFile: StoredFile | undefined;
+    const attachBuf = anyFileBufferFromBody(b);
+    const attachName = String(b.fileName || b.attachmentName || '').trim();
+    if (attachBuf) {
+      const fileId = newId();
+      const ext = (attachName.split('.').pop() || 'bin').replace(/[^\w]+/g, '') || 'bin';
+      const s3Key = `tms/locker/providers/${targetWeek.providerId || 'p'}/${fileId}.${ext}`;
+      await putLockerPdf(s3Key, attachBuf);
+      attachedFile = store.addFile({
+        id: fileId,
+        studentId: session.studentId || '',
+        providerId: String(targetWeek.providerId || ''),
+        weekId: targetWeek.id,
+        sessionId: session.id,
+        kind: 'session_note',
+        s3Key,
+        label: String(b.fileLabel || attachName || 'Session note file'),
+        createdAt: nowIso(),
+      });
+    }
+    return json(200, {
+      session,
+      file: attachedFile || null,
+      warnings: [...check.warnings, ...screenedLocal.warnFlags],
+    });
   }
 
   if (req.method === 'GET' && /^\/students\/[^/]+\/missed$/.test(path)) {
