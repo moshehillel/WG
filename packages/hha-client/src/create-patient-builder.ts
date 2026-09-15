@@ -24,21 +24,24 @@ export interface CreatePatientReferenceIds {
   evacuationZoneId: number;
 }
 
-const KNOWN_DISCIPLINES = ['OT', 'PT', 'ST', 'SLP', 'RN', 'HHA', 'PCA', 'SI'];
+const KNOWN_DISCIPLINES = ['OT', 'PT', 'ST', 'SLP', 'RN', 'HHA', 'PCA', 'SI', 'COTA', 'PTA'];
 
 export function mapServiceToDiscipline(serviceType: string | undefined): string {
   const s = (serviceType ?? '').toUpperCase();
   const first = s.trim().split(/\s+/)[0] ?? '';
-  if (first === 'SI' || first.startsWith('SI-')) return 'SI';
-  if (s.includes('OT')) return 'OT';
-  if (s.includes('PT')) return 'PT';
-  if (s.includes('ST') || s.includes('SPEECH') || s.includes('SLP')) return 'ST';
-  if (s.includes('RN')) return 'RN';
-  if (s.includes('HHA')) return 'HHA';
-  if (s.includes('PCA')) return 'PCA';
   const token = first.replace(/[^A-Z]/g, '');
+  // Prefer the leading discipline token (PT school 30 → PT, COTA → COTA).
   if (token && KNOWN_DISCIPLINES.includes(token)) return token;
-  return 'OT';
+  if (first === 'SI' || first.startsWith('SI-')) return 'SI';
+  // Word-boundary checks — do NOT use bare includes('OT') (matches COTA).
+  if (/\bPT\b/.test(s) || /\bPHYSICAL\b/.test(s)) return 'PT';
+  if (/\bOT\b/.test(s) || /\bOCCUPATIONAL\b/.test(s)) return 'OT';
+  if (/\bST\b/.test(s) || /\bSLP\b/.test(s) || /\bSPEECH\b/.test(s)) return 'ST';
+  if (/\bRN\b/.test(s)) return 'RN';
+  if (/\bHHA\b/.test(s)) return 'HHA';
+  if (/\bPCA\b/.test(s)) return 'PCA';
+  // No silent OT default — callers must pass service/discipline for therapy patients.
+  return '';
 }
 
 /**
@@ -135,6 +138,12 @@ export function buildCreatePatientBody(
   const discipline = mapServiceToDiscipline(patient.serviceCode);
   const gender = patient.gender?.trim() || defaults.defaultGender;
   const zip4Xml = zip4 !== undefined ? `\n      <Zip4>${zip4}</Zip4>` : '';
+  const acceptedServicesXml = discipline
+    ? `
+  <AcceptedServices>
+    <Discipline>${esc(discipline)}</Discipline>
+  </AcceptedServices>`
+    : '';
 
   return `<PatientInfo>
   <OfficeID>${defaults.officeId}</OfficeID>
@@ -150,10 +159,7 @@ export function buildCreatePatientBody(
   <SourceOfAdmission>${defaults.sourceOfAdmission}</SourceOfAdmission>
   <BranchID>${refs.branchId}</BranchID>
   <TeamID>${refs.teamId}</TeamID>
-  <LocationID>${refs.locationId}</LocationID>
-  <AcceptedServices>
-    <Discipline>${esc(discipline)}</Discipline>
-  </AcceptedServices>
+  <LocationID>${refs.locationId}</LocationID>${acceptedServicesXml}
   <Addresses>
     <Address>
       <Address1>${esc(patient.address1!)}</Address1>

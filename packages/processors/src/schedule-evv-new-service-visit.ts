@@ -228,19 +228,55 @@ export async function scheduleEvvNewServiceVisit(options: {
     );
   }
 
-  return hha.locateOrScheduleVisit({
-    patientId,
-    visitDate,
-    startTime: NEW_SERVICE_EVV_VISIT_START,
-    endTime: NEW_SERVICE_EVV_VISIT_END,
-    caregiverId,
-    contractId,
-    serviceCodeId,
-    serviceCode: row.serviceCode,
-    programType: row.programType,
-    providerName,
-    payCodeId,
-    payRate,
-    durationMinutes: 30,
-  });
+  // Therapy EVV placeholders must be Skilled — Non-Skilled yields false -310
+  // ("cannot be scheduled for OT/PT/ST visit") even when the caregiver is eligible.
+  try {
+    return await hha.locateOrScheduleVisit({
+      patientId,
+      visitDate,
+      startTime: NEW_SERVICE_EVV_VISIT_START,
+      endTime: NEW_SERVICE_EVV_VISIT_END,
+      caregiverId,
+      contractId,
+      serviceCodeId,
+      serviceCode: row.serviceCode,
+      scheduleType: 'Skilled',
+      programType: row.programType,
+      providerName,
+      payCodeId,
+      payRate,
+      durationMinutes: 30,
+    });
+  } catch (err) {
+    // Placeholder goal is "any visit exists for unscheduled clocks". Shift overlap
+    // means a visit is already present — treat as success here only (not sessions).
+    if (isCreateScheduleShiftOverlapError(err)) {
+      console.info(
+        `[new_services] EVV placeholder visit already present (CreateSchedule shift overlap) ` +
+          `case=${row.caseId} provider="${providerName}" date=${visitDate}`,
+      );
+      return { id: 'overlap-existing', created: false };
+    }
+    throw err;
+  }
+}
+
+/**
+ * True when HHA CreateSchedule failed because a shift already overlaps
+ * (visit scaffolding already satisfied). Does not match other -310 variants
+ * such as "cannot be scheduled for OT/PT/ST visit".
+ */
+export function isCreateScheduleShiftOverlapError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  if (
+    /Overlapping shifts are not allowed/i.test(message) ||
+    /Your shift is overlapping with (Patient|Caregiver)/i.test(message)
+  ) {
+    return true;
+  }
+  // Defensive: ErrorID=-310 only counts when overlap wording is also present.
+  return (
+    /ErrorID\s*=\s*-310\b/i.test(message) &&
+    /overlap/i.test(message)
+  );
 }

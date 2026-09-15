@@ -55,6 +55,18 @@ describe('isAlreadyDischargedError', () => {
   });
 });
 
+describe('isInvalidHhaVisitError', () => {
+  it('detects ErrorID=-415 and Invalid VisitID message', async () => {
+    const { isInvalidHhaVisitError } = await import('./resolve-patient-id.js');
+    expect(
+      isInvalidHhaVisitError(
+        new Error('HHA GetVisitInfoV2 failed: Invalid VisitID for current agency (ErrorID=-415)'),
+      ),
+    ).toBe(true);
+    expect(isInvalidHhaVisitError(new Error('ErrorID=-310'))).toBe(false);
+  });
+});
+
 describe('isInvalidHhaPatientError', () => {
   it('detects ErrorID=-56 and invalid-for-agency wording', () => {
     expect(

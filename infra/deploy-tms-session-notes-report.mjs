@@ -36,6 +36,11 @@ if (!reportsDist.includes('sessionNotesReport')) {
     'packages/tms-db/dist/reports.js missing sessionNotesReport — build failed or stale',
   );
 }
+if (!reportsDist.includes('districtOptions') || !reportsDist.includes('districtLabelForStudent')) {
+  throw new Error(
+    'packages/tms-db/dist/reports.js missing districtOptions / districtLabelForStudent — aborting',
+  );
+}
 
 fs.mkdirSync(outDir, { recursive: true });
 for (const f of fs.readdirSync(outDir)) {
@@ -108,10 +113,11 @@ fs.writeFileSync(
     'IMPORTANT: rebuilds packages/tms-db + shared dist before esbuild (keeps solo-group mandate fix).',
     '',
     'Changes:',
-    '1. GET /admin/reports/session-notes — totals + rows; filter by from/to + providerId',
+    '1. GET /admin/reports/session-notes — totals + rows; filter by from/to + providerId + district',
     '2. GET /admin/reports/session-notes.xlsx — Excel export',
     '3. Attended = attended + makeup (same delivered bar as weekly progress)',
-    '4. FE: Admin → Reports → Session notes (app.js?v=96, styles.css?v=90)',
+    '4. districtOptions from programType || school.district (caseload payer labels)',
+    '5. FE: Admin → Reports → Session notes (app.js?v=103)',
     '',
   ].join('\n'),
 );

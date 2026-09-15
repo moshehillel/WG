@@ -46,6 +46,33 @@ describe('parseHhaApiFault (ErrorID=-74 overload)', () => {
     expect(fault.title).toBe('Failed — provider not eligible for that service');
     expect(fault.title).not.toMatch(/WGC|ServiceCodeID|CreateSchedule/i);
   });
+
+  it('labels CreateSchedule overlapping shifts as shift_overlap (not provider_not_eligible)', () => {
+    const fault = parseHhaApiFault(
+      'HHA CreateSchedule failed: "Your shift is overlapping with Patient: [WGC-924445/Cuchillas Viera Nathaly ]  Overlapping shifts are not allowed." (ErrorID=-310)',
+    );
+    expect(fault.kind).toBe('shift_overlap');
+    expect(fault.title).toMatch(/overlaps an existing HHA visit/i);
+    expect(fault.title).toMatch(/Cuchillas Viera Nathaly/i);
+    expect(fault.kind).not.toBe('provider_not_eligible');
+  });
+
+  it('labels only-select-OT service code inconsistency as discipline mismatch', () => {
+    const fault = parseHhaApiFault(
+      'HHA CreateSchedule failed: "Service code inconsistency: \rYou should only select OT Service Code." (ErrorID=-310)',
+    );
+    expect(fault.kind).toBe('service_code_discipline_mismatch');
+    expect(fault.title).toMatch(/AcceptedServices/i);
+    expect(fault.kind).not.toBe('provider_not_eligible');
+  });
+
+  it('labels ConfirmVisits timesheet config restriction separately', () => {
+    const fault = parseHhaApiFault(
+      'ConfirmVisits failed for visit 1331688458: "Restriction for Timesheet Required from Configuration" (-310)',
+    );
+    expect(fault.kind).toBe('timesheet_config_block');
+    expect(fault.title).toMatch(/timesheet configuration/i);
+  });
 });
 
 describe('formatRejectedServiceCodeTitle', () => {

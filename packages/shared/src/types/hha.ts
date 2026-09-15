@@ -67,6 +67,11 @@ export const HhaVisitSchema = z.object({
   serviceCodeId: z.string().optional(),
   /** HHA PayCodeID. */
   payCodeId: z.string().optional(),
+  /**
+   * HHA AuthorizationID to attach on CreateSchedule PrimaryBillTo.
+   * Prefer creating/finding patient auth first, then pass the id here.
+   */
+  authorizationId: z.string().optional(),
   programType: z.string().optional(),
   providerName: z.string().optional(),
   payRate: z.string().optional(),

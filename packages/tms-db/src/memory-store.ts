@@ -75,6 +75,8 @@ function mergeSnapshot(snapshot: Partial<TmsSnapshot> | null | undefined): TmsSn
   base.mandates = migrateMandateBillingServiceNames(migrateMandateGroupSizes(base.mandates));
   base.adminNotes = (base.adminNotes || []).map((n) => ({
     ...n,
+    providerId: String((n as { providerId?: unknown }).providerId || ''),
+    studentId: String((n as { studentId?: unknown }).studentId || ''),
     tags: Array.isArray((n as { tags?: unknown }).tags)
       ? (n as { tags: string[] }).tags.map((t) => String(t)).filter(Boolean)
       : [],
@@ -198,7 +200,18 @@ export class MemoryStore {
   }
 
   notesForProvider(providerId: string): AdminNote[] {
-    return this.data.adminNotes.filter((n) => n.providerId === providerId);
+    const id = String(providerId || '').trim();
+    if (!id) return [];
+    // Provider tab shows provider-scoped notes (not child-only rows).
+    return this.data.adminNotes.filter(
+      (n) => n.providerId === id && !String(n.studentId || '').trim(),
+    );
+  }
+
+  notesForStudent(studentId: string): AdminNote[] {
+    const id = String(studentId || '').trim();
+    if (!id) return [];
+    return this.data.adminNotes.filter((n) => String(n.studentId || '').trim() === id);
   }
 
   upsertAdminNote(row: AdminNote): AdminNote {
@@ -241,6 +254,9 @@ export class MemoryStore {
     if (i < 0) return undefined;
     const [removed] = this.data.students.splice(i, 1);
     this.data.mandates = this.data.mandates.filter((m) => m.studentId !== id);
+    this.data.adminNotes = this.data.adminNotes.filter(
+      (n) => String(n.studentId || '').trim() !== id,
+    );
     const sessionIds = new Set(
       this.data.sessions.filter((s) => s.studentId === id).map((s) => s.id),
     );

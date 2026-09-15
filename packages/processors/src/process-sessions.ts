@@ -19,6 +19,7 @@ import { rowKey } from './idempotency.js';
 import { previewVerifiedSessionWithHha } from './preview-scan.js';
 import { triageVerifiedSession, type SessionRulesConfig } from './rules.js';
 import { resolveSessionVisit, resolveUnscheduledMatchKeys } from './session-resolve.js';
+import { ensureSessionAuthorization } from './session-auth.js';
 import { validateSessionAgainstUnscheduled } from './unscheduled-validate.js';
 import { consumeTimeBudgetStop } from './time-budget.js';
 import { resolveHhaPatientId } from './resolve-hha-patient.js';
@@ -252,7 +253,29 @@ export async function processVerifiedSessions(options: {
         );
       }
 
-      const visitInput = { ...resolved.resolved.visit, patientId };
+      // Patient-level auth + AuthorizationID on CreateSchedule so visits are not "Unauthorized".
+      step = 'upsertAuthorization';
+      const visitBase = resolved.resolved.visit;
+      if (!visitBase.contractId || !visitBase.serviceCodeId || !visitBase.serviceCode) {
+        throw new Error(
+          `[verified_sessions] session=${row.sessionId} missing contract/service for authorization`,
+        );
+      }
+      const auth = await ensureSessionAuthorization({
+        hha,
+        patientId,
+        row,
+        contractId: visitBase.contractId,
+        serviceCodeId: visitBase.serviceCodeId,
+        serviceCode: visitBase.serviceCode,
+        durationMinutes: visitBase.durationMinutes,
+      });
+
+      const visitInput = {
+        ...visitBase,
+        patientId,
+        authorizationId: auth.authorizationId,
+      };
       const unscheduledMatch = needsEvv
         ? matchUnscheduledToSession(row, unscheduledRows, matchKeys)
         : undefined;

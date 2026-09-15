@@ -169,6 +169,9 @@ export type HhaApiFaultKind =
   | 'service_code_missing'
   | 'invalid_zip'
   | 'placement_overlap'
+  | 'shift_overlap'
+  | 'service_code_discipline_mismatch'
+  | 'timesheet_config_block'
   | 'invalid_schedule_date'
   | 'invalid_patient_id'
   | 'no_active_placements'
@@ -262,11 +265,15 @@ export function parseHhaApiFault(message: string): ParsedHhaApiFault {
   const cleaned = cleanExceptionMessage(stripSoapFaultDump(message));
 
   if (/Ambiguous HHA discharge/i.test(message)) {
+    const activeCount = message.match(/patient has (\d+) active placement/i)?.[1];
+    const n = activeCount ? Number(activeCount) : undefined;
     return {
       kind: 'ambiguous_discharge',
       title: 'Cannot identify which service to discharge',
       problem:
-        'The child has multiple active services in HHA, and the discharge report Service Type / Service Begin Date did not match exactly one placement.',
+        n === 1
+          ? 'The discharge report Service Type / Service Begin Date did not match the child’s active HHA placement (often a program alias or begin-date mismatch).'
+          : 'The child has multiple active services in HHA, and the discharge report Service Type / Service Begin Date did not match exactly one placement.',
     };
   }
 
@@ -366,7 +373,48 @@ export function parseHhaApiFault(message: string): ParsedHhaApiFault {
     };
   }
 
-  // CreateSchedule ErrorID=-310: caregiver discipline does not allow that visit type.
+  // CreateSchedule ErrorID=-310 is overloaded — classify by message text first.
+  if (
+    /Overlapping shifts are not allowed/i.test(message) ||
+    /Your shift is overlapping with Patient/i.test(message)
+  ) {
+    const peer =
+      message.match(/overlapping with Patient:\s*\[([^\]]+)\]/i)?.[1]?.trim() ||
+      message.match(/Patient:\s*\[([^\]]+)\]/i)?.[1]?.trim();
+    const peerBit = peer ? ` (${peer})` : '';
+    return {
+      kind: 'shift_overlap',
+      title: `Failed — caregiver shift overlaps an existing HHA visit${peerBit}`,
+      problem:
+        cleaned ||
+        `HHA rejected CreateSchedule: overlapping shifts are not allowed${peerBit}.`,
+    };
+  }
+
+  if (
+    /only select OT Service Code/i.test(message) ||
+    /Service code inconsistency/i.test(message)
+  ) {
+    return {
+      kind: 'service_code_discipline_mismatch',
+      title: 'Failed — patient AcceptedServices does not match visit service code',
+      problem:
+        cleaned ||
+        'HHA rejected CreateSchedule: patient AcceptedServices / discipline does not allow this service code (e.g. OT-only patient with a PT visit).',
+    };
+  }
+
+  if (/Timesheet Required from Configuration/i.test(message)) {
+    return {
+      kind: 'timesheet_config_block',
+      title: 'Failed — HHA timesheet configuration blocks visit confirm',
+      problem:
+        cleaned ||
+        'HHA ConfirmVisits rejected: Restriction for Timesheet Required from Configuration.',
+    };
+  }
+
+  // Caregiver discipline does not allow that visit type.
   if (
     /ErrorID\s*=\s*-310\b/i.test(message) ||
     /cannot be scheduled for\s+\w+\s+visit/i.test(message)
@@ -448,6 +496,9 @@ export function formatActionableReason(
     ex.code === 'hha_api_error' ? parseHhaApiFault(ex.message) : undefined;
   const skipBillingNoise =
     hhaFault?.kind === 'provider_not_eligible' ||
+    hhaFault?.kind === 'shift_overlap' ||
+    hhaFault?.kind === 'service_code_discipline_mismatch' ||
+    hhaFault?.kind === 'timesheet_config_block' ||
     hhaFault?.kind === 'invalid_service_code' ||
     hhaFault?.kind === 'service_code_missing' ||
     hhaFault?.kind === 'invalid_zip' ||
@@ -692,6 +743,45 @@ export function explainException(ex: PipelineException): ExplainedException {
             'Placement/contract was not added — HHA already has an overlapping active placement for this child/contract.',
           action:
             'Confirm the child is not already open on this contract for an overlapping date range. Adjust Service Begin Date or discharge the prior placement in HHA, then re-run.',
+          rowRef,
+          reportLabel: report,
+          isPreview,
+        };
+      }
+      if (fault.kind === 'shift_overlap') {
+        return {
+          title: fault.title,
+          problem: fault.problem,
+          impact:
+            'Visit was not created — HHA will not schedule this caregiver over an existing visit at the same time (same or another patient).',
+          action:
+            'In HHA, find the conflicting visit named in the error, cancel/reschedule it, or change the TMS session time so it no longer overlaps, then re-send.',
+          rowRef,
+          reportLabel: report,
+          isPreview,
+        };
+      }
+      if (fault.kind === 'service_code_discipline_mismatch') {
+        return {
+          title: fault.title,
+          problem: fault.problem,
+          impact:
+            'Visit was not created — patient AcceptedServices / placement discipline does not allow the billing service code on CreateSchedule.',
+          action:
+            'Ensure CreatePatient AcceptedServices matches the therapy discipline (PT/OT/ST). For existing OT-locked patients, update AcceptedServices in HHA or recreate the patient with the correct discipline, then re-send.',
+          rowRef,
+          reportLabel: report,
+          isPreview,
+        };
+      }
+      if (fault.kind === 'timesheet_config_block') {
+        return {
+          title: fault.title,
+          problem: fault.problem,
+          impact:
+            'Visit may already be scheduled in HHA, but ConfirmVisits cannot complete under this office timesheet configuration.',
+          action:
+            'Confirm the VisitID exists in HHA. If scheduling was the goal, no further TMS action may be needed; otherwise adjust HHA timesheet/EVV office settings or confirm the visit in the HHA UI.',
           rowRef,
           reportLabel: report,
           isPreview,

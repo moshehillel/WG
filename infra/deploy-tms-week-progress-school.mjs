@@ -11,6 +11,23 @@ const outfile = path.join(outDir, 'index.mjs');
 const zipPath = path.join(__dirname, 'tms-api-week-progress-school.zip');
 const fnName = 'WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ';
 
+// esbuild resolves @white-glove/tms-db via package.json "main" → dist/.
+// Rebuild so school-column deploy cannot silently drop solo-group mandate fix.
+console.log('building @white-glove/shared + @white-glove/tms-db…');
+execSync('npm run build -w @white-glove/shared -w @white-glove/tms-db', {
+  cwd: repoRoot,
+  stdio: 'inherit',
+});
+const mandateDist = fs.readFileSync(
+  path.join(repoRoot, 'packages/tms-db/dist/mandate.js'),
+  'utf8',
+);
+if (!mandateDist.includes('sessionIsSoloGroupViaNote')) {
+  throw new Error(
+    'packages/tms-db/dist/mandate.js missing sessionIsSoloGroupViaNote — build failed or stale',
+  );
+}
+
 fs.mkdirSync(outDir, { recursive: true });
 for (const f of fs.readdirSync(outDir)) {
   fs.unlinkSync(path.join(outDir, f));
@@ -33,6 +50,20 @@ await esbuild.build({
 });
 
 console.log('bundled', outfile);
+const bundled = fs.readFileSync(outfile, 'utf8');
+const oldBroken =
+  /function \w+\(e,t\)\{let r=\w+\(e\.serviceType\);if\(t\.discipline&&r&&t\.discipline!==r\)return!1;let o=\w+\(e\.serviceType\);return!\(o!=null&&o!==!!t\.ratioGroup\)\}/.test(
+    bundled,
+  );
+if (oldBroken) {
+  throw new Error(
+    'Bundle still has OLD sessionMatchesMandate without solo-group note bridge — aborting deploy',
+  );
+}
+if (!bundled.includes('School') || !/schoolName/.test(bundled)) {
+  throw new Error('Bundle missing School / schoolName week-progress column — aborting deploy');
+}
+console.log('bundle guard: school column + solo-group mandate bridge OK');
 
 if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
 execSync(
@@ -62,10 +93,13 @@ fs.writeFileSync(
     env.trim(),
     'HHA: env preserved as configured',
     '',
+    'IMPORTANT: rebuilds packages/tms-db dist before esbuild (keeps solo-group mandate fix).',
+    '',
     'Changes:',
     '1. week-progress.xlsx: Program type → School (schoolName)',
     '2. Provider column kept',
     '3. FE: app.js?v=92 School column',
+    '4. solo-group / no-partner → group mandate matching (sessionIsSoloGroupViaNote)',
     '',
   ].join('\n'),
 );

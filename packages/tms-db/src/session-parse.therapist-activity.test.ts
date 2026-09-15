@@ -81,7 +81,7 @@ Astacio, Wiglishai
     const rows = parseTherapistActivityText(missedSample);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.attendance).toBe('missed');
-    expect(rows[0]?.cancelReason).toMatch(/not in school|Absent/i);
+    expect(rows[0]?.cancelReason).toMatch(/Student Absence|not in school|Absent/i);
     expect(rows[0]?.cptCodes).toEqual([]);
     expect(rows[0]?.cptUnits).toBe(0);
     expect(rows[0]?.signed).toBe(false);

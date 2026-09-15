@@ -18,7 +18,7 @@
     "@aws-cdk/core:checkSecretUsage": true,
     "providerSoftLiveBot": false,
     "providerSoftUseStubs": true,
-    "alertEmails": "elefkowitz@whiteglovecare.net,moshe@advancedautomations.net,ggreenfeld@whiteglovecare.net,alowy@whiteglovecare.net,gfriedman@whiteglovecare.net",
+    "alertEmails": "elefkowitz@whiteglovecare.net,moshe@advancedautomations.net,ggreenfeld@whiteglovecare.net,alowy@whiteglovecare.net,gfriedman@whiteglovecare.net,miris@whiteglovecare.net",
     "alertFromDomain": "advancedautomations.net",
     "alertFromEmail": "alerts@advancedautomations.net",
     "alertFromEmailFallback": "moshe@advancedautomations.net",
