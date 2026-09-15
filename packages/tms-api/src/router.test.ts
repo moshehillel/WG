@@ -4575,6 +4575,39 @@ describe('TMS MFA org policy', () => {
       aiFlags: [],
       aiBlock: false,
     });
+    const draftWeek = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-24',
+      status: 'draft',
+      programType: 'Baldwin UFSD',
+      schoolId: schoolA.id,
+      signerName: schoolA.signerName,
+      signerEmail: schoolA.signerEmail,
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+      hhaError: '',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: draftWeek.id,
+      studentId: baldwin.id,
+      dateOfService: '08/25/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'school',
+      notes: 'baldwin draft prior week',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
 
     const meAll = await handleTmsRequest(store, {
       method: 'GET',
@@ -4606,11 +4639,21 @@ describe('TMS MFA org policy', () => {
       body: undefined,
     });
     expect(weeks.status).toBe(200);
-    const processed = (
-      weeks.body as { processedSessions: Array<{ studentId: string; programType?: string }> }
-    ).processedSessions;
+    const weeksBody = weeks.body as {
+      processedSessions: Array<{ studentId: string; programType?: string }>;
+      draftWeeks: Array<{ id: string; weekStart: string; status: string; sessionCount: number }>;
+      draftSessions: Array<{ studentId: string; weekStart?: string; weekStatus?: string }>;
+    };
+    const processed = weeksBody.processedSessions;
     expect(processed).toHaveLength(1);
     expect(processed[0]?.studentId).toBe(baldwin.id);
     expect(processed[0]?.programType).toBe('Baldwin UFSD');
+    expect(weeksBody.draftWeeks.some((w) => w.id === draftWeek.id && w.sessionCount === 1)).toBe(
+      true,
+    );
+    expect(weeksBody.draftSessions).toHaveLength(1);
+    expect(weeksBody.draftSessions[0]?.studentId).toBe(baldwin.id);
+    expect(weeksBody.draftSessions[0]?.weekStart).toBe('2026-08-24');
+    expect(weeksBody.draftSessions[0]?.weekStatus).toBe('draft');
   });
 });

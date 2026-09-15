@@ -2721,67 +2721,90 @@ export async function handleTmsRequest(
       (provider?.id === providerId ? provider : undefined);
     const weeks = store.data.weeks
       .filter((w) => providerLookupIds(store, providerId).includes(w.providerId))
-      .map((w) => ({
-        id: w.id,
-        weekStart: w.weekStart,
-        status: w.status,
-        sessionCount: store.sessionsForWeek(w.id).length,
-        isCurrent: w.weekStart === currentStart,
-        processed: w.status === 'signed' || w.status === 'locked',
-      }))
-      .sort((a, b) => String(b.weekStart).localeCompare(String(a.weekStart)));
-    const processedSessions = weeks
-      .filter((w) => w.processed)
-      .flatMap((w) => {
-        const weekRow = store.data.weeks.find((x) => x.id === w.id);
-        if (!weekRow) return [];
+      .map((w) => {
         const scoped = filterSessionsByProgramType(
           store,
           store.sessionsForWeek(w.id),
           programType || undefined,
         );
-        return scoped.map((s) => {
-          const dayPeers = providerDaySessions(
-            store.data.sessions,
-            store.data.weeks,
-            providerId,
-            s.dateOfService,
-            s.id,
-          );
-          const payOpts = {
-            presentGroupPeerCount: presentGroupPeerCount({
-              candidate: s,
-              peers: dayPeers,
-              mandates: store.data.mandates,
-            }),
-            mandateDurationMinutes: mandateDurationMinutesForSession(s, store.data.mandates),
-          };
-          const student = store.data.students.find((st) => st.id === s.studentId);
-          return {
-            id: s.id,
-            dateOfService: s.dateOfService,
-            attendance: s.attendance,
-            beginTime: s.beginTime || '',
-            endTime: s.endTime || '',
-            payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
-            studentId: s.studentId,
-            studentName: student
-              ? `${student.firstName} ${student.lastName}`.trim() || s.studentId
-              : s.studentId,
-            programType: String(student?.programType || '').trim(),
-            schoolId: String(student?.schoolId || '').trim(),
-          };
-        });
+        return {
+          id: w.id,
+          weekStart: w.weekStart,
+          status: w.status,
+          sessionCount: scoped.length,
+          isCurrent: w.weekStart === currentStart,
+          processed: w.status === 'signed' || w.status === 'locked',
+          draft: w.status === 'draft' || w.status === 'reopened',
+          programType: String(w.programType || '').trim(),
+          schoolId: String(w.schoolId || '').trim(),
+          signerName: String(w.signerName || '').trim(),
+          signerEmail: String(w.signerEmail || '').trim(),
+        };
       })
-      .sort((a, b) => {
-        const da = String(b.dateOfService || '').localeCompare(String(a.dateOfService || ''));
-        if (da) return da;
-        return String(b.beginTime || '').localeCompare(String(a.beginTime || ''));
-      });
+      .sort((a, b) => String(b.weekStart).localeCompare(String(a.weekStart)));
+    const mapWeekSessions = (weekIds: Set<string>) =>
+      weeks
+        .filter((w) => weekIds.has(w.id))
+        .flatMap((w) => {
+          const scoped = filterSessionsByProgramType(
+            store,
+            store.sessionsForWeek(w.id),
+            programType || undefined,
+          );
+          return scoped.map((s) => {
+            const dayPeers = providerDaySessions(
+              store.data.sessions,
+              store.data.weeks,
+              providerId,
+              s.dateOfService,
+              s.id,
+            );
+            const payOpts = {
+              presentGroupPeerCount: presentGroupPeerCount({
+                candidate: s,
+                peers: dayPeers,
+                mandates: store.data.mandates,
+              }),
+              mandateDurationMinutes: mandateDurationMinutesForSession(s, store.data.mandates),
+            };
+            const student = store.data.students.find((st) => st.id === s.studentId);
+            return {
+              id: s.id,
+              weekId: w.id,
+              weekStart: w.weekStart,
+              weekStatus: w.status,
+              dateOfService: s.dateOfService,
+              attendance: s.attendance,
+              beginTime: s.beginTime || '',
+              endTime: s.endTime || '',
+              payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
+              studentId: s.studentId,
+              studentName: student
+                ? `${student.firstName} ${student.lastName}`.trim() || s.studentId
+                : s.studentId,
+              programType: String(student?.programType || '').trim(),
+              schoolId: String(student?.schoolId || '').trim(),
+            };
+          });
+        })
+        .sort((a, b) => {
+          const da = String(b.dateOfService || '').localeCompare(String(a.dateOfService || ''));
+          if (da) return da;
+          return String(b.beginTime || '').localeCompare(String(a.beginTime || ''));
+        });
+    const processedSessions = mapWeekSessions(
+      new Set(weeks.filter((w) => w.processed).map((w) => w.id)),
+    );
+    // Draft / reopened weeks with sessions — including prior Mondays (last week / two weeks ago).
+    // Import still respects the 14-day locker; viewing and sending these drafts stays allowed.
+    const draftWeeks = weeks.filter((w) => w.draft && w.sessionCount > 0);
+    const draftSessions = mapWeekSessions(new Set(draftWeeks.map((w) => w.id)));
     return json(200, {
       weeks,
       currentWeekStart: currentStart,
       processedSessions,
+      draftWeeks,
+      draftSessions,
       programType: programType || '',
     });
   }
