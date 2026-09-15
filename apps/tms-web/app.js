@@ -854,7 +854,7 @@ function showActionToast(message, kind = 'neutral', { sticky = false } = {}) {
 }
 
 function timesheetSendBlockReason({ week, sessions, locked, errors, signerEmail }) {
-  if (locked) return 'This school\'s timesheet for the week is already submitted and cannot be sent again. Choose a different school/signer to send another timesheet for the same week.';
+  if (locked) return 'This program\'s timesheet for the week is already submitted and cannot be sent again. Choose a different program type or school/signer to send another timesheet for the same week.';
   if (!week) return 'Your provider profile is not ready yet. Contact the office.';
   if (!sessions.length) return 'Add at least one session before submitting.';
   if (errors.length) {
@@ -1617,7 +1617,7 @@ async function openTimesheetModal(opts) {
   }
 }
 
-async function fetchAndShowTimesheet({ weekId, weekStart, providerId, providerName, status, schoolId }) {
+async function fetchAndShowTimesheet({ weekId, weekStart, providerId, providerName, status, schoolId, programType }) {
   // Prefer the explicit week row (admin View on a locked/signed bin). Do not re-resolve via
   // GET /week — that can pick a sibling school/signer draft and show an unsigned PDF.
   if (weekId) {
@@ -1632,9 +1632,10 @@ async function fetchAndShowTimesheet({ weekId, weekStart, providerId, providerNa
   const q = new URLSearchParams();
   if (weekStart) q.set('weekStart', weekStart);
   if (providerId) q.set('providerId', providerId);
+  if (programType) q.set('programType', programType);
   if (schoolId) q.set('schoolId', schoolId);
-  else if (state.selectedProgramType) q.set('programType', state.selectedProgramType);
-  else if (state.selectedSchoolId) q.set('schoolId', state.selectedSchoolId);
+  else if (!programType && state.selectedProgramType) q.set('programType', state.selectedProgramType);
+  else if (!programType && state.selectedSchoolId) q.set('schoolId', state.selectedSchoolId);
   const data = await api('GET', `/week?${q.toString()}`);
   const id = data.week?.id || weekId;
   await openTimesheetModal({
@@ -2538,7 +2539,7 @@ async function showProgramPicker(programTypes, opts = {}) {
     <div class="hero-strip" aria-hidden="true"></div>
     <div class="card school-picker-card">
       <h2>Select your program</h2>
-      <p class="muted">Choose the program type for your caseload. Your timesheet stays one per week across all buildings in that program — we do not split by school building.</p>
+      <p class="muted">Choose the program type for your caseload. Each program type gets its own timesheet for the week. Buildings that share a signer within the same program stay on one sheet.</p>
       <div class="school-picker-grid">
         ${types.map((pt) => `
           <button type="button" class="school-pick-btn" data-program-type="${esc(pt)}">
@@ -3407,25 +3408,35 @@ async function adminProviderDetail(providerId) {
     return true;
   });
   const timesheetSchools = (() => {
-    const byId = new Map();
+    const byKey = new Map();
     for (const x of sessions) {
       const sid = String(x.schoolId || '').trim();
-      if (!sid || byId.has(sid)) continue;
-      byId.set(sid, {
+      const pt = String(x.programType || x.district || '').trim();
+      if (!sid) continue;
+      const key = `${pt.toLowerCase()}::${sid}`;
+      if (byKey.has(key)) continue;
+      byKey.set(key, {
         id: sid,
-        label: [x.schoolName, x.district].filter(Boolean).join(' · ') || sid,
+        programType: pt,
+        label: [pt, x.schoolName].filter(Boolean).join(' · ') || sid,
       });
     }
     for (const w of weeks) {
       const sid = String(w.schoolId || '').trim();
-      if (!sid || byId.has(sid)) continue;
+      const pt = String(w.programType || w.district || '').trim();
+      if (!sid) continue;
+      const key = `${pt.toLowerCase()}::${sid}`;
+      if (byKey.has(key)) continue;
       const school = detail.schools?.find?.((s) => s.id === sid);
-      byId.set(sid, {
+      byKey.set(key, {
         id: sid,
-        label: [w.schoolName || school?.name, w.district || school?.district].filter(Boolean).join(' · ') || sid,
+        programType: pt,
+        label: [pt || w.district || school?.district, w.schoolName || school?.name]
+          .filter(Boolean)
+          .join(' · ') || sid,
       });
     }
-    return [...byId.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+    return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
   })();
   const provTab = ['basic', 'pay', 'caseload', 'sessions', 'reports', 'notes'].includes(state.providerDetailTab)
     ? state.providerDetailTab
@@ -3509,7 +3520,7 @@ async function adminProviderDetail(providerId) {
 
       <div class="detail-pane"${provTab === 'sessions' ? '' : ' hidden'}>
         <h3>Sessions</h3>
-        <p class="muted">All sessions for this provider (newest first). Filter by date of service or district as needed. Sessions from different school signers land on separate timesheets for the same week.</p>
+        <p class="muted">All sessions for this provider (newest first). Filter by date of service or district as needed. Sessions from different program types (district/payer) land on separate timesheets for the same week; within a program, different school signers still split.</p>
         <div class="row">
           <label>From <input id="pSessFrom" type="date" value="${esc(sessFrom)}" /></label>
           <label>To <input id="pSessTo" type="date" value="${esc(sessTo)}" /></label>
@@ -3545,19 +3556,19 @@ async function adminProviderDetail(providerId) {
         </table>
 
         <h3 style="margin-top:1.25rem">Import Frontline / Therapist Activity sessions</h3>
-        <p class="muted">Same as the therapist workspace: upload a Frontline or Therapist Activity PDF (text-based). No week selection needed — each session attaches to the week of its date of service (within the 14-day locker), split by school signer when schools differ. Children and schools must already exist. Import is all-or-nothing for hard errors; yellow warnings follow the admin screening setting.</p>
+        <p class="muted">Same as the therapist workspace: upload a Frontline or Therapist Activity PDF (text-based). No week selection needed — each session attaches to the week of its date of service (within the 14-day locker), split by program type and school signer when those differ. Children and schools must already exist. Import is all-or-nothing for hard errors; yellow warnings follow the admin screening setting.</p>
         <input id="pSessionPdf" type="file" accept="application/pdf,.pdf" />
         <button type="button" class="btn-primary" id="pUploadSessions">Import sessions</button>
         <div id="pUploadIssues" class="upload-issues" hidden></div>
 
         <h3 style="margin-top:1.25rem">Generate timesheet</h3>
-        <p class="muted">Open or create a week for this provider, choose the school/signer when there is more than one, then view or send the timesheet. You can send another timesheet for the same calendar week when it is for a different school signer.</p>
+        <p class="muted">Open or create a week for this provider, choose the program/school/signer when there is more than one, then view or send the timesheet. You can send another timesheet for the same calendar week when it is for a different program type or school signer.</p>
         <div class="row">
           <label>Week start (Monday) <input id="pWeekStart" type="date" value="${esc(mondayIso())}" /></label>
-          <label>School / signer
+          <label>Program / school / signer
             <select id="pTimesheetSchool">
               <option value="">Auto (from sessions)</option>
-              ${timesheetSchools.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join('')}
+              ${timesheetSchools.map((s) => `<option value="${esc(s.id)}" data-program-type="${esc(s.programType || '')}">${esc(s.label)}</option>`).join('')}
             </select>
           </label>
           <button type="button" class="btn-primary" id="pGenTimesheet">View timesheet</button>
@@ -3870,18 +3881,23 @@ async function adminProviderDetail(providerId) {
   document.getElementById('pGenTimesheet').onclick = async () => {
     try {
       const weekStart = document.getElementById('pWeekStart').value;
-      const schoolId = document.getElementById('pTimesheetSchool')?.value || '';
+      const schoolSel = document.getElementById('pTimesheetSchool');
+      const schoolId = schoolSel?.value || '';
+      const programType =
+        schoolSel?.selectedOptions?.[0]?.getAttribute('data-program-type') || '';
       if (!weekStart) throw new Error('Select a week start date.');
       await api('POST', '/week/ensure', {
         providerId,
         weekStart,
         schoolId: schoolId || undefined,
+        programType: programType || undefined,
       });
       await fetchAndShowTimesheet({
         weekStart,
         providerId,
         providerName: `${p.firstName || ''} ${p.lastName || ''}`.trim(),
         schoolId: schoolId || undefined,
+        programType: programType || undefined,
       });
     } catch (e) { setStatus(e.message, 'err'); }
   };
@@ -3890,12 +3906,16 @@ async function adminProviderDetail(providerId) {
     const hint = document.getElementById('pSendTimesheetHint');
     try {
       const weekStart = document.getElementById('pWeekStart').value;
-      const schoolId = document.getElementById('pTimesheetSchool')?.value || '';
+      const schoolSel = document.getElementById('pTimesheetSchool');
+      const schoolId = schoolSel?.value || '';
+      const programType =
+        schoolSel?.selectedOptions?.[0]?.getAttribute('data-program-type') || '';
       if (!weekStart) throw new Error('Select a week start date.');
       const ensured = await api('POST', '/week/ensure', {
         providerId,
         weekStart,
         schoolId: schoolId || undefined,
+        programType: programType || undefined,
       });
       const weekId = ensured.week?.id;
       if (!weekId) throw new Error('Could not open this provider week.');
@@ -3904,6 +3924,7 @@ async function adminProviderDetail(providerId) {
         providerId,
       });
       if (schoolId) q.set('schoolId', schoolId);
+      if (programType) q.set('programType', programType);
       const detail = await api('GET', `/week?${q.toString()}`);
       const signerEmail = detail.week?.signerEmail || ensured.week?.signerEmail || '';
       const signerName = detail.week?.signerName || ensured.week?.signerName || '';
@@ -3935,7 +3956,12 @@ async function adminProviderDetail(providerId) {
       const out = await api(
         'POST',
         `/weeks/${weekId}/submit`,
-        { signerName, signerEmail, schoolId: schoolId || detail.week?.schoolId || undefined },
+        {
+          signerName,
+          signerEmail,
+          schoolId: schoolId || detail.week?.schoolId || undefined,
+          programType: programType || detail.week?.programType || undefined,
+        },
         { timeoutMs: 120000 },
       );
       const okMsg = out.message || 'Timesheet sent. Status is now Pending.';

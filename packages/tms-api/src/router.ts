@@ -26,6 +26,7 @@ import {
   parseMandatePdfText,
   parseWeeklySessionText,
   isGenericSettingLabel,
+  isNonSchoolLikeSetting,
   pdfSchoolConflictsWithChild,
   screenServiceNote,
   sessionSlotLabel,
@@ -73,7 +74,9 @@ import {
   weeksMatchingSchoolBin,
   weekMatchesSchoolBin,
   resolveWeekSchoolId,
+  resolveWeekProgramType,
   dominantSchoolIdForSessions,
+  districtLabelForStudent,
   type AppSettings,
   type AppUser,
   type Discipline,
@@ -430,19 +433,25 @@ function foldWeeksOnto(
   }
 }
 
-/** Prefer school-scoped week; never fold different signer/school bins together. */
+/** Prefer school/program-scoped week; never fold different program or signer bins together. */
 function pickWeekForScope(
   store: MemoryStore,
   matchedWeeks: WeeklyPeriod[],
-  opts?: { providerId?: string; schoolId?: string },
+  opts?: { providerId?: string; schoolId?: string; programType?: string },
 ): WeeklyPeriod | undefined {
   if (!matchedWeeks.length) return undefined;
   const providerId = String(opts?.providerId || '').trim();
   const schoolId = String(opts?.schoolId || '').trim();
+  const programType = String(opts?.programType || '').trim();
   let candidates = matchedWeeks;
-  if (schoolId) {
-    const scoped = weeksMatchingSchoolBin(store, matchedWeeks, schoolId);
-    // Empty scoped list means no existing bin for this signer/school — caller should create one.
+  if (schoolId || programType) {
+    const scoped = weeksMatchingSchoolBin(
+      store,
+      matchedWeeks,
+      schoolId || undefined,
+      programType || undefined,
+    );
+    // Empty scoped list means no existing bin for this program/signer — caller should create one.
     candidates = scoped;
   }
   if (!candidates.length) return undefined;
@@ -459,22 +468,30 @@ function pickWeekForScope(
       timesheetBinKeyForWeek(store, w) === timesheetBinKeyForWeek(store, week!),
   );
   if (sameBin.length) foldWeeksOnto(store, week, sameBin);
-  // Repair mixed-signer weeks left over from pre-split imports.
+  // Repair mixed program/signer weeks left over from pre-split imports.
   const split = splitWeekBySchoolBins(store, week, () => newId());
-  if (schoolId) {
-    const match = split.find((w) => weekMatchesSchoolBin(store, w, schoolId));
+  if (schoolId || programType) {
+    const match = split.find((w) =>
+      weekMatchesSchoolBin(store, w, schoolId, programType || undefined),
+    );
     if (match) week = match;
   } else {
     week = split[0] || week;
   }
-  if (schoolId && therapistCanEdit(week.status) && !String(week.schoolId || '').trim()) {
-    const school = store.data.schools.find((s) => s.id === schoolId);
-    week = store.upsertWeek({
-      ...week,
-      schoolId,
-      signerName: school?.signerName || week.signerName,
-      signerEmail: school?.signerEmail || week.signerEmail,
-    });
+  if (therapistCanEdit(week.status)) {
+    const patch: Partial<WeeklyPeriod> = {};
+    if (schoolId && !String(week.schoolId || '').trim()) {
+      const school = store.data.schools.find((s) => s.id === schoolId);
+      patch.schoolId = schoolId;
+      patch.signerName = school?.signerName || week.signerName;
+      patch.signerEmail = school?.signerEmail || week.signerEmail;
+    }
+    if (programType && !String(week.programType || '').trim()) {
+      patch.programType = programType;
+    }
+    if (Object.keys(patch).length) {
+      week = store.upsertWeek({ ...week, ...patch });
+    }
   }
   return week;
 }
@@ -612,7 +629,10 @@ function schoolDistrictForWeek(
   weekId: string,
   preferredSchoolId?: string,
 ): string {
-  // Prefer child's school from sessions (same rule as signer), not the school picker.
+  // Prefer caseload programType (district/payer), then school.district — same as reports.
+  const week = store.data.weeks.find((w) => w.id === weekId);
+  const stampedPt = String(week?.programType || '').trim();
+  if (stampedPt) return stampedPt;
   const sessions = store.sessionsForWeek(weekId);
   if (sessions.length) {
     const counts = new Map<string, number>();
@@ -621,7 +641,7 @@ function schoolDistrictForWeek(
       const school = student
         ? store.data.schools.find((sc) => sc.id === student.schoolId)
         : undefined;
-      const label = String(school?.district || school?.name || '').trim();
+      const label = districtLabelForStudent(student, school);
       if (!label) continue;
       counts.set(label, (counts.get(label) || 0) + 1);
     }
@@ -2774,30 +2794,29 @@ export async function handleTmsRequest(
     const schoolId = String(req.query.schoolId || '').trim();
     const programType = String(req.query.programType || '').trim();
     const matchedWeeks = weeksForProviderStart(store, providerId, weekStart);
-    // When therapist scopes by program type (Madison multi-building), prefer a school
-    // that belongs to that program so we land on the right signer bin if several exist.
+    // Prefer the program-type bin (district/payer). School id is a secondary signer hint.
     let scopeSchoolId = schoolId;
     if (!scopeSchoolId && programType && matchedWeeks.length > 1) {
       const ptKey = programTypeKey(programType);
-      const programSchoolIds = new Set(
-        store.data.students
-          .filter((s) => programTypeKey(s.programType) === ptKey)
-          .map((s) => s.schoolId)
-          .filter(Boolean),
-      );
       const withProgramSessions = matchedWeeks.find((w) =>
         store.sessionsForWeek(w.id).some((s) => {
           const st = store.data.students.find((x) => x.id === s.studentId);
-          return st && programSchoolIds.has(st.schoolId);
+          return st && programTypeKey(st.programType) === ptKey;
         }),
       );
       if (withProgramSessions) {
         scopeSchoolId = resolveWeekSchoolId(store, withProgramSessions);
+      } else {
+        const stamped = matchedWeeks.find(
+          (w) => programTypeKey(resolveWeekProgramType(store, w)) === ptKey,
+        );
+        if (stamped) scopeSchoolId = resolveWeekSchoolId(store, stamped);
       }
     }
     let week = pickWeekForScope(store, matchedWeeks, {
       providerId,
       schoolId: scopeSchoolId || undefined,
+      programType: programType || undefined,
     });
     // Therapist school picker is metadata — if that bin is empty/missing, surface the sibling
     // week that actually has sessions so admin-imported rows remain visible.
@@ -2900,6 +2919,7 @@ export async function handleTmsRequest(
           .map((w) => {
             const sid = resolveWeekSchoolId(store, w);
             const school = sid ? store.data.schools.find((s) => s.id === sid) : undefined;
+            const pt = resolveWeekProgramType(store, w);
             return {
               id: w.id,
               weekStart: w.weekStart,
@@ -2907,6 +2927,7 @@ export async function handleTmsRequest(
               schoolId: sid,
               schoolName: school?.name || '',
               district: school?.district || '',
+              programType: pt,
               signerName: w.signerName,
               signerEmail: w.signerEmail,
               sessionCount: store.sessionsForWeek(w.id).length,
@@ -2932,11 +2953,13 @@ export async function handleTmsRequest(
     const providerId = String(b.providerId || provider?.id || '');
     const weekStart = String(b.weekStart || '');
     const schoolId = String(b.schoolId || '').trim();
+    const programType = String(b.programType || '').trim();
     if (!providerId || !weekStart) return json(400, { error: 'providerId and weekStart are required.' });
     const aliasWeeks = weeksForProviderStart(store, providerId, weekStart);
     let week = pickWeekForScope(store, aliasWeeks, {
       providerId,
       schoolId: schoolId || undefined,
+      programType: programType || undefined,
     });
     // Signer from session children's school when present; picker/caseload only if empty week.
     const preferredSchool = resolveWeekSchool(store, providerId, {
@@ -2949,6 +2972,7 @@ export async function handleTmsRequest(
         providerId,
         weekStart,
         schoolId: preferredSchool?.id || schoolId || '',
+        programType: programType || '',
         status: 'draft',
         signerName: preferredSchool?.signerName || '',
         signerEmail: preferredSchool?.signerEmail || '',
@@ -2960,10 +2984,19 @@ export async function handleTmsRequest(
       });
     } else {
       week = stampWeekSignerFromSchool(store, week, preferredSchool);
-      if (preferredSchool?.id && therapistCanEdit(week.status)) {
-        const stampedId = String(week.schoolId || '').trim();
-        if (!stampedId || stampedId === preferredSchool.id) {
-          week = store.upsertWeek({ ...week, schoolId: preferredSchool.id });
+      if (therapistCanEdit(week.status)) {
+        const patch: Partial<WeeklyPeriod> = {};
+        if (preferredSchool?.id) {
+          const stampedId = String(week.schoolId || '').trim();
+          if (!stampedId || stampedId === preferredSchool.id) {
+            patch.schoolId = preferredSchool.id;
+          }
+        }
+        if (programType && !String(week.programType || '').trim()) {
+          patch.programType = programType;
+        }
+        if (Object.keys(patch).length) {
+          week = store.upsertWeek({ ...week, ...patch });
         }
       }
     }
@@ -3026,18 +3059,21 @@ export async function handleTmsRequest(
     }
 
     // Attach each session to the Monday week of its date of service (no calendar picker required),
-    // scoped by the child's school/signer so multi-school imports become separate timesheets.
+    // scoped by the child's program type + school/signer so multi-district imports become separate timesheets.
     const weekCache = new Map<string, (typeof store.data.weeks)[number]>();
     const uploadSchoolId = String(b.schoolId || '').trim();
-    const ensureWeek = (weekStart: string, sessionSchoolId?: string) => {
+    const uploadProgramType = String(b.programType || '').trim();
+    const ensureWeek = (weekStart: string, sessionSchoolId?: string, sessionProgramType?: string) => {
       const scopeSchoolId = String(sessionSchoolId || uploadSchoolId || '').trim();
-      const cacheKey = `${weekStart}::${scopeSchoolId || '_'}`;
+      const scopeProgramType = String(sessionProgramType || uploadProgramType || '').trim();
+      const cacheKey = `${weekStart}::${scopeSchoolId || '_'}::${programTypeKey(scopeProgramType) || '_'}`;
       let w = weekCache.get(cacheKey);
       if (w) return w;
       const matched = weeksForProviderStart(store, providerId, weekStart);
       w = pickWeekForScope(store, matched, {
         providerId,
         schoolId: scopeSchoolId || undefined,
+        programType: scopeProgramType || undefined,
       });
       if (!w) {
         const school = resolveWeekSchool(store, providerId, {
@@ -3048,6 +3084,7 @@ export async function handleTmsRequest(
           providerId,
           weekStart,
           schoolId: school?.id || scopeSchoolId || '',
+          programType: scopeProgramType || '',
           status: 'draft',
           signerName: String(b.signerName || school?.signerName || ''),
           signerEmail: String(b.signerEmail || school?.signerEmail || ''),
@@ -3057,14 +3094,20 @@ export async function handleTmsRequest(
           hhaStatus: 'none',
           hhaError: '',
         });
-      } else if (scopeSchoolId && therapistCanEdit(w.status) && !String(w.schoolId || '').trim()) {
-        const school = store.data.schools.find((s) => s.id === scopeSchoolId);
-        w = store.upsertWeek({
-          ...w,
-          schoolId: scopeSchoolId,
-          signerName: school?.signerName || w.signerName,
-          signerEmail: school?.signerEmail || w.signerEmail,
-        });
+      } else if (therapistCanEdit(w.status)) {
+        const patch: Partial<WeeklyPeriod> = {};
+        if (scopeSchoolId && !String(w.schoolId || '').trim()) {
+          const school = store.data.schools.find((s) => s.id === scopeSchoolId);
+          patch.schoolId = scopeSchoolId;
+          patch.signerName = school?.signerName || w.signerName;
+          patch.signerEmail = school?.signerEmail || w.signerEmail;
+        }
+        if (scopeProgramType && !String(w.programType || '').trim()) {
+          patch.programType = scopeProgramType;
+        }
+        if (Object.keys(patch).length) {
+          w = store.upsertWeek({ ...w, ...patch });
+        }
       }
       weekCache.set(cacheKey, w);
       return w;
@@ -3151,7 +3194,7 @@ export async function handleTmsRequest(
         `${student.firstName} ${student.lastName}`.trim() || display;
 
       const rowWeekStart = weekStartFromDos(row.dateOfService) || fallbackWeekStart;
-      const targetWeek = ensureWeek(rowWeekStart, student.schoolId);
+      const targetWeek = ensureWeek(rowWeekStart, student.schoolId, student.programType);
       week = targetWeek;
       if (!therapistCanImportOrAddServices(targetWeek.status) && ctx.user.role !== 'admin') {
         const lockMsg =
@@ -3188,7 +3231,10 @@ export async function handleTmsRequest(
       }
 
       const rawSchool = String(row.schoolName || row.location || '').trim();
-      const pdfSchool = rawSchool && !isGenericSettingLabel(rawSchool) ? rawSchool : '';
+      const pdfSchool =
+        rawSchool && !isGenericSettingLabel(rawSchool) && !isNonSchoolLikeSetting(rawSchool)
+          ? rawSchool
+          : '';
       if (pdfSchool) {
         const knownSchool = store.data.schools.find((s) => s.id === student.schoolId);
         if (
@@ -3780,29 +3826,37 @@ export async function handleTmsRequest(
       isAdmin: ctx.user.role === 'admin',
     });
     if (ageErr) return json(400, { error: ageErr, errors: [ageErr] });
-    // Route new sessions onto the child's school/signer timesheet bin (not a sibling school's week).
+    // Route new sessions onto the child's program-type + school/signer timesheet bin.
     let targetWeek = week;
-    const childSchoolId = String(
-      store.data.students.find((st) => st.id === pickStr(b.studentId, existing?.studentId || ''))
-        ?.schoolId || '',
-    ).trim();
+    const childStudent = store.data.students.find(
+      (st) => st.id === pickStr(b.studentId, existing?.studentId || ''),
+    );
+    const childSchoolId = String(childStudent?.schoolId || '').trim();
+    const childProgramType = String(childStudent?.programType || '').trim();
     if (
       !existing &&
-      childSchoolId &&
-      !weekMatchesSchoolBin(store, week, childSchoolId)
+      (childSchoolId || childProgramType) &&
+      !weekMatchesSchoolBin(store, week, childSchoolId, childProgramType || undefined)
     ) {
       const matched = weeksForProviderStart(store, week.providerId, week.weekStart);
       let scoped = pickWeekForScope(store, matched, {
         providerId: week.providerId,
-        schoolId: childSchoolId,
+        schoolId: childSchoolId || undefined,
+        programType: childProgramType || undefined,
       });
-      if (!scoped || !weekMatchesSchoolBin(store, scoped, childSchoolId)) {
-        const school = store.data.schools.find((s) => s.id === childSchoolId);
+      if (
+        !scoped ||
+        !weekMatchesSchoolBin(store, scoped, childSchoolId, childProgramType || undefined)
+      ) {
+        const school = childSchoolId
+          ? store.data.schools.find((s) => s.id === childSchoolId)
+          : undefined;
         scoped = store.upsertWeek({
           id: newId(),
           providerId: week.providerId,
           weekStart: week.weekStart,
           schoolId: childSchoolId,
+          programType: childProgramType,
           status: 'draft',
           signerName: school?.signerName || '',
           signerEmail: school?.signerEmail || '',
@@ -3818,10 +3872,10 @@ export async function handleTmsRequest(
         return json(409, {
           error:
             targetWeek.status === 'submitted'
-              ? 'This school week is awaiting signature. Cancel the approval request before adding sessions.'
+              ? 'This program week is awaiting signature. Cancel the approval request before adding sessions.'
               : weekIsProcessed(targetWeek.status)
-                ? 'This school week is signed/locked. Ask an admin to reopen it before adding sessions.'
-                : 'This school week cannot accept new sessions.',
+                ? 'This program week is signed/locked. Ask an admin to reopen it before adding sessions.'
+                : 'This program week cannot accept new sessions.',
         });
       }
     }
@@ -3955,10 +4009,23 @@ export async function handleTmsRequest(
   }
 
   if (req.method === 'POST' && /^\/weeks\/[^/]+\/submit$/.test(path)) {
-    const week = store.data.weeks.find((w) => w.id === path.split('/')[2]);
+    let week = store.data.weeks.find((w) => w.id === path.split('/')[2]);
     if (!week) return json(404, { error: 'Week not found.' });
     if (!therapistCanEdit(week.status) && ctx.user.role !== 'admin') {
       return json(409, { error: 'This week is locked.' });
+    }
+    const submitBody = obj(req);
+    const submitProgramType = String(submitBody.programType || '').trim();
+    const submitSchoolId = String(submitBody.schoolId || '').trim();
+    // Repair mixed program/signer weeks before building the PDF / SignNow envelope.
+    const splitBins = splitWeekBySchoolBins(store, week, () => newId());
+    if (submitProgramType || submitSchoolId) {
+      const match = splitBins.find((w) =>
+        weekMatchesSchoolBin(store, w, submitSchoolId, submitProgramType || undefined),
+      );
+      if (match) week = match;
+    } else {
+      week = splitBins.find((w) => w.id === week!.id) || splitBins[0] || week;
     }
     const sessions = store.sessionsForWeek(week.id);
     const check = checkMandatesForWeek(
@@ -4032,7 +4099,7 @@ export async function handleTmsRequest(
         warnings: check.warnings,
       });
     }
-    const b = obj(req);
+    const b = submitBody;
     const signerSchool = resolveWeekSchool(store, week.providerId, {
       weekId: week.id,
       preferredSchoolId: String(b.schoolId || '').trim() || undefined,
@@ -4054,6 +4121,11 @@ export async function handleTmsRequest(
       ...week,
       status: 'submitted',
       schoolId: week.schoolId || signerSchool?.id || '',
+      programType:
+        week.programType ||
+        submitProgramType ||
+        resolveWeekProgramType(store, week) ||
+        '',
       signerName,
       signerEmail,
     });
@@ -4458,6 +4530,8 @@ export async function handleTmsRequest(
       week: store.data.weeks.find((w) => w.id === week.id)!,
       hha: deps.hha,
       actorId: ctx.user.id,
+      // Manual admin Send: re-assert Auth + ConfirmVisits on already-confirmed visits (payroll).
+      reprocessConfirmed: true,
     });
     return json(result.ok ? 200 : 207, result);
   }
