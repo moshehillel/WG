@@ -1,0 +1,22 @@
+TMS admin Generate timesheet: program-type / school-signer picker options
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+TMS_GIT_SHA (build define): 711e6c0
+{
+    "CodeSha256": "rF0d8c6SOPaak7CA5WHZUx+X7dGVtb8XRidjbzWOyRw=",
+    "LastModified": "2026-09-15T16:45:41.000+0000",
+    "CodeSize": 2054185
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "TMS_GIT_SHA": "711e6c0",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA_USE_PRODUCTION=true preserved
+
+Changes:
+1. adminProviderDetail.timesheetProgramOptions = program type (+ signer only when split)
+2. No standalone school-building options in the picker payload
+3. FE app.js?v=105 uses timesheetProgramOptions with program-type fallback

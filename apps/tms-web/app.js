@@ -3407,36 +3407,37 @@ async function adminProviderDetail(providerId) {
     if (sessDistrict && String(x.district || '').trim() !== sessDistrict) return false;
     return true;
   });
+  // Program-type picker (not school buildings). API timesheetProgramOptions collapses
+  // same-signer buildings; FE fallback keys only by program type / district label.
   const timesheetSchools = (() => {
+    const fromApi = Array.isArray(detail.timesheetProgramOptions)
+      ? detail.timesheetProgramOptions
+          .map((o) => ({
+            id: String(o?.id || '').trim(),
+            programType: String(o?.programType || '').trim(),
+            label: String(o?.label || o?.programType || '').trim(),
+          }))
+          .filter((o) => o.programType && o.label)
+      : [];
+    if (fromApi.length) {
+      return fromApi.sort((a, b) =>
+        a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }),
+      );
+    }
     const byKey = new Map();
-    for (const x of sessions) {
-      const sid = String(x.schoolId || '').trim();
-      const pt = String(x.programType || x.district || '').trim();
-      if (!sid) continue;
-      const key = `${pt.toLowerCase()}::${sid}`;
-      if (byKey.has(key)) continue;
-      byKey.set(key, {
-        id: sid,
-        programType: pt,
-        label: [pt, x.schoolName].filter(Boolean).join(' · ') || sid,
-      });
-    }
-    for (const w of weeks) {
-      const sid = String(w.schoolId || '').trim();
-      const pt = String(w.programType || w.district || '').trim();
-      if (!sid) continue;
-      const key = `${pt.toLowerCase()}::${sid}`;
-      if (byKey.has(key)) continue;
-      const school = detail.schools?.find?.((s) => s.id === sid);
-      byKey.set(key, {
-        id: sid,
-        programType: pt,
-        label: [pt || w.district || school?.district, w.schoolName || school?.name]
-          .filter(Boolean)
-          .join(' · ') || sid,
-      });
-    }
-    return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+    const addProgram = (raw) => {
+      const pt = String(raw || '').trim();
+      if (!pt) return;
+      const key = pt.toLowerCase();
+      if (byKey.has(key)) return;
+      byKey.set(key, { id: '', programType: pt, label: pt });
+    };
+    for (const d of districtOptions) addProgram(d);
+    for (const x of sessions) addProgram(x.programType || x.district);
+    for (const w of weeks) addProgram(w.programType || w.district);
+    return [...byKey.values()].sort((a, b) =>
+      a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }),
+    );
   })();
   const provTab = ['basic', 'pay', 'caseload', 'sessions', 'reports', 'notes'].includes(state.providerDetailTab)
     ? state.providerDetailTab
@@ -3562,10 +3563,10 @@ async function adminProviderDetail(providerId) {
         <div id="pUploadIssues" class="upload-issues" hidden></div>
 
         <h3 style="margin-top:1.25rem">Generate timesheet</h3>
-        <p class="muted">Open or create a week for this provider, choose the program/school/signer when there is more than one, then view or send the timesheet. You can send another timesheet for the same calendar week when it is for a different program type or school signer.</p>
+        <p class="muted">Open or create a week for this provider, choose the program type (school signer) when there is more than one, then view or send the timesheet. You can send another timesheet for the same calendar week when it is for a different program type. Buildings that share a signer stay on one sheet.</p>
         <div class="row">
           <label>Week start (Monday) <input id="pWeekStart" type="date" value="${esc(mondayIso())}" /></label>
-          <label>Program / school / signer
+          <label>Program type / school signer
             <select id="pTimesheetSchool">
               <option value="">Auto (from sessions)</option>
               ${timesheetSchools.map((s) => `<option value="${esc(s.id)}" data-program-type="${esc(s.programType || '')}">${esc(s.label)}</option>`).join('')}

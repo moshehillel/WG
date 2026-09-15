@@ -16,6 +16,7 @@ import { schoolCalendarSummary, hasConfiguredSchoolCalendar, schoolCalendarMonFr
 import type { HhaTransferStatus, Mandate, SessionRow, Student } from './types.js';
 import { DEFAULT_ADMIN_NOTE_TAGS } from './types.js';
 import type { MemoryStore } from './memory-store.js';
+import { normalizeProgramTypeKey, normalizeSignerEmail } from './week-school.js';
 
 /**
  * Admin "district" label for filters / columns.
@@ -27,6 +28,136 @@ export function districtLabelForStudent(
   school?: { district?: string } | null,
 ): string {
   return String(student?.programType || school?.district || '').trim();
+}
+
+/** Admin Generate-timesheet picker row: program type (+ signer only when it splits the bin). */
+export type TimesheetProgramOption = {
+  /** Representative schoolId when multiple signers share a program type; else empty. */
+  id: string;
+  programType: string;
+  signerEmail: string;
+  signerName: string;
+  label: string;
+};
+
+type SignerBucket = {
+  schoolId: string;
+  signerEmail: string;
+  signerName: string;
+  schoolName: string;
+};
+
+/**
+ * Dropdown options for admin "Generate timesheet": one row per program type
+ * (district/payer). Buildings that share a signer collapse. Only when the same
+ * program has multiple distinct signer emails do we show "Program · Signer".
+ * Never lists raw school-building names without a program type.
+ */
+export function buildTimesheetProgramOptions(
+  store: MemoryStore,
+  providerIds: Iterable<string>,
+): TimesheetProgramOption[] {
+  const aliasIds = new Set(
+    [...providerIds].map((id) => String(id || '').trim()).filter(Boolean),
+  );
+  if (!aliasIds.size) return [];
+
+  const studentIds = new Set(
+    store.data.mandates
+      .filter((m) => aliasIds.has(String(m.providerId || '').trim()))
+      .map((m) => m.studentId),
+  );
+
+  /** programKey → { label, bySignerEmail } */
+  const byProgram = new Map<
+    string,
+    { programType: string; bySigner: Map<string, SignerBucket> }
+  >();
+
+  const add = (programTypeRaw: string | undefined | null, schoolIdRaw: string | undefined | null) => {
+    const programType = String(programTypeRaw || '').trim();
+    if (!programType) return;
+    const schoolId = String(schoolIdRaw || '').trim();
+    const school = schoolId
+      ? store.data.schools.find((s) => s.id === schoolId)
+      : undefined;
+    const signerEmail = String(school?.signerEmail || '').trim();
+    const signerKey = normalizeSignerEmail(signerEmail);
+    const ptKey = normalizeProgramTypeKey(programType);
+    let prog = byProgram.get(ptKey);
+    if (!prog) {
+      prog = { programType, bySigner: new Map() };
+      byProgram.set(ptKey, prog);
+    }
+    const existing = prog.bySigner.get(signerKey);
+    if (existing) {
+      if (!existing.schoolId && schoolId) existing.schoolId = schoolId;
+      if (!existing.signerName && school?.signerName) {
+        existing.signerName = String(school.signerName).trim();
+      }
+      if (!existing.schoolName && school?.name) {
+        existing.schoolName = String(school.name).trim();
+      }
+      return;
+    }
+    prog.bySigner.set(signerKey, {
+      schoolId,
+      signerEmail,
+      signerName: String(school?.signerName || '').trim(),
+      schoolName: String(school?.name || '').trim(),
+    });
+  };
+
+  for (const s of store.data.students) {
+    if (!studentIds.has(s.id)) continue;
+    add(s.programType, s.schoolId);
+  }
+  for (const w of store.data.weeks) {
+    if (!aliasIds.has(String(w.providerId || '').trim())) continue;
+    const stamped = String(w.programType || '').trim();
+    if (stamped) {
+      add(stamped, w.schoolId);
+      continue;
+    }
+    // Legacy week: infer program from session children when stamped programType is empty.
+    for (const sess of store.sessionsForWeek(w.id)) {
+      const student = store.data.students.find((st) => st.id === sess.studentId);
+      if (!student) continue;
+      add(student.programType, student.schoolId || w.schoolId);
+    }
+  }
+
+  const options: TimesheetProgramOption[] = [];
+  for (const prog of byProgram.values()) {
+    const signed = [...prog.bySigner.entries()].filter(([emailKey]) => Boolean(emailKey));
+    const unsigned = prog.bySigner.get('');
+    if (signed.length <= 1) {
+      const only = signed[0]?.[1] || unsigned;
+      options.push({
+        id: '',
+        programType: prog.programType,
+        signerEmail: only?.signerEmail || '',
+        signerName: only?.signerName || '',
+        label: prog.programType,
+      });
+      continue;
+    }
+    for (const [, bucket] of signed) {
+      const signerLabel =
+        bucket.signerName || bucket.signerEmail || bucket.schoolName || 'Signer';
+      options.push({
+        id: bucket.schoolId,
+        programType: prog.programType,
+        signerEmail: bucket.signerEmail,
+        signerName: bucket.signerName,
+        label: `${prog.programType} · ${signerLabel}`,
+      });
+    }
+  }
+
+  return options.sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }),
+  );
 }
 
 /** Per-week HHA transfer rollup (attended/makeup only — misses are not HHA-eligible). */
@@ -942,6 +1073,7 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
       }),
     ]),
   ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  const timesheetProgramOptions = buildTimesheetProgramOptions(store, aliasIds);
   const files = store.filesForProvider(provider.id);
   const extraTags = [...new Set(notes.flatMap((n) => n.tags || []))];
   return {
@@ -952,6 +1084,7 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
     weeks,
     sessions,
     districtOptions,
+    timesheetProgramOptions,
     files,
     noteTagOptions: [...new Set([...DEFAULT_ADMIN_NOTE_TAGS, ...extraTags])],
     caseloadCount: new Set(mandates.map((m) => m.studentId)).size,

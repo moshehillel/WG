@@ -1832,6 +1832,7 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     expect(detail.status).toBe(200);
     const body = detail.body as {
       districtOptions: string[];
+      timesheetProgramOptions: Array<{ id: string; programType: string; label: string }>;
       sessions: Array<{ studentId: string; district: string; schoolName: string }>;
     };
     expect(body.districtOptions).toEqual([
@@ -1839,6 +1840,13 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
       'Island Park UFSD',
       'Westbury UFSD',
     ]);
+    // Program-type picker only — no per-building school rows.
+    expect(body.timesheetProgramOptions.map((o) => o.label)).toEqual([
+      'Carle Place UFSD',
+      'Island Park UFSD',
+      'Westbury UFSD',
+    ]);
+    expect(body.timesheetProgramOptions.every((o) => !o.id)).toBe(true);
     const byStudent = new Map(body.sessions.map((s) => [s.studentId, s]));
     expect(byStudent.get(islandKid.id)?.district).toBe('Island Park UFSD');
     expect(byStudent.get(islandKid.id)?.schoolName).toMatch(/Hegarty/i);
