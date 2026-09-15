@@ -3419,7 +3419,6 @@ async function adminChildren() {
           <td>${esc(s.mandateCount)}</td>
           <td>${esc(s.sessionCount)}</td>
           <td>
-            <button type="button" class="btn" data-open-child="${esc(s.id)}">Open</button>
             <button type="button" class="btn" data-del-child="${esc(s.id)}">Remove</button>
           </td>
         </tr>`).join('') || '<tr id="childrenEmpty"><td colspan="8">No children on file. Import a caseload under Mandates.</td></tr>'}
