@@ -1,4 +1,5 @@
 import { notesMentionNoPeerAvailable } from './mandate.js';
+import { extractMakeupForDate, MAKEUP_COVERED_DATE_PREFIX } from './makeup-date.js';
 import {
   FRONTLINE_MISSED_REASON_RE,
   matchFrontlineMissedReason,
@@ -380,8 +381,6 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
     const nextStart = hits[i + 1]?.idx ?? flat.length;
     const slice = flat.slice(hit.idx, Math.min(nextStart, hit.idx + 3500));
 
-    const makeupFor =
-      (slice.match(/Make\s*up\s*for:\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i) || [])[1] || '';
     const groupMatch = slice.match(/#\s*Children\s*in\s*Group:\s*(\d+)/i);
     const groupSize = groupMatch ? Number(groupMatch[1]) : 0;
 
@@ -436,7 +435,9 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
         fullNotes = absenceHit[1].replace(/\s+/g, ' ').trim();
       }
     }
-    if (makeupFor) {
+    const makeupFor =
+      extractMakeupForDate(fullNotes) || extractMakeupForDate(slice);
+    if (makeupFor && !/make\s*up\s*for\s*:/i.test(fullNotes)) {
       fullNotes = `Make up for: ${makeupFor}${fullNotes ? ` ${fullNotes}` : ''}`.trim();
     }
     const notes = clipSessionNotes(fullNotes);
@@ -478,15 +479,13 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
 
 /** True when this slash-date is a Frontline service-date row (not From/To/DOB/makeup). */
 function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
-  const before = blob.slice(Math.max(0, idx - 48), idx);
+  const before = blob.slice(Math.max(0, idx - 64), idx);
   if (/\bFrom:\s*$/i.test(before) || /\bTo:\s*$/i.test(before) || /D\.?O\.?B\.?\s*$/i.test(before)) {
     return false;
   }
-  if (
-    /(?:makeup for|make[\s-]?up for|missed(?:\s+session)?(?:\s+on)?|original(?:\s+date|\s+dos)?|for(?:\s+date)?)\s*$/i.test(
-      before,
-    )
-  ) {
+  // Covered-miss dates inside makeup notes (e.g. "make-up session 9/3/26") must not
+  // become their own session rows — that invents phantom misses on the wrong day.
+  if (new RegExp(`${MAKEUP_COVERED_DATE_PREFIX}\\s*:?\\s*$`, 'i').test(before)) {
     return false;
   }
   return true;
@@ -618,9 +617,14 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       /(?:Service Provided:|Provider Absence:|Provider Not Available:|Student Absence:|Student Not Available:|School Closed:|Staff Shortage:|Make[\s-]?up)[\s\S]*?(?=\n\s*(?:Provider\s+Signature|Telehealth:)|$)/i,
     );
     // Classify attendance from the full note block before clipping for storage.
-    const fullNotes = String(notesMatch?.[0] || '')
+    let fullNotes = String(notesMatch?.[0] || '')
       .replace(/\s+/g, ' ')
       .trim();
+    const makeupFor =
+      extractMakeupForDate(fullNotes) || extractMakeupForDate(slice);
+    if (makeupFor && !/make\s*up\s*for\s*:/i.test(fullNotes)) {
+      fullNotes = `Make up for: ${makeupFor}${fullNotes ? ` ${fullNotes}` : ''}`.trim();
+    }
     const notes = clipSessionNotes(fullNotes);
     const absenceOnly =
       FRONTLINE_ABSENCE_LABEL_RE.test(slice) && !/Service\s+Provided\s*:/i.test(slice);
@@ -632,7 +636,9 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       beginTime = times[0] || '';
       endTime = times[1] || '';
     }
-    const attendance = attendanceFromNotes(fullNotes || slice, beginTime, endTime);
+    const attendance: ParsedSessionNote['attendance'] = makeupFor
+      ? 'makeup'
+      : attendanceFromNotes(fullNotes || slice, beginTime, endTime);
     if (attendance === 'missed') {
       beginTime = '';
       endTime = '';

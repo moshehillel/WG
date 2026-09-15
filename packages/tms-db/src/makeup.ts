@@ -1,6 +1,9 @@
 import { parseDos } from './ids.js';
 import { isMakeupAuthMandate } from './mandate.js';
+import { extractMakeupForDate } from './makeup-date.js';
 import type { Mandate, SessionRow } from './types.js';
+
+export { extractMakeupForDate, MAKEUP_COVERED_DATE_PREFIX } from './makeup-date.js';
 
 export function unusedMissedForStudent(
   allSessions: SessionRow[],
@@ -15,16 +18,6 @@ export function unusedMissedForStudent(
 }
 
 const MAKEUP_RE = /\bmakeup\b|\bmake[\s-]?up\b/i;
-
-/** Pull the "makeup for / missed on …" date from Frontline-style notes. */
-export function extractMakeupForDate(notes: string): string {
-  const n = String(notes || '');
-  if (!MAKEUP_RE.test(n)) return '';
-  const m = n.match(
-    /(?:missed(?:\s+session)?(?:\s+on)?|makeup for|make[\s-]?up for|original(?:\s+date|\s+dos)?|for(?:\s+date)?)\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
-  );
-  return m?.[1] || '';
-}
 
 export function notesContainMakeupWord(notes: string): boolean {
   return MAKEUP_RE.test(String(notes || ''));
