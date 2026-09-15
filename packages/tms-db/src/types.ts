@@ -160,6 +160,13 @@ export interface WeeklyPeriod {
   timesheetKey: string;
   signedKey: string;
   envelopeId: string;
+  /**
+   * Provider-signed timesheet PDF (S3 key) saved before Send to principal.
+   * Required before POST /weeks/{id}/submit.
+   */
+  providerSignedKey?: string;
+  /** ISO timestamp when the provider signed locally. */
+  providerSignedAt?: string;
   hhaStatus: HhaTransferStatus;
   /** Joined transfer error text when hhaStatus is failed (for admin Triage UI). */
   hhaError?: string;

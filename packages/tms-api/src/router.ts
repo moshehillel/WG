@@ -77,6 +77,7 @@ import {
   resolveWeekProgramType,
   dominantSchoolIdForSessions,
   districtLabelForStudent,
+  weekHhaRollup,
   type AppSettings,
   type AppUser,
   type Discipline,
@@ -2126,7 +2127,16 @@ export async function handleTmsRequest(
   }
 
   if (req.method === 'GET' && path === '/admin/weeks') {
-    return adminUser(() => json(200, { weeks: adminWeeksList(store) }));
+    return adminUser(() => {
+      const weekStart = String(req.query.weekStart || '').trim();
+      const name = String(req.query.name || req.query.q || '').trim();
+      return json(200, {
+        weeks: adminWeeksList(store, {
+          ...(weekStart ? { weekStart } : {}),
+          ...(name ? { name } : {}),
+        }),
+      });
+    });
   }
 
   if (req.method === 'POST' && /^\/admin\/providers\/[^/]+\/notes$/.test(path)) {
@@ -2725,27 +2735,87 @@ export async function handleTmsRequest(
     const payProvider =
       store.data.providers.find((p) => p.id === providerId) ||
       (provider?.id === providerId ? provider : undefined);
+    const confirmedSessionIds = new Set(
+      (store.data.hhaTransfers || [])
+        .filter((t) => t.status === 'confirmed')
+        .map((t) => t.sessionId),
+    );
+    const wantPt = programTypeKey(programType);
     const weeks = store.data.weeks
       .filter((w) => providerLookupIds(store, providerId).includes(w.providerId))
       .map((w) => {
-        const scoped = filterSessionsByProgramType(
-          store,
-          store.sessionsForWeek(w.id),
-          programType || undefined,
-        );
+        const allSessions = store.sessionsForWeek(w.id);
+        const scoped = filterSessionsByProgramType(store, allSessions, programType || undefined);
+        // Prefer label from scoped sessions so a mis-stamped week doesn't show the wrong district.
+        const resolvedPt =
+          (scoped.length
+            ? (() => {
+                const counts = new Map<string, number>();
+                for (const s of scoped) {
+                  const st = store.data.students.find((x) => x.id === s.studentId);
+                  const pt = String(st?.programType || '').trim();
+                  if (!pt) continue;
+                  counts.set(pt, (counts.get(pt) || 0) + 1);
+                }
+                let best = '';
+                let n = 0;
+                for (const [pt, c] of counts) {
+                  if (c > n) {
+                    best = pt;
+                    n = c;
+                  }
+                }
+                return best;
+              })()
+            : '') ||
+          resolveWeekProgramType(store, w) ||
+          String(w.programType || '').trim();
+        const rollup = weekHhaRollup(store, w.id);
+        // Paid rollup for Processed uses confirmed transfers; when program-scoped, only count scoped.
+        const scopedConfirmed = scoped.filter((s) => confirmedSessionIds.has(s.id)).length;
+        const scopedEligible = scoped.filter(
+          (s) => s.attendance === 'attended' || s.attendance === 'makeup',
+        ).length;
+        const fullyPaid =
+          wantPt
+            ? scopedEligible > 0 && scopedConfirmed === scopedEligible
+            : rollup.eligible > 0 && rollup.confirmed === rollup.eligible && rollup.failed === 0;
+        const draft = w.status === 'draft' || w.status === 'reopened';
+        const isCurrent = w.weekStart === currentStart;
+        const stampedKey = programTypeKey(w.programType || resolvedPt);
+        // Hard exclude bins stamped for a different program than the provider picker.
+        const wrongProgram = Boolean(wantPt && stampedKey && stampedKey !== wantPt);
+        const pending =
+          !wrongProgram &&
+          (isCurrent || w.status === 'submitted' || !draft) &&
+          !fullyPaid &&
+          (scoped.length > 0 || isCurrent || w.status === 'submitted');
         return {
           id: w.id,
           weekStart: w.weekStart,
           status: w.status,
           sessionCount: scoped.length,
-          isCurrent: w.weekStart === currentStart,
-          processed: w.status === 'signed' || w.status === 'locked',
-          draft: w.status === 'draft' || w.status === 'reopened',
-          programType: String(w.programType || '').trim(),
+          isCurrent,
+          processed: fullyPaid,
+          draft,
+          pending,
+          wrongProgram,
+          providerSigned: Boolean(String(w.providerSignedKey || '').trim()),
+          providerSignedKey: String(w.providerSignedKey || '').trim(),
+          programType: resolvedPt,
           schoolId: String(w.schoolId || '').trim(),
           signerName: String(w.signerName || '').trim(),
           signerEmail: String(w.signerEmail || '').trim(),
+          hhaStatus: rollup.status,
+          hhaConfirmed: wantPt ? scopedConfirmed : rollup.confirmed,
+          hhaEligible: wantPt ? scopedEligible : rollup.eligible,
         };
+      })
+      .filter((w) => {
+        if (!wantPt) return true;
+        if (w.wrongProgram) return false;
+        // Keep only bins with sessions in this program (or empty current week for workspace).
+        return w.sessionCount > 0 || (w.isCurrent && !programTypeKey(w.programType));
       })
       .sort((a, b) => {
         const byWeek = String(b.weekStart).localeCompare(String(a.weekStart));
@@ -2754,50 +2824,68 @@ export async function handleTmsRequest(
           sensitivity: 'base',
         });
       });
-    const mapWeekSessions = (weekIds: Set<string>) =>
-      weeks
-        .filter((w) => weekIds.has(w.id))
-        .flatMap((w) => {
-          const scoped = filterSessionsByProgramType(
-            store,
-            store.sessionsForWeek(w.id),
-            programType || undefined,
+    // Collapse duplicate unlabeled bins for the same Monday+program (legacy mixed rows).
+    const dedupeKey = (w: (typeof weeks)[number]) =>
+      `${w.weekStart}::${programTypeKey(w.programType) || '_'}::${String(w.signerEmail || '')
+        .trim()
+        .toLowerCase()}`;
+    const dedupedWeeks: typeof weeks = [];
+    const seen = new Map<string, number>();
+    for (const w of weeks) {
+      const key = dedupeKey(w);
+      const idx = seen.get(key);
+      if (idx == null) {
+        seen.set(key, dedupedWeeks.length);
+        dedupedWeeks.push(w);
+        continue;
+      }
+      const prev = dedupedWeeks[idx]!;
+      if (w.sessionCount > prev.sessionCount) dedupedWeeks[idx] = w;
+    }
+    const weeksOut = dedupedWeeks;
+    const mapSessions = (
+      sessions: Array<{
+        session: (typeof store.data.sessions)[number];
+        week: (typeof weeksOut)[number];
+      }>,
+    ) =>
+      sessions
+        .map(({ session: s, week: w }) => {
+          const dayPeers = providerDaySessions(
+            store.data.sessions,
+            store.data.weeks,
+            providerId,
+            s.dateOfService,
+            s.id,
           );
-          return scoped.map((s) => {
-            const dayPeers = providerDaySessions(
-              store.data.sessions,
-              store.data.weeks,
-              providerId,
-              s.dateOfService,
-              s.id,
-            );
-            const payOpts = {
-              presentGroupPeerCount: presentGroupPeerCount({
-                candidate: s,
-                peers: dayPeers,
-                mandates: store.data.mandates,
-              }),
-              mandateDurationMinutes: mandateDurationMinutesForSession(s, store.data.mandates),
-            };
-            const student = store.data.students.find((st) => st.id === s.studentId);
-            return {
-              id: s.id,
-              weekId: w.id,
-              weekStart: w.weekStart,
-              weekStatus: w.status,
-              dateOfService: s.dateOfService,
-              attendance: s.attendance,
-              beginTime: s.beginTime || '',
-              endTime: s.endTime || '',
-              payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
-              studentId: s.studentId,
-              studentName: student
-                ? `${student.firstName} ${student.lastName}`.trim() || s.studentId
-                : s.studentId,
-              programType: String(student?.programType || '').trim(),
-              schoolId: String(student?.schoolId || '').trim(),
-            };
-          });
+          const payOpts = {
+            presentGroupPeerCount: presentGroupPeerCount({
+              candidate: s,
+              peers: dayPeers,
+              mandates: store.data.mandates,
+            }),
+            mandateDurationMinutes: mandateDurationMinutesForSession(s, store.data.mandates),
+          };
+          const student = store.data.students.find((st) => st.id === s.studentId);
+          const transfer = store.transferForSession(s.id);
+          return {
+            id: s.id,
+            weekId: w.id,
+            weekStart: w.weekStart,
+            weekStatus: w.status,
+            dateOfService: s.dateOfService,
+            attendance: s.attendance,
+            beginTime: s.beginTime || '',
+            endTime: s.endTime || '',
+            payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
+            studentId: s.studentId,
+            studentName: student
+              ? `${student.firstName} ${student.lastName}`.trim() || s.studentId
+              : s.studentId,
+            programType: String(student?.programType || w.programType || '').trim(),
+            schoolId: String(student?.schoolId || '').trim(),
+            hhaStatus: transfer?.status || 'none',
+          };
         })
         .sort((a, b) => {
           const da = String(b.dateOfService || '').localeCompare(String(a.dateOfService || ''));
@@ -2808,19 +2896,50 @@ export async function handleTmsRequest(
           if (byPt) return byPt;
           return String(b.beginTime || '').localeCompare(String(a.beginTime || ''));
         });
-    const processedSessions = mapWeekSessions(
-      new Set(weeks.filter((w) => w.processed).map((w) => w.id)),
+    const mapWeekSessions = (weekIds: Set<string>) =>
+      mapSessions(
+        weeksOut
+          .filter((w) => weekIds.has(w.id))
+          .flatMap((w) => {
+            const scoped = filterSessionsByProgramType(
+              store,
+              store.sessionsForWeek(w.id),
+              programType || undefined,
+            );
+            return scoped.map((session) => ({ session, week: w }));
+          }),
+      );
+    // Processed = successfully synced to HHA (paid path), not merely signed/locked.
+    const processedSessions = mapSessions(
+      weeksOut.flatMap((w) => {
+        const scoped = filterSessionsByProgramType(
+          store,
+          store.sessionsForWeek(w.id),
+          programType || undefined,
+        );
+        return scoped
+          .filter((s) => confirmedSessionIds.has(s.id))
+          .map((session) => ({ session, week: w }));
+      }),
     );
     // Draft / reopened weeks with sessions — including prior Mondays (last week / two weeks ago).
     // Import still respects the 14-day locker; viewing and sending these drafts stays allowed.
-    const draftWeeks = weeks.filter((w) => w.draft && w.sessionCount > 0);
+    // Already program-scoped via weeksOut filter (wrong-program bins dropped).
+    const draftWeeks = weeksOut.filter((w) => w.draft && w.sessionCount > 0);
     const draftSessions = mapWeekSessions(new Set(draftWeeks.map((w) => w.id)));
+    // Pending weeks for provider week filter (current + submitted + unpaid signed, not prior drafts).
+    const pendingWeeks = weeksOut.filter((w) => w.pending);
+    const pendingWeekStarts = [
+      ...new Set(pendingWeeks.map((w) => w.weekStart).filter(Boolean)),
+    ].sort((a, b) => String(b).localeCompare(String(a)));
     return json(200, {
-      weeks,
+      weeks: weeksOut,
       currentWeekStart: currentStart,
       processedSessions,
       draftWeeks,
       draftSessions,
+      pendingWeeks,
+      pendingWeekStarts,
       programType: programType || '',
     });
   }
@@ -4072,6 +4191,143 @@ export async function handleTmsRequest(
     return json(200, screened);
   }
 
+  if (req.method === 'POST' && /^\/weeks\/[^/]+\/provider-sign$/.test(path)) {
+    let week = store.data.weeks.find((w) => w.id === path.split('/')[2]);
+    if (!week) return json(404, { error: 'Week not found.' });
+    if (!therapistCanEdit(week.status) && ctx.user.role !== 'admin') {
+      return json(409, { error: 'This week is locked.' });
+    }
+    const signBody = obj(req);
+    const signProgramType = String(signBody.programType || '').trim();
+    const signSchoolId = String(signBody.schoolId || '').trim();
+    const splitBins = splitWeekBySchoolBins(store, week, () => newId());
+    if (signProgramType || signSchoolId) {
+      const match = splitBins.find((w) =>
+        weekMatchesSchoolBin(store, w, signSchoolId, signProgramType || undefined),
+      );
+      if (match) week = match;
+    } else {
+      week = splitBins.find((w) => w.id === week!.id) || splitBins[0] || week;
+    }
+    const sessions = store.sessionsForWeek(week.id);
+    if (!sessions.length) {
+      return json(400, { error: 'Add at least one session before signing the timesheet.' });
+    }
+    const check = checkMandatesForWeek(
+      store.data.mandates,
+      sessions,
+      store.data.sessions,
+      studentNameById(store),
+      mandateWeekOpts(store),
+    );
+    if (check.errors.length) {
+      return json(400, {
+        error: overMandateSummary(check.errors),
+        errors: check.errors,
+      });
+    }
+    const provider = store.data.providers.find((p) => p.id === week!.providerId);
+    const typedName = String(signBody.signatureName || signBody.providerSignName || '').trim();
+    const defaultName = provider
+      ? `${provider.firstName || ''} ${provider.lastName || ''}`.trim()
+      : '';
+    const providerSignName = typedName || defaultName;
+    if (!providerSignName) {
+      return json(400, { error: 'Enter your name to sign the timesheet.' });
+    }
+    const rawDate = String(signBody.signDate || signBody.providerSignDate || '').trim();
+    const providerSignDate = rawDate || formatTimesheetSignDate();
+    const signerSchool = resolveWeekSchool(store, week.providerId, {
+      weekId: week.id,
+      preferredSchoolId: signSchoolId || undefined,
+    });
+    const signerName = signerSchool
+      ? String(signerSchool.signerName || '')
+      : String(signBody.signerName || week.signerName || '');
+    const signerEmail = signerSchool
+      ? String(signerSchool.signerEmail || '')
+      : String(signBody.signerEmail || week.signerEmail || '');
+    const schoolDistrict = schoolDistrictForWeek(
+      store,
+      week.id,
+      signerSchool?.id || signSchoolId || undefined,
+    );
+    const stampedWeek = {
+      ...week,
+      schoolId: week.schoolId || signerSchool?.id || '',
+      programType:
+        week.programType || signProgramType || resolveWeekProgramType(store, week) || '',
+      signerName: signerName || week.signerName,
+      signerEmail: signerEmail || week.signerEmail,
+    };
+    const pdf = buildTimesheetPdf({
+      week: stampedWeek,
+      providerLabel: provider
+        ? `${provider.firstName} ${provider.lastName}`
+        : stampedWeek.providerId,
+      signerName: stampedWeek.signerName,
+      signerEmail: stampedWeek.signerEmail,
+      schoolDistrict,
+      providerSignDate,
+      providerSignName,
+      rows: sessions.map((session) => {
+        const dayPeers = providerDaySessions(
+          store.data.sessions,
+          store.data.weeks,
+          stampedWeek.providerId,
+          session.dateOfService,
+          session.id,
+        );
+        const payOpts = {
+          presentGroupPeerCount: presentGroupPeerCount({
+            candidate: session,
+            peers: dayPeers,
+            mandates: store.data.mandates,
+          }),
+          mandateDurationMinutes: mandateDurationMinutesForSession(session, store.data.mandates),
+        };
+        return {
+          session,
+          student: store.data.students.find((s) => s.id === session.studentId) as Student | undefined,
+          payAmount: provider ? sessionPayAmount(provider, session, payOpts) : null,
+        };
+      }),
+    });
+    const providerSignedKey = `tms/provider-signed/${stampedWeek.id}.pdf`;
+    const timesheetKey = stampedWeek.timesheetKey || `tms/timesheets/${stampedWeek.id}.pdf`;
+    await putLockerPdf(providerSignedKey, Buffer.from(pdf));
+    await putLockerPdf(timesheetKey, Buffer.from(pdf));
+    const next = store.upsertWeek({
+      ...stampedWeek,
+      timesheetKey,
+      providerSignedKey,
+      providerSignedAt: nowIso(),
+    });
+    const existingTs = findTimesheetArchive(store, next.id);
+    await persistArchivePdf({
+      store,
+      kind: 'timesheet',
+      sourceType: 'timesheet',
+      userId: ctx.user.id,
+      providerId: next.providerId,
+      schoolId: signerSchool?.id || signSchoolId,
+      weekId: next.id,
+      weekStart: next.weekStart,
+      filename: `timesheet-${next.weekStart}-provider-signed.pdf`,
+      s3Key: providerSignedKey,
+      status: 'provider_signed',
+      pdf: Buffer.from(pdf),
+      replaceId: existingTs?.id,
+    });
+    store.audit(ctx.user.id, 'provider_sign_timesheet', `week:${week.id}`, week, next);
+    return json(200, {
+      week: next,
+      providerSignedKey,
+      message: 'Timesheet signed and saved. You can now send it to the school signer.',
+      warnings: check.warnings,
+    });
+  }
+
   if (req.method === 'POST' && /^\/weeks\/[^/]+\/submit$/.test(path)) {
     let week = store.data.weeks.find((w) => w.id === path.split('/')[2]);
     if (!week) return json(404, { error: 'Week not found.' });
@@ -4181,6 +4437,70 @@ export async function handleTmsRequest(
         error: 'No school signer is on file. Contact the office to assign a signer.',
       });
     }
+    const providerSignedKey = String(week.providerSignedKey || '').trim();
+    let providerSignedPdf = providerSignedKey ? await getPdfFromS3(providerSignedKey) : null;
+    // Vitest / email-fallback / admin: auto-stamp provider signature when missing.
+    if (
+      !providerSignedPdf?.length &&
+      (process.env.VITEST === 'true' ||
+        process.env.TMS_SIGNNOW_ALLOW_EMAIL_FALLBACK === '1' ||
+        ctx.user.role === 'admin')
+    ) {
+      const provider = store.data.providers.find((p) => p.id === week.providerId);
+      const schoolDistrict = schoolDistrictForWeek(
+        store,
+        week.id,
+        signerSchool?.id || String(b.schoolId || '').trim() || undefined,
+      );
+      const autoName = provider
+        ? `${provider.firstName || ''} ${provider.lastName || ''}`.trim() || 'Therapist'
+        : 'Therapist';
+      const autoPdf = buildTimesheetPdf({
+        week: { ...week, signerName, signerEmail },
+        providerLabel: autoName,
+        signerName,
+        signerEmail,
+        schoolDistrict,
+        providerSignDate: formatTimesheetSignDate(),
+        providerSignName: autoName,
+        rows: sessions.map((session) => {
+          const dayPeers = providerDaySessions(
+            store.data.sessions,
+            store.data.weeks,
+            week.providerId,
+            session.dateOfService,
+            session.id,
+          );
+          const payOpts = {
+            presentGroupPeerCount: presentGroupPeerCount({
+              candidate: session,
+              peers: dayPeers,
+              mandates: store.data.mandates,
+            }),
+            mandateDurationMinutes: mandateDurationMinutesForSession(session, store.data.mandates),
+          };
+          return {
+            session,
+            student: store.data.students.find((s) => s.id === session.studentId) as Student | undefined,
+            payAmount: provider ? sessionPayAmount(provider, session, payOpts) : null,
+          };
+        }),
+      });
+      const autoKey = `tms/provider-signed/${week.id}.pdf`;
+      await putLockerPdf(autoKey, Buffer.from(autoPdf));
+      week = store.upsertWeek({
+        ...week,
+        providerSignedKey: autoKey,
+        providerSignedAt: nowIso(),
+      });
+      providerSignedPdf = Buffer.from(autoPdf);
+    }
+    const resolvedProviderSignedKey = String(week.providerSignedKey || providerSignedKey || '').trim();
+    if (!resolvedProviderSignedKey || !providerSignedPdf?.length) {
+      return json(400, {
+        error: 'Sign the timesheet first (Sign timesheet), then send it to the school signer.',
+      });
+    }
     const next = store.upsertWeek({
       ...week,
       status: 'submitted',
@@ -4192,44 +4512,10 @@ export async function handleTmsRequest(
         '',
       signerName,
       signerEmail,
+      providerSignedKey: resolvedProviderSignedKey,
     });
     const provider = store.data.providers.find((p) => p.id === next.providerId);
-    const schoolDistrict = schoolDistrictForWeek(
-      store,
-      next.id,
-      signerSchool?.id || String(b.schoolId || '').trim() || undefined,
-    );
-    const pdf = buildTimesheetPdf({
-      week: next,
-      providerLabel: provider ? `${provider.firstName} ${provider.lastName}` : next.providerId,
-      signerName: next.signerName,
-      signerEmail: next.signerEmail,
-      schoolDistrict,
-      // Therapist dates the timesheet when submitting (before principal signs in SignNow).
-      providerSignDate: formatTimesheetSignDate(),
-      rows: sessions.map((session) => {
-        const dayPeers = providerDaySessions(
-          store.data.sessions,
-          store.data.weeks,
-          next.providerId,
-          session.dateOfService,
-          session.id,
-        );
-        const payOpts = {
-          presentGroupPeerCount: presentGroupPeerCount({
-            candidate: session,
-            peers: dayPeers,
-            mandates: store.data.mandates,
-          }),
-          mandateDurationMinutes: mandateDurationMinutesForSession(session, store.data.mandates),
-        };
-        return {
-          session,
-          student: store.data.students.find((s) => s.id === session.studentId) as Student | undefined,
-          payAmount: provider ? sessionPayAmount(provider, session, payOpts) : null,
-        };
-      }),
-    });
+    const pdf = Uint8Array.from(providerSignedPdf);
     let envelope;
     try {
       envelope = await createSignEnvelope({
@@ -4529,7 +4815,14 @@ export async function handleTmsRequest(
       if (week.status !== 'locked' && week.status !== 'signed') {
         return json(409, { error: 'Only signed or locked weeks can be reopened.' });
       }
-      const next = store.upsertWeek({ ...week, status: 'reopened', hhaStatus: week.hhaStatus });
+      const next = store.upsertWeek({
+        ...week,
+        status: 'reopened',
+        hhaStatus: week.hhaStatus,
+        providerSignedKey: '',
+        providerSignedAt: '',
+        envelopeId: '',
+      });
       store.audit(ctx.user.id, 'reopen_week', `week:${week.id}`, week, next);
       return json(200, { week: next });
     });

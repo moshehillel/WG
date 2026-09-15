@@ -36,10 +36,19 @@ const state = {
   providerSessionDistrict: '',
   sessionNotesDistrict: '',
   therapistPane: sessionStorage.getItem('tmsTherapistPane') || 'current',
+  /** When set on Draft tab, open that week’s editor (send timesheet) instead of the draft list. */
+  draftFocusWeekStart: sessionStorage.getItem('tmsDraftFocusWeek') || '',
+  /** Pending tab week filter (defaults to current Monday). */
+  pendingWeekStart: sessionStorage.getItem('tmsPendingWeek') || '',
+  processedWeekStart: sessionStorage.getItem('tmsProcessedWeek') || '',
   childDetailTab: sessionStorage.getItem('tmsChildDetailTab') || 'basic',
   providerDetailTab: sessionStorage.getItem('tmsProviderDetailTab') || 'basic',
   listTabLetter: 'A',
   editingMandateId: '',
+  /** Admin dashboard Weeks filters (persist across reopen / HHA refresh). */
+  adminWeeksWeekStart: sessionStorage.getItem('tmsAdminWeeksWeek') || '',
+  adminWeeksName: sessionStorage.getItem('tmsAdminWeeksName') || '',
+  adminWeeksAll: sessionStorage.getItem('tmsAdminWeeksAll') === '1',
 };
 
 const REPORT_LIST = [
@@ -209,11 +218,24 @@ const I18N = {
     'forgot.sending': 'Sending…',
     'forgot.needEmail': 'Enter your email address.',
     'therapist.pending': 'Pending Sessions',
+    'therapist.draft': 'Draft',
     'therapist.processed': 'Processed Sessions',
     'therapist.archive': 'My uploads',
     'therapist.reload': 'Reload sessions',
     'therapist.changeSchool': 'Change program',
     'therapist.changeProgram': 'Change program',
+    'therapist.draftBlurb':
+      'Weeks still in draft or reopened for the selected program (including last week / two weeks ago). Sign the timesheet, then send it for principal e-sign.',
+    'therapist.draftEmpty': 'No draft weeks with sessions for this program right now.',
+    'therapist.backToDrafts': 'Back to draft weeks',
+    'therapist.openWeek': 'Open',
+    'therapist.signTimesheet': 'Sign timesheet',
+    'therapist.sendTimesheet': 'Send timesheet',
+    'therapist.processedBlurb':
+      'Sessions successfully synced to HHA (paid). Filter by week if needed. Draft weeks stay under Draft; work awaiting signature stays under Pending Sessions.',
+    'therapist.processedEmpty': 'No HHA-confirmed (paid) sessions for this program yet.',
+    'therapist.pendingWeekFilter': 'Week',
+    'therapist.allWeeks': 'All weeks',
     'common.save': 'Save',
     'common.cancel': 'Cancel',
     'common.error': 'Something went wrong.',
@@ -355,11 +377,18 @@ const I18N = {
     'forgot.sending': 'Enviando…',
     'forgot.needEmail': 'Ingrese su dirección de correo.',
     'therapist.pending': 'Sesiones pendientes',
+    'therapist.draft': 'Borrador',
     'therapist.processed': 'Sesiones procesadas',
     'therapist.archive': 'Mis cargas',
     'therapist.reload': 'Recargar sesiones',
     'therapist.changeSchool': 'Cambiar programa',
     'therapist.changeProgram': 'Cambiar programa',
+    'therapist.draftBlurb':
+      'Semanas aún en borrador o reabiertas (incluida la semana pasada / hace dos semanas). Abra una semana para editar, o envíe la hoja de tiempo para firma.',
+    'therapist.draftEmpty': 'No hay semanas en borrador con sesiones por ahora.',
+    'therapist.backToDrafts': 'Volver a borradores',
+    'therapist.openWeek': 'Abrir',
+    'therapist.sendTimesheet': 'Enviar hoja de tiempo',
     'common.save': 'Guardar',
     'common.cancel': 'Cancelar',
     'common.error': 'Algo salió mal.',
@@ -521,6 +550,15 @@ function mondayFromDos(dos) {
   const day = d.getUTCDay();
   const offset = day === 0 ? -6 : 1 - day;
   d.setUTCDate(d.getUTCDate() + offset);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Shift an ISO YYYY-MM-DD by N calendar days (UTC). */
+function addDaysIso(iso, days) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return mondayIso();
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  d.setUTCDate(d.getUTCDate() + Number(days || 0));
   return d.toISOString().slice(0, 10);
 }
 
@@ -853,7 +891,7 @@ function showActionToast(message, kind = 'neutral', { sticky = false } = {}) {
   }
 }
 
-function timesheetSendBlockReason({ week, sessions, locked, errors, signerEmail }) {
+function timesheetSendBlockReason({ week, sessions, locked, errors, signerEmail, providerSigned }) {
   if (locked) return 'This program\'s timesheet for the week is already submitted and cannot be sent again. Choose a different program type or school/signer to send another timesheet for the same week.';
   if (!week) return 'Your provider profile is not ready yet. Contact the office.';
   if (!sessions.length) return 'Add at least one session before submitting.';
@@ -862,6 +900,9 @@ function timesheetSendBlockReason({ week, sessions, locked, errors, signerEmail 
   }
   if (!String(signerEmail || '').trim()) {
     return 'No school signer is on file. Contact the office to assign a signer.';
+  }
+  if (!providerSigned) {
+    return 'Sign the timesheet first, then you can send it to the school signer.';
   }
   return '';
 }
@@ -1818,6 +1859,9 @@ async function therapistHome(statusFlash) {
     providerId = me.provider?.id || '';
     schools = me.schools || [];
     programTypes = Array.isArray(me.programTypes) ? me.programTypes.filter(Boolean) : [];
+    programTypes = [...new Set(programTypes.map((p) => String(p).trim()).filter(Boolean))].sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' }),
+    );
     state.meSettings = me.settings || {};
     if (schools.length === 0 && programTypes.length === 0) {
       // Caseload has no schools — empty state only (never org-wide / other therapists).
@@ -1875,16 +1919,36 @@ async function therapistHome(statusFlash) {
       })].map((t) => `<div>${esc(t)}</div>`).join('')}</div>`;
     }
     if (providerId) {
-      const ensured = await api('POST', '/week/ensure', {
-        weekStart: state.weekStart,
-        providerId,
-        schoolId: state.selectedSchoolId || undefined,
-        programType: state.selectedProgramType || undefined,
-      });
-      week = ensured.week;
-      state.weekId = week.id;
-      signerName = week.signerName || '';
-      signerEmail = week.signerEmail || '';
+      const paneEarly =
+        state.therapistPane === 'prior'
+          ? 'prior'
+          : state.therapistPane === 'archive'
+            ? 'archive'
+            : state.therapistPane === 'draft'
+              ? 'draft'
+              : 'current';
+      const draftListOnly = paneEarly === 'draft' && !state.draftFocusWeekStart;
+      if (paneEarly === 'draft' && state.draftFocusWeekStart) {
+        state.weekStart = state.draftFocusWeekStart;
+      }
+      if (paneEarly === 'current') {
+        const pendingWs = String(state.pendingWeekStart || '').trim();
+        state.weekStart = pendingWs || mondayIso();
+        state.pendingWeekStart = state.weekStart;
+        sessionStorage.setItem('tmsPendingWeek', state.weekStart);
+      }
+      if (!draftListOnly && paneEarly !== 'prior' && paneEarly !== 'archive') {
+        const ensured = await api('POST', '/week/ensure', {
+          weekStart: state.weekStart,
+          providerId,
+          schoolId: state.selectedSchoolId || undefined,
+          programType: state.selectedProgramType || undefined,
+        });
+        week = ensured.week;
+        state.weekId = week.id;
+        signerName = week.signerName || '';
+        signerEmail = week.signerEmail || '';
+      }
     }
   } catch (e) {
     loadFailed = e.message || 'Unable to load this week.';
@@ -1892,32 +1956,45 @@ async function therapistHome(statusFlash) {
 
   const scopeQ = therapistScopeQuery();
   const schoolQ = scopeQ.toString() ? `&${scopeQ.toString()}` : '';
+  const panePreview =
+    state.therapistPane === 'prior'
+      ? 'prior'
+      : state.therapistPane === 'archive'
+        ? 'archive'
+        : state.therapistPane === 'draft'
+          ? 'draft'
+          : 'current';
+  const isDraftListPreview = panePreview === 'draft' && !state.draftFocusWeekStart;
 
   try {
-    const list = await api(
-      'GET',
-      `/students?weekStart=${encodeURIComponent(state.weekStart)}${schoolQ}`,
-    );
-    students = list.students || [];
+    if (!isDraftListPreview) {
+      const list = await api(
+        'GET',
+        `/students?weekStart=${encodeURIComponent(state.weekStart)}${schoolQ}`,
+      );
+      students = list.students || [];
+    }
   } catch {
     students = [];
   }
 
   try {
-    const data = await api(
-      'GET',
-      `/week?weekStart=${encodeURIComponent(state.weekStart)}${schoolQ}`,
-    );
-    if (data.week) {
-      week = data.week;
-      state.weekId = week.id;
-      sessions = data.sessions || [];
-      if ((data.students || []).length) students = data.students;
-      errors = data.errors || [];
-      warnings = data.warnings || [];
-      signerName = week.signerName || signerName;
-      signerEmail = week.signerEmail || signerEmail;
-      schoolDistrict = data.schoolDistrict || '';
+    if (!isDraftListPreview) {
+      const data = await api(
+        'GET',
+        `/week?weekStart=${encodeURIComponent(state.weekStart)}${schoolQ}`,
+      );
+      if (data.week) {
+        week = data.week;
+        state.weekId = week.id;
+        sessions = data.sessions || [];
+        if ((data.students || []).length) students = data.students;
+        errors = data.errors || [];
+        warnings = data.warnings || [];
+        signerName = week.signerName || signerName;
+        signerEmail = week.signerEmail || signerEmail;
+        schoolDistrict = data.schoolDistrict || '';
+      }
     }
   } catch {
     /* keep empty week */
@@ -1926,6 +2003,7 @@ async function therapistHome(statusFlash) {
   const status = week?.status || 'draft';
   const processed = status === 'signed' || status === 'locked';
   const pending = status === 'submitted';
+  const providerSigned = Boolean(String(week?.providerSignedKey || '').trim());
   // Madison: while awaiting signature or already signed/locked, providers cannot mutate sessions.
   const canImport = !pending && !processed && (status === 'draft' || status === 'reopened');
   const canMutateExisting = canImport;
@@ -1935,6 +2013,7 @@ async function therapistHome(statusFlash) {
     locked: pending || processed,
     errors,
     signerEmail,
+    providerSigned,
   });
   const canSend = !sendBlockReason;
   const programLabel = state.selectedProgramType || '';
@@ -1955,33 +2034,86 @@ async function therapistHome(statusFlash) {
   });
 
   let processedSessions = [];
+  let draftWeeks = [];
+  let draftSessions = [];
+  let pendingWeeks = [];
+  let pendingWeekStarts = [];
   if (providerId) {
     try {
-      const listed = await api('GET', '/weeks');
+      const listed = await api(
+        'GET',
+        `/weeks?${new URLSearchParams({
+          ...(state.selectedProgramType ? { programType: state.selectedProgramType } : {}),
+        }).toString()}`.replace(/\?$/, ''),
+      );
       processedSessions = Array.isArray(listed.processedSessions) ? listed.processedSessions : [];
-      if (!processedSessions.length) {
-        // Fallback: flatten sessions from signed/locked weeks if API is older.
-        const signed = (listed.weeks || []).filter((w) => w.status === 'signed' || w.status === 'locked');
-        for (const w of signed) {
-          try {
-            const detail = await api('GET', `/week?weekStart=${encodeURIComponent(w.weekStart)}`);
-            for (const s of detail.sessions || []) {
-              processedSessions.push({
-                id: s.id,
-                dateOfService: s.dateOfService,
-                attendance: s.attendance,
-                beginTime: s.beginTime || '',
-                endTime: s.endTime || '',
-                payAmount: s.payAmount ?? null,
-              });
-            }
-          } catch {
-            /* ignore */
-          }
-        }
+      draftWeeks = Array.isArray(listed.draftWeeks)
+        ? listed.draftWeeks
+        : (listed.weeks || []).filter(
+            (w) =>
+              (w.status === 'draft' || w.status === 'reopened') &&
+              Number(w.sessionCount || 0) > 0,
+          );
+      // Client-side belt-and-suspenders: never show another program's bins.
+      const wantPt = String(state.selectedProgramType || '').trim().toLowerCase();
+      if (wantPt) {
+        draftWeeks = draftWeeks.filter(
+          (w) =>
+            !String(w.programType || '').trim() ||
+            String(w.programType || '').trim().toLowerCase() === wantPt,
+        );
+        processedSessions = processedSessions.filter(
+          (s) =>
+            !String(s.programType || '').trim() ||
+            String(s.programType || '').trim().toLowerCase() === wantPt,
+        );
       }
+      draftWeeks = [...draftWeeks].sort((a, b) => {
+        const byWeek = String(b.weekStart || '').localeCompare(String(a.weekStart || ''));
+        if (byWeek) return byWeek;
+        return String(a.programType || '').localeCompare(String(b.programType || ''), undefined, {
+          sensitivity: 'base',
+        });
+      });
+      draftSessions = Array.isArray(listed.draftSessions) ? listed.draftSessions : [];
+      if (wantPt) {
+        draftSessions = draftSessions.filter(
+          (s) =>
+            !String(s.programType || '').trim() ||
+            String(s.programType || '').trim().toLowerCase() === wantPt,
+        );
+      }
+      draftSessions = [...draftSessions].sort((a, b) => {
+        const byDate = String(b.dateOfService || '').localeCompare(String(a.dateOfService || ''));
+        if (byDate) return byDate;
+        const byPt = String(a.programType || '').localeCompare(String(b.programType || ''), undefined, {
+          sensitivity: 'base',
+        });
+        if (byPt) return byPt;
+        return String(b.beginTime || '').localeCompare(String(a.beginTime || ''));
+      });
+      pendingWeeks = Array.isArray(listed.pendingWeeks)
+        ? listed.pendingWeeks
+        : (listed.weeks || []).filter((w) => w.pending || w.isCurrent || w.status === 'submitted');
+      if (wantPt) {
+        pendingWeeks = pendingWeeks.filter(
+          (w) =>
+            !String(w.programType || '').trim() ||
+            String(w.programType || '').trim().toLowerCase() === wantPt ||
+            w.isCurrent,
+        );
+      }
+      pendingWeekStarts = Array.isArray(listed.pendingWeekStarts)
+        ? listed.pendingWeekStarts
+        : [...new Set(pendingWeeks.map((w) => w.weekStart).filter(Boolean))];
+      if (!pendingWeekStarts.includes(mondayIso())) pendingWeekStarts = [mondayIso(), ...pendingWeekStarts];
+      pendingWeekStarts = [...new Set(pendingWeekStarts)].sort((a, b) => String(b).localeCompare(String(a)));
     } catch {
       processedSessions = [];
+      draftWeeks = [];
+      draftSessions = [];
+      pendingWeeks = [];
+      pendingWeekStarts = [mondayIso()];
     }
   }
   const pane =
@@ -1989,9 +2121,14 @@ async function therapistHome(statusFlash) {
       ? 'prior'
       : state.therapistPane === 'archive'
         ? 'archive'
-        : 'current';
+        : state.therapistPane === 'draft'
+          ? 'draft'
+          : 'current';
   const isPriorPane = pane === 'prior';
   const isArchivePane = pane === 'archive';
+  const isDraftPane = pane === 'draft';
+  const isDraftList = isDraftPane && !state.draftFocusWeekStart;
+  const isWeekWorkspace = pane === 'current' || (isDraftPane && !isDraftList);
   const yellowBlocksImport = state.meSettings?.yellowWarningsBlockImport !== false;
   const importBlockCopy = yellowBlocksImport
     ? 'Import is all-or-nothing — any error or yellow warning blocks the whole file.'
@@ -2062,6 +2199,7 @@ async function therapistHome(statusFlash) {
     <div class="card">
       <div class="pane-tabs" id="therapistPaneTabs" role="tablist">
         <button type="button" class="pane-tab${pane === 'current' ? ' on' : ''}" data-therapist-pane="current" role="tab">${esc(t('therapist.pending'))}</button>
+        <button type="button" class="pane-tab${pane === 'draft' ? ' on' : ''}" data-therapist-pane="draft" role="tab">${esc(t('therapist.draft'))}</button>
         <button type="button" class="pane-tab${pane === 'prior' ? ' on' : ''}" data-therapist-pane="prior" role="tab">${esc(t('therapist.processed'))}</button>
         <button type="button" class="pane-tab${pane === 'archive' ? ' on' : ''}" data-therapist-pane="archive" role="tab">${esc(t('therapist.archive'))}</button>
       </div>
@@ -2098,32 +2236,99 @@ async function therapistHome(statusFlash) {
       </table></div>
       ` : isPriorPane ? `
       <h2>Processed sessions</h2>
-      <p class="muted">Signed and paid sessions only. Draft, pending signature, and reopened work stay under Pending Sessions.</p>
+      <p class="muted">${esc(t('therapist.processedBlurb'))}</p>
+      ${(() => {
+        const weekStarts = [...new Set(processedSessions.map((s) => s.weekStart).filter(Boolean))]
+          .sort((a, b) => String(b).localeCompare(String(a)));
+        const filterWs = String(state.processedWeekStart || '').trim();
+        const rows = filterWs
+          ? processedSessions.filter((s) => s.weekStart === filterWs)
+          : processedSessions;
+        return `
+      <div class="row">
+        <label>${esc(t('therapist.pendingWeekFilter'))}
+          <select id="processedWeekFilter">
+            <option value="">${esc(t('therapist.allWeeks'))}</option>
+            ${weekStarts.map((ws) => `<option value="${esc(ws)}" ${filterWs === ws ? 'selected' : ''}>${esc(ws)}</option>`).join('')}
+          </select>
+        </label>
+      </div>
       <div class="table-wrap"><table>
-        <tr><th>Session date</th><th>Attended status</th><th>Start/End time</th></tr>
-        ${processedSessions.map((s) => {
+        <tr><th>Session date</th><th>Child</th><th>Attended status</th><th>Start/End time</th><th>Week</th></tr>
+        ${rows.map((s) => {
           const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ') || '—';
           return `<tr>
           <td>${esc(s.dateOfService || '—')}</td>
+          <td>${esc(s.studentName || '—')}</td>
+          <td>${esc(s.attendance || '—')}</td>
+          <td>${esc(time)}</td>
+          <td>${esc(s.weekStart || '—')}</td>
+        </tr>`;
+        }).join('') || `<tr><td colspan="5">${esc(t('therapist.processedEmpty'))}</td></tr>`}
+      </table></div>`;
+      })()}
+      ` : isDraftList ? `
+      <h2>${esc(t('therapist.draft'))}</h2>
+      <p class="muted">${esc(t('therapist.draftBlurb'))}</p>
+      <div class="table-wrap"><table>
+        <tr><th>Week of</th><th>Status</th><th>Sessions</th><th>Signer</th><th></th></tr>
+        ${draftWeeks.map((w) => {
+          const st = w.status || 'draft';
+          const count = Number(w.sessionCount || 0);
+          const signer = w.signerEmail
+            ? `${w.signerName || w.signerEmail} <${w.signerEmail}>`
+            : '—';
+          const signed = Boolean(w.providerSigned || w.providerSignedKey);
+          return `<tr>
+          <td>${esc(w.weekStart || '—')}${w.isCurrent ? ' · current' : ''}${w.programType ? ` · ${esc(w.programType)}` : ''}</td>
+          <td>${esc(st)}${signed ? ' · signed' : ''}</td>
+          <td>${esc(String(count))}</td>
+          <td>${esc(signer)}</td>
+          <td class="row-actions">
+            <button type="button" class="btn" data-open-draft-week="${esc(w.weekStart || '')}" data-draft-week-id="${esc(w.id || '')}">${esc(t('therapist.openWeek'))}</button>
+            <button type="button" class="btn" data-sign-draft-week="${esc(w.id || '')}" data-draft-week-start="${esc(w.weekStart || '')}">${esc(t('therapist.signTimesheet'))}</button>
+            <button type="button" class="btn-primary${signed ? '' : ' is-blocked'}" data-send-draft-week="${esc(w.id || '')}" data-draft-week-start="${esc(w.weekStart || '')}" data-draft-signer-email="${esc(w.signerEmail || '')}" data-draft-signer-name="${esc(w.signerName || '')}" data-draft-provider-signed="${signed ? '1' : ''}" title="${esc(signed ? 'Send timesheet to the school signer' : 'Sign the timesheet first')}">${esc(t('therapist.sendTimesheet'))}</button>
+          </td>
+        </tr>`;
+        }).join('') || `<tr><td colspan="5">${esc(t('therapist.draftEmpty'))}</td></tr>`}
+      </table></div>
+      ${draftSessions.length ? `
+      <h3 class="sec">Draft sessions</h3>
+      <div class="table-wrap"><table>
+        <tr><th>Week</th><th>Session date</th><th>Child</th><th>Attendance</th><th>Time</th></tr>
+        ${draftSessions.map((s) => {
+          const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ') || '—';
+          return `<tr>
+          <td>${esc(s.weekStart || '—')}</td>
+          <td>${esc(s.dateOfService || '—')}</td>
+          <td>${esc(s.studentName || '—')}</td>
           <td>${esc(s.attendance || '—')}</td>
           <td>${esc(time)}</td>
         </tr>`;
-        }).join('') || '<tr><td colspan="3">No processed sessions yet.</td></tr>'}
-      </table></div>
+        }).join('')}
+      </table></div>` : ''}
       ` : `
-      <h2>Pending sessions</h2>
+      <h2>${isDraftPane ? esc(t('therapist.draft')) : 'Pending sessions'}</h2>
+      ${isDraftPane ? `<p class="row"><button type="button" class="btn" id="backToDraftList">${esc(t('therapist.backToDrafts'))}</button></p>` : `
+      <div class="row">
+        <label>${esc(t('therapist.pendingWeekFilter'))}
+          <select id="pendingWeekFilter">
+            ${pendingWeekStarts.map((ws) => `<option value="${esc(ws)}" ${state.weekStart === ws ? 'selected' : ''}>${esc(ws)}${ws === mondayIso() ? ' · current' : ''}</option>`).join('') || `<option value="${esc(state.weekStart)}">${esc(state.weekStart)}</option>`}
+          </select>
+        </label>
+      </div>`}
       ${banner}
       ${week ? approvalBanner(status) : '<div class="warn-box">Contact the office to complete your therapist profile setup.</div>'}
-      <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${pending ? ' · awaiting signature (sessions locked)' : ''}${processed ? ' · signed/locked (sessions locked)' : ''}</p>
+      <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${pending ? ' · awaiting signature (sessions locked)' : ''}${processed ? ' · signed/locked (sessions locked)' : ''}${providerSigned && !pending && !processed ? ' · provider signed' : ''}</p>
       <div class="row">
         ${programTypes.length > 1 ? `<button type="button" class="btn" id="changeSchool">${esc(t('therapist.changeProgram'))}</button>` : ''}
         <button class="btn" id="refreshHome">${esc(t('therapist.reload'))}</button>
         ${pending ? `<button type="button" class="btn" id="cancelApproval">Cancel approval request</button>` : ''}
       </div>
       `}
-      ${!isPriorPane && !isArchivePane && errors.length ? `<div class="err-box status-banner" id="weekErrorsBox" data-week-issue="errors"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss errors">×</button><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
-      ${!isPriorPane && !isArchivePane && warnings.length ? `<div class="warn-box status-banner" id="weekWarningsBox" data-week-issue="warnings"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss warnings">×</button><strong>Warnings (submission is still allowed).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
-      ${!isPriorPane && !isArchivePane ? `<p class="muted">Red indicates a blocking issue (no mandate on file, over-mandate, or note review). Yellow indicates under-mandate or soft warnings only.</p>
+      ${isWeekWorkspace && errors.length ? `<div class="err-box status-banner" id="weekErrorsBox" data-week-issue="errors"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss errors">×</button><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
+      ${isWeekWorkspace && warnings.length ? `<div class="warn-box status-banner" id="weekWarningsBox" data-week-issue="warnings"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss warnings">×</button><strong>Warnings (submission is still allowed).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
+      ${isWeekWorkspace ? `<p class="muted">Red indicates a blocking issue (no mandate on file, over-mandate, or note review). Yellow indicates under-mandate or soft warnings only.</p>
       <div class="table-wrap">
       <table>
         <tr><th>Date</th><th>Child</th><th>Service</th><th>CPT</th><th>Time</th><th>Attendance</th><th>Notes</th><th></th></tr>
@@ -2166,7 +2371,7 @@ async function therapistHome(statusFlash) {
     </div>` : ''}
     </div>
 
-    ${!isPriorPane && !isArchivePane ? `
+    ${isWeekWorkspace ? `
     ${processed ? `<div class="warn-box">This week is signed and locked. Sessions cannot be edited, removed, or added. Ask an admin to reopen the week if a change is required.</div>` : ''}
     ${pending ? `<div class="warn-box">Approval is pending. Sessions are locked until you cancel the approval request (returns the week to draft) or the timesheet is signed.</div>` : ''}
     ${canImport ? `
@@ -2189,15 +2394,22 @@ async function therapistHome(statusFlash) {
     <div class="card sec-card">
       <h2 class="sec"><span class="sec-num">3</span> Timesheet</h2>
       <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
-    </div>` : `
+    </div>` : isDraftPane ? `
     <div class="card sec-card">
-      <h2 class="sec"><span class="sec-num">3</span> Send timesheet</h2>
-      <p>The timesheet is sent to the school signer on file${signerEmail ? `: ${esc(signerName || signerEmail)} &lt;${esc(signerEmail)}&gt;` : ''}.</p>
+      <h2 class="sec"><span class="sec-num">3</span> Sign &amp; send timesheet</h2>
+      <p>1) Sign the timesheet (saves your signature + date). 2) Send the provider-signed PDF to the school signer${signerEmail ? `: ${esc(signerName || signerEmail)} &lt;${esc(signerEmail)}&gt;` : ''}.</p>
       <div class="row timesheet-actions">
         <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
+        <button type="button" class="btn big" id="signTimesheet" ${sessions.length && !pending && !processed ? '' : 'disabled'}>${esc(t('therapist.signTimesheet'))}${providerSigned ? ' ✓' : ''}</button>
         <button type="button" class="btn-primary big${canSend ? '' : ' is-blocked'}" id="submit" title="${esc(sendBlockReason || 'Send timesheet to the school signer')}">Send timesheet</button>
       </div>
       <p id="submitHint" class="${canSend ? 'muted' : 'err-inline'}"${canSend ? ' hidden' : ''}>${esc(sendBlockReason || '')}</p>
+    </div>
+    ` : `
+    <div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">3</span> Timesheet</h2>
+      <p class="muted">To sign and send a timesheet, open the week from the Draft tab.</p>
+      <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
     </div>
     `}
     ` : ''}
@@ -2206,10 +2418,186 @@ async function therapistHome(statusFlash) {
   document.querySelectorAll('[data-therapist-pane]').forEach((btn) => {
     btn.onclick = () => {
       clearTransientErrors();
-      state.therapistPane = btn.getAttribute('data-therapist-pane') || 'current';
+      const next = btn.getAttribute('data-therapist-pane') || 'current';
+      state.therapistPane = next;
       sessionStorage.setItem('tmsTherapistPane', state.therapistPane);
-      if (state.therapistPane === 'current') state.weekStart = mondayIso();
+      if (next === 'current') {
+        state.weekStart = String(state.pendingWeekStart || '').trim() || mondayIso();
+        state.draftFocusWeekStart = '';
+        sessionStorage.removeItem('tmsDraftFocusWeek');
+      } else if (next === 'draft') {
+        state.draftFocusWeekStart = '';
+        sessionStorage.removeItem('tmsDraftFocusWeek');
+      }
       therapistHome();
+    };
+  });
+  document.getElementById('pendingWeekFilter')?.addEventListener('change', (ev) => {
+    const ws = String(ev.target?.value || '').trim() || mondayIso();
+    state.pendingWeekStart = ws;
+    state.weekStart = ws;
+    sessionStorage.setItem('tmsPendingWeek', ws);
+    clearTransientErrors();
+    therapistHome();
+  });
+  document.getElementById('processedWeekFilter')?.addEventListener('change', (ev) => {
+    state.processedWeekStart = String(ev.target?.value || '').trim();
+    sessionStorage.setItem('tmsProcessedWeek', state.processedWeekStart);
+    clearTransientErrors();
+    therapistHome();
+  });
+  document.getElementById('backToDraftList')?.addEventListener('click', () => {
+    clearTransientErrors();
+    state.therapistPane = 'draft';
+    state.draftFocusWeekStart = '';
+    sessionStorage.setItem('tmsTherapistPane', 'draft');
+    sessionStorage.removeItem('tmsDraftFocusWeek');
+    therapistHome();
+  });
+  document.querySelectorAll('[data-open-draft-week]').forEach((btn) => {
+    btn.onclick = () => {
+      const ws = btn.getAttribute('data-open-draft-week') || '';
+      if (!ws) return;
+      clearTransientErrors();
+      state.therapistPane = 'draft';
+      state.draftFocusWeekStart = ws;
+      state.weekStart = ws;
+      sessionStorage.setItem('tmsTherapistPane', 'draft');
+      sessionStorage.setItem('tmsDraftFocusWeek', ws);
+      therapistHome();
+    };
+  });
+  const runProviderSign = async (weekId, weekStart) => {
+    let id = weekId;
+    const scopeQSign = therapistScopeQuery();
+    const schoolQSign = scopeQSign.toString() ? `&${scopeQSign.toString()}` : '';
+    if (!id && weekStart) {
+      const detail = await api(
+        'GET',
+        `/week?weekStart=${encodeURIComponent(weekStart)}${schoolQSign}`,
+      );
+      id = detail.week?.id || '';
+    }
+    if (!id) throw new Error('Week not found.');
+    const nameGuess = String(
+      state.last?.me?.provider?.firstName
+        ? `${state.last.me.provider.firstName} ${state.last.me.provider.lastName || ''}`.trim()
+        : state.email || 'Therapist',
+    ).trim();
+    const signatureName = prompt('Type your full name to sign this timesheet:', nameGuess);
+    if (signatureName == null) return null;
+    if (!String(signatureName || '').trim()) throw new Error('Enter your name to sign the timesheet.');
+    return api('POST', `/weeks/${id}/provider-sign`, {
+      signatureName: String(signatureName).trim(),
+      schoolId: state.selectedSchoolId || undefined,
+      programType: state.selectedProgramType || undefined,
+    });
+  };
+  document.querySelectorAll('[data-sign-draft-week]').forEach((btn) => {
+    btn.onclick = async () => {
+      const weekId = btn.getAttribute('data-sign-draft-week') || '';
+      const weekStart = btn.getAttribute('data-draft-week-start') || '';
+      const prev = btn.textContent;
+      try {
+        btn.disabled = true;
+        btn.textContent = 'Signing…';
+        clearTransientErrors();
+        const out = await runProviderSign(weekId, weekStart);
+        if (!out) {
+          btn.disabled = false;
+          btn.textContent = prev || t('therapist.signTimesheet');
+          return;
+        }
+        showActionToast(out.message || 'Timesheet signed and saved.', 'success');
+        await therapistHome({ success: [out.message || 'Timesheet signed and saved.'] });
+      } catch (e) {
+        const errs = Array.isArray(e.errors) && e.errors.length
+          ? e.errors
+          : [e.message || 'Unable to sign timesheet.'];
+        setStatus({ error: errs });
+        showActionToast(errs[0], 'error');
+        btn.disabled = false;
+        btn.textContent = prev || t('therapist.signTimesheet');
+      }
+    };
+  });
+  document.querySelectorAll('[data-send-draft-week]').forEach((btn) => {
+    btn.onclick = async () => {
+      const weekId = btn.getAttribute('data-send-draft-week') || '';
+      const weekStart = btn.getAttribute('data-draft-week-start') || '';
+      const alreadySigned = btn.getAttribute('data-draft-provider-signed') === '1';
+      let sEmail = btn.getAttribute('data-draft-signer-email') || '';
+      let sName = btn.getAttribute('data-draft-signer-name') || '';
+      if (!weekId && !weekStart) return;
+      if (!alreadySigned) {
+        showActionToast('Sign the timesheet first, then send.', 'error');
+        return;
+      }
+      const prev = btn.textContent;
+      try {
+        btn.disabled = true;
+        btn.textContent = 'Sending…';
+        clearTransientErrors();
+        showActionToast(
+          'Sending timesheet… note review can take up to a minute.',
+          'neutral',
+          { sticky: true },
+        );
+        const scopeQ = therapistScopeQuery();
+        const schoolQ = scopeQ.toString() ? `&${scopeQ.toString()}` : '';
+        const detail = await api(
+          'GET',
+          `/week?weekStart=${encodeURIComponent(weekStart)}${schoolQ}`,
+        );
+        const w = detail.week;
+        const sess = detail.sessions || [];
+        const errs = detail.errors || [];
+        sEmail = w?.signerEmail || sEmail;
+        sName = w?.signerName || sName;
+        const id = w?.id || weekId;
+        const block = timesheetSendBlockReason({
+          week: w,
+          sessions: sess,
+          locked: w?.status === 'submitted' || w?.status === 'signed' || w?.status === 'locked',
+          errors: errs,
+          signerEmail: sEmail,
+          providerSigned: Boolean(w?.providerSignedKey) || alreadySigned,
+        });
+        if (block) throw Object.assign(new Error(block), { errors: errs.length ? errs : [block] });
+        if (!id) throw new Error('Week not found.');
+        const out = await api(
+          'POST',
+          `/weeks/${id}/submit`,
+          {
+            signerName: sName,
+            signerEmail: sEmail,
+            schoolId: state.selectedSchoolId || undefined,
+            programType: state.selectedProgramType || undefined,
+          },
+          { timeoutMs: 120000 },
+        );
+        const okMsg = out.message || 'Submitted. Status is now Pending.';
+        showActionToast(okMsg, 'success');
+        state.draftFocusWeekStart = '';
+        sessionStorage.removeItem('tmsDraftFocusWeek');
+        await therapistHome({ success: [okMsg] });
+      } catch (e) {
+        const errs = Array.isArray(e.errors) && e.errors.length
+          ? e.errors
+          : [e.message || 'Unable to send timesheet.'];
+        setStatus({ error: errs, warn: Array.isArray(e.warnings) ? e.warnings : [] });
+        showActionToast(errs[0] || 'Unable to send timesheet.', 'error');
+        btn.disabled = false;
+        btn.textContent = prev || t('therapist.sendTimesheet');
+        if (weekStart && /resolve|blocking|signer|session|sign/i.test(String(errs[0] || ''))) {
+          state.therapistPane = 'draft';
+          state.draftFocusWeekStart = weekStart;
+          state.weekStart = weekStart;
+          sessionStorage.setItem('tmsTherapistPane', 'draft');
+          sessionStorage.setItem('tmsDraftFocusWeek', weekStart);
+          await therapistHome({ error: errs });
+        }
+      }
     };
   });
   document.getElementById('refreshHome')?.addEventListener('click', () => {
@@ -2264,6 +2652,37 @@ async function therapistHome(statusFlash) {
       });
     };
   }
+  document.getElementById('signTimesheet')?.addEventListener('click', async () => {
+    const btn = document.getElementById('signTimesheet');
+    const prev = btn?.textContent;
+    try {
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Signing…';
+      }
+      clearTransientErrors();
+      const out = await runProviderSign(state.weekId || week?.id, state.weekStart);
+      if (!out) {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = prev || t('therapist.signTimesheet');
+        }
+        return;
+      }
+      showActionToast(out.message || 'Timesheet signed and saved.', 'success');
+      await therapistHome({ success: [out.message || 'Timesheet signed and saved.'] });
+    } catch (e) {
+      const errs = Array.isArray(e.errors) && e.errors.length
+        ? e.errors
+        : [e.message || 'Unable to sign timesheet.'];
+      setStatus({ error: errs });
+      showActionToast(errs[0], 'error');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = prev || t('therapist.signTimesheet');
+      }
+    }
+  });
 
   document.querySelectorAll('[data-open-archive]').forEach((btn) => {
     btn.onclick = () => {
@@ -2467,6 +2886,7 @@ async function therapistHome(statusFlash) {
         locked: false,
         errors,
         signerEmail,
+        providerSigned,
       });
       if (blockNow) {
         if (hint) {
@@ -2507,6 +2927,10 @@ async function therapistHome(statusFlash) {
         state.last = out;
         const okMsg = out.message || 'Submitted. Status is now Pending.';
         showActionToast(okMsg, 'success');
+        if (state.therapistPane === 'draft') {
+          state.draftFocusWeekStart = '';
+          sessionStorage.removeItem('tmsDraftFocusWeek');
+        }
         await therapistHome({ success: [okMsg] });
         revealStatus();
       } catch (e) {
@@ -2534,7 +2958,8 @@ function pencilIcon() {
 }
 
 async function showProgramPicker(programTypes, opts = {}) {
-  const types = Array.isArray(programTypes) ? programTypes.filter(Boolean) : [];
+  const types = [...new Set((Array.isArray(programTypes) ? programTypes : []).map((p) => String(p).trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   view(`
     <div class="hero-strip" aria-hidden="true"></div>
     <div class="card school-picker-card">
@@ -2568,7 +2993,8 @@ async function showProgramPicker(programTypes, opts = {}) {
 
 /** @deprecated building picker replaced by program-type scope — kept as alias */
 async function showSchoolPicker(schools, opts = {}) {
-  const types = [...new Set((schools || []).map((s) => s.district || s.name).filter(Boolean))];
+  const types = [...new Set((schools || []).map((s) => s.district || s.name).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   return showProgramPicker(types.length ? types : [], opts);
 }
 
@@ -2650,13 +3076,22 @@ function showTriageDetail(errorText, weekId) {
 async function adminDash() {
   let d = { timesheet: { draft: 0, submitted: 0, signed: 0, locked: 0 }, hha: { pending: 0, confirmed: 0, failed: 0 } };
   let weeks = [];
+  if (!state.adminWeeksWeekStart) state.adminWeeksWeekStart = mondayIso();
+  const weeksAll = state.adminWeeksAll === true;
+  const weeksWeekStart = mondayFromDos(state.adminWeeksWeekStart) || mondayIso();
+  state.adminWeeksWeekStart = weeksWeekStart;
+  const weeksName = String(state.adminWeeksName || '').trim();
   try {
     d = await api('GET', '/dashboard');
   } catch (err) {
     console.warn('dashboard load failed', err);
   }
   try {
-    const listed = await api('GET', '/admin/weeks');
+    const q = new URLSearchParams();
+    if (!weeksAll && weeksWeekStart) q.set('weekStart', weeksWeekStart);
+    if (weeksName) q.set('name', weeksName);
+    const qs = q.toString();
+    const listed = await api('GET', `/admin/weeks${qs ? `?${qs}` : ''}`);
     weeks = Array.isArray(listed?.weeks) ? listed.weeks : [];
   } catch (err) {
     console.warn('admin weeks load failed', err);
@@ -2691,6 +3126,9 @@ async function adminDash() {
     }
     return parts.join(' ') || '<span class="muted">—</span>';
   };
+  const weeksFilterBlurb = weeksAll
+    ? 'Showing all weeks'
+    : `Showing week of ${weeksWeekStart} (Monday)`;
   view(`
     <div class="hero-strip" aria-hidden="true"></div>
     <div class="card">
@@ -2735,6 +3173,17 @@ async function adminDash() {
     </div>
     <div class="card">
       <h2>Weeks</h2>
+      <p class="muted">${esc(weeksFilterBlurb)}${weeksName ? ` · name “${esc(weeksName)}”` : ''}. Date snaps to Monday. Name matches provider or a child on that week.</p>
+      <div class="row">
+        <label>Week start (Monday)
+          <input id="adminWeeksWeek" type="date" value="${esc(weeksWeekStart)}" ${weeksAll ? 'disabled' : ''} />
+        </label>
+        <button type="button" class="btn" id="adminWeeksPrev" ${weeksAll ? 'disabled' : ''} title="Previous week">←</button>
+        <button type="button" class="btn" id="adminWeeksNext" ${weeksAll ? 'disabled' : ''} title="Next week">→</button>
+        <label class="inline-check"><input type="checkbox" id="adminWeeksAll" ${weeksAll ? 'checked' : ''} /> All weeks</label>
+        <label>Provider / child name <input id="adminWeeksName" type="search" value="${esc(weeksName)}" placeholder="Search name…" /></label>
+        <button type="button" class="btn-primary" id="adminWeeksApply">Apply</button>
+      </div>
       ${bulkBar('weeks')}
       <div class="table-wrap">
       <table>
@@ -2749,11 +3198,58 @@ async function adminDash() {
           <td>${esc(w.signerName || w.signerEmail || '—')}</td>
           <td>${hhaStatusCell(w)}</td>
           <td class="week-actions">${weekActions(w)}</td>
-        </tr>`).join('') || `<tr><td colspan="9">No weeks yet.</td></tr>`}
+        </tr>`).join('') || `<tr><td colspan="9">No weeks match these filters.</td></tr>`}
       </table>
       </div>
     </div>
   `);
+  const persistAdminWeeksFilters = () => {
+    sessionStorage.setItem('tmsAdminWeeksWeek', state.adminWeeksWeekStart || '');
+    sessionStorage.setItem('tmsAdminWeeksName', state.adminWeeksName || '');
+    sessionStorage.setItem('tmsAdminWeeksAll', state.adminWeeksAll ? '1' : '0');
+  };
+  const readAdminWeeksFiltersFromForm = () => {
+    const allEl = document.getElementById('adminWeeksAll');
+    const weekEl = document.getElementById('adminWeeksWeek');
+    const nameEl = document.getElementById('adminWeeksName');
+    state.adminWeeksAll = Boolean(allEl?.checked);
+    const rawWeek = weekEl?.value || state.adminWeeksWeekStart || mondayIso();
+    state.adminWeeksWeekStart = mondayFromDos(rawWeek) || mondayIso();
+    if (weekEl && !state.adminWeeksAll) weekEl.value = state.adminWeeksWeekStart;
+    state.adminWeeksName = String(nameEl?.value || '').trim();
+    persistAdminWeeksFilters();
+  };
+  document.getElementById('adminWeeksAll')?.addEventListener('change', () => {
+    readAdminWeeksFiltersFromForm();
+    adminDash();
+  });
+  document.getElementById('adminWeeksWeek')?.addEventListener('change', () => {
+    readAdminWeeksFiltersFromForm();
+    adminDash();
+  });
+  document.getElementById('adminWeeksPrev')?.addEventListener('click', () => {
+    if (state.adminWeeksAll) return;
+    state.adminWeeksWeekStart = addDaysIso(state.adminWeeksWeekStart || mondayIso(), -7);
+    persistAdminWeeksFilters();
+    adminDash();
+  });
+  document.getElementById('adminWeeksNext')?.addEventListener('click', () => {
+    if (state.adminWeeksAll) return;
+    state.adminWeeksWeekStart = addDaysIso(state.adminWeeksWeekStart || mondayIso(), 7);
+    persistAdminWeeksFilters();
+    adminDash();
+  });
+  document.getElementById('adminWeeksApply')?.addEventListener('click', () => {
+    readAdminWeeksFiltersFromForm();
+    adminDash();
+  });
+  document.getElementById('adminWeeksName')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      readAdminWeeksFiltersFromForm();
+      adminDash();
+    }
+  });
   // Load 14-day locker + yellow import settings
   (async () => {
     try {
@@ -3556,6 +4052,42 @@ async function adminProviderDetail(providerId) {
           }).join('') || '<tr><td colspan="9">No sessions in this date range.</td></tr>'}
         </table>
 
+        <h3 style="margin-top:1.25rem">Add session manually</h3>
+        <p class="muted">Enter session fields by hand (no Frontline PDF parsing). Optional note file (.doc / .docx / PDF) is stored on file storage only — it is not read or imported. The session attaches to the week of the date of service, split by the child’s program type / school signer when those differ.</p>
+        <div class="row">
+          <label>Child
+            <select id="pManStudent">${(mandates || []).map((m) => `<option value="${esc(m.studentId)}">${esc(m.studentName || m.studentId)}</option>`).join('') || '<option value="">No caseload children</option>'}</select>
+          </label>
+          <label>Date of service <input id="pManDos" placeholder="MM/DD/YYYY" /></label>
+        </div>
+        <div class="row">
+          <label>Attendance
+            <select id="pManAtt">
+              <option value="attended">attended</option>
+              <option value="missed">missed</option>
+              <option value="makeup">makeup</option>
+            </select>
+          </label>
+          <label>Program type (optional)
+            <select id="pManProgram">
+              <option value="">Auto (from child)</option>
+              ${timesheetSchools.map((s) => `<option value="${esc(s.programType)}">${esc(s.label)}</option>`).join('')}
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Begin time <input id="pManBegin" placeholder="9:00 am" /></label>
+          <label>End time <input id="pManEnd" placeholder="9:30 am" /></label>
+        </div>
+        <div class="row">
+          <label>CPT code <input id="pManCpt" placeholder="97110x2" /></label>
+          <label>Missed reason (if missed) <input id="pManCancel" placeholder="Student Absence / Provider Absence / …" /></label>
+        </div>
+        <label>Notes <textarea id="pManNotes" rows="3"></textarea></label>
+        <label>Note file (optional) <input id="pManFile" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" /></label>
+        <p class="muted">Missed sessions need a Frontline-style reason in the reason field or notes (e.g. Student Absence, Provider Absence, School Closed).</p>
+        <button type="button" class="btn-primary" id="pManSave">Save session</button>
+
         <h3 style="margin-top:1.25rem">Import Frontline / Therapist Activity sessions</h3>
         <p class="muted">Same as the therapist workspace: upload a Frontline or Therapist Activity PDF (text-based). No week selection needed — each session attaches to the week of its date of service (within the 14-day locker), split by program type and school signer when those differ. Children and schools must already exist. Import is all-or-nothing for hard errors; yellow warnings follow the admin screening setting.</p>
         <input id="pSessionPdf" type="file" accept="application/pdf,.pdf" />
@@ -3612,16 +4144,17 @@ async function adminProviderDetail(providerId) {
         <button type="button" class="btn" id="pUploadReport">Upload report</button>
         ${bulkBar('prov-files')}
         <table>
-          <tr>${bulkTh('prov-files')}<th>Label</th><th>When</th><th></th></tr>
+          <tr>${bulkTh('prov-files')}<th>Label</th><th>Kind</th><th>When</th><th></th></tr>
           ${(detail.files || []).map((f) => `<tr>
             ${bulkTd('prov-files', f.id)}
             <td>${esc(f.label || f.s3Key)}</td>
+            <td>${esc(f.kind === 'session_note' ? 'Session note' : (f.kind || 'report'))}</td>
             <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
             <td>
               <button type="button" class="btn" data-view-file="${esc(f.id)}" data-file-label="${esc(f.label || 'report')}">View</button>
               <button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button>
             </td>
-          </tr>`).join('') || '<tr><td colspan="4">No files on file.</td></tr>'}
+          </tr>`).join('') || '<tr><td colspan="5">No files on file.</td></tr>'}
         </table>
       </div>
 
@@ -3800,6 +4333,75 @@ async function adminProviderDetail(providerId) {
       await adminProviderDetail(providerId);
     } catch (e) { setStatus(e.message, 'err'); }
   };
+  document.getElementById('pManSave').onclick = async () => {
+    const btn = document.getElementById('pManSave');
+    try {
+      const studentId = document.getElementById('pManStudent')?.value || '';
+      const dateOfService = document.getElementById('pManDos')?.value?.trim() || '';
+      const attendance = document.getElementById('pManAtt')?.value || 'attended';
+      const notes = document.getElementById('pManNotes')?.value || '';
+      const cancelReason = document.getElementById('pManCancel')?.value?.trim() || '';
+      const programType = document.getElementById('pManProgram')?.value?.trim() || '';
+      if (!studentId) throw new Error('Select a child.');
+      if (!dateOfService) throw new Error('Enter the date of service.');
+      const fileInput = document.getElementById('pManFile');
+      const file = fileInput?.files?.[0] || null;
+      if (file) {
+        const lower = String(file.name || '').toLowerCase();
+        if (!/\.(pdf|doc|docx)$/.test(lower)) {
+          throw new Error('Note file must be a PDF or Word document (.doc / .docx).');
+        }
+      }
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+      }
+      setStatus('Saving session…', '');
+      const weekStart = mondayFromDos(dateOfService) || mondayIso();
+      const childSchoolId = String(
+        sessions.find((x) => x.studentId === studentId)?.schoolId
+          || mandates.find((m) => m.studentId === studentId)?.schoolId
+          || '',
+      ).trim();
+      const ensured = await api('POST', '/week/ensure', {
+        providerId,
+        weekStart,
+        schoolId: childSchoolId || undefined,
+        programType: programType || undefined,
+      });
+      const payload = {
+        weekId: ensured.week?.id,
+        studentId,
+        dateOfService,
+        beginTime: document.getElementById('pManBegin')?.value || '',
+        endTime: document.getElementById('pManEnd')?.value || '',
+        attendance,
+        cancelReason,
+        cptLabel: document.getElementById('pManCpt')?.value?.trim() || '',
+        notes,
+      };
+      if (file) {
+        payload.fileName = file.name;
+        payload.fileBase64 = await fileToBase64(file);
+        payload.fileLabel = `Session note — ${dateOfService} — ${file.name}`;
+      }
+      const out = await api('POST', '/week/sessions', payload);
+      const warns = Array.isArray(out.warnings) ? out.warnings : [];
+      const okMsg = out.file
+        ? 'Session saved and note file stored (not parsed).'
+        : 'Session saved.';
+      setStatus({ success: [okMsg], warn: warns });
+      await adminProviderDetail(providerId);
+    } catch (e) {
+      const errs = Array.isArray(e.errors) && e.errors.length ? e.errors : [e.message || 'Unable to save session.'];
+      const warns = Array.isArray(e.warnings) ? e.warnings : [];
+      setStatus({ error: errs, warn: warns });
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Save session';
+      }
+    }
+  };
   document.getElementById('pUploadSessions').onclick = async () => {
     const btn = document.getElementById('pUploadSessions');
     const issuesHost = document.getElementById('pUploadIssues');
@@ -3937,6 +4539,7 @@ async function adminProviderDetail(providerId) {
         locked: ['submitted', 'signed', 'locked'].includes(String(detail.week?.status || '')),
         errors,
         signerEmail,
+        providerSigned: true,
       });
       if (block) {
         if (hint) {

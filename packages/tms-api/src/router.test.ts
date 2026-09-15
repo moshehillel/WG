@@ -4557,6 +4557,19 @@ describe('TMS MFA org policy', () => {
       aiFlags: [],
       aiBlock: false,
     });
+    const baldwinSessionId = store.data.sessions.find(
+      (s) => s.weekId === week.id && s.studentId === baldwin.id,
+    )!.id;
+    store.upsertTransfer({
+      id: newId(),
+      sessionId: baldwinSessionId,
+      weekId: week.id,
+      status: 'confirmed',
+      hhaVisitId: 'visit-baldwin-1',
+      lastError: '',
+      payloadHash: 'x',
+      updatedAt: nowIso(),
+    });
     store.upsertSession({
       id: newId(),
       weekId: week.id,
@@ -4570,6 +4583,40 @@ describe('TMS MFA org policy', () => {
       serviceType: 'PT School',
       location: 'school',
       notes: 'island processed',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+    // Carle Place draft bin must not appear when filtering to Baldwin.
+    const carleWeek = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'draft',
+      programType: 'Carle Place UFSD',
+      schoolId: schoolB.id,
+      signerName: schoolB.signerName,
+      signerEmail: schoolB.signerEmail,
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+      hhaError: '',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: carleWeek.id,
+      studentId: island.id,
+      dateOfService: '09/03/2026',
+      beginTime: '11:00 am',
+      endTime: '11:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'school',
+      notes: 'carle draft other program',
       cptCodes: [],
       cptLabel: '',
       aiFlags: [],
@@ -4640,17 +4687,20 @@ describe('TMS MFA org policy', () => {
     });
     expect(weeks.status).toBe(200);
     const weeksBody = weeks.body as {
-      processedSessions: Array<{ studentId: string; programType?: string }>;
-      draftWeeks: Array<{ id: string; weekStart: string; status: string; sessionCount: number }>;
+      processedSessions: Array<{ studentId: string; programType?: string; hhaStatus?: string }>;
+      draftWeeks: Array<{ id: string; weekStart: string; status: string; sessionCount: number; programType?: string }>;
       draftSessions: Array<{ studentId: string; weekStart?: string; weekStatus?: string }>;
+      pendingWeeks?: Array<{ id: string; weekStart: string }>;
     };
     const processed = weeksBody.processedSessions;
     expect(processed).toHaveLength(1);
     expect(processed[0]?.studentId).toBe(baldwin.id);
     expect(processed[0]?.programType).toBe('Baldwin UFSD');
+    expect(processed[0]?.hhaStatus).toBe('confirmed');
     expect(weeksBody.draftWeeks.some((w) => w.id === draftWeek.id && w.sessionCount === 1)).toBe(
       true,
     );
+    expect(weeksBody.draftWeeks.some((w) => /carle/i.test(String(w.programType || '')))).toBe(false);
     expect(weeksBody.draftSessions).toHaveLength(1);
     expect(weeksBody.draftSessions[0]?.studentId).toBe(baldwin.id);
     expect(weeksBody.draftSessions[0]?.weekStart).toBe('2026-08-24');

@@ -44,6 +44,17 @@ export const PROVIDER_DATE_FIELD = {
   height: 18,
 } as const;
 
+/**
+ * Provider signature scribble/name area on the left authorization card.
+ * Filled at TMS provider-sign step (before principal SignNow invite).
+ */
+export const PROVIDER_SIGN_FIELD = {
+  x: 42,
+  y: 448,
+  width: 220,
+  height: 40,
+} as const;
+
 /** @deprecated Prefer PRINCIPAL_SIGN_FIELD — kept for older DocuSign-style callers. */
 export const PRINCIPAL_SIGN_TAB = {
   pageNumber: '1',
@@ -217,8 +228,10 @@ function buildPageContent(input: {
   signerName: string;
   signerEmail: string;
   schoolDistrict?: string;
-  /** Therapist signature date (MM/DD/YYYY), stamped at submit. */
+  /** Therapist signature date (MM/DD/YYYY), stamped at provider-sign. */
   providerSignDate?: string;
+  /** Typed / wet-sign display name drawn on the provider signature line. */
+  providerSignName?: string;
   rows: RowCells[];
   pageIndex: number;
   pageCount: number;
@@ -396,8 +409,23 @@ function buildPageContent(input: {
         // Tiny white anchors for e-sign field placement / debugging
         ops.push(textAt(card.x + 14, cardsY + 6, PRINCIPAL_SIGN_ANCHOR, 4, C.white, false));
         ops.push(textAt(dateX + 28, cardsY + 6, '/date-principal/', 4, C.white, false));
-      } else if (input.providerSignDate) {
-        ops.push(textAt(dateX + 30, cardsY + 8, input.providerSignDate, 9, C.ink, false));
+      } else {
+        const signName = String(input.providerSignName || '').trim();
+        if (signName) {
+          ops.push(
+            textAt(
+              card.x + 18,
+              cardsY + 40,
+              truncate(signName, 10, cardW - 36),
+              11,
+              C.ink,
+              false,
+            ),
+          );
+        }
+        if (input.providerSignDate) {
+          ops.push(textAt(dateX + 30, cardsY + 8, input.providerSignDate, 9, C.ink, false));
+        }
       }
     }
   } else if (input.pageIndex < input.pageCount - 1) {
@@ -520,9 +548,11 @@ export function buildTimesheetPdf(input: {
   schoolDistrict?: string;
   /**
    * Therapist/provider Date under the left signature card (MM/DD/YYYY).
-   * Pass at submit so the PDF is dated before SignNow; omit for draft previews.
+   * Pass at provider-sign so the PDF is dated before principal SignNow; omit for draft previews.
    */
   providerSignDate?: string;
+  /** Provider typed name drawn on the left signature line. */
+  providerSignName?: string;
   rows: Array<{ session: SessionRow; student: Student | undefined; payAmount?: number | null }>;
 }): Uint8Array {
   const dataRows: RowCells[] = input.rows
@@ -567,6 +597,7 @@ export function buildTimesheetPdf(input: {
       signerEmail: input.signerEmail,
       schoolDistrict: input.schoolDistrict,
       providerSignDate: input.providerSignDate,
+      providerSignName: input.providerSignName,
       rows: chunk,
       pageIndex,
       pageCount,
