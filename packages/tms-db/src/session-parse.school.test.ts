@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isNonSchoolLikeSetting,
   looksLikeDistrictLabel,
   parseWeeklySessionText,
   pdfSchoolConflictsWithChild,
@@ -122,5 +123,52 @@ Provider Signature/Credentials
     const rows = parseWeeklySessionText(text);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows[0]?.schoolName).toMatch(/Woodland School/i);
+  });
+
+  it('rejects note fragments and ICD codes as school names', () => {
+    expect(isNonSchoolLikeSetting('with reward (walking on hallway).')).toBe(true);
+    expect(isNonSchoolLikeSetting('F82')).toBe(true);
+    expect(isNonSchoolLikeSetting('poor body safety awareness.')).toBe(true);
+    expect(isNonSchoolLikeSetting('Powells Lane')).toBe(false);
+    expect(isNonSchoolLikeSetting('Clara H. Carlson School')).toBe(false);
+  });
+
+  it('ignores note scraps / F82 and prefers Clara H. Carlson School', () => {
+    const text = `
+District/Agency/BOCES: Elmont Union Free School District
+Summary of Related Service Session Notes
+Service: Physical Therapy
+Service Provider: Test, Provider (White Glove)
+Student Name: Anthony Duroseau, D.O.B. 01/01/2018
+Clara H. Carlson School
+09/03/2026 10:00 am 10:30 am
+with reward (walking on hallway).
+Service Provided: gait training with reward
+Provider Signature/Credentials  Date
+Test Provider PT
+Sep  3 2026 10:40AM
+
+Student Name: Valerie Eley, D.O.B. 01/01/2018
+09/03/2026 11:00 am 11:30 am
+F82
+Service Provided: balance work
+Provider Signature/Credentials  Date
+Test Provider PT
+Sep  3 2026 11:40AM
+
+Student Name: Anthony Figueroa Contreras, D.O.B. 01/01/2018
+09/03/2026 1:00 pm 1:30 pm
+poor body safety awareness.
+Service Provided: safety awareness practice
+Provider Signature/Credentials  Date
+Test Provider PT
+Sep  3 2026 1:40PM
+`;
+    const rows = parseWeeklySessionText(text);
+    expect(rows.length).toBe(3);
+    for (const row of rows) {
+      expect(row.schoolName).toMatch(/Clara H\. Carlson School/i);
+      expect(row.schoolName).not.toMatch(/reward|F82|awareness/i);
+    }
   });
 });

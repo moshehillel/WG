@@ -186,11 +186,31 @@ function isNumericOrRatioSchoolToken(name: string): boolean {
   return false;
 }
 
+/**
+ * PDF/text extraction often surfaces note scraps, ICD codes, or sentence fragments
+ * where a Setting / unlabeled building line should be. Reject those so we fall back
+ * to a real "... School" hit or the child's caseload school.
+ */
+export function isNonSchoolLikeSetting(name: string): boolean {
+  const n = String(name || '').replace(/\s+/g, ' ').trim();
+  if (!n || isNumericOrRatioSchoolToken(n)) return true;
+  // ICD-10 style (F82, R26.2) — not a building name.
+  if (/^[A-TV-Z]\d{2}(?:\.\d{1,4})?$/i.test(n)) return true;
+  // Sentence / clinical note fragments.
+  if (/\.\s*$/.test(n)) return true;
+  if (/^[a-z]/.test(n)) return true;
+  // Parenthetical activity notes without a school token.
+  if (/\([^)]{3,}\)/.test(n) && !/\b(school|ms\/hs|m\.?s\.?|h\.?s\.?|elem)\b/i.test(n)) {
+    return true;
+  }
+  return false;
+}
+
 function takeSchoolLabel(raw: string): string {
   const name = String(raw || '').replace(/\s+/g, ' ').trim();
   if (
     !name ||
-    isNumericOrRatioSchoolToken(name) ||
+    isNonSchoolLikeSetting(name) ||
     isServiceTypeSchoolLabel(name) ||
     isGenericSettingLabel(name)
   ) {
@@ -251,9 +271,9 @@ function frontlineUnlabeledSetting(slice: string): string {
     // Labeled Setting/School already handled above; if the value was rejected (e.g. "1"), skip the line.
     if (/^(?:Setting|School(?:\s*Name)?|Recommended School)\s*:/i.test(line)) continue;
     if (/^(?:Ratio|CPT|ICD|Units|Session|Log Type|Notes)\b/i.test(line)) continue;
-    if (/^[Rr]\d{2}(?:\.\d+)?$/.test(line)) continue;
+    if (/^[A-TV-Z]\d{2}(?:\.\d{1,4})?$/i.test(line)) continue;
     if (/^\d{4,5}(?:\s*x\s*\d+)?$/.test(line)) continue;
-    if (isNumericOrRatioSchoolToken(line)) continue;
+    if (isNonSchoolLikeSetting(line)) continue;
     const name = takeSchoolLabel(line);
     if (!name || looksLikeDistrictLabel(name)) continue;
     // Building names are short; skip long narrative / note lines.
@@ -267,14 +287,15 @@ function frontlineUnlabeledSetting(slice: string): string {
 function schoolFromSlice(slice: string): string {
   const setting = takeSchoolLabel((slice.match(/\bSetting\s*:\s*([^\n]+)/i) || [])[1] || '');
   if (setting && !looksLikeDistrictLabel(setting)) return setting;
-  const unlabeled = frontlineUnlabeledSetting(slice);
-  if (unlabeled) return unlabeled;
+  // Prefer "... School" / MS/HS patterns before loose unlabeled lines (notes, ICD).
   const re = new RegExp(SCHOOL_NAME_RE.source, 'g');
   for (const m of slice.matchAll(re)) {
     const name = takeSchoolLabel(m[1] || '');
     if (!name || looksLikeDistrictLabel(name)) continue;
     return name;
   }
+  const unlabeled = frontlineUnlabeledSetting(slice);
+  if (unlabeled) return unlabeled;
   return '';
 }
 
