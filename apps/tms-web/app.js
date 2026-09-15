@@ -3176,10 +3176,12 @@ async function adminDash() {
       <p class="muted">${esc(weeksFilterBlurb)}${weeksName ? ` · name “${esc(weeksName)}”` : ''}. Date snaps to Monday. Name matches provider or a child on that week.</p>
       <div class="row">
         <label>Week start (Monday)
-          <input id="adminWeeksWeek" type="date" value="${esc(weeksWeekStart)}" ${weeksAll ? 'disabled' : ''} />
+          <span class="week-start-controls">
+            <input id="adminWeeksWeek" type="date" value="${esc(weeksWeekStart)}" ${weeksAll ? 'disabled' : ''} />
+            <button type="button" class="icon-btn" id="adminWeeksPrev" ${weeksAll ? 'disabled' : ''} title="Previous week" aria-label="Previous week">←</button>
+            <button type="button" class="icon-btn" id="adminWeeksNext" ${weeksAll ? 'disabled' : ''} title="Next week" aria-label="Next week">→</button>
+          </span>
         </label>
-        <button type="button" class="btn" id="adminWeeksPrev" ${weeksAll ? 'disabled' : ''} title="Previous week">←</button>
-        <button type="button" class="btn" id="adminWeeksNext" ${weeksAll ? 'disabled' : ''} title="Next week">→</button>
         <label class="inline-check"><input type="checkbox" id="adminWeeksAll" ${weeksAll ? 'checked' : ''} /> All weeks</label>
         <label>Provider / child name <input id="adminWeeksName" type="search" value="${esc(weeksName)}" placeholder="Search name…" /></label>
         <button type="button" class="btn-primary" id="adminWeeksApply">Apply</button>
@@ -5065,7 +5067,6 @@ async function adminProviders() {
             <td>${esc(pid)}</td>
             <td>${esc(p.discipline || '—')}</td>
             <td>
-              <button type="button" class="btn" data-open-provider="${esc(pid)}">Open</button>
               <button type="button" class="btn" data-del-provider="${esc(pid)}">Remove</button>
             </td>
           </tr>`).join('') || ''}

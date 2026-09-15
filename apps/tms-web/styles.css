@@ -136,13 +136,28 @@ body {
   justify-content: center;
   width: 32px;
   height: 32px;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
   color: var(--accent-deep);
   cursor: pointer;
+  flex: 0 0 auto;
 }
-.icon-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+.icon-btn:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); }
+.icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.week-start-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.28rem;
+}
+.week-start-controls > input[type="date"] {
+  margin-top: 0;
+  width: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+}
 .row-actions { white-space: nowrap; display: flex; gap: 0.35rem; align-items: center; }
 .timesheet-pdf-panel {
   width: min(1100px, 96vw);
@@ -970,6 +985,17 @@ label > textarea {
   font-weight: 450;
   font-size: 0.92rem;
   color: #0f172a;
+}
+label.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 1.35rem;
+  font-weight: 600;
+}
+label.inline-check > input {
+  margin-top: 0;
+  width: auto;
 }
 input, select, textarea {
   width: 100%;
