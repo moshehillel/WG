@@ -1402,11 +1402,12 @@ export async function handleTmsRequest(
     }
     if (!pdf) return json(404, { error: 'Archived file missing from storage.' });
     const safeName = String(row.filename || 'archive.pdf').replace(/[^\w.\-]+/g, '_');
+    const ctype = contentTypeForStoredFile(row.s3Key, row.filename);
     return {
       status: 200,
       headers: {
-        'content-type': 'application/pdf',
-        'content-disposition': `inline; filename="${safeName}"`,
+        'content-type': ctype,
+        'content-disposition': `${ctype === 'application/pdf' ? 'inline' : 'attachment'}; filename="${safeName}"`,
       },
       body: pdf,
     };
@@ -2927,10 +2928,30 @@ export async function handleTmsRequest(
     // Already program-scoped via weeksOut filter (wrong-program bins dropped).
     const draftWeeks = weeksOut.filter((w) => w.draft && w.sessionCount > 0);
     const draftSessions = mapWeekSessions(new Set(draftWeeks.map((w) => w.id)));
-    // Pending weeks for provider week filter (current + submitted + unpaid signed, not prior drafts).
+    // Pending weeks (current + submitted + unpaid signed). Prior drafts stay on Draft tab rows,
+    // but their Mondays still appear in the Pending week selector so providers can navigate.
     const pendingWeeks = weeksOut.filter((w) => w.pending);
+    // Always offer a rolling window of recent Mondays (not only current), plus any draft/pending
+    // weekStarts that fall outside that window.
+    const RECENT_PENDING_WEEK_COUNT = 8;
+    const recentWeekStarts: string[] = [];
+    {
+      let ws = currentStart;
+      for (let i = 0; i < RECENT_PENDING_WEEK_COUNT; i++) {
+        if (!ws) break;
+        recentWeekStarts.push(ws);
+        const dt = parseDos(ws);
+        if (!dt) break;
+        dt.setUTCDate(dt.getUTCDate() - 7);
+        ws = dt.toISOString().slice(0, 10);
+      }
+    }
     const pendingWeekStarts = [
-      ...new Set(pendingWeeks.map((w) => w.weekStart).filter(Boolean)),
+      ...new Set([
+        ...pendingWeeks.map((w) => w.weekStart).filter(Boolean),
+        ...draftWeeks.map((w) => w.weekStart).filter(Boolean),
+        ...recentWeekStarts,
+      ]),
     ].sort((a, b) => String(b).localeCompare(String(a)));
     return json(200, {
       weeks: weeksOut,
@@ -2940,6 +2961,7 @@ export async function handleTmsRequest(
       draftSessions,
       pendingWeeks,
       pendingWeekStarts,
+      pendingWeekWindow: RECENT_PENDING_WEEK_COUNT,
       programType: programType || '',
     });
   }
@@ -4145,13 +4167,24 @@ export async function handleTmsRequest(
         errors: check.errors,
       });
     }
-    // Optional attachment: store bytes only (no session-parse / PDF reading).
+    // Optional custom note (Word/PDF): store bytes only — never session-parse / PDF-read.
+    // Locker links the file to the session; uploads archive mirrors Frontline/Therapist Activity archive.
     let attachedFile: StoredFile | undefined;
+    let archiveRow: Awaited<ReturnType<typeof persistArchivePdf>> = null;
     const attachBuf = anyFileBufferFromBody(b);
     const attachName = String(b.fileName || b.attachmentName || '').trim();
     if (attachBuf) {
+      const lowerName = attachName.toLowerCase();
+      if (attachName && !/\.(pdf|doc|docx)$/.test(lowerName)) {
+        store.removeSession(session.id);
+        return json(400, {
+          error: 'Custom note must be a PDF or Word document (.doc / .docx).',
+          errors: ['Custom note must be a PDF or Word document (.doc / .docx).'],
+        });
+      }
       const fileId = newId();
       const ext = (attachName.split('.').pop() || 'bin').replace(/[^\w]+/g, '') || 'bin';
+      const label = String(b.fileLabel || attachName || 'Custom session note');
       const s3Key = `tms/locker/providers/${targetWeek.providerId || 'p'}/${fileId}.${ext}`;
       await putLockerPdf(s3Key, attachBuf);
       attachedFile = store.addFile({
@@ -4162,13 +4195,31 @@ export async function handleTmsRequest(
         sessionId: session.id,
         kind: 'session_note',
         s3Key,
-        label: String(b.fileLabel || attachName || 'Session note file'),
+        label,
         createdAt: nowIso(),
+      });
+      const archiveId = newId();
+      const archiveExt = ext === 'bin' ? 'pdf' : ext;
+      archiveRow = await persistArchivePdf({
+        store,
+        kind: 'upload',
+        sourceType: 'upload_other',
+        userId: ctx.user.id,
+        providerId: String(targetWeek.providerId || ''),
+        schoolId: childSchoolId || targetWeek.schoolId || '',
+        weekId: targetWeek.id,
+        weekStart: targetWeek.weekStart,
+        filename: attachName || label || `custom-note.${archiveExt}`,
+        s3Key: `tms/archive/uploads/${targetWeek.providerId || 'p'}/${archiveId}.${archiveExt}`,
+        status: 'imported',
+        pdf: attachBuf,
+        replaceId: archiveId,
       });
     }
     return json(200, {
       session,
       file: attachedFile || null,
+      archive: archiveRow || null,
       warnings: [...check.warnings, ...screenedLocal.warnFlags],
     });
   }

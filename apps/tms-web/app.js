@@ -562,6 +562,17 @@ function addDaysIso(iso, days) {
   return d.toISOString().slice(0, 10);
 }
 
+/** Recent Mondays for Pending week selector (current first, then prior weeks). */
+function recentMondayStarts(count = 8) {
+  const out = [];
+  let ws = mondayIso();
+  for (let i = 0; i < count; i++) {
+    out.push(ws);
+    ws = addDaysIso(ws, -7);
+  }
+  return out;
+}
+
 async function downloadReportXlsx(path, filename) {
   const res = await fetch(API + path, { method: 'GET', headers: headers() });
   if (!res.ok) {
@@ -2103,17 +2114,22 @@ async function therapistHome(statusFlash) {
             w.isCurrent,
         );
       }
-      pendingWeekStarts = Array.isArray(listed.pendingWeekStarts)
-        ? listed.pendingWeekStarts
-        : [...new Set(pendingWeeks.map((w) => w.weekStart).filter(Boolean))];
-      if (!pendingWeekStarts.includes(mondayIso())) pendingWeekStarts = [mondayIso(), ...pendingWeekStarts];
-      pendingWeekStarts = [...new Set(pendingWeekStarts)].sort((a, b) => String(b).localeCompare(String(a)));
+      // Union: API pendingWeekStarts + draft/pending Mondays + last 8 weeks (never only current).
+      pendingWeekStarts = [
+        ...(Array.isArray(listed.pendingWeekStarts) ? listed.pendingWeekStarts : []),
+        ...pendingWeeks.map((w) => w.weekStart).filter(Boolean),
+        ...draftWeeks.map((w) => w.weekStart).filter(Boolean),
+        ...recentMondayStarts(8),
+      ];
+      pendingWeekStarts = [...new Set(pendingWeekStarts.filter(Boolean))].sort((a, b) =>
+        String(b).localeCompare(String(a)),
+      );
     } catch {
       processedSessions = [];
       draftWeeks = [];
       draftSessions = [];
       pendingWeeks = [];
-      pendingWeekStarts = [mondayIso()];
+      pendingWeekStarts = recentMondayStarts(8);
     }
   }
   const pane =
@@ -4053,8 +4069,8 @@ async function adminProviderDetail(providerId) {
           }).join('') || '<tr><td colspan="9">No sessions in this date range.</td></tr>'}
         </table>
 
-        <h3 style="margin-top:1.25rem">Add session manually</h3>
-        <p class="muted">Enter session fields by hand (no Frontline PDF parsing). Optional note file (.doc / .docx / PDF) is stored on file storage only — it is not read or imported. The session attaches to the week of the date of service, split by the child’s program type / school signer when those differ.</p>
+        <h3 style="margin-top:1.25rem">Manual session + custom note</h3>
+        <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note (linked to this provider / week).</p>
         <div class="row">
           <label>Child
             <select id="pManStudent">${(mandates || []).map((m) => `<option value="${esc(m.studentId)}">${esc(m.studentName || m.studentId)}</option>`).join('') || '<option value="">No caseload children</option>'}</select>
@@ -4085,12 +4101,12 @@ async function adminProviderDetail(providerId) {
           <label>Missed reason (if missed) <input id="pManCancel" placeholder="Student Absence / Provider Absence / …" /></label>
         </div>
         <label>Notes <textarea id="pManNotes" rows="3"></textarea></label>
-        <label>Note file (optional) <input id="pManFile" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" /></label>
-        <p class="muted">Missed sessions need a Frontline-style reason in the reason field or notes (e.g. Student Absence, Provider Absence, School Closed).</p>
-        <button type="button" class="btn-primary" id="pManSave">Save session</button>
+        <label>Custom note file (optional Word/PDF — not parsed) <input id="pManFile" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" /></label>
+        <p class="muted">Missed sessions need a Frontline-style reason in the reason field or notes (e.g. Student Absence, Provider Absence, School Closed). Session attaches to the week of the date of service, split by the child’s program type / school signer when those differ.</p>
+        <button type="button" class="btn-primary" id="pManSave">Submit session</button>
 
         <h3 style="margin-top:1.25rem">Import Frontline / Therapist Activity sessions</h3>
-        <p class="muted">Same as the therapist workspace: upload a Frontline or Therapist Activity PDF (text-based). No week selection needed — each session attaches to the week of its date of service (within the 14-day locker), split by program type and school signer when those differ. Children and schools must already exist. Import is all-or-nothing for hard errors; yellow warnings follow the admin screening setting.</p>
+        <p class="muted">Parsed import only (Frontline Related Service Session Notes or Therapist Activity Output PDF, text-based). Not for custom Word/PDF notes — use Manual session above for those. No week selection needed — each session attaches to the week of its date of service (within the 14-day locker), split by program type and school signer when those differ. Children and schools must already exist. Import is all-or-nothing for hard errors; yellow warnings follow the admin screening setting.</p>
         <input id="pSessionPdf" type="file" accept="application/pdf,.pdf" />
         <button type="button" class="btn-primary" id="pUploadSessions">Import sessions</button>
         <div id="pUploadIssues" class="upload-issues" hidden></div>
@@ -4355,9 +4371,9 @@ async function adminProviderDetail(providerId) {
       }
       if (btn) {
         btn.disabled = true;
-        btn.textContent = 'Saving…';
+        btn.textContent = 'Submitting…';
       }
-      setStatus('Saving session…', '');
+      setStatus('Submitting session…', '');
       const weekStart = mondayFromDos(dateOfService) || mondayIso();
       const childSchoolId = String(
         sessions.find((x) => x.studentId === studentId)?.schoolId
@@ -4384,12 +4400,12 @@ async function adminProviderDetail(providerId) {
       if (file) {
         payload.fileName = file.name;
         payload.fileBase64 = await fileToBase64(file);
-        payload.fileLabel = `Session note — ${dateOfService} — ${file.name}`;
+        payload.fileLabel = `Custom note — ${dateOfService} — ${file.name}`;
       }
       const out = await api('POST', '/week/sessions', payload);
       const warns = Array.isArray(out.warnings) ? out.warnings : [];
-      const okMsg = out.file
-        ? 'Session saved and note file stored (not parsed).'
+      const okMsg = out.archive || out.file
+        ? 'Session saved; custom note archived (not parsed).'
         : 'Session saved.';
       setStatus({ success: [okMsg], warn: warns });
       await adminProviderDetail(providerId);
@@ -4399,7 +4415,7 @@ async function adminProviderDetail(providerId) {
       setStatus({ error: errs, warn: warns });
       if (btn) {
         btn.disabled = false;
-        btn.textContent = 'Save session';
+        btn.textContent = 'Submit session';
       }
     }
   };
@@ -6009,6 +6025,7 @@ function archiveSourceLabel(sourceType) {
   const v = String(sourceType || '');
   if (v === 'therapist_activity') return 'Therapist Activity';
   if (v === 'frontline') return 'Frontline';
+  if (v === 'upload_other') return 'Custom note';
   if (v === 'timesheet' || v === 'timesheet_signed') return 'Timesheet';
   return v || 'Upload';
 }
@@ -6017,13 +6034,27 @@ async function openArchivePdf(archiveId) {
   const id = String(archiveId || '').trim();
   if (!id) return;
   try {
-    setStatus('Opening archived PDF…', '');
+    setStatus('Opening archived file…', '');
     const raw = await api('GET', `/archive/${encodeURIComponent(id)}/file`);
+    const ctype = String((raw && raw.type) || '').toLowerCase();
+    const isPdf = ctype.includes('pdf');
     const blob =
-      raw && raw.type && String(raw.type).includes('pdf')
+      raw instanceof Blob
         ? raw
-        : new Blob([await raw.arrayBuffer()], { type: 'application/pdf' });
+        : new Blob([await raw.arrayBuffer()], { type: ctype || 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
+    if (!isPdf) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'custom-note';
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      setStatus('Downloaded archived note.', 'ok');
+      return;
+    }
     const existing = document.getElementById('archivePdfModal');
     if (existing) existing.remove();
     const backdrop = document.createElement('div');
@@ -6051,7 +6082,7 @@ async function openArchivePdf(archiveId) {
     });
     setStatus('', '');
   } catch (e) {
-    setStatus(e.message || 'Unable to open archived PDF.', 'error');
+    setStatus(e.message || 'Unable to open archived file.', 'error');
   }
 }
 

@@ -4691,6 +4691,7 @@ describe('TMS MFA org policy', () => {
       draftWeeks: Array<{ id: string; weekStart: string; status: string; sessionCount: number; programType?: string }>;
       draftSessions: Array<{ studentId: string; weekStart?: string; weekStatus?: string }>;
       pendingWeeks?: Array<{ id: string; weekStart: string }>;
+      pendingWeekStarts?: string[];
     };
     const processed = weeksBody.processedSessions;
     expect(processed).toHaveLength(1);
@@ -4705,5 +4706,85 @@ describe('TMS MFA org policy', () => {
     expect(weeksBody.draftSessions[0]?.studentId).toBe(baldwin.id);
     expect(weeksBody.draftSessions[0]?.weekStart).toBe('2026-08-24');
     expect(weeksBody.draftSessions[0]?.weekStatus).toBe('draft');
+    // Pending week selector includes draft Mondays + a rolling recent window (not only current).
+    expect(Array.isArray(weeksBody.pendingWeekStarts)).toBe(true);
+    expect((weeksBody.pendingWeekStarts || []).length).toBeGreaterThanOrEqual(8);
+    expect(weeksBody.pendingWeekStarts).toContain('2026-08-24');
+  });
+});
+
+describe('TMS admin manual session custom note archive', () => {
+  it('creates session, stores locker note, and archives custom Word/PDF without parsing', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.data.schools[0]!;
+    const student = store.upsertStudent({
+      id: newId(),
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      dob: '01/01/2018',
+      schoolId: school.id,
+      programId: '1012074',
+      programType: 'Westbury',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'PT School',
+      frequencyPerWeek: 2,
+      durationMinutes: 30,
+      groupSize: 1,
+      billingServiceName: 'PT school 30',
+      createdAt: nowIso(),
+    });
+    const weekStart = '2026-09-14';
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: adminH,
+      query: {},
+      body: { providerId: provider.id, weekStart, schoolId: school.id },
+    });
+    expect(ensured.status).toBe(200);
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+    const fileBytes = Buffer.from('fake-docx-bytes-not-a-real-office-file');
+    const added = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: adminH,
+      query: {},
+      body: {
+        weekId,
+        studentId: student.id,
+        dateOfService: '09/15/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: manual entry with custom note attachment',
+        serviceType: 'PT School',
+        fileName: 'custom-note.docx',
+        fileBase64: fileBytes.toString('base64'),
+        fileLabel: 'Custom note — 09/15/2026 — custom-note.docx',
+      },
+    });
+    expect(added.status).toBe(200);
+    const body = added.body as {
+      session: { id: string };
+      file: { id: string; kind: string; sessionId?: string; s3Key: string } | null;
+      archive: { id: string; kind: string; sourceType: string; s3Key: string; filename: string } | null;
+    };
+    expect(body.session?.id).toBeTruthy();
+    expect(body.file?.kind).toBe('session_note');
+    expect(body.file?.sessionId).toBe(body.session.id);
+    expect(body.file?.s3Key).toMatch(/^tms\/locker\/providers\//);
+    expect(body.archive?.kind).toBe('upload');
+    expect(body.archive?.sourceType).toBe('upload_other');
+    expect(body.archive?.filename).toBe('custom-note.docx');
+    expect(body.archive?.s3Key).toMatch(/^tms\/archive\/uploads\//);
+    expect(body.archive?.s3Key).toMatch(/\.docx$/);
+    expect(store.data.archives.some((a) => a.id === body.archive?.id && a.sourceType === 'upload_other')).toBe(
+      true,
+    );
   });
 });
