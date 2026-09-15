@@ -51,3 +51,14 @@ export function isInvalidHhaPatientError(err: unknown): boolean {
   if (/ErrorID\s*=\s*-56\b/i.test(msg)) return true;
   return /Patient ID is an invalid/i.test(msg) || /invalid for (?:the )?current Agency/i.test(msg);
 }
+
+/**
+ * True when HHA rejected a VisitID for this agency (GetVisitInfoV2 ErrorID=-415).
+ * Typical: stale/sandbox VisitID, or confirm called before the new visit is readable.
+ * Transfer should keep the scheduled VisitID and not abort the week.
+ */
+export function isInvalidHhaVisitError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  if (/ErrorID\s*=\s*-415\b/i.test(msg)) return true;
+  return /Invalid VisitID for current agency/i.test(msg);
+}

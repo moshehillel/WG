@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  isCreateScheduleShiftOverlapError,
   NEW_SERVICE_EVV_VISIT_END,
   NEW_SERVICE_EVV_VISIT_START,
   NEW_SERVICE_PROVIDER_COLUMN,
@@ -176,6 +177,7 @@ describe('schedule-evv-new-service-visit helpers', () => {
         visitDate: '2026-08-20',
         payCodeId: 'pay-ot72',
         payRate: '72.0000',
+        scheduleType: 'Skilled',
       }),
     );
   });
@@ -214,6 +216,7 @@ describe('schedule-evv-new-service-visit helpers', () => {
       expect.objectContaining({
         payCodeId: 'pay-ot70',
         payRate: '70',
+        scheduleType: 'Skilled',
       }),
     );
   });
@@ -257,5 +260,87 @@ describe('schedule-evv-new-service-visit helpers', () => {
         programType: 'Garden City UFSD Therapy',
       }),
     ).toBe(false);
+  });
+
+  it('detects CreateSchedule shift-overlap errors but not other -310s', () => {
+    expect(
+      isCreateScheduleShiftOverlapError(
+        new Error(
+          'HHA CreateSchedule failed: "Your shift is overlapping with Patient: [WGC-1/X]  Overlapping shifts are not allowed." (ErrorID=-310)',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isCreateScheduleShiftOverlapError(
+        new Error(
+          'HHA CreateSchedule failed: "Caregiver: [WGC-1/X] cannot be scheduled for OT visit." (ErrorID=-310)',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it('treats CreateSchedule shift overlap as success for EVV placeholder', async () => {
+    const locateOrScheduleVisit = vi.fn(async () => {
+      throw new Error(
+        'HHA CreateSchedule failed: "Your shift is overlapping with Patient: [WGC-924758/Abdulmateen Marwa ]  Overlapping shifts are not allowed." (ErrorID=-310)',
+      );
+    });
+    const hha = {
+      resolveCaregiverId: vi.fn(async () => 'cg-1'),
+      resolvePayCodeId: vi.fn(async () => 'pay-ot72'),
+      listPayRateCodes: vi.fn(async () => []),
+      locateOrScheduleVisit,
+    };
+    const result = await scheduleEvvNewServiceVisit({
+      row: {
+        caseId: '166448',
+        firstName: 'Marwa',
+        lastName: 'Abdulmateen',
+        sourceReport: 'new_services',
+        programType: 'Americare Certified',
+        providerName: 'HOROWITZ LEAH',
+        startDate: '08/20/2026',
+        serviceCode: 'OT HC Eval',
+        payRate: '72',
+      },
+      hha: hha as never,
+      patientId: 'p1',
+      contractId: 'c1',
+      serviceCodeId: 's1',
+    });
+    expect(result).toEqual({ id: 'overlap-existing', created: false });
+  });
+
+  it('still throws non-overlap CreateSchedule -310 for EVV placeholder', async () => {
+    const locateOrScheduleVisit = vi.fn(async () => {
+      throw new Error(
+        'HHA CreateSchedule failed: "Caregiver: [WGC-35705/HOROWITZ LEAH ] cannot be scheduled for OT visit." (ErrorID=-310)',
+      );
+    });
+    const hha = {
+      resolveCaregiverId: vi.fn(async () => 'cg-1'),
+      resolvePayCodeId: vi.fn(async () => 'pay-ot72'),
+      listPayRateCodes: vi.fn(async () => []),
+      locateOrScheduleVisit,
+    };
+    await expect(
+      scheduleEvvNewServiceVisit({
+        row: {
+          caseId: '166448',
+          firstName: 'Marwa',
+          lastName: 'Abdulmateen',
+          sourceReport: 'new_services',
+          programType: 'Americare Certified',
+          providerName: 'HOROWITZ LEAH',
+          startDate: '08/20/2026',
+          serviceCode: 'OT HC Eval',
+          payRate: '72',
+        },
+        hha: hha as never,
+        patientId: 'p1',
+        contractId: 'c1',
+        serviceCodeId: 's1',
+      }),
+    ).rejects.toThrow(/cannot be scheduled for OT visit/);
   });
 });

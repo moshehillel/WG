@@ -27,6 +27,45 @@ describe('resolvePlacementForService', () => {
     ).toBe('p1');
   });
 
+  it('prefers program-scoped resolvedServiceCodeId over flat SERVICE_CODE_MAP', () => {
+    expect(
+      resolvePlacementForService({
+        serviceCode: 'PT HC Eval',
+        startDate: '8/14/2026',
+        contractId: 61591,
+        // Flat map would use a different ID; placement has Extended OASIS id.
+        resolvedServiceCodeIds: ['785139', '1416587'],
+        active: [
+          {
+            placementId: '6761818',
+            serviceCodeId: '785139',
+            contractId: '61591',
+            startDate: '2024-11-03',
+          },
+        ],
+      }),
+    ).toBe('6761818');
+  });
+
+  it('matches sole byService placement when PS begin date ≠ HHA ServiceStartDate', () => {
+    expect(
+      resolvePlacementForService({
+        serviceCode: 'PT HC Eval',
+        startDate: '8/14/2026',
+        contractId: 61591,
+        resolvedServiceCodeId: '785139',
+        active: [
+          {
+            placementId: '6761818',
+            serviceCodeId: '785139',
+            contractId: '61591',
+            startDate: '2024-11-03',
+          },
+        ],
+      }),
+    ).toBe('6761818');
+  });
+
   it('matches service code and begin date among multiple placements', () => {
     expect(
       resolvePlacementForService({

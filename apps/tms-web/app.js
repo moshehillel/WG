@@ -66,7 +66,7 @@ const REPORT_LIST = [
   {
     id: 'internal-notes',
     title: 'Internal notes',
-    blurb: 'All provider internal notes across the caseload, filterable by date and provider.',
+    blurb: 'All provider and child internal notes across the caseload, filterable by date and provider.',
   },
   {
     id: 'session-notes',
@@ -611,7 +611,15 @@ async function api(method, path, body, opts = {}) {
     throw apiError('Please sign in again.', { status: 401 });
   }
   const ct = res.headers.get('content-type') || '';
-  const data = ct.includes('pdf') ? await res.blob() : await res.json().catch(() => ({}));
+  const isBinary =
+    ct.includes('pdf') ||
+    ct.includes('octet-stream') ||
+    ct.startsWith('image/') ||
+    ct.includes('msword') ||
+    ct.includes('officedocument') ||
+    ct.includes('ms-excel') ||
+    ct.includes('spreadsheetml');
+  const data = isBinary ? await res.blob() : await res.json().catch(() => ({}));
   if (!res.ok && !(res.status === 207)) {
     const { errors, warnings, summary } = issueListFromPayload(data);
     const msg =
@@ -1610,6 +1618,17 @@ async function openTimesheetModal(opts) {
 }
 
 async function fetchAndShowTimesheet({ weekId, weekStart, providerId, providerName, status, schoolId }) {
+  // Prefer the explicit week row (admin View on a locked/signed bin). Do not re-resolve via
+  // GET /week — that can pick a sibling school/signer draft and show an unsigned PDF.
+  if (weekId) {
+    await openTimesheetModal({
+      weekId,
+      weekStart: weekStart || '',
+      providerName: providerName || '',
+      status: status || '',
+    });
+    return;
+  }
   const q = new URLSearchParams();
   if (weekStart) q.set('weekStart', weekStart);
   if (providerId) q.set('providerId', providerId);
@@ -2935,7 +2954,7 @@ async function adminChildren() {
   document.querySelectorAll('[data-del-child]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
-        if (!confirm('Remove this child? Mandates, sessions, and student files for this child will also be removed. This cannot be undone.')) return;
+        if (!confirm('Remove this child? Mandates, sessions, internal notes, and student files for this child will also be removed. This cannot be undone.')) return;
         await api('DELETE', `/admin/students/${btn.getAttribute('data-del-child')}`);
         setStatus('Child removed.', 'ok');
         await adminChildren();
@@ -2958,6 +2977,7 @@ async function adminChildDetail(studentId, opts = {}) {
   const weeks = detail.weeks || [];
   const dueDates = detail.dueDates || [];
   const files = detail.files || [];
+  const notes = detail.notes || [];
   const schoolName = detail.schoolName || school?.name || '—';
   const cal = detail.schoolCalendar;
   const calSummary = detail.schoolCalendarSummary || formatCalendarSummary(cal);
@@ -2981,7 +3001,7 @@ async function adminChildDetail(studentId, opts = {}) {
   const filteredSessions = sessions.filter((x) =>
     sessionDosInRange(x.dateOfService, sessFrom, sessTo),
   );
-  const childTab = ['basic', 'mandates', 'sessions', 'timesheet', 'files'].includes(state.childDetailTab)
+  const childTab = ['basic', 'mandates', 'sessions', 'timesheet', 'files', 'notes'].includes(state.childDetailTab)
     ? state.childDetailTab
     : 'basic';
   const childTabBtn = (id, label) =>
@@ -3003,6 +3023,7 @@ async function adminChildDetail(studentId, opts = {}) {
         ${childTabBtn('sessions', 'Sessions')}
         ${childTabBtn('timesheet', 'Timesheet')}
         ${childTabBtn('files', 'Student files')}
+        ${childTabBtn('notes', 'Internal notes')}
       </div>
 
       <div class="detail-pane"${childTab === 'basic' ? '' : ' hidden'}>
@@ -3125,8 +3146,42 @@ async function adminChildDetail(studentId, opts = {}) {
             <td>${esc(f.label || f.s3Key || '—')}</td>
             <td>${esc(f.kind || '—')}</td>
             <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
-            <td><button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button></td>
+            <td>
+              <button type="button" class="btn" data-view-file="${esc(f.id)}" data-file-label="${esc(f.label || 'file')}">View</button>
+              <button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button>
+            </td>
           </tr>`).join('') || '<tr><td colspan="5">No files on file.</td></tr>'}
+        </table>
+      </div>
+
+      <div class="detail-pane"${childTab === 'notes' ? '' : ' hidden'}>
+        <h3>Internal notes</h3>
+        <p class="muted">Visible to administrators only. Tag notes to support later filtering. Also appears under Reports → Internal notes.</p>
+        <label>Filter by tag
+          <select id="cNoteFilter">
+            <option value="">All</option>
+            ${(detail.noteTagOptions || ['Session note follow up', 'Gap in service']).map((t) => `<option>${esc(t)}</option>`).join('')}
+          </select>
+        </label>
+        <label>New note <textarea id="cNoteBody" rows="3"></textarea></label>
+        <div class="row" id="cNoteTags">
+          ${(detail.noteTagOptions || ['Session note follow up', 'Gap in service']).map((t) =>
+            `<label class="chk"><input type="checkbox" data-new-child-tag value="${esc(t)}" /> ${esc(t)}</label>`,
+          ).join('')}
+        </div>
+        <label>Add tag <input id="cNoteTagCustom" placeholder="New tag name" /></label>
+        <button type="button" class="btn" id="cAddNote">Add note</button>
+        <table>
+          <tr><th>When</th><th>Tags</th><th>Note</th><th></th></tr>
+          ${notes.slice().reverse().map((n) => `<tr data-note-tags="${esc((n.tags || []).join('|').toLowerCase())}">
+            <td>${esc((n.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
+            <td>${(n.tags || []).map((t) => `<span class="status-chip">${esc(t)}</span>`).join(' ') || '—'}</td>
+            <td><textarea data-child-note-body="${esc(n.id)}" rows="2">${esc(n.body || '')}</textarea></td>
+            <td>
+              <button type="button" class="btn" data-save-child-note="${esc(n.id)}">Save</button>
+              <button type="button" class="btn" data-del-child-note="${esc(n.id)}">Delete</button>
+            </td>
+          </tr>`).join('') || '<tr><td colspan="4">No notes yet.</td></tr>'}
         </table>
       </div>
     </div>
@@ -3197,7 +3252,7 @@ async function adminChildDetail(studentId, opts = {}) {
   };
   document.getElementById('deleteChild').onclick = async () => {
     try {
-      if (!confirm('Remove this child? Mandates, sessions, and student files for this child will also be removed. This cannot be undone.')) return;
+      if (!confirm('Remove this child? Mandates, sessions, internal notes, and student files for this child will also be removed. This cannot be undone.')) return;
       await api('DELETE', `/admin/students/${studentId}`);
       setStatus('Child removed.', 'ok');
       await adminChildren();
@@ -3251,6 +3306,11 @@ async function adminChildDetail(studentId, opts = {}) {
       } catch (e) { setStatus(e.message, 'err'); }
     });
   });
+  document.querySelectorAll('[data-view-file]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      openLockerFile(btn.getAttribute('data-view-file'), btn.getAttribute('data-file-label') || 'file');
+    });
+  });
   document.querySelectorAll('[data-del-week]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
@@ -3277,6 +3337,50 @@ async function adminChildDetail(studentId, opts = {}) {
       } catch (e) { setStatus(e.message, 'err'); }
     });
   });
+  document.getElementById('cAddNote')?.addEventListener('click', async () => {
+    try {
+      const text = document.getElementById('cNoteBody')?.value?.trim() || '';
+      if (!text) throw new Error('Enter a note first.');
+      const tags = [...document.querySelectorAll('[data-new-child-tag]:checked')].map((el) => el.value);
+      const custom = document.getElementById('cNoteTagCustom')?.value?.trim();
+      if (custom) tags.push(custom);
+      await api('POST', `/admin/students/${studentId}/notes`, { body: text, tags });
+      setStatus('Note saved.', 'ok');
+      await adminChildDetail(studentId, { backTo: state.childDetailBack });
+    } catch (e) { setStatus(e.message, 'err'); }
+  });
+  const childNoteFilter = document.getElementById('cNoteFilter');
+  if (childNoteFilter) {
+    childNoteFilter.onchange = () => {
+      const want = childNoteFilter.value.toLowerCase();
+      document.querySelectorAll('[data-note-tags]').forEach((tr) => {
+        const hay = tr.getAttribute('data-note-tags') || '';
+        tr.hidden = Boolean(want) && !hay.split('|').includes(want);
+      });
+    };
+  }
+  document.querySelectorAll('[data-save-child-note]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        const id = btn.getAttribute('data-save-child-note');
+        const body = document.querySelector(`[data-child-note-body="${CSS.escape(id)}"]`)?.value?.trim() || '';
+        if (!body) throw new Error('Note text is required.');
+        await api('PATCH', `/admin/students/${studentId}/notes/${id}`, { body });
+        setStatus('Note updated.', 'ok');
+        await adminChildDetail(studentId, { backTo: state.childDetailBack });
+      } catch (e) { setStatus(e.message, 'err'); }
+    });
+  });
+  document.querySelectorAll('[data-del-child-note]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        if (!confirm('Delete this internal note? This cannot be undone.')) return;
+        await api('DELETE', `/admin/students/${studentId}/notes/${btn.getAttribute('data-del-child-note')}`);
+        setStatus('Note deleted.', 'ok');
+        await adminChildDetail(studentId, { backTo: state.childDetailBack });
+      } catch (e) { setStatus(e.message, 'err'); }
+    });
+  });
 }
 
 async function adminProviderDetail(providerId) {
@@ -3292,9 +3396,11 @@ async function adminProviderDetail(providerId) {
   const sessFrom = state.providerSessionFrom || '';
   const sessTo = state.providerSessionTo || '';
   const sessDistrict = state.providerSessionDistrict || '';
-  const districtOptions = [...new Set(
-    sessions.map((x) => String(x.district || '').trim()).filter(Boolean),
-  )].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  // Prefer API districtOptions (sessions + caseload programType fallback); merge session labels.
+  const districtOptions = [...new Set([
+    ...(Array.isArray(detail.districtOptions) ? detail.districtOptions : []),
+    ...sessions.map((x) => String(x.district || '').trim()).filter(Boolean),
+  ])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   const filteredSessions = sessions.filter((x) => {
     if (!sessionDosInRange(x.dateOfService, sessFrom, sessTo)) return false;
     if (sessDistrict && String(x.district || '').trim() !== sessDistrict) return false;
@@ -3499,7 +3605,10 @@ async function adminProviderDetail(providerId) {
             ${bulkTd('prov-files', f.id)}
             <td>${esc(f.label || f.s3Key)}</td>
             <td>${esc((f.createdAt || '').slice(0, 16).replace('T', ' '))}</td>
-            <td><button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button></td>
+            <td>
+              <button type="button" class="btn" data-view-file="${esc(f.id)}" data-file-label="${esc(f.label || 'report')}">View</button>
+              <button type="button" class="btn" data-del-file="${esc(f.id)}">Delete</button>
+            </td>
           </tr>`).join('') || '<tr><td colspan="4">No files on file.</td></tr>'}
         </table>
       </div>
@@ -3890,6 +3999,11 @@ async function adminProviderDetail(providerId) {
         setStatus('File removed.', 'ok');
         await adminProviderDetail(providerId);
       } catch (e) { setStatus(e.message, 'err'); }
+    });
+  });
+  document.querySelectorAll('[data-view-file]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      openLockerFile(btn.getAttribute('data-view-file'), btn.getAttribute('data-file-label') || 'report');
     });
   });
   document.querySelectorAll('[data-save-note]').forEach((btn) => {
@@ -5311,6 +5425,65 @@ async function openArchivePdf(archiveId) {
   }
 }
 
+async function openLockerFile(fileId, label) {
+  const id = String(fileId || '').trim();
+  if (!id) return;
+  const title = String(label || 'File').trim() || 'File';
+  try {
+    setStatus('Opening file…', '');
+    const raw = await api('GET', `/files/${encodeURIComponent(id)}/file`);
+    if (!(raw instanceof Blob)) throw new Error('Unable to download file.');
+    const type = String(raw.type || '');
+    const url = URL.createObjectURL(raw);
+    const safeDownload = title.replace(/[^\w.\-]+/g, '_') || 'file';
+    const isPdf = type.includes('pdf');
+    const isImage = type.startsWith('image/');
+    if (!isPdf && !isImage) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = safeDownload;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      setStatus(`Downloaded ${title}.`, 'ok');
+      return;
+    }
+    const existing = document.getElementById('lockerFileModal');
+    if (existing) existing.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'lockerFileModal';
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal-panel timesheet-print timesheet-pdf-panel">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h2>${esc(title)}</h2>
+          <div class="row">
+            <a class="btn" href="${url}" download="${esc(safeDownload)}">Download</a>
+            <button type="button" class="btn" data-close-locker-file>Close</button>
+          </div>
+        </div>
+        ${
+          isPdf
+            ? `<iframe class="timesheet-pdf-frame" title="${esc(title)}" src="${url}" style="display:block;width:100%;min-height:70vh;border:0"></iframe>`
+            : `<img alt="${esc(title)}" src="${url}" style="display:block;max-width:100%;max-height:70vh;margin:0 auto" />`
+        }
+      </div>`;
+    document.body.appendChild(backdrop);
+    const close = () => {
+      URL.revokeObjectURL(url);
+      backdrop.remove();
+    };
+    backdrop.querySelector('[data-close-locker-file]').onclick = close;
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) close();
+    });
+    setStatus('', '');
+  } catch (e) {
+    setStatus(e.message || 'Unable to open file.', 'error');
+  }
+}
+
 async function adminReportArchive() {
   const { from, to } = reportDateDefaults();
   let providers = [];
@@ -5444,13 +5617,13 @@ async function adminReportInternalNotes() {
     <div class="card">
       <button type="button" class="btn" id="backReports">← Reports</button>
       <h2>Internal notes</h2>
-      <p class="muted">All administrator internal notes across providers. Filter by date range and provider.</p>
+      <p class="muted">All administrator internal notes on providers and children. Add or edit notes under Providers → Internal notes or Children → Internal notes. Filter by date range and provider (provider notes only).</p>
       <div class="row">
         <label>From <input id="notesFrom" type="date" value="${esc(from)}" /></label>
         <label>To <input id="notesTo" type="date" value="${esc(to)}" /></label>
         <label>Provider
           <select id="notesProvider">
-            <option value="">All providers</option>
+            <option value="">All providers &amp; children</option>
             ${providers
               .map((p) => {
                 const label = `${p.firstName || ''} ${p.lastName || ''}`.trim() || p.id;
@@ -5466,12 +5639,13 @@ async function adminReportInternalNotes() {
       <div class="table-wrap"><table>
         <tr>
           <th>When</th>
-          <th>Provider</th>
+          <th>On</th>
+          <th>Name</th>
           <th>Author</th>
           <th>Tags</th>
           <th>Note</th>
         </tr>
-        <tbody id="notesBody"><tr><td colspan="5">Loading…</td></tr></tbody>
+        <tbody id="notesBody"><tr><td colspan="6">Loading…</td></tr></tbody>
       </table></div>
     </div>
   `);
@@ -5485,15 +5659,18 @@ async function adminReportInternalNotes() {
           const when = String(r.createdAt || '').slice(0, 16).replace('T', ' ') || '—';
           const tags =
             (r.tags || []).map((t) => `<span class="status-chip">${esc(t)}</span>`).join(' ') || '—';
+          const on = r.subjectKind === 'child' ? 'Child' : 'Provider';
+          const name = r.subjectName || r.providerName || r.childName || '—';
           return `<tr>
             <td>${esc(when)}</td>
-            <td>${esc(r.providerName || '—')}</td>
+            <td>${esc(on)}</td>
+            <td>${esc(name)}</td>
             <td>${esc(r.authorName || '—')}</td>
             <td>${tags}</td>
             <td style="white-space:pre-wrap">${esc(r.body || '')}</td>
           </tr>`;
         })
-        .join('') || '<tr><td colspan="5">No internal notes match these filters.</td></tr>';
+        .join('') || '<tr><td colspan="6">No internal notes match these filters.</td></tr>';
   };
   const loadNotes = async () => {
     const nextFrom = document.getElementById('notesFrom')?.value || from;
@@ -5507,14 +5684,14 @@ async function adminReportInternalNotes() {
     if (nextTo) q.set('to', nextTo);
     if (pid) q.set('providerId', pid);
     const tbody = document.getElementById('notesBody');
-    if (tbody) tbody.innerHTML = '<tr><td colspan="5">Loading…</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
     try {
       const out = await api('GET', `/admin/reports/internal-notes?${q.toString()}`);
       fillNotes(out.rows || []);
       setStatus('', '');
     } catch (e) {
       if (tbody) {
-        tbody.innerHTML = `<tr><td colspan="5">${esc(e.message || 'Unable to load internal notes.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6">${esc(e.message || 'Unable to load internal notes.')}</td></tr>`;
       }
       setStatus(e.message || 'Unable to load internal notes.', 'err');
     }
@@ -5553,10 +5730,20 @@ async function adminReportSessionNotes() {
   } catch {
     providers = [];
   }
+  // Same as Providers → Sessions: prefer programType (payer/district); school.district is often blank.
   try {
-    const schoolsOut = await api('GET', '/admin/schools');
+    const [schoolsOut, studentsOut] = await Promise.all([
+      api('GET', '/admin/schools'),
+      api('GET', '/admin/students'),
+    ]);
+    const schoolById = new Map((schoolsOut.schools || []).map((s) => [s.id, s]));
     districts = [...new Set(
-      (schoolsOut.schools || []).map((s) => String(s.district || '').trim()).filter(Boolean),
+      (studentsOut.students || [])
+        .map((st) => {
+          const school = schoolById.get(st.schoolId);
+          return String(st.programType || school?.district || '').trim();
+        })
+        .filter(Boolean),
     )].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   } catch {
     districts = [];
@@ -5646,6 +5833,17 @@ async function adminReportSessionNotes() {
         )
         .join('') || '<tr><td colspan="8">No session notes match these filters.</td></tr>';
   };
+  const fillDistrictSelect = (opts) => {
+    const sel = document.getElementById('snDistrict');
+    if (!sel) return;
+    const current = sel.value || notesDistrict || '';
+    const merged = [...new Set([...(opts || []), ...districts].map((d) => String(d || '').trim()).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    districts = merged;
+    sel.innerHTML = `<option value="">All districts</option>${merged
+      .map((d) => `<option value="${esc(d)}"${d === current ? ' selected' : ''}>${esc(d)}</option>`)
+      .join('')}`;
+  };
   const loadSessionNotes = async () => {
     const nextFrom = document.getElementById('snFrom')?.value || from;
     const nextTo = document.getElementById('snTo')?.value || to;
@@ -5664,6 +5862,9 @@ async function adminReportSessionNotes() {
     if (tbody) tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
     try {
       const out = await api('GET', `/admin/reports/session-notes?${q.toString()}`);
+      if (Array.isArray(out.districtOptions) && out.districtOptions.length) {
+        fillDistrictSelect(out.districtOptions);
+      }
       fillSummary(out.totals || {});
       fillRows(out.rows || []);
       setStatus('', '');

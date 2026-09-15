@@ -26,7 +26,7 @@ import {
   parseMandatePdfText,
   parseWeeklySessionText,
   isGenericSettingLabel,
-  schoolNamesConflict,
+  pdfSchoolConflictsWithChild,
   screenServiceNote,
   sessionSlotLabel,
   cptDurationError,
@@ -354,6 +354,39 @@ function providerFor(store: MemoryStore, user: AppUser) {
   return store.data.providers.find((p) => p.userId === user.id);
 }
 
+/** MIME type for locker / provider-report downloads (S3 key extension preferred). */
+function contentTypeForStoredFile(s3Key: string, label?: string): string {
+  const fromKey = String(s3Key || '').split('/').pop() || '';
+  const fromLabel = String(label || '').trim();
+  const name = (/\.[a-z0-9]{1,8}$/i.test(fromKey) ? fromKey : fromLabel).toLowerCase();
+  const ext = (name.match(/\.([a-z0-9]{1,8})$/i) || [])[1] || '';
+  switch (ext) {
+    case 'pdf':
+      return 'application/pdf';
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    case 'doc':
+      return 'application/msword';
+    case 'docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case 'xls':
+      return 'application/vnd.ms-excel';
+    case 'xlsx':
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case 'txt':
+      return 'text/plain; charset=utf-8';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
 /** Same-name provider ids (orphan twins) so week/session lookup matches admin detail. */
 function providerLookupIds(store: MemoryStore, providerId: string): string[] {
   const id = String(providerId || '').trim();
@@ -491,6 +524,46 @@ function programTypeKey(v: string): string {
   return String(v || '').trim().toLowerCase();
 }
 
+function sessionMatchesProgramType(
+  store: MemoryStore,
+  session: { studentId: string },
+  programType?: string,
+): boolean {
+  const pt = String(programType || '').trim();
+  if (!pt) return true;
+  const student = store.data.students.find((s) => s.id === session.studentId);
+  return programTypeKey(student?.programType) === programTypeKey(pt);
+}
+
+function filterSessionsByProgramType<T extends { studentId: string }>(
+  store: MemoryStore,
+  sessions: T[],
+  programType?: string,
+): T[] {
+  const pt = String(programType || '').trim();
+  if (!pt) return sessions;
+  return sessions.filter((s) => sessionMatchesProgramType(store, s, pt));
+}
+
+/** Schools on this provider's caseload that have at least one child in the program type. */
+function schoolIdsForProviderProgramType(
+  store: MemoryStore,
+  providerId: string,
+  programType: string,
+): Set<string> {
+  const key = programTypeKey(programType);
+  if (!key || !providerId) return new Set();
+  const myStudentIds = new Set(
+    store.data.mandates.filter((m) => m.providerId === providerId).map((m) => m.studentId),
+  );
+  return new Set(
+    store.data.students
+      .filter((s) => myStudentIds.has(s.id) && programTypeKey(s.programType) === key)
+      .map((s) => s.schoolId)
+      .filter(Boolean),
+  );
+}
+
 /** Majority student.schoolId among sessions on this week (child's school, not picker). */
 function dominantSchoolIdForWeek(store: MemoryStore, weekId: string): string {
   return dominantSchoolIdForSessions(store, store.sessionsForWeek(weekId));
@@ -576,10 +649,25 @@ function cptLabelFromParts(codes: string[], procedures: string[], units: number)
   return '';
 }
 
-/** School-scoped due dates visible to the signed-in user (admins see all). */
-function dueDatesForUser(store: MemoryStore, user: AppUser) {
+/**
+ * School-scoped due dates visible to the signed-in user (admins see all).
+ * Optional programType further scopes to schools that have caseload kids in that program
+ * (district/payer), so switching program type does not leak another school's progress dues.
+ */
+function dueDatesForUser(store: MemoryStore, user: AppUser, programType?: string) {
   const open = dueDateReport(store).filter((d) => d.status !== 'done');
-  if (user.role === 'admin') return open;
+  const pt = String(programType || '').trim();
+  if (user.role === 'admin') {
+    if (!pt) return open;
+    const key = programTypeKey(pt);
+    const schoolIds = new Set(
+      store.data.students
+        .filter((s) => programTypeKey(s.programType) === key)
+        .map((s) => s.schoolId)
+        .filter(Boolean),
+    );
+    return open.filter((d) => schoolIds.has(d.schoolId));
+  }
   const provider = providerFor(store, user);
   if (!provider) return [];
   const myStudentIds = new Set(
@@ -588,7 +676,12 @@ function dueDatesForUser(store: MemoryStore, user: AppUser) {
   const mySchoolIds = new Set(
     store.data.students.filter((s) => myStudentIds.has(s.id)).map((s) => s.schoolId),
   );
-  return open.filter((d) => mySchoolIds.has(d.schoolId));
+  let rows = open.filter((d) => mySchoolIds.has(d.schoolId));
+  if (pt) {
+    const scoped = schoolIdsForProviderProgramType(store, provider.id, pt);
+    rows = rows.filter((d) => scoped.has(d.schoolId));
+  }
+  return rows;
 }
 
 function linkUserToProvider(store: MemoryStore, userId: string, providerId: string): void {
@@ -961,10 +1054,11 @@ function reportXlsxInternalNotes(
     'internal-notes.xlsx',
     rowsToXlsxBuffer(
       'Internal notes',
-      ['When', 'Provider', 'Author', 'Tags', 'Note'],
+      ['When', 'On', 'Name', 'Author', 'Tags', 'Note'],
       rows.map((r) => [
         String(r.createdAt || '').slice(0, 16).replace('T', ' '),
-        r.providerName,
+        r.subjectKind === 'child' ? 'Child' : 'Provider',
+        r.subjectName,
         r.authorName,
         (r.tags || []).join(', '),
         r.body,
@@ -1200,6 +1294,7 @@ export async function handleTmsRequest(
     const provider = providerFor(store, ctx.user);
     const schools = provider ? schoolsForProvider(store, provider.id) : [];
     const programTypes = provider ? programTypesForProvider(store, provider.id) : [];
+    const programType = String(req.query.programType || '').trim();
     return json(200, {
       user: ctx.user,
       provider,
@@ -1214,7 +1309,7 @@ export async function handleTmsRequest(
         allowSmsMfa: getAppSettings(store).allowSmsMfa === true,
       },
       alerts: store.openAlerts().slice(0, 20),
-      dueDates: dueDatesForUser(store, ctx.user),
+      dueDates: dueDatesForUser(store, ctx.user, programType || undefined),
     });
   }
 
@@ -1996,10 +2091,13 @@ export async function handleTmsRequest(
   }
 
   if (req.method === 'DELETE' && /^\/admin\/files\/[^/]+$/.test(path)) {
-    return adminUser(() => {
+    return adminUser(async () => {
       const id = path.split('/')[3];
       const existing = store.data.files.find((f) => f.id === id);
       if (!existing) return json(404, { error: 'File not found.' });
+      if (existing.s3Key && String(existing.s3Key).startsWith('tms/')) {
+        await deletePdfFromS3(existing.s3Key);
+      }
       store.removeFile(id);
       store.audit(ctx.user.id, 'delete_file', `file:${id}`, existing, null);
       return json(200, { deleted: true, id, message: 'File removed.' });
@@ -2020,6 +2118,7 @@ export async function handleTmsRequest(
       const note = store.addAdminNote({
         id: newId(),
         providerId,
+        studentId: '',
         authorId: ctx.user.id,
         body: text,
         tags: parseNoteTags(obj(req), []),
@@ -2034,6 +2133,67 @@ export async function handleTmsRequest(
       const providerId = path.split('/')[3];
       return json(200, {
         notes: store.notesForProvider(providerId),
+        tagOptions: [...DEFAULT_ADMIN_NOTE_TAGS],
+      });
+    });
+  }
+
+  if ((req.method === 'POST' || req.method === 'PATCH') && /^\/admin\/students\/[^/]+\/notes\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const studentId = path.split('/')[3];
+      const noteId = path.split('/')[5];
+      const existing = store.data.adminNotes.find(
+        (n) => n.id === noteId && String(n.studentId || '').trim() === studentId,
+      );
+      if (!existing) return json(404, { error: 'Note not found.' });
+      const text = String(obj(req).body || obj(req).note || obj(req).text || '').trim();
+      if (!text) return json(400, { error: 'Note text is required.' });
+      const tags = parseNoteTags(obj(req), existing.tags);
+      const note = store.upsertAdminNote({ ...existing, body: text, tags, studentId });
+      store.audit(ctx.user.id, 'update_admin_note', `note:${noteId}`, existing, note);
+      return json(200, { note, notes: store.notesForStudent(studentId) });
+    });
+  }
+
+  if (req.method === 'DELETE' && /^\/admin\/students\/[^/]+\/notes\/[^/]+$/.test(path)) {
+    return adminUser(() => {
+      const studentId = path.split('/')[3];
+      const noteId = path.split('/')[5];
+      const existing = store.data.adminNotes.find(
+        (n) => n.id === noteId && String(n.studentId || '').trim() === studentId,
+      );
+      if (!existing) return json(404, { error: 'Note not found.' });
+      store.removeAdminNote(noteId);
+      store.audit(ctx.user.id, 'delete_admin_note', `note:${noteId}`, existing, null);
+      return json(200, { deleted: true, notes: store.notesForStudent(studentId) });
+    });
+  }
+
+  if (req.method === 'POST' && /^\/admin\/students\/[^/]+\/notes$/.test(path)) {
+    return adminUser(() => {
+      const studentId = path.split('/')[3];
+      const student = store.data.students.find((s) => s.id === studentId);
+      if (!student) return json(404, { error: 'Child not found.' });
+      const text = String(obj(req).body || obj(req).note || obj(req).text || '').trim();
+      if (!text) return json(400, { error: 'Note text is required.' });
+      const note = store.addAdminNote({
+        id: newId(),
+        providerId: '',
+        studentId,
+        authorId: ctx.user.id,
+        body: text,
+        tags: parseNoteTags(obj(req), []),
+        createdAt: nowIso(),
+      });
+      return json(201, { note, notes: store.notesForStudent(studentId) });
+    });
+  }
+
+  if (req.method === 'GET' && /^\/admin\/students\/[^/]+\/notes$/.test(path)) {
+    return adminUser(() => {
+      const studentId = path.split('/')[3];
+      return json(200, {
+        notes: store.notesForStudent(studentId),
         tagOptions: [...DEFAULT_ADMIN_NOTE_TAGS],
       });
     });
@@ -2484,6 +2644,46 @@ export async function handleTmsRequest(
     return json(201, { file });
   }
 
+  /** Download / view provider reports and student locker files from S3 (same pattern as /archive/{id}/file). */
+  if (req.method === 'GET' && /^\/files\/[^/]+\/file$/.test(path)) {
+    const id = path.split('/')[2];
+    const row = store.data.files.find((f) => f.id === id);
+    if (!row) return json(404, { error: 'File not found.' });
+    const provider = providerFor(store, ctx.user);
+    if (ctx.user.role !== 'admin') {
+      const myIds = provider?.id ? new Set(providerLookupIds(store, provider.id)) : new Set<string>();
+      const ownsProvider = Boolean(row.providerId && myIds.has(row.providerId));
+      const ownsStudent = Boolean(
+        row.studentId &&
+          store.data.mandates.some(
+            (m) => m.studentId === row.studentId && myIds.has(String(m.providerId || '')),
+          ),
+      );
+      if (!ownsProvider && !ownsStudent) {
+        return json(403, { error: 'You can only open your own files.' });
+      }
+    }
+    const s3Key = String(row.s3Key || '').trim();
+    if (!s3Key || !s3Key.startsWith('tms/')) {
+      return json(404, { error: 'No file stored for this item.' });
+    }
+    const bytes = await getPdfFromS3(s3Key);
+    if (!bytes?.length) return json(404, { error: 'File missing from storage.' });
+    const keyName = s3Key.split('/').pop() || 'file';
+    const labelName = String(row.label || '').trim();
+    const hasExt = /\.[a-z0-9]{1,8}$/i.test(labelName);
+    const rawName = hasExt ? labelName : keyName;
+    const safeName = rawName.replace(/[^\w.\-]+/g, '_') || 'file';
+    return {
+      status: 200,
+      headers: {
+        'content-type': contentTypeForStoredFile(s3Key, row.label),
+        'content-disposition': `inline; filename="${safeName}"`,
+      },
+      body: bytes,
+    };
+  }
+
   if (req.method === 'GET' && path === '/weeks') {
     const provider = providerFor(store, ctx.user);
     if (!provider && ctx.user.role !== 'admin') {
@@ -2494,6 +2694,7 @@ export async function handleTmsRequest(
     if (ctx.user.role !== 'admin' && provider?.id !== providerId) {
       return json(403, { error: 'You can only list your own weeks.' });
     }
+    const programType = String(req.query.programType || '').trim();
     const currentStart = weekStartFromDos(nowIso().slice(0, 10));
     const payProvider =
       store.data.providers.find((p) => p.id === providerId) ||
@@ -2514,7 +2715,12 @@ export async function handleTmsRequest(
       .flatMap((w) => {
         const weekRow = store.data.weeks.find((x) => x.id === w.id);
         if (!weekRow) return [];
-        return store.sessionsForWeek(w.id).map((s) => {
+        const scoped = filterSessionsByProgramType(
+          store,
+          store.sessionsForWeek(w.id),
+          programType || undefined,
+        );
+        return scoped.map((s) => {
           const dayPeers = providerDaySessions(
             store.data.sessions,
             store.data.weeks,
@@ -2530,6 +2736,7 @@ export async function handleTmsRequest(
             }),
             mandateDurationMinutes: mandateDurationMinutesForSession(s, store.data.mandates),
           };
+          const student = store.data.students.find((st) => st.id === s.studentId);
           return {
             id: s.id,
             dateOfService: s.dateOfService,
@@ -2537,6 +2744,12 @@ export async function handleTmsRequest(
             beginTime: s.beginTime || '',
             endTime: s.endTime || '',
             payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
+            studentId: s.studentId,
+            studentName: student
+              ? `${student.firstName} ${student.lastName}`.trim() || s.studentId
+              : s.studentId,
+            programType: String(student?.programType || '').trim(),
+            schoolId: String(student?.schoolId || '').trim(),
           };
         });
       })
@@ -2545,7 +2758,12 @@ export async function handleTmsRequest(
         if (da) return da;
         return String(b.beginTime || '').localeCompare(String(a.beginTime || ''));
       });
-    return json(200, { weeks, currentWeekStart: currentStart, processedSessions });
+    return json(200, {
+      weeks,
+      currentWeekStart: currentStart,
+      processedSessions,
+      programType: programType || '',
+    });
   }
 
   if (req.method === 'GET' && path === '/week') {
@@ -2583,18 +2801,26 @@ export async function handleTmsRequest(
     });
     // Therapist school picker is metadata — if that bin is empty/missing, surface the sibling
     // week that actually has sessions so admin-imported rows remain visible.
+    // When programType is set, only fall back to a week that has sessions in that program.
     if (ctx.user.role !== 'admin') {
       const emptyOrMissing = !week || store.sessionsForWeek(week.id).length === 0;
       if (emptyOrMissing && matchedWeeks.length) {
-        const withSessions =
-          matchedWeeks.find((w) => store.sessionsForWeek(w.id).length > 0) ||
-          matchedWeeks.find((w) => w.id !== week?.id && store.sessionsForWeek(w.id).length > 0);
+        const withSessions = matchedWeeks.find((w) => {
+          const sess = store.sessionsForWeek(w.id);
+          if (!sess.length) return false;
+          if (!programType) return true;
+          return sess.some((s) => sessionMatchesProgramType(store, s, programType));
+        });
         if (withSessions) week = withSessions;
       }
     }
-    // Keep every session on this school-scoped week. Program/school picker only scopes the caseload
-    // dropdown — hiding rows made admin-added sessions disappear for the therapist.
-    const sessions = week ? store.sessionsForWeek(week.id) : [];
+    // Scope sessions to the selected program type (district/payer) when provided.
+    // Caseload already filters by programType; pending/processed lists must match.
+    const sessions = filterSessionsByProgramType(
+      store,
+      week ? store.sessionsForWeek(week.id) : [],
+      programType || undefined,
+    );
     const nameMap = studentNameById(store);
     const students = visibleStudents(
       store,
@@ -2965,7 +3191,10 @@ export async function handleTmsRequest(
       const pdfSchool = rawSchool && !isGenericSettingLabel(rawSchool) ? rawSchool : '';
       if (pdfSchool) {
         const knownSchool = store.data.schools.find((s) => s.id === student.schoolId);
-        if (knownSchool && schoolNamesConflict(pdfSchool, knownSchool.name)) {
+        if (
+          knownSchool &&
+          pdfSchoolConflictsWithChild(pdfSchool, knownSchool, student.programType)
+        ) {
           failed.push({
             studentName,
             dateOfService: row.dateOfService,
@@ -2977,7 +3206,9 @@ export async function handleTmsRequest(
         }
         if (!knownSchool) {
           const exists = store.data.schools.some(
-            (s) => !schoolNamesConflict(pdfSchool, s.name) && Boolean(String(s.name || '').trim()),
+            (s) =>
+              Boolean(String(s.name || '').trim()) &&
+              !pdfSchoolConflictsWithChild(pdfSchool, s),
           );
           if (!exists) {
             failed.push({
@@ -3947,9 +4178,24 @@ export async function handleTmsRequest(
 
     // Prefer wet-ink SignNow PDF after lock (signature + date). Do not regenerate over it.
     if (week.status === 'locked' || week.status === 'signed' || week.signedKey) {
-      if (week.signedKey) {
-        const existing = await getPdfFromS3(week.signedKey);
+      const archiveKey = findTimesheetArchive(store, week.id)?.s3Key || '';
+      const candidateKeys = [
+        week.signedKey,
+        `tms/signed/${week.id}.pdf`,
+        week.timesheetKey,
+        `tms/timesheets/${week.id}.pdf`,
+        archiveKey,
+      ].filter((k, i, arr): k is string => Boolean(k) && arr.indexOf(k) === i);
+      for (const key of candidateKeys) {
+        const existing = await getPdfFromS3(key);
         if (existing?.length) {
+          if (!week.signedKey || week.signedKey !== key) {
+            store.upsertWeek({
+              ...week,
+              signedKey: week.signedKey || (key.includes('/signed/') ? key : `tms/signed/${week.id}.pdf`),
+              timesheetKey: week.timesheetKey || key,
+            });
+          }
           return servePdf(existing, `timesheet-${week.weekStart}-signed.pdf`);
         }
       }
@@ -3996,6 +4242,11 @@ export async function handleTmsRequest(
           );
         }
       }
+      // Never fall through to an unsigned regeneration for locked/signed weeks.
+      return json(404, {
+        error:
+          'Signed timesheet PDF is not available yet. Wait for SignNow completion or use Admin → refresh signed PDF.',
+      });
     }
 
     const provider = store.data.providers.find((p) => p.id === week.providerId);

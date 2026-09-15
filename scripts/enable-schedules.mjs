@@ -1,15 +1,24 @@
 /**
- * Enable live EventBridge schedules (nightly cases + Tuesday sessions).
+ * Enable live EventBridge schedules.
  * Rules are always provisioned by CDK (disabled by default); this flips State to ENABLED.
  *
  * Usage:
- *   npm run schedules:enable
+ *   npm run schedules:enable              # both nightly cases + Tuesday sessions
+ *   npm run schedules:enable -- --cases-only
+ *   npm run schedules:enable -- --sessions-only
  */
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const args = new Set(process.argv.slice(2));
+const casesOnly = args.has('--cases-only');
+const sessionsOnly = args.has('--sessions-only');
+if (casesOnly && sessionsOnly) {
+  console.error('Use only one of --cases-only or --sessions-only');
+  process.exit(1);
+}
 
 const check = spawnSync(
   process.execPath,
@@ -19,6 +28,11 @@ const check = spawnSync(
 if (check.status !== 0) process.exit(check.status ?? 1);
 
 function listLiveScheduleRules() {
+  const nameFilter = casesOnly
+    ? "contains(Name, 'NightlyCaseReports')"
+    : sessionsOnly
+      ? "contains(Name, 'TuesdaySessions')"
+      : "contains(Name, 'NightlyCaseReports') || contains(Name, 'TuesdaySessions')";
   const listed = spawnSync(
     'aws',
     [
@@ -27,7 +41,7 @@ function listLiveScheduleRules() {
       '--name-prefix',
       'WhiteGloveStack-',
       '--query',
-      "Rules[?contains(Name, 'NightlyCaseReports') || contains(Name, 'TuesdaySessions')].Name",
+      `Rules[?${nameFilter}].Name`,
       '--output',
       'text',
     ],
@@ -65,7 +79,7 @@ if (!rules.length) {
       '-c',
       'hhaUseMock=false',
       '-c',
-      `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net'}`,
+      `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net,ggreenfeld@whiteglovecare.net,alowy@whiteglovecare.net,gfriedman@whiteglovecare.net,miris@whiteglovecare.net'}`,
     ],
     { cwd: infraDir, stdio: 'inherit', shell: true },
   );
@@ -74,7 +88,13 @@ if (!rules.length) {
 }
 
 if (!rules.length) {
-  console.error('No NightlyCaseReports / TuesdaySessions EventBridge rules found after deploy.');
+  console.error(
+    casesOnly
+      ? 'No NightlyCaseReports EventBridge rule found after deploy.'
+      : sessionsOnly
+        ? 'No TuesdaySessions EventBridge rule found after deploy.'
+        : 'No NightlyCaseReports / TuesdaySessions EventBridge rules found after deploy.',
+  );
   process.exit(1);
 }
 
@@ -89,5 +109,10 @@ for (const name of rules) {
 }
 
 console.log('Live schedules ENABLED:', rules.join(', '));
+if (casesOnly) {
+  console.log('Mode: cases only — Tuesday API/sessions schedule was not changed.');
+} else if (sessionsOnly) {
+  console.log('Mode: sessions only — Nightly case reports schedule was not changed.');
+}
 console.log('Note: Monday dry-run preview is not toggled by this script.');
 process.exit(0);

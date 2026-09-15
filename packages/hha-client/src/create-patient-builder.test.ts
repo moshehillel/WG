@@ -12,6 +12,80 @@ describe('create-patient-builder', () => {
   it('maps service type to discipline', () => {
     expect(mapServiceToDiscipline('OT CHHA EXTENDED')).toBe('OT');
     expect(mapServiceToDiscipline('SI- ABA 1 West')).toBe('SI');
+    expect(mapServiceToDiscipline('PT school 30')).toBe('PT');
+    expect(mapServiceToDiscipline('Physical Therapy')).toBe('PT');
+    expect(mapServiceToDiscipline('COTA')).toBe('COTA');
+    expect(mapServiceToDiscipline(undefined)).toBe('');
+  });
+
+  it('omits AcceptedServices when discipline cannot be inferred (no silent OT)', () => {
+    const xml = buildCreatePatientBody(
+      {
+        firstName: 'Ana',
+        lastName: 'Binaj',
+        dateOfBirth: '2021-02-22',
+        caseId: '21021322',
+        address1: '1 Main St',
+        city: 'Island Park',
+        state: 'NY',
+        zipCode: '11558',
+      },
+      {
+        officeId: 1025,
+        coordinatorId: 81103,
+        sourceOfAdmission: 9300,
+        branchId: 10073742,
+        teamId: 2036,
+        locationId: 12284,
+        mobilityStatusId: 2495,
+        evacuationZoneId: 10003239,
+        defaultGender: 'Male',
+      },
+      {
+        branchId: 10073742,
+        teamId: 2036,
+        locationId: 12284,
+        mobilityStatusId: 2495,
+        evacuationZoneId: 10003239,
+      },
+    );
+    expect(xml).not.toContain('<AcceptedServices>');
+    expect(xml).not.toContain('<Discipline>OT</Discipline>');
+  });
+
+  it('sets AcceptedServices PT from school billing name', () => {
+    const xml = buildCreatePatientBody(
+      {
+        firstName: 'Ana',
+        lastName: 'Binaj',
+        dateOfBirth: '2021-02-22',
+        caseId: '21021322',
+        serviceCode: 'PT school 30',
+        address1: '1 Main St',
+        city: 'Island Park',
+        state: 'NY',
+        zipCode: '11558',
+      },
+      {
+        officeId: 1025,
+        coordinatorId: 81103,
+        sourceOfAdmission: 9300,
+        branchId: 10073742,
+        teamId: 2036,
+        locationId: 12284,
+        mobilityStatusId: 2495,
+        evacuationZoneId: 10003239,
+        defaultGender: 'Male',
+      },
+      {
+        branchId: 10073742,
+        teamId: 2036,
+        locationId: 12284,
+        mobilityStatusId: 2495,
+        evacuationZoneId: 10003239,
+      },
+    );
+    expect(xml).toContain('<Discipline>PT</Discipline>');
   });
 
   it('formats medicaid and admission ids', () => {

@@ -885,6 +885,45 @@ function normName(s: string): string {
     .trim();
 }
 
+/** Frontline / RS agency phrases that are not part of a person name. */
+const AGENCY_NAME_RE = /\bwhite\s*,?\s*glove(?:\s+care)?\b/gi;
+const AGENCY_PAREN_RE = /\(\s*white\s*,?\s*glove(?:\s+care)?\s*\)/gi;
+
+/** Credentials / noise tokens often appended on Service Provider / signature lines. */
+const PROVIDER_NAME_NOISE = new Set([
+  'pt',
+  'ot',
+  'slp',
+  'pta',
+  'cota',
+  'dpt',
+  'ms',
+  'ma',
+  'otr',
+  'ccc',
+  'r',
+  'l',
+  'npi',
+  'jr',
+  'sr',
+  'ii',
+  'iii',
+  'iv',
+]);
+
+/**
+ * Remove org labels like "White Glove", "(White Glove)", and leftover dashes
+ * so "White Glove -Baniqued, Jazel" → "Baniqued, Jazel".
+ */
+export function stripAgencyFromProviderName(rawName: string): string {
+  let s = String(rawName || '');
+  s = s.replace(AGENCY_PAREN_RE, ' ');
+  s = s.replace(AGENCY_NAME_RE, ' ');
+  s = s.replace(/^[\s\-–—:#/]+/, '').replace(/[\s\-–—:#/]+$/, '');
+  s = s.replace(/\s*[\-–—]\s*/g, ' ');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
 /**
  * Order-independent name key: lowercase, strip punctuation/commas, collapse
  * whitespace, then sort tokens so "Ali, Fatimah" ≡ "Fatimah Ali" ≡ "ALI FATIMAH".
@@ -897,16 +936,28 @@ export function nameTokenKey(s: string): string {
     .join(' ');
 }
 
-/** Agency / office labels in RS Provider (not a real therapist name). */
+/**
+ * Person-name key from Frontline/RS text: strip agency prefixes/suffixes and
+ * credential noise, then order-independent tokens.
+ */
+export function personNameTokenKey(rawName: string): string {
+  return normName(stripAgencyFromProviderName(rawName))
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((t) => !PROVIDER_NAME_NOISE.has(t))
+    .sort()
+    .join(' ');
+}
+
+/**
+ * Agency / office labels in RS Provider (not a real therapist name).
+ * Pure "White Glove" is agency; "White Glove -Baniqued, Jazel" is a person.
+ */
 export function isAgencyProviderName(rawName: string): boolean {
   const n = normName(rawName);
   if (!n) return false;
-  return (
-    n === 'white glove' ||
-    n === 'whiteglove' ||
-    n === 'white glove care' ||
-    /^white\s*glove\b/.test(n)
-  );
+  // Nothing person-like remains after removing agency phrases.
+  return !normName(stripAgencyFromProviderName(rawName));
 }
 
 /** Prefer linked login + active when duplicate provider rows share a name. */
@@ -997,23 +1048,42 @@ export function reassignProviderOwnedData(
 }
 
 /**
- * Match RS Provider text to a TMS provider by token-set equality
+ * Match RS Provider text to a TMS provider by first/last name tokens
  * (case-insensitive, comma/punctuation-insensitive, order-independent).
- * Agency labels like "White, Glove" / "White Glove" never match a person.
+ * Strips org prefixes like "White Glove -" and credential noise (PT/OT/…).
+ * Exact token-set matches win; otherwise profile first+last must all appear in
+ * the PDF name (extra PDF words ignored). Ambiguous soft hits are rejected.
+ * Pure agency labels like "White Glove" never match a person.
  * When several rows share a name, prefer the linked (login) active profile.
  */
 export function findProviderByName(providers: Provider[], rawName: string): Provider | undefined {
   const s = String(rawName || '').trim();
   if (!s) return undefined;
   if (isAgencyProviderName(s)) return undefined;
-  const needle = nameTokenKey(s);
+  const needle = personNameTokenKey(s);
   if (!needle) return undefined;
+  const needleSet = new Set(needle.split(/\s+/).filter(Boolean));
 
-  const hits: Provider[] = [];
+  const exact: Provider[] = [];
+  const soft: Provider[] = [];
   for (const p of providers) {
-    if (providerDisplayNameKey(p) === needle) hits.push(p);
+    const key = providerDisplayNameKey(p);
+    if (!key) continue;
+    if (key === needle) {
+      exact.push(p);
+      continue;
+    }
+    const pToks = key.split(/\s+/).filter(Boolean);
+    // Require both first and last (or more) so a single shared token never soft-matches.
+    if (pToks.length >= 2 && pToks.every((t) => needleSet.has(t))) {
+      soft.push(p);
+    }
   }
-  return preferCanonicalProvider(hits);
+  if (exact.length) return preferCanonicalProvider(exact);
+  if (!soft.length) return undefined;
+  const softKeys = new Set(soft.map((p) => providerDisplayNameKey(p)));
+  if (softKeys.size !== 1) return undefined;
+  return preferCanonicalProvider(soft);
 }
 
 /** Move owned data from same-name alias rows onto the linked canonical profile. */
@@ -1282,7 +1352,8 @@ export function applyCaseloadImport(
       school = {
         id: newId(),
         name: row.schoolName,
-        district: '',
+        // Prefer program type as district/payer when import has no separate district column.
+        district: String(row.programType || '').trim(),
         signerName: '',
         signerEmail: '',
         createdAt: nowIso(),

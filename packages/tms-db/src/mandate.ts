@@ -161,25 +161,46 @@ export function sessionLooksGroup(serviceType: string): boolean | null {
 /**
  * True when notes clearly say no peer/partner was available (or clear synonym).
  * Solo-group Frontline rows often arrive as 1:1 with this note.
+ * Also matches "group mate is absent" / "partner absent" (peer missing, student attended).
  */
 export function notesMentionNoPeerAvailable(notes: string): boolean {
   const n = String(notes || '');
   if (!n.trim()) return false;
-  // peer | partner | classmate | groupmate (optional plural)
-  const who = 'peers?|partners?|classmates?|groupmates?';
-  const otherWho = 'student|child|peer|partner|member|participant';
+  // peer | partner | classmate | groupmate / "group mate" (optional plural)
+  const who =
+    'peers?|partners?|classmates?|groupmates?|group\\s*mates?|group\\s*partners?';
+  const otherWho =
+    'student|child|peer|partner|member|participant|group\\s*mate|group\\s*partner|classmate';
   if (
     new RegExp(
       `\\bno\\s+(?:other\\s+)?(?:${who})\\b` +
-        `|\\b(?:${who})\\s+(?:were\\s+|was\\s+)?(?:not\\s+|un)?available\\b` +
+        `|\\b(?:${who})\\s+(?:were\\s+|was\\s+|are\\s+|is\\s+)?(?:not\\s+|un)?available\\b` +
         `|\\bno\\s+other\\s+(?:${otherWho})s?\\b` +
-        `|\\bother\\s+(?:${otherWho}).{0,24}(?:absent|unavailable|missing)\\b`,
+        `|\\b(?:other\\s+)?(?:${otherWho})s?.{0,32}(?:absent|unavailable|missing)\\b` +
+        `|\\b(?:his|her|their|the)\\s+(?:${who})\\s+(?:is|was|are|were)\\s+absent\\b`,
       'i',
     ).test(n)
   ) {
     return true;
   }
   return false;
+}
+
+/**
+ * Short note-context tags for mandate reader / over-mandate messages.
+ * Prefer product language: "no partner available", "makeup session".
+ */
+export function sessionMandateNoteContext(session: Pick<SessionRow, 'attendance' | 'notes'>): string {
+  const bits: string[] = [];
+  const notes = String(session.notes || '');
+  if (
+    session.attendance === 'makeup' ||
+    /\b(?:makeup|make[\s-]?up)\s+session\b|\bmake[\s-]?up\s+for\b/i.test(notes)
+  ) {
+    bits.push('makeup session');
+  }
+  if (notesMentionNoPeerAvailable(notes)) bits.push('no partner available');
+  return bits.join('; ');
 }
 
 /**
@@ -381,6 +402,12 @@ function whoLabel(opts: MandateCheckOpts): string {
   return 'this child';
 }
 
+function sessionSlotWithNoteContext(session: SessionRow): string {
+  const slot = sessionSlotLabel(session);
+  const ctx = sessionMandateNoteContext(session);
+  return ctx ? `${slot} (${ctx})` : slot;
+}
+
 function overMandateMessage(
   opts: MandateCheckOpts,
   counted: SessionRow[],
@@ -389,29 +416,40 @@ function overMandateMessage(
   kind: 'weekly' | 'makeup_auth' | 'school_day_cycle' | 'monthly',
 ): string {
   const who = whoLabel(opts);
-  const slots = counted.map(sessionSlotLabel).filter(Boolean).join('; ');
+  const slots = counted.map(sessionSlotWithNoteContext).filter(Boolean).join('; ');
   const slotBit = slots ? ` session(s) on ${slots}.` : '';
+  // Exact reader reasons when dual-mandate math applies solo-group / makeup rows.
+  const noteContexts = [
+    ...new Set(counted.map(sessionMandateNoteContext).filter(Boolean)),
+  ];
+  const reasonBit = noteContexts.length
+    ? ` Reason from note: ${noteContexts.join('; ')}.`
+    : '';
   if (kind === 'makeup_auth') {
     return (
       `This exceeds the makeup authorization for ${who}:${slotBit} ` +
-      `Authorization allows ${allowed} leftover makeup session(s); this would make it ${used}.`
+      `Authorization allows ${allowed} leftover makeup session(s); this would make it ${used}.` +
+      (reasonBit || ' Reason from note: makeup session.')
     );
   }
   if (kind === 'school_day_cycle') {
     return (
       `This exceeds the cycle mandate for ${who}:${slotBit} ` +
-      `Mandate allows ${allowed} session(s) per cycle; densest window would make it ${used}.`
+      `Mandate allows ${allowed} session(s) per cycle; densest window would make it ${used}.` +
+      reasonBit
     );
   }
   if (kind === 'monthly') {
     return (
       `This exceeds the monthly mandate for ${who}:${slotBit} ` +
-      `Mandate allows ${allowed} session(s) per month; this upload would make it ${used}.`
+      `Mandate allows ${allowed} session(s) per month; this upload would make it ${used}.` +
+      reasonBit
     );
   }
   return (
     `This exceeds the mandate for ${who}:${slotBit} ` +
-    `Mandate allows ${allowed} session(s) per week; this upload would make it ${used}.`
+    `Mandate allows ${allowed} session(s) per week; this upload would make it ${used}.` +
+    reasonBit
   );
 }
 
@@ -715,6 +753,7 @@ export function checkMandatesForWeek(
     }
 
     const { byMandateId, unmatched } = assignSessionsToMandates(studentMandates, rows);
+    const mandateResults: Array<{ mandate: Mandate; result: ReturnType<typeof checkMandate> }> = [];
     for (const mandate of studentMandates) {
       const assigned = isMakeupAuthMandate(mandate)
         ? allSessions.filter(
@@ -734,8 +773,32 @@ export function checkMandatesForWeek(
         calendar,
         monthAnchorDos,
       });
+      mandateResults.push({ mandate, result });
+    }
+    const hasGroupUnder = mandateResults.some(
+      ({ mandate, result }) =>
+        !isMakeupAuthMandate(mandate) &&
+        mandate.ratioGroup &&
+        result.under &&
+        !result.over &&
+        !result.missingMandate,
+    );
+    for (const { mandate, result } of mandateResults) {
       if (result.over || result.missingMandate) {
-        errors.push(result.message);
+        let msg = result.message;
+        // Dual individual+group: individual over while group still has room → tell reader
+        // the note must say no partner available so frequency counts toward group.
+        if (
+          hasGroupUnder &&
+          !isMakeupAuthMandate(mandate) &&
+          !mandate.ratioGroup &&
+          result.over &&
+          !/Reason from note:/i.test(msg)
+        ) {
+          msg +=
+            ' If this session covers the group mandate, the note must say no partner available (or group partner absent / makeup session).';
+        }
+        errors.push(msg);
       } else if (result.under) {
         warnings.push(result.message);
       }

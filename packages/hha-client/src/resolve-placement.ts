@@ -10,6 +10,13 @@ export interface ResolvePlacementInput {
   startDate?: string;
   /** HHA contract id resolved from report Program Type. */
   contractId?: string | number;
+  /**
+   * Program-scoped ServiceCodeID(s) from GetBillingServiceCodes (alias → HHA name).
+   * Prefer these over the flat SERVICE_CODE_MAP — same PS label maps to different
+   * IDs per program, and one HHA billing name can have multiple IDs on a contract.
+   */
+  resolvedServiceCodeId?: string;
+  resolvedServiceCodeIds?: readonly string[];
   active: PatientPlacement[];
 }
 
@@ -37,6 +44,22 @@ function uniquePlacement(matches: PatientPlacement[]): string | undefined {
   return matches[0]!.placementId;
 }
 
+function serviceCodeIdSet(input: ResolvePlacementInput): Set<string> {
+  const ids = new Set<string>();
+  for (const id of input.resolvedServiceCodeIds ?? []) {
+    const t = id?.trim();
+    if (t) ids.add(t);
+  }
+  const single = input.resolvedServiceCodeId?.trim();
+  if (single) ids.add(single);
+  // Flat map only when program-scoped resolve did not run — never override aliases.
+  if (!ids.size) {
+    const mapped = lookupServiceCode(input.serviceCode)?.hhaCode?.trim();
+    if (mapped) ids.add(mapped);
+  }
+  return ids;
+}
+
 export function assertDischargeReportFields(serviceCode?: string, startDate?: string): void {
   const missing: string[] = [];
   if (!serviceCode?.trim()) missing.push('Service Type');
@@ -61,13 +84,12 @@ export function resolvePlacementForService(input: ResolvePlacementInput): string
   }
 
   const reportStart = normalizeReportDate(input.startDate);
-  const mapped = lookupServiceCode(input.serviceCode);
-  const hhaServiceCodeId = mapped?.hhaCode?.trim();
+  const serviceIds = serviceCodeIdSet(input);
   const reportContractId =
     input.contractId != null ? String(input.contractId) : undefined;
 
-  const byService = hhaServiceCodeId
-    ? active.filter((p) => p.serviceCodeId === hhaServiceCodeId)
+  const byService = serviceIds.size
+    ? active.filter((p) => p.serviceCodeId && serviceIds.has(p.serviceCodeId))
     : [];
 
   if (byService.length && reportStart) {
@@ -82,6 +104,12 @@ export function resolvePlacementForService(input: ResolvePlacementInput): string
       byService.filter((p) => contractIdsMatch(p.contractId, reportContractId)),
     );
     if (match) return match;
+  }
+
+  // Sole active placement already filtered to the resolved service code(s) —
+  // date/contract can disagree when PS auth begin ≠ HHA placement ServiceStartDate.
+  if (byService.length === 1) {
+    return byService[0]!.placementId;
   }
 
   if (reportStart && reportContractId) {

@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
 import { MockHhaClient } from '@white-glove/hha-client';
 import { MemoryStore, newId, nowIso } from '@white-glove/tms-db';
@@ -1367,6 +1367,95 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     expect((listed.body as { notes: Array<{ body: string }> }).notes[0].body).toMatch(/makeup/);
   });
 
+  it('saves and lists internal child notes', async () => {
+    const { store } = storeWithTherapist();
+    const adminH = {
+      'x-tms-role': 'admin',
+      'x-tms-email': 'admin@whiteglove.local',
+    };
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: store.data.schools[0].id,
+      firstName: 'Nathaly',
+      lastName: 'Test',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+
+    const empty = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/students/${student.id}/notes`,
+      headers: adminH,
+      query: {},
+      body: { body: '  ' },
+    });
+    expect(empty.status).toBe(400);
+
+    const created = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/students/${student.id}/notes`,
+      headers: adminH,
+      query: {},
+      body: { body: 'Inability to Group form received', tags: ['Gap in service'] },
+    });
+    expect(created.status).toBe(201);
+    const createdBody = created.body as {
+      note: { body: string; studentId?: string; providerId: string; tags: string[] };
+      notes: Array<{ body: string }>;
+    };
+    expect(createdBody.note.body).toMatch(/Inability to Group/);
+    expect(createdBody.note.studentId).toBe(student.id);
+    expect(createdBody.note.providerId).toBe('');
+    expect(createdBody.note.tags).toContain('Gap in service');
+    expect(createdBody.notes).toHaveLength(1);
+
+    const detail = await handleTmsRequest(store, {
+      method: 'GET',
+      path: `/admin/students/${student.id}`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(detail.status).toBe(200);
+    expect((detail.body as { notes: Array<{ body: string }> }).notes).toHaveLength(1);
+
+    const report = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/internal-notes',
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(report.status).toBe(200);
+    const rows = (report.body as { rows: Array<{ subjectKind: string; subjectName: string; body: string }> }).rows;
+    expect(rows.some((r) => r.subjectKind === 'child' && /Nathaly/.test(r.subjectName) && /Inability/.test(r.body))).toBe(
+      true,
+    );
+
+    const noteId = (created.body as { note: { id: string } }).note.id;
+    const patched = await handleTmsRequest(store, {
+      method: 'PATCH',
+      path: `/admin/students/${student.id}/notes/${noteId}`,
+      headers: adminH,
+      query: {},
+      body: { body: 'Inability to Group form filed for Nathaly' },
+    });
+    expect(patched.status).toBe(200);
+
+    const deleted = await handleTmsRequest(store, {
+      method: 'DELETE',
+      path: `/admin/students/${student.id}/notes/${noteId}`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(deleted.status).toBe(200);
+    expect(store.notesForStudent(student.id)).toHaveLength(0);
+  });
+
   it('blocks signing draft weeks; allows remove session and remove draft week', async () => {
     const { store, provider } = storeWithTherapist();
     const weekStart = '2026-09-01';
@@ -1617,6 +1706,143 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     });
     expect(provDel.status).toBe(200);
     expect(store.data.providers.find((p) => p.id === provider.id)).toBeUndefined();
+  });
+
+  it('admin provider sessions use programType when school.district is blank', async () => {
+    const { store, provider } = storeWithTherapist();
+    const hegarty = store.upsertSchool({
+      id: newId(),
+      name: 'Francis X. Hegarty Elementary School',
+      district: '',
+      signerName: 'IP Signer',
+      signerEmail: 'ip@school.test',
+      createdAt: nowIso(),
+    });
+    const carle = store.upsertSchool({
+      id: newId(),
+      name: 'Carle Place Middle/High School',
+      district: '',
+      signerName: 'CP Signer',
+      signerEmail: 'cp@school.test',
+      createdAt: nowIso(),
+    });
+    const islandKid = store.upsertStudent({
+      id: newId(),
+      schoolId: hegarty.id,
+      firstName: 'Isle',
+      lastName: 'Kid',
+      dob: '',
+      programId: '',
+      programType: 'Island Park UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const carleKid = store.upsertStudent({
+      id: newId(),
+      schoolId: carle.id,
+      firstName: 'Carle',
+      lastName: 'Kid',
+      dob: '',
+      programId: '',
+      programType: 'Carle Place UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    // Caseload-only district (no session yet) still appears in districtOptions.
+    const westburyKid = store.upsertStudent({
+      id: newId(),
+      schoolId: store.data.schools[0]!.id,
+      firstName: 'West',
+      lastName: 'Kid',
+      dob: '',
+      programId: '',
+      programType: 'Westbury UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    for (const studentId of [islandKid.id, carleKid.id, westburyKid.id]) {
+      store.upsertMandate({
+        id: newId(),
+        studentId,
+        providerId: provider.id,
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 1,
+        frequencyKind: 'weekly',
+        sessionsPerPeriod: 1,
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: nowIso(),
+        startOn: '',
+        endOn: '',
+        createdAt: nowIso(),
+      });
+    }
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'open',
+      signerName: '',
+      signerEmail: '',
+      schoolId: hegarty.id,
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'unset',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: islandKid.id,
+      dateOfService: '2026-09-04',
+      beginTime: '13:00',
+      endTime: '13:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: '',
+      notes: 'gait',
+      aiFlags: [],
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: carleKid.id,
+      dateOfService: '2026-09-02',
+      beginTime: '13:00',
+      endTime: '13:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: '',
+      notes: 'balance',
+      aiFlags: [],
+    });
+
+    const detail = await handleTmsRequest(store, {
+      method: 'GET',
+      path: `/admin/providers/${provider.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    expect(detail.status).toBe(200);
+    const body = detail.body as {
+      districtOptions: string[];
+      sessions: Array<{ studentId: string; district: string; schoolName: string }>;
+    };
+    expect(body.districtOptions).toEqual([
+      'Carle Place UFSD',
+      'Island Park UFSD',
+      'Westbury UFSD',
+    ]);
+    const byStudent = new Map(body.sessions.map((s) => [s.studentId, s]));
+    expect(byStudent.get(islandKid.id)?.district).toBe('Island Park UFSD');
+    expect(byStudent.get(islandKid.id)?.schoolName).toMatch(/Hegarty/i);
+    expect(byStudent.get(carleKid.id)?.district).toBe('Carle Place UFSD');
   });
 
   it('deletes schools and due dates', async () => {
@@ -2613,6 +2839,72 @@ describe('TMS upload-sessions errors', () => {
     expect(store.data.sessions).toHaveLength(0);
   });
 
+  it('accepts Westbury district header when child school is Powells Lane building', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.upsertSchool({
+      id: newId(),
+      name: 'Powells Lane',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Daniel',
+      lastName: 'Amaya',
+      dob: '08/09/2019',
+      active: true,
+      programType: 'Westbury UFSD',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      frequencyPerWeek: 5,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    const pdfText = [
+      'District/Agency/BOCES: Westbury Union Free School District',
+      'Summary of Related Service Session Notes',
+      'Service: Physical Therapy',
+      'Service Provider: Pat Lee',
+      'Student Name: Daniel Amaya, D.O.B. 08/09/2019',
+      '09/08/2026 1:1 97110  1 9:27 am  9:57 am',
+      'Powells Lane',
+      'Service Provided: Daniel engaged in LE strengthening exercises',
+      '97110x2',
+      signedBlock('Sep 8 2026 12:11PM'),
+    ].join('\n');
+    const res = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-09-07', pdfText },
+    });
+    expect(res.status).toBe(200);
+    const body = res.body as {
+      ok: boolean;
+      saved: unknown[];
+      failed: Array<{ error: string }>;
+      errors: string[];
+    };
+    expect(body.failed || []).toEqual([]);
+    expect(body.ok).toBe(true);
+    expect(body.saved.length).toBeGreaterThan(0);
+    expect(store.data.sessions.length).toBeGreaterThan(0);
+  });
+
   it('rejects PDF when Service Provider does not match logged-in therapist', async () => {
     const { store, provider } = storeWithTherapist();
     await handleTmsRequest(store, {
@@ -2645,6 +2937,41 @@ describe('TMS upload-sessions errors', () => {
       true,
     );
     expect(store.data.sessions).toHaveLength(0);
+  });
+
+  it('accepts Frontline Service Provider with White Glove prefix for matching therapist', async () => {
+    const { store, provider } = storeWithTherapist();
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 1x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    const pdfText = [
+      'Student Name: Odne, Aiden',
+      'Service Provider:White Glove -Lee, Pat',
+      'Service: PT School',
+      '09/01/2026 9:00 am 9:30 am',
+      'Service Provided: balance work in gym',
+      '97110x2',
+      signedBlock('Sep 1 2026 9:35AM'),
+    ].join('\n');
+    const res = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-08-31', pdfText },
+    });
+    expect(res.status).toBe(200);
+    const body = res.body as { ok: boolean; saved: unknown[]; errors?: string[] };
+    expect(body.ok).toBe(true);
+    expect(body.saved).toHaveLength(1);
+    expect(store.data.sessions).toHaveLength(1);
   });
 
   it('allows paid absence and makeup over weekly mandate when linked to a missed session', async () => {
@@ -3995,7 +4322,7 @@ describe('TMS MFA org policy', () => {
     expect(store.archiveById(archId)).toBeUndefined();
   });
 
-  it('students filtered by programType across buildings; week sessions stay unfiltered', async () => {
+  it('students and week sessions filter by programType across buildings', async () => {
     const { store, provider } = storeWithTherapist();
     const schoolA = store.data.schools[0]!;
     const schoolB = store.upsertSchool({
@@ -4117,8 +4444,165 @@ describe('TMS MFA org policy', () => {
     });
     expect(weekGet.status).toBe(200);
     const sessions = (weekGet.body as { sessions: Array<{ notes: string; studentName: string }> }).sessions;
-    expect(sessions).toHaveLength(2);
-    expect(sessions.some((s) => s.notes === 'island session')).toBe(true);
-    expect(sessions.find((s) => s.notes === 'baldwin session')?.studentName).toMatch(/Bald/i);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.notes).toBe('baldwin session');
+    expect(sessions[0]?.studentName).toMatch(/Bald/i);
+  });
+
+  it('due dates and processed sessions scope to selected program type', async () => {
+    const { store, provider } = storeWithTherapist();
+    const schoolA = store.data.schools[0]!;
+    const schoolB = store.upsertSchool({
+      id: newId(),
+      name: 'Island Park Building',
+      district: 'Island Park',
+      signerName: 'IP Signer',
+      signerEmail: 'ip@example.com',
+      createdAt: nowIso(),
+    });
+    store.upsertDueDate({
+      id: newId(),
+      schoolId: schoolA.id,
+      kind: 'progress',
+      dueOn: '2026-10-01',
+      notes: 'Baldwin progress',
+      completedAt: '',
+      lastNagOn: '',
+    });
+    store.upsertDueDate({
+      id: newId(),
+      schoolId: schoolB.id,
+      kind: 'progress',
+      dueOn: '2026-10-15',
+      notes: 'Island progress',
+      completedAt: '',
+      lastNagOn: '',
+    });
+    const baldwin = store.upsertStudent({
+      id: newId(),
+      schoolId: schoolA.id,
+      firstName: 'Bald',
+      lastName: 'Win',
+      dob: '',
+      programId: '',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const island = store.upsertStudent({
+      id: newId(),
+      schoolId: schoolB.id,
+      firstName: 'Isle',
+      lastName: 'Park',
+      dob: '',
+      programId: '',
+      programType: 'Island Park UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    for (const studentId of [baldwin.id, island.id]) {
+      store.upsertMandate({
+        id: newId(),
+        studentId,
+        providerId: provider.id,
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 1,
+        frequencyKind: 'weekly',
+        sessionsPerPeriod: 1,
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: nowIso(),
+        startOn: '',
+        endOn: '',
+        createdAt: nowIso(),
+      });
+    }
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: schoolA.signerName,
+      signerEmail: schoolA.signerEmail,
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+      hhaError: '',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: baldwin.id,
+      dateOfService: '09/01/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'school',
+      notes: 'baldwin processed',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: island.id,
+      dateOfService: '09/02/2026',
+      beginTime: '10:00 am',
+      endTime: '10:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'school',
+      notes: 'island processed',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+
+    const meAll = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/me',
+      headers: thH,
+      query: {},
+      body: undefined,
+    });
+    expect(meAll.status).toBe(200);
+    expect((meAll.body as { dueDates: Array<{ notes?: string }> }).dueDates).toHaveLength(2);
+
+    const meBaldwin = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/me',
+      headers: thH,
+      query: { programType: 'Baldwin UFSD' },
+      body: undefined,
+    });
+    expect(meBaldwin.status).toBe(200);
+    const dues = (meBaldwin.body as { dueDates: Array<{ schoolId: string; notes?: string }> }).dueDates;
+    expect(dues).toHaveLength(1);
+    expect(dues[0]?.schoolId).toBe(schoolA.id);
+
+    const weeks = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/weeks',
+      headers: thH,
+      query: { providerId: provider.id, programType: 'Baldwin UFSD' },
+      body: undefined,
+    });
+    expect(weeks.status).toBe(200);
+    const processed = (
+      weeks.body as { processedSessions: Array<{ studentId: string; programType?: string }> }
+    ).processedSessions;
+    expect(processed).toHaveLength(1);
+    expect(processed[0]?.studentId).toBe(baldwin.id);
+    expect(processed[0]?.programType).toBe('Baldwin UFSD');
   });
 });

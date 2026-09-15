@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  looksLikeDistrictLabel,
   parseWeeklySessionText,
+  pdfSchoolConflictsWithChild,
   schoolNamesConflict,
 } from './session-parse.js';
 
@@ -13,6 +15,35 @@ describe('school name match / Frontline Setting', () => {
 
   it('still flags a different school', () => {
     expect(schoolNamesConflict('Carle Place MS/HS', 'Westbury Middle School')).toBe(true);
+  });
+
+  it('treats Westbury Union Free / UFSD as the same district label', () => {
+    expect(looksLikeDistrictLabel('Westbury Union Free School District')).toBe(true);
+    expect(looksLikeDistrictLabel('Westbury UFSD')).toBe(true);
+    expect(looksLikeDistrictLabel('Powells Lane')).toBe(false);
+    expect(looksLikeDistrictLabel('Westbury Middle School')).toBe(false);
+    expect(schoolNamesConflict('Westbury Union Free School', 'Westbury UFSD')).toBe(false);
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Westbury Union Free School',
+        { name: 'Powells Lane', district: '' },
+        'Westbury UFSD',
+      ),
+    ).toBe(false);
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Westbury Middle School',
+        { name: 'Powells Lane', district: '' },
+        'Westbury UFSD',
+      ),
+    ).toBe(true);
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Carle Place UFSD',
+        { name: 'Powells Lane', district: '' },
+        'Westbury UFSD',
+      ),
+    ).toBe(true);
   });
 
   it('reads Setting Carle Place MS/HS instead of a header "... School" fallback', () => {
@@ -33,5 +64,63 @@ Sep 2 2026 12:40PM
     const rows = parseWeeklySessionText(text);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows[0]?.schoolName).toMatch(/Carle Place MS\/HS/i);
+  });
+
+  it('reads unlabeled Frontline setting Powells Lane over District/Agency header', () => {
+    const text = `
+District/Agency/BOCES: Westbury Union Free School District
+Summary of Related Service Session Notes
+Service: Physical Therapy
+Service Provider: Dawan, Fatimah (White Glove)
+Student Name: Daniel Amaya, D.O.B. 08/09/2019
+09/08/2026 1:1 97110  1 9:27 am  9:57 am
+Powells Lane
+Service Provided: Daniel engaged in LE strengthening exercises
+Provider Signature/Credentials  Date
+Fatimah (White Glove) Dawan PT
+Sep  8 2026 12:11PM
+`;
+    const rows = parseWeeklySessionText(text);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.schoolName).toMatch(/Powells Lane/i);
+  });
+
+  it('skips lone group-size "1" and reads Woodland School', () => {
+    const text = `
+District/Agency/BOCES: Westbury Union Free School District
+Summary of Related Service Session Notes
+Service: Physical Therapy
+Service Provider: Test, Provider (White Glove)
+Student Name: Matteo Mira, D.O.B. 01/01/2018
+09/08/2026
+1:1
+97110
+1
+1:25 pm
+1:55 pm
+Woodland School
+Service Provided: Matteo engaged in strengthening exercises
+Provider Signature/Credentials  Date
+Test Provider PT
+Sep  8 2026 2:00PM
+`;
+    const rows = parseWeeklySessionText(text);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.schoolName).toMatch(/Woodland School/i);
+    expect(rows[0]?.schoolName).not.toBe('1');
+  });
+
+  it('does not treat Setting: 1 as a school name', () => {
+    const text = `
+Student Name: Netra Patel, D.O.B. 01/01/2018
+09/10/2026 12:05 pm 12:35 pm
+Setting: 1
+Woodland School
+Service Provided: session note
+Provider Signature/Credentials
+`;
+    const rows = parseWeeklySessionText(text);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.schoolName).toMatch(/Woodland School/i);
   });
 });

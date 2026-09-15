@@ -1,5 +1,5 @@
 import type { HhaClient } from '@white-glove/hha-client';
-import { psDateToIso, sessionDurationMinutes } from '@white-glove/hha-client';
+import { inferCreateScheduleType, psDateToIso, sessionDurationMinutes } from '@white-glove/hha-client';
 import type { ExceptionCode, HhaVisit, UnscheduledMatchKeys, VerifiedSessionRow } from '@white-glove/shared';
 import {
   buildPayCodeName,
@@ -144,7 +144,8 @@ export async function resolveSessionVisit(options: {
     programType: row.programType,
     providerName: row.providerName,
     payRate: row.payRate,
-    scheduleType: 'Non-Skilled',
+    // Therapy must be Skilled — Non-Skilled causes false ErrorID=-310.
+    scheduleType: inferCreateScheduleType(serviceCode),
     durationMinutes,
   };
 

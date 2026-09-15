@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveServiceCodeIdFromRows } from './resolve-service-code-order.js';
+import { resolveServiceCodeIdFromRows, resolveServiceCodeIdsFromRows } from './resolve-service-code-order.js';
 
 describe('resolveServiceCodeIdFromRows (map before name)', () => {
   it('uses Excel alias HHA name when PS name is absent on contract', () => {
@@ -219,5 +219,20 @@ describe('resolveServiceCodeIdFromRows (map before name)', () => {
         rows: [{ id: 'nys-104', name: 'PT Eval 97162-104' }],
       }),
     ).toBe('nys-104');
+  });
+
+  it('returns every contract row that shares the aliased HHA billing name', () => {
+    const rows = [
+      { id: '785139', name: 'PT SOC/ROC OASIS' },
+      { id: '1416587', name: 'PT SOC/ROC OASIS' },
+      { id: '999', name: 'Other' },
+    ];
+    expect(
+      resolveServiceCodeIdsFromRows({
+        serviceType: 'PT HC Eval',
+        programType: 'Extended Home Care Therapy',
+        rows,
+      }),
+    ).toEqual(['785139', '1416587']);
   });
 });

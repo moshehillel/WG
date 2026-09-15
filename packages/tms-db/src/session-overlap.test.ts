@@ -571,6 +571,10 @@ describe('solo group → individual pay (absent peers)', () => {
       'no other child',
       'other peer was absent',
       'classmate not available',
+      'his group mate is absent',
+      'group mate is absent',
+      'partner absent',
+      'group partner was absent',
     ];
     for (const phrase of ok) {
       expect(notesMentionNoPeerAvailable(`Service Provided: ${phrase}`)).toBe(true);

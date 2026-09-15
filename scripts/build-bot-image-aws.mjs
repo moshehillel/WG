@@ -221,7 +221,7 @@ async function cdkDeployLive() {
       '-c',
       'enableGuardDuty=false',
       '-c',
-      `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net,ggreenfeld@whiteglovecare.net,alowy@whiteglovecare.net,gfriedman@whiteglovecare.net'}`,
+      `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net,ggreenfeld@whiteglovecare.net,alowy@whiteglovecare.net,gfriedman@whiteglovecare.net,miris@whiteglovecare.net'}`,
       '-c',
       'hhaSecretArn=arn:aws:secretsmanager:us-east-1:065194293782:secret:HhaSecret3062EA85-CsJnQwEGJqwN-7DaLQY',
       // Do not pass an empty sandboxApiKey — the stack persists one in Secrets Manager.

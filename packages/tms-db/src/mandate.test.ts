@@ -14,7 +14,7 @@ import {
   sessionNotesReport,
   weekProgressReport,
 } from './reports.js';
-import { attendanceFromNotes, parseWeeklySessionText } from './session-parse.js';
+import { attendanceFromNotes, clipSessionNotes, parseWeeklySessionText } from './session-parse.js';
 import type { Mandate, SchoolCalendar, SessionRow } from './types.js';
 import { afterLock, afterReopen, therapistCanEdit, therapistCanImportOrAddServices, therapistCanMutateExistingSession, weekIsProcessed } from './week-state.js';
 
@@ -225,6 +225,178 @@ describe('mandate math', () => {
     );
     expect(errors.some((e) => /PT group/i.test(e) && /exceeds the mandate/i.test(e))).toBe(true);
     expect(errors.some((e) => /PT individual/i.test(e))).toBe(false);
+    expect(errors.some((e) => /no partner available/i.test(e))).toBe(true);
+    expect(errors.some((e) => /Reason from note:\s*no partner available/i.test(e))).toBe(true);
+  });
+
+  it('over-mandate on makeup auth names makeup session in note context', () => {
+    const makeupAuth = mandate({
+      id: 'm-mu',
+      mandateKind: 'makeup_auth',
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+      serviceType: 'Makeup Auth',
+    });
+    const a = sess({
+      id: 'mu-a',
+      attendance: 'makeup',
+      makeupOfSessionId: '',
+      dateOfService: '09/02/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      notes: 'Make-up session: gait training',
+    });
+    const b = sess({
+      id: 'mu-b',
+      attendance: 'makeup',
+      makeupOfSessionId: '',
+      dateOfService: '09/03/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      notes: 'Make-up session: balance',
+    });
+    const { errors } = checkMandatesForWeek(
+      [makeupAuth],
+      [a, b],
+      [a, b],
+      { st1: 'Makeup Kid' },
+    );
+    expect(errors.some((e) => /exceeds the makeup authorization/i.test(e))).toBe(true);
+    expect(errors.some((e) => /makeup session/i.test(e))).toBe(true);
+  });
+
+  it('group mate absent solo-group counts against group when individual already covered', () => {
+    const individual = mandate({
+      id: 'm-ind',
+      ratioGroup: false,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+    });
+    const group = mandate({
+      id: 'm-grp',
+      ratioGroup: true,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+      serviceType: 'PT School Group',
+      groupSize: 2,
+    });
+    const tue = sess({
+      id: 's-tue',
+      dateOfService: '09/02/2026',
+      beginTime: '11:00 am',
+      endTime: '11:30 am',
+      serviceType: 'PT School 1:1',
+      notes: 'Service Provided: evaluation of balance',
+    });
+    const wed = sess({
+      id: 's-wed',
+      dateOfService: '09/03/2026',
+      beginTime: '10:35 am',
+      endTime: '11:05 am',
+      serviceType: 'PT School 2:1',
+      notes:
+        'Service Provided: Kenny is in a group (2:1) session, however, his group mate is absent.',
+    });
+    const { errors } = checkMandatesForWeek(
+      [group, individual],
+      [tue, wed],
+      [tue, wed],
+      { st1: 'Kenny Ibarra' },
+    );
+    expect(errors.filter((e) => /exceeds the mandate/i.test(e))).toEqual([]);
+    expect(errors.filter((e) => /PT individual/i.test(e))).toEqual([]);
+  });
+
+  it('dual-mandate individual over without peer note hints group-mandate note wording', () => {
+    const individual = mandate({
+      id: 'm-ind',
+      ratioGroup: false,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+    });
+    const group = mandate({
+      id: 'm-grp',
+      ratioGroup: true,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+      serviceType: 'PT School Group',
+      groupSize: 2,
+    });
+    const a = sess({
+      id: 'a',
+      dateOfService: '09/08/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      serviceType: 'Physical Therapy 1:1',
+      notes: 'Service Provided: evaluation',
+    });
+    const b = sess({
+      id: 'b',
+      dateOfService: '09/10/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      serviceType: 'Physical Therapy 1:1',
+      notes: 'Service Provided: continued evaluation',
+    });
+    const { errors } = checkMandatesForWeek(
+      [individual, group],
+      [a, b],
+      [a, b],
+      { st1: 'Jason Persandi' },
+    );
+    expect(errors.some((e) => /PT individual/i.test(e) && /exceeds the mandate/i.test(e))).toBe(true);
+    expect(
+      errors.some((e) =>
+        /no partner available \(or group partner absent \/ makeup session\)/i.test(e),
+      ),
+    ).toBe(true);
+  });
+
+  it('preserves trailing no-partner phrase when clipping long notes (solo-group routing)', () => {
+    const pad = 'Service Provided: ' + 'gait training assessment details '.repeat(40);
+    const full = `${pad} no partner available`;
+    expect(full.length).toBeGreaterThan(800);
+    const clipped = clipSessionNotes(full);
+    expect(clipped.length).toBeLessThanOrEqual(800);
+    expect(clipped).toMatch(/no partner available/i);
+
+    const individual = mandate({
+      id: 'm-ind',
+      ratioGroup: false,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+    });
+    const group = mandate({
+      id: 'm-grp',
+      ratioGroup: true,
+      frequencyPerWeek: 1,
+      sessionsPerPeriod: 1,
+      serviceType: 'PT School Group',
+      groupSize: 2,
+    });
+    const tue = sess({
+      id: 's-tue',
+      dateOfService: '09/08/2026',
+      beginTime: '11:00 am',
+      endTime: '11:30 am',
+      serviceType: 'Physical Therapy 1:1',
+      notes: 'Service Provided: evaluation of balance',
+    });
+    const thu = sess({
+      id: 's-thu',
+      dateOfService: '09/10/2026',
+      beginTime: '11:00 am',
+      endTime: '11:30 am',
+      serviceType: 'Physical Therapy 1:1',
+      notes: clipped,
+    });
+    const { errors } = checkMandatesForWeek(
+      [group, individual],
+      [tue, thu],
+      [tue, thu],
+      { st1: 'Dylan Santos-Santiago' },
+    );
+    expect(errors.filter((e) => /exceeds the mandate/i.test(e))).toEqual([]);
   });
 });
 
@@ -653,6 +825,41 @@ describe('weekly notes', () => {
     expect(attendanceFromNotes('Student Absence: student not in school', '9:00 am', '9:30 am')).toBe(
       'missed',
     );
+  });
+
+  it('keeps Service Provided + group mate absent as attended (Kenny / solo-group)', () => {
+    const note =
+      'Service Provided: FIRST ATTEND DATE. Kenny is in a group (2:1) session, however, his group mate is absent. Kenny transitioned well and completed obstacle course.';
+    expect(attendanceFromNotes(note, '10:35 am', '11:05 am')).toBe('attended');
+    expect(
+      attendanceFromNotes(
+        'Service Provided: Kenny is in a group (2:1) session, however, his group mate is absent.',
+        '10:35 am',
+        '11:05 am',
+      ),
+    ).toBe('attended');
+    expect(
+      attendanceFromNotes(
+        'Service Provided: seen individually — partner absent today',
+        '9:00 am',
+        '9:30 am',
+      ),
+    ).toBe('attended');
+  });
+
+  it('parses Frontline Service Provided + group mate absent rows as attended', () => {
+    const rows = parseWeeklySessionText(`
+Student Name: Ibarra, Kenny
+Service Provider: White Glove - Baniqued, Jazel
+Service: Physical Therapy
+09/10/2026 2:1 10:35 am 11:05 am Service Provided: Kenny is in a group (2:1) session, however, his group mate is absent. Kenny navigated a 2-step obstacle course.
+CPT: 97150 Units: 1
+Signed: Sep 10 2026 3:08 PM
+`);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.attendance).toBe('attended');
+    expect(rows[0]?.cancelReason).toBe('');
+    expect(rows[0]?.beginTime).toMatch(/10:35/i);
   });
 
   it('parses Frontline Student Absence rows as missed', () => {

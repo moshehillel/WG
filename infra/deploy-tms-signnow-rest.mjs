@@ -50,11 +50,11 @@ console.log(out);
 fs.writeFileSync(
   path.join(__dirname, 'cdk-tms-signnow-rest-deploy-out.txt'),
   [
-    'TMS SignNow REST (upload + freeform invite + cancel + webhook)',
+    'TMS SignNow: field invite (signature + date) + zip download + date stamp backfill',
     `Function: ${fnName}`,
     out.trim(),
     'Secret: TmsDocuSignSecret — JSON { api_key, from_email, webhook_url }',
-    'FE: white-glove-tms-web ?v=84',
+    'FE: white-glove-tms-web',
     '',
   ].join('\n'),
 );

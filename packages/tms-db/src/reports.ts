@@ -13,9 +13,21 @@ import {
 } from './mandate.js';
 import { isoDate, parseDos } from './ids.js';
 import { schoolCalendarSummary, hasConfiguredSchoolCalendar, schoolCalendarMonFriFallbackWarning, schoolSetupIncomplete } from './school-calendar.js';
-import type { HhaTransferStatus, Mandate, SessionRow } from './types.js';
+import type { HhaTransferStatus, Mandate, SessionRow, Student } from './types.js';
 import { DEFAULT_ADMIN_NOTE_TAGS } from './types.js';
 import type { MemoryStore } from './memory-store.js';
+
+/**
+ * Admin "district" label for filters / columns.
+ * Caseload imports store the payer/district on student.programType and often leave
+ * school.district blank (building-only school rows), so prefer programType.
+ */
+export function districtLabelForStudent(
+  student?: Pick<Student, 'programType'> | null,
+  school?: { district?: string } | null,
+): string {
+  return String(student?.programType || school?.district || '').trim();
+}
 
 /** Per-week HHA transfer rollup (attended/makeup only — misses are not HHA-eligible). */
 export type WeekHhaRollup = {
@@ -486,7 +498,7 @@ export function sessionNotesReport(
     const school = student
       ? store.data.schools.find((sc) => sc.id === student.schoolId)
       : undefined;
-    const district = String(school?.district || '').trim();
+    const district = districtLabelForStudent(student, school);
     if (districtKey && district.toLowerCase() !== districtKey) continue;
 
     const att = String(s.attendance || '').trim() || 'attended';
@@ -527,6 +539,17 @@ export function sessionNotesReport(
 
   const attended = attendedOnly + makeup;
   const total = attended + missed + other;
+  // Caseload programType is the payer/district; school.district is often blank on imports.
+  const districtOptions = [
+    ...new Set(
+      store.data.students
+        .map((st) => {
+          const school = store.data.schools.find((sc) => sc.id === st.schoolId);
+          return districtLabelForStudent(st, school);
+        })
+        .filter(Boolean),
+    ),
+  ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   return {
     from: from || null,
     to: to || null,
@@ -541,12 +564,14 @@ export function sessionNotesReport(
       total,
     },
     rows,
+    districtOptions,
   };
 }
 
 /**
- * Admin internal notes across providers (Admin → Providers → Internal notes).
- * Filter by note createdAt date (YYYY-MM-DD) and optional providerId.
+ * Admin internal notes across providers and children
+ * (Admin → Providers/Children → Internal notes; Reports → Internal notes).
+ * Filter by note createdAt date (YYYY-MM-DD) and optional providerId (provider-scoped only).
  */
 export function adminInternalNotesReport(
   store: MemoryStore,
@@ -557,21 +582,42 @@ export function adminInternalNotesReport(
   const providerId = String(opts.providerId || '').trim();
   return store.data.adminNotes
     .filter((n) => {
-      if (providerId && n.providerId !== providerId) return false;
+      const studentId = String(n.studentId || '').trim();
+      if (providerId) {
+        // Provider filter: only provider-scoped notes for that provider.
+        if (studentId) return false;
+        if (n.providerId !== providerId) return false;
+      }
       const day = String(n.createdAt || '').slice(0, 10);
       if (from && (!day || day < from)) return false;
       if (to && (!day || day > to)) return false;
       return true;
     })
     .map((n) => {
+      const studentId = String(n.studentId || '').trim();
+      const student = studentId
+        ? store.data.students.find((s) => s.id === studentId)
+        : undefined;
       const provider = store.data.providers.find((p) => p.id === n.providerId);
       const author = store.userById(n.authorId) || store.data.users.find((u) => u.id === n.authorId);
+      const childName = student
+        ? `${student.firstName} ${student.lastName}`.trim() || student.id
+        : '';
+      const providerName = provider
+        ? `${provider.firstName} ${provider.lastName}`.trim() || provider.id
+        : n.providerId || '';
+      const subjectKind = studentId ? 'child' : 'provider';
+      const subjectName = studentId
+        ? childName || studentId
+        : providerName || n.providerId || '—';
       return {
         id: n.id,
-        providerId: n.providerId,
-        providerName: provider
-          ? `${provider.firstName} ${provider.lastName}`.trim() || provider.id
-          : n.providerId || '—',
+        providerId: n.providerId || '',
+        studentId,
+        subjectKind,
+        subjectName,
+        providerName: providerName || (studentId ? '—' : n.providerId || '—'),
+        childName: childName || (studentId ? studentId : '—'),
         body: n.body || '',
         tags: Array.isArray(n.tags) ? n.tags : [],
         createdAt: n.createdAt || '',
@@ -585,7 +631,7 @@ export function adminInternalNotesReport(
       const ca = String(a.createdAt || '');
       const cb = String(b.createdAt || '');
       if (ca !== cb) return cb.localeCompare(ca);
-      return a.providerName.localeCompare(b.providerName);
+      return a.subjectName.localeCompare(b.subjectName);
     });
 }
 
@@ -719,6 +765,8 @@ export function adminStudentDetail(store: MemoryStore, studentId: string) {
     .map((w) => enrichWeekHhaError(store, w));
   const dueDates = dueDateReport(store).filter((d) => d.schoolId === student.schoolId);
   const files = store.filesForStudent(student.id);
+  const notes = store.notesForStudent(student.id);
+  const extraTags = [...new Set(notes.flatMap((n) => n.tags || []))];
   const schoolCalendar = store.schoolCalendarForSchool(student.schoolId);
   return {
     student,
@@ -732,6 +780,8 @@ export function adminStudentDetail(store: MemoryStore, studentId: string) {
     weeks,
     dueDates,
     files,
+    notes,
+    noteTagOptions: [...new Set([...DEFAULT_ADMIN_NOTE_TAGS, ...extraTags])],
   };
 }
 
@@ -823,11 +873,31 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
       const school = schoolId
         ? store.data.schools.find((s) => s.id === schoolId)
         : undefined;
+      const weekSessions = store.sessionsForWeek(w.id);
+      const districtCounts = new Map<string, number>();
+      for (const s of weekSessions) {
+        const student = store.data.students.find((st) => st.id === s.studentId);
+        const sessSchool = student
+          ? store.data.schools.find((sc) => sc.id === student.schoolId)
+          : undefined;
+        const label = districtLabelForStudent(student, sessSchool);
+        if (!label) continue;
+        districtCounts.set(label, (districtCounts.get(label) || 0) + 1);
+      }
+      let weekDistrict = '';
+      let bestN = 0;
+      for (const [label, n] of districtCounts) {
+        if (n > bestN) {
+          weekDistrict = label;
+          bestN = n;
+        }
+      }
+      if (!weekDistrict) weekDistrict = String(school?.district || '').trim();
       return {
         ...enriched,
         schoolId: schoolId || '',
         schoolName: school?.name || '',
-        district: school?.district || '',
+        district: weekDistrict,
       };
     });
   const weekById = new Map(weeks.map((w) => [w.id, w]));
@@ -845,7 +915,7 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
         weekStatus: w?.status || '',
         schoolId: student?.schoolId || w?.schoolId || '',
         schoolName: school?.name || '',
-        district: school?.district || '',
+        district: districtLabelForStudent(student, school),
         studentName: student
           ? `${student.firstName} ${student.lastName}`.trim()
           : s.studentId,
@@ -857,6 +927,21 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
       if (da !== db) return db.localeCompare(da);
       return String(b.beginTime || '').localeCompare(String(a.beginTime || ''));
     });
+  // Caseload + session districts so the Sessions filter lists payers even before
+  // school.district is backfilled (imports leave it blank).
+  const districtOptions = [
+    ...new Set([
+      ...sessions.map((s) => String(s.district || '').trim()).filter(Boolean),
+      ...mandates.flatMap((m) => {
+        const student = store.data.students.find((st) => st.id === m.studentId);
+        const school = student
+          ? store.data.schools.find((sc) => sc.id === student.schoolId)
+          : undefined;
+        const label = districtLabelForStudent(student, school);
+        return label ? [label] : [];
+      }),
+    ]),
+  ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   const files = store.filesForProvider(provider.id);
   const extraTags = [...new Set(notes.flatMap((n) => n.tags || []))];
   return {
@@ -866,6 +951,7 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
     mandates,
     weeks,
     sessions,
+    districtOptions,
     files,
     noteTagOptions: [...new Set([...DEFAULT_ADMIN_NOTE_TAGS, ...extraTags])],
     caseloadCount: new Set(mandates.map((m) => m.studentId)).size,

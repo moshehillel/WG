@@ -70,7 +70,10 @@ export const DEFAULT_ADMIN_NOTE_TAGS = ['Session note follow up', 'Gap in servic
 
 export interface AdminNote {
   id: string;
+  /** Set for provider-scoped notes; empty when the note is on a child only. */
   providerId: string;
+  /** Set for child-scoped notes (Admin → Children → Internal notes). */
+  studentId?: string;
   authorId: string;
   body: string;
   /** Predefined or custom tags. */

@@ -16,6 +16,7 @@ export { AmbiguousPatientNameError } from './patient-errors.js';
 export {
   isAlreadyDischargedError,
   isInvalidHhaPatientError,
+  isInvalidHhaVisitError,
   isTrustedHhaPatientId,
   toFindPatientOptions,
 } from './resolve-patient-id.js';
@@ -111,4 +112,5 @@ export {
   stripLeadingZerosFromNumericId,
 } from './create-patient-builder.js';
 export type { CreatePatientDefaults, CreatePatientReferenceIds } from './create-patient-builder.js';
+export { buildCreateScheduleBody, inferCreateScheduleType } from './schedule-builder.js';
 

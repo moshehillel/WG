@@ -13,6 +13,8 @@ import {
   isOrphanProvider,
   mandateMatchKey,
   nameTokenKey,
+  personNameTokenKey,
+  stripAgencyFromProviderName,
   parseCaseloadCsv,
   parseCaseloadUpload,
   parseCaseloadWorkbook,
@@ -1031,6 +1033,46 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
     expect(findProviderByName(store.data.providers, 'James Vasaturo')?.id).toBe('p-james');
     expect(findProviderByName(store.data.providers, 'White, Glove')).toBeUndefined();
     expect(isAgencyProviderName('White Glove')).toBe(true);
+    expect(isAgencyProviderName('White Glove Care')).toBe(true);
+    expect(isAgencyProviderName('White Glove -Baniqued, Jazel')).toBe(false);
+  });
+
+  it('matches Frontline White Glove-prefixed Service Provider names', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p-jazel',
+      userId: 'u-jazel',
+      firstName: 'Jazel',
+      lastName: 'Baniqued',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    expect(stripAgencyFromProviderName('White Glove -Baniqued, Jazel')).toBe('Baniqued, Jazel');
+    expect(personNameTokenKey('White Glove -Baniqued, Jazel')).toBe('baniqued jazel');
+    expect(personNameTokenKey('Dawan, Fatimah (White Glove)')).toBe('dawan fatimah');
+    for (const raw of [
+      'White Glove -Baniqued, Jazel',
+      'White Glove-Baniqued, Jazel',
+      'Baniqued, Jazel',
+      'Jazel Baniqued',
+      'Baniqued, Jazel PT',
+      'jazel baniqued',
+    ]) {
+      expect(findProviderByName(store.data.providers, raw)?.id).toBe('p-jazel');
+    }
+    expect(findProviderByName(store.data.providers, 'White Glove -Other, Person')).toBeUndefined();
+    expect(findProviderByName(store.data.providers, 'White Glove')).toBeUndefined();
   });
 
   it('matches provider names order-independently and case-insensitively', () => {
@@ -1086,7 +1128,10 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
     expect(findProviderByName(store.data.providers, 'John Doe')).toBeUndefined();
     expect(findProviderByName(store.data.providers, 'John')).toBeUndefined();
     expect(findProviderByName(store.data.providers, 'Smith')).toBeUndefined();
-    expect(findProviderByName(store.data.providers, 'John Smith Jr')).toBeUndefined();
+    // Generational suffixes / extra PDF words are ignored when first+last still match.
+    expect(findProviderByName(store.data.providers, 'John Smith Jr')?.id).toBe('p-john');
+    expect(findProviderByName(store.data.providers, 'John Smith DDS')?.id).toBe('p-john');
+    expect(findProviderByName(store.data.providers, 'Jonathan Smith')).toBeUndefined();
   });
 
   it('prefers linked login provider when duplicate names exist', () => {

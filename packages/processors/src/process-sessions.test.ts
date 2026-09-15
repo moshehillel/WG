@@ -19,6 +19,8 @@ describe('processVerifiedSessions', () => {
       runId: 'run-s',
       hha,
       store: new InMemoryIdempotencyStore(),
+      // Legacy SOAP pending-call path (not ENT unscheduled fetch).
+      unscheduledFetchActive: false,
       rows: [
         {
           sessionId: 'S-auto',
@@ -56,6 +58,7 @@ describe('processVerifiedSessions', () => {
     expect(result.failed).toBe(1);
     expect(result.skipped).toBe(0);
     expect(hha.calls).toContain('findPatient');
+    expect(hha.calls).toContain('upsertAuthorization');
     expect(hha.calls).toContain('approveVisit');
     expect(hha.calls).toContain('getClockingDetails');
     expect(hha.calls).toContain('resolveCaregiverId');

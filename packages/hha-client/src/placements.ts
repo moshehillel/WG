@@ -22,7 +22,8 @@ export function parsePatientPlacements(xml: string): PatientPlacement[] {
       serviceCodeId:
         xmlFirstTag(block, 'ServiceCodeID') ??
         block.match(/<ServiceCode>\s*<ID>(\d+)/i)?.[1],
-      startDate: xmlFirstTag(block, 'StartDate'),
+      // HHA GetPatientContracts uses ServiceStartDate (not StartDate).
+      startDate: xmlFirstTag(block, 'ServiceStartDate') ?? xmlFirstTag(block, 'StartDate'),
       dischargeDate: xmlFirstTag(block, 'DischargeDate'),
     });
   }
