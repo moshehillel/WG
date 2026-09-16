@@ -67,6 +67,33 @@ describe('parseOpenedCases', () => {
       homePhone: expect.stringContaining('347'),
     });
   });
+
+  it('maps Extended Mandate columns from new-service style sheet', () => {
+    // Headers match ProviderSoft "new service" export (Basic blank/0 → Extended fallback).
+    const csv = [
+      "Child's Name,Program Id,Service Type,Times per Basic Mandate,Times per Extended Mandate,Basic Mandate Frequency,Extended Mandate Frequency,Service Begin Date,Program Type",
+      'DOUGLAS TIDEMON,NYS000000277,PT NYS eval 105,0,1,,Authorization,09/01/2026,NYS Medical Indemnity Fund Therapy',
+      'Kazani Sofia,NYS000001701,PT NYS 103,2,2,,Weekly,09/14/2026,NYS Medical Indemnity Fund Therapy',
+    ].join('\n');
+    const rows = parseOpenedCases(csv);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      caseId: 'NYS000000277',
+      lastName: 'DOUGLAS',
+      firstName: 'TIDEMON',
+      mandateTimes: '0',
+      mandateFrequency: undefined,
+      extendedMandateTimes: '1',
+      extendedMandateFrequency: 'Authorization',
+    });
+    expect(rows[1]).toMatchObject({
+      caseId: 'NYS000001701',
+      mandateTimes: '2',
+      mandateFrequency: undefined,
+      extendedMandateTimes: '2',
+      extendedMandateFrequency: 'Weekly',
+    });
+  });
 });
 
 describe('parseClosedCases', () => {

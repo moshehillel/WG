@@ -622,7 +622,7 @@ export function explainException(ex: PipelineException): ExplainedException {
           isPreview,
         };
       }
-      if (/invalid auth mandate|Basic Mandate Frequency|Times per Basic Mandate/i.test(ex.message)) {
+      if (/invalid auth mandate|Basic Mandate Frequency|Times per Basic Mandate|Extended Mandate/i.test(ex.message)) {
         return {
           title: 'Failed — invalid or missing auth mandate',
           problem: ex.message.replace(/^\[preview\/[^\]]+\]\s*/i, ''),
@@ -630,7 +630,7 @@ export function explainException(ex: PipelineException): ExplainedException {
             ? 'Sandbox/dry-run only: on a live run this row would be blocked — authorization cannot be created without Period/Maximum.'
             : 'No HHA authorization write was attempted. Mandate frequency and times must map to HHA Period/Maximum.',
           action:
-            'Set Basic Mandate Frequency and Times per Basic Mandate on the ProviderSoft row (e.g. Weekly / 2), re-export, and re-run.',
+            'Set Basic Mandate Frequency and Times per Basic Mandate on the ProviderSoft row (e.g. Weekly / 2), or fill Extended Mandate Frequency and Times per Extended Mandate when Basic is blank/0, then re-export and re-run.',
           rowRef,
           reportLabel: report,
           isPreview,
