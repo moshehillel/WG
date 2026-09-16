@@ -3957,7 +3957,7 @@ describe('TMS MFA org policy', () => {
     expect(sessions.some((s) => s.notes === 'admin eval')).toBe(true);
   });
 
-  it('week signer comes from session child school; different signer schools stay separate bins', async () => {
+  it('week signer comes from session child school; different program types stay separate bins', async () => {
     const { store, provider } = storeWithTherapist();
     const hegarty = store.upsertSchool({
       id: newId(),
@@ -3982,7 +3982,7 @@ describe('TMS MFA org policy', () => {
       lastName: 'Binaj',
       dob: '',
       programId: '',
-      programType: '',
+      programType: 'Island Park UFSD',
       hhaPatientId: '',
       createdAt: nowIso(),
     });
@@ -3993,7 +3993,7 @@ describe('TMS MFA org policy', () => {
       lastName: 'Santos',
       dob: '',
       programId: '',
-      programType: '',
+      programType: 'Carle Place UFSD',
       hhaPatientId: '',
       createdAt: nowIso(),
     });
@@ -4015,14 +4015,14 @@ describe('TMS MFA org policy', () => {
         createdAt: nowIso(),
       });
     }
-    const weekStart = '2026-08-31';
+    const weekStart = '2026-09-07';
     // Empty week stamped from Carle Place picker (no signer).
     const ensured = await handleTmsRequest(store, {
       method: 'POST',
       path: '/week/ensure',
       headers: thH,
       query: {},
-      body: { providerId: provider.id, weekStart, schoolId: carle.id },
+      body: { providerId: provider.id, weekStart, schoolId: carle.id, programType: 'Carle Place UFSD' },
     });
     expect(ensured.status).toBe(200);
     const weekId = (ensured.body as { week: { id: string; signerEmail: string } }).week.id;
@@ -4036,7 +4036,7 @@ describe('TMS MFA org policy', () => {
       body: {
         weekId,
         studentId: hegChild.id,
-        dateOfService: '09/01/2026',
+        dateOfService: '09/08/2026',
         beginTime: '9:00 am',
         endTime: '9:30 am',
         attendance: 'attended',
@@ -4060,7 +4060,7 @@ describe('TMS MFA org policy', () => {
       path: '/week/ensure',
       headers: thH,
       query: {},
-      body: { providerId: provider.id, weekStart, schoolId: carle.id },
+      body: { providerId: provider.id, weekStart, schoolId: carle.id, programType: 'Carle Place UFSD' },
     });
     expect(reensure.status).toBe(200);
     const stillHeg = store.data.weeks.find((w) => w.id === hegWeek!.id);
@@ -4071,18 +4071,20 @@ describe('TMS MFA org policy', () => {
       method: 'GET',
       path: '/week',
       headers: thH,
-      query: { weekStart, schoolId: carle.id, providerId: provider.id },
+      query: { weekStart, schoolId: carle.id, providerId: provider.id, programType: 'Carle Place UFSD' },
       body: undefined,
     });
     expect(got.status).toBe(200);
-    // Therapist empty Carle picker falls back to the sibling week that has sessions.
-    expect((got.body as { week: { signerEmail: string }; schoolDistrict: string }).week.signerEmail).toBe(
-      'mgluck@whiteglovecare.net',
+    // Carle Place program scope stays on the empty Carle week; Island Park sibling keeps Madison.
+    expect((got.body as { week: { signerEmail: string; id: string }; sessions: unknown[] }).week.signerEmail).toBe(
+      '',
     );
-    expect((got.body as { schoolDistrict: string }).schoolDistrict).toMatch(/Hegarty/i);
+    expect((got.body as { sessions: unknown[] }).sessions).toHaveLength(0);
+    expect(hegWeek!.id).not.toBe((got.body as { week: { id: string } }).week.id);
+    expect(hegWeek?.programType).toBe('Island Park UFSD');
   });
 
-  it('admin can import two signer schools and send a second timesheet the same week', async () => {
+  it('admin can import two program types and send a second timesheet the same week', async () => {
     const { store, provider } = storeWithTherapist();
     const schoolA = store.upsertSchool({
       id: newId(),
@@ -4107,7 +4109,7 @@ describe('TMS MFA org policy', () => {
       lastName: 'Alpha',
       dob: '',
       programId: '',
-      programType: '',
+      programType: 'District A UFSD',
       hhaPatientId: '',
       createdAt: nowIso(),
     });
@@ -4118,7 +4120,7 @@ describe('TMS MFA org policy', () => {
       lastName: 'Beta',
       dob: '',
       programId: '',
-      programType: '',
+      programType: 'District B UFSD',
       hhaPatientId: '',
       createdAt: nowIso(),
     });
@@ -4146,7 +4148,7 @@ describe('TMS MFA org policy', () => {
       path: '/week/ensure',
       headers: adminH,
       query: {},
-      body: { providerId: provider.id, weekStart, schoolId: schoolA.id },
+      body: { providerId: provider.id, weekStart, schoolId: schoolA.id, programType: 'District A UFSD' },
     });
     const weekA = (ensuredA.body as { week: { id: string } }).week.id;
     await handleTmsRequest(store, {
@@ -4170,7 +4172,7 @@ describe('TMS MFA org policy', () => {
       path: '/week/ensure',
       headers: adminH,
       query: {},
-      body: { providerId: provider.id, weekStart, schoolId: schoolB.id },
+      body: { providerId: provider.id, weekStart, schoolId: schoolB.id, programType: 'District B UFSD' },
     });
     const weekB = (ensuredB.body as { week: { id: string } }).week.id;
     expect(weekB).not.toBe(weekA);
@@ -4202,7 +4204,7 @@ describe('TMS MFA org policy', () => {
       method: 'GET',
       path: '/week',
       headers: adminH,
-      query: { weekStart, providerId: provider.id, schoolId: schoolB.id },
+      query: { weekStart, providerId: provider.id, schoolId: schoolB.id, programType: 'District B UFSD' },
       body: undefined,
     });
     expect(gotB.status).toBe(200);

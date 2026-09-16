@@ -100,6 +100,7 @@ const I18N = {
     'nav.providers': 'Providers',
     'nav.mandates': 'Mandates',
     'nav.schools': 'Schools',
+    'nav.districts': 'Districts',
     'nav.admins': 'Admins',
     'nav.reports': 'Reports',
     'auth.kicker': 'White Glove Therapy',
@@ -259,6 +260,7 @@ const I18N = {
     'nav.providers': 'Proveedores',
     'nav.mandates': 'Mandatos',
     'nav.schools': 'Escuelas',
+    'nav.districts': 'Distritos',
     'nav.admins': 'Administradores',
     'nav.reports': 'Informes',
     'auth.kicker': 'White Glove Therapy',
@@ -464,6 +466,7 @@ function applyStaticI18n() {
     providers: 'nav.providers',
     mandates: 'nav.mandates',
     schools: 'nav.schools',
+    districts: 'nav.districts',
     admins: 'nav.admins',
     reports: 'nav.reports',
   };
@@ -1701,21 +1704,72 @@ async function fetchAndShowTimesheet({ weekId, weekStart, providerId, providerNa
   });
 }
 
-async function loadMissedOptions(studentId, selected) {
-  const sel = document.getElementById('makeupOf');
-  if (!sel) return;
+async function loadMissedOptions(selOrStudentId, selectedOrUndefined, opts) {
+  // Supports: loadMissedOptions(selectEl, selectedId, opts) or legacy loadMissedOptions(studentId, selectedId)
+  let sel;
+  let studentId;
+  let selected;
+  let options = opts || {};
+  if (selOrStudentId && typeof selOrStudentId === 'object' && selOrStudentId.tagName) {
+    sel = selOrStudentId;
+    selected = selectedOrUndefined || '';
+  } else {
+    sel = document.getElementById('makeupOf');
+    studentId = selOrStudentId;
+    selected = selectedOrUndefined || '';
+    options = opts || {};
+  }
+  if (!sel) return [];
+  if (studentId == null) studentId = options.studentId || '';
+  const emptyLabel = 'Select missed session…';
+  const noneLabel = 'No unused missed sessions for this child';
   if (!studentId) {
-    sel.innerHTML = '<option value="">None — apply makeup authorization if needed</option>';
-    return;
+    sel.innerHTML = `<option value="">${emptyLabel}</option>`;
+    return [];
   }
   try {
-    const out = await api('GET', `/students/${studentId}/missed`);
+    const editId = String(options.excludeSessionId || '').trim();
+    const q = editId ? `?excludeSessionId=${encodeURIComponent(editId)}` : '';
+    const out = await api('GET', `/students/${studentId}/missed${q}`);
     const missed = out.missed || [];
-    sel.innerHTML = `<option value="">None — apply makeup authorization if needed</option>${missed.map((m) =>
+    if (!missed.length) {
+      sel.innerHTML = `<option value="">${noneLabel}</option>`;
+      return [];
+    }
+    sel.innerHTML = `<option value="">${emptyLabel}</option>${missed.map((m) =>
       `<option value="${esc(m.id)}"${m.id === selected ? ' selected' : ''}>${esc(m.dateOfService || m.id)}</option>`,
     ).join('')}`;
+    return missed;
   } catch {
-    sel.innerHTML = '<option value="">None — apply makeup authorization if needed</option>';
+    sel.innerHTML = '<option value="">Unable to load missed sessions</option>';
+    return [];
+  }
+}
+
+const MAKEUP_NOTES_HINT =
+  'Select the missed session this makeup covers. Each miss can only be made up once.';
+
+function isMakeupNotesPlaceholder(value) {
+  const t = String(value || '').trim();
+  return !t || /^Makeup for MM\/DD\/YY$/i.test(t) || /^Makeup for \d{1,2}\/\d{1,2}\/\d{2,4}$/i.test(t);
+}
+
+/** Prefill / refresh notes with parser-friendly "Makeup for {date}" from the selected miss. */
+function applyMakeupNoteFromSelection(notesEl, makeupOfEl) {
+  if (!notesEl || !makeupOfEl?.value) return;
+  const date = makeupOfEl.selectedOptions[0]?.textContent?.trim() || '';
+  if (!date || date.toLowerCase().includes('select') || date.toLowerCase().includes('no unused')) return;
+  const cur = String(notesEl.value || '').trim();
+  if (!cur || isMakeupNotesPlaceholder(cur)) {
+    notesEl.value = `Makeup for ${date}`;
+    return;
+  }
+  if (!/\bmakeup\b|\bmake[\s-]?up\b/i.test(cur)) {
+    notesEl.value = `Makeup for ${date}. ${cur}`;
+    return;
+  }
+  if (!cur.includes(date)) {
+    notesEl.value = `Makeup for ${date}. ${cur}`;
   }
 }
 
@@ -1725,31 +1779,91 @@ function bindMakeupPickers() {
   const wrap = document.getElementById('makeupWrap');
   const makeupOf = document.getElementById('makeupOf');
   const notes = document.getElementById('notes');
-  if (!att || !student || !wrap) return;
+  const hint = document.getElementById('makeupNotesHint');
+  const emptyMsg = document.getElementById('makeupEmptyMsg');
+  if (!att || !student || !wrap || !makeupOf) return;
   const fillMakeupNote = () => {
-    if (!notes || att.value !== 'makeup') return;
-    let cur = notes.value || '';
-    if (!/\bmakeup\b|\bmake[\s-]?up\b/i.test(cur)) {
-      cur = `${cur ? `${cur.trim()} ` : ''}Makeup session`;
+    if (att.value !== 'makeup') return;
+    applyMakeupNoteFromSelection(notes, makeupOf);
+  };
+  const sync = async () => {
+    const isMakeup = att.value === 'makeup';
+    wrap.hidden = !isMakeup;
+    if (hint) {
+      hint.hidden = !isMakeup;
+      if (isMakeup) hint.textContent = MAKEUP_NOTES_HINT;
     }
-    if (makeupOf?.value) {
-      const date = makeupOf.selectedOptions[0]?.textContent?.trim() || '';
-      if (date && !cur.includes(date)) {
-        cur = `${cur.trim()} for missed session on ${date}`;
+    if (!isMakeup) {
+      if (emptyMsg) emptyMsg.hidden = true;
+      if (notes && /^Makeup for (MM\/DD\/YY|\d{1,2}\/\d{1,2}\/\d{2,4})$/i.test(String(notes.value || '').trim())) {
+        notes.value = '';
       }
+      return;
     }
-    notes.value = cur;
-  };
-  const sync = () => {
-    wrap.hidden = att.value !== 'makeup';
-    if (att.value === 'makeup') {
-      loadMissedOptions(student.value).then(fillMakeupNote);
+    const editId = document.getElementById('editSessionId')?.value?.trim() || '';
+    const prev = makeupOf.value;
+    const missed = await loadMissedOptions(makeupOf, prev, {
+      studentId: student.value,
+      excludeSessionId: editId,
+    });
+    if (emptyMsg) {
+      emptyMsg.hidden = missed.length > 0;
+      emptyMsg.textContent = student.value
+        ? 'This child has no unused missed sessions. Makeup is not allowed until a miss exists (each miss can only be made up once).'
+        : 'Select a child first, then choose the missed session this makeup covers.';
     }
+    fillMakeupNote();
   };
-  att.onchange = sync;
-  student.onchange = sync;
+  att.onchange = () => { void sync(); };
+  student.onchange = () => { void sync(); };
+  makeupOf.onchange = fillMakeupNote;
+  return sync();
+}
+
+/** Admin manual session: required unused-miss dropdown (same one-time rule). */
+function bindAdminMakeupNotes() {
+  const att = document.getElementById('pManAtt');
+  const student = document.getElementById('pManStudent');
+  const wrap = document.getElementById('pManMakeupWrap');
+  const makeupOf = document.getElementById('pManMakeupOf');
+  const notes = document.getElementById('pManNotes');
+  const hint = document.getElementById('pManMakeupNotesHint');
+  const emptyMsg = document.getElementById('pManMakeupEmpty');
+  if (!att || !notes) return;
+  const fillMakeupNote = () => {
+    if (att.value !== 'makeup') return;
+    applyMakeupNoteFromSelection(notes, makeupOf);
+  };
+  const sync = async () => {
+    const isMakeup = att.value === 'makeup';
+    if (wrap) wrap.hidden = !isMakeup;
+    if (hint) {
+      hint.hidden = !isMakeup;
+      if (isMakeup) hint.textContent = MAKEUP_NOTES_HINT;
+    }
+    if (!isMakeup) {
+      if (emptyMsg) emptyMsg.hidden = true;
+      if (/^Makeup for (MM\/DD\/YY|\d{1,2}\/\d{1,2}\/\d{2,4})$/i.test(String(notes.value || '').trim())) {
+        notes.value = '';
+      }
+      return;
+    }
+    if (!makeupOf) return;
+    const missed = await loadMissedOptions(makeupOf, makeupOf.value, {
+      studentId: student?.value || '',
+    });
+    if (emptyMsg) {
+      emptyMsg.hidden = missed.length > 0;
+      emptyMsg.textContent = student?.value
+        ? 'This child has no unused missed sessions. Makeup is not allowed until a miss exists (each miss can only be made up once).'
+        : 'Select a child first, then choose the missed session this makeup covers.';
+    }
+    fillMakeupNote();
+  };
+  att.onchange = () => { void sync(); };
+  if (student) student.onchange = () => { void sync(); };
   if (makeupOf) makeupOf.onchange = fillMakeupNote;
-  sync();
+  return sync();
 }
 
 function weekApprovalLabel(status) {
@@ -1866,7 +1980,7 @@ async function therapistHome(statusFlash) {
   let programTypes = [];
 
   try {
-    const me = await api('GET', '/me');
+    let me = await api('GET', '/me');
     providerId = me.provider?.id || '';
     schools = me.schools || [];
     programTypes = Array.isArray(me.programTypes) ? me.programTypes.filter(Boolean) : [];
@@ -1920,6 +2034,14 @@ async function therapistHome(statusFlash) {
     }
     state.schoolConfirmed = true;
     sessionStorage.setItem('tmsSchoolConfirmed', '1');
+    // Re-fetch /me with programType so due banners stay scoped to the selected district/payer.
+    if (state.selectedProgramType) {
+      me = await api(
+        'GET',
+        `/me?programType=${encodeURIComponent(state.selectedProgramType)}`,
+      );
+      state.meSettings = me.settings || state.meSettings;
+    }
     const dues = (me.dueDates || []).filter((d) => d.status !== 'done');
     const alerts = me.alerts || [];
     if (dues.length || alerts.length) {
@@ -2201,11 +2323,13 @@ async function therapistHome(statusFlash) {
       </div>
       <div class="row">
         <label>CPT code <input id="cptLabel" placeholder="97110x2" /></label>
-        <label id="makeupWrap" hidden>Makeup for missed session (optional)
-          <select id="makeupOf"><option value="">None — apply makeup authorization if needed</option></select>
+        <label id="makeupWrap" hidden>Missed session this makeup covers (required)
+          <select id="makeupOf" required><option value="">Select missed session…</option></select>
         </label>
       </div>
+      <p class="muted" id="makeupEmptyMsg" hidden></p>
       <label>Notes <textarea id="notes" rows="3"></textarea></label>
+      <p class="muted" id="makeupNotesHint" hidden>${esc(MAKEUP_NOTES_HINT)}</p>
       <p class="muted">If a group-mandate child is seen alone (or as individual), the note must say no peer/partner was available.</p>
       <button type="button" class="btn big" id="add">Save session</button>
     </div>`;
@@ -2340,6 +2464,7 @@ async function therapistHome(statusFlash) {
         ${programTypes.length > 1 ? `<button type="button" class="btn" id="changeSchool">${esc(t('therapist.changeProgram'))}</button>` : ''}
         <button class="btn" id="refreshHome">${esc(t('therapist.reload'))}</button>
         ${pending ? `<button type="button" class="btn" id="cancelApproval">Cancel approval request</button>` : ''}
+        ${pending ? `<button type="button" class="btn" id="resendInvite">Resend e-sign email</button>` : ''}
       </div>
       `}
       ${isWeekWorkspace && errors.length ? `<div class="err-box status-banner" id="weekErrorsBox" data-week-issue="errors"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss errors">×</button><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
@@ -2635,6 +2760,17 @@ async function therapistHome(statusFlash) {
       setStatus(err.message, 'error');
     }
   });
+  document.getElementById('resendInvite')?.addEventListener('click', async () => {
+    if (!state.weekId) return;
+    if (!confirm('Resend the SignNow signing email to the principal / signer?')) return;
+    try {
+      clearTransientErrors();
+      const out = await api('POST', `/weeks/${state.weekId}/resend-invite`);
+      setStatus(out.message || 'SignNow invite resent.', 'ok');
+    } catch (err) {
+      setStatus(err.message, 'error');
+    }
+  });
 
   const dismissApproval = document.getElementById('dismissApprovalBanner');
   if (dismissApproval) {
@@ -2749,9 +2885,16 @@ async function therapistHome(statusFlash) {
       document.getElementById('endTime').value = raw.endTime || '';
       document.getElementById('cptLabel').value = raw.cptLabel || '';
       document.getElementById('notes').value = raw.notes || '';
-      bindMakeupPickers();
-      if (raw.makeupOfSessionId) {
-        await loadMissedOptions(raw.studentId, raw.makeupOfSessionId);
+      await bindMakeupPickers();
+      if (raw.attendance === 'makeup') {
+        const makeupOfEl = document.getElementById('makeupOf');
+        const notesEl = document.getElementById('notes');
+        await loadMissedOptions(makeupOfEl, raw.makeupOfSessionId || '', {
+          studentId: raw.studentId,
+          excludeSessionId: raw.id || '',
+        });
+        if (raw.notes) notesEl.value = raw.notes;
+        else applyMakeupNoteFromSelection(notesEl, makeupOfEl);
       }
       document.getElementById('add').textContent = 'Update session';
       document.getElementById('additionalServiceType')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2860,11 +3003,21 @@ async function therapistHome(statusFlash) {
       const additionalServiceType = document.getElementById('additionalServiceType').value;
       const studentId = document.getElementById('studentId').value;
       const dateOfService = document.getElementById('dos').value.trim();
-      const notes = document.getElementById('notes').value.trim();
+      const attendance = document.getElementById('att').value;
+      const makeupOfEl = document.getElementById('makeupOf');
+      const notesEl = document.getElementById('notes');
       const editId = document.getElementById('editSessionId').value.trim();
       if (!additionalServiceType) throw new Error('Select a service type.');
       if (!studentId) throw new Error('Select a student.');
       if (!dateOfService) throw new Error('Enter the date of service.');
+      if (attendance === 'makeup') {
+        const makeupOfSessionId = makeupOfEl?.value || '';
+        if (!makeupOfSessionId) {
+          throw new Error('Select the missed session this makeup covers. Each miss can only be made up once.');
+        }
+        applyMakeupNoteFromSelection(notesEl, makeupOfEl);
+      }
+      const notes = notesEl.value.trim();
       btn.disabled = true;
       btn.textContent = 'Saving…';
       clearTransientErrors();
@@ -2876,8 +3029,8 @@ async function therapistHome(statusFlash) {
         dateOfService,
         beginTime: document.getElementById('beginTime').value,
         endTime: document.getElementById('endTime').value,
-        attendance: document.getElementById('att').value,
-        makeupOfSessionId: document.getElementById('makeupOf').value,
+        attendance,
+        makeupOfSessionId: attendance === 'makeup' ? (makeupOfEl?.value || '') : '',
         additionalServiceType,
         cptLabel: document.getElementById('cptLabel').value.trim(),
         notes,
@@ -4034,7 +4187,7 @@ async function adminProviderDetail(providerId) {
 
       <div class="detail-pane"${provTab === 'sessions' ? '' : ' hidden'}>
         <h3>Sessions</h3>
-        <p class="muted">All sessions for this provider (newest first). Filter by date of service or district as needed. Sessions from different program types (district/payer) land on separate timesheets for the same week; within a program, different school signers still split.</p>
+        <p class="muted">All sessions for this provider (newest first). Filter by date of service or district as needed. Sessions from different program types (district/payer) land on separate timesheets for the same week; buildings inside one program share one sheet.</p>
         <div class="row">
           <label>From <input id="pSessFrom" type="date" value="${esc(sessFrom)}" /></label>
           <label>To <input id="pSessTo" type="date" value="${esc(sessTo)}" /></label>
@@ -4100,7 +4253,14 @@ async function adminProviderDetail(providerId) {
           <label>CPT code <input id="pManCpt" placeholder="97110x2" /></label>
           <label>Missed reason (if missed) <input id="pManCancel" placeholder="Student Absence / Provider Absence / …" /></label>
         </div>
+        <div class="row">
+          <label id="pManMakeupWrap" hidden>Missed session this makeup covers (required)
+            <select id="pManMakeupOf"><option value="">Select missed session…</option></select>
+          </label>
+        </div>
+        <p class="muted" id="pManMakeupEmpty" hidden></p>
         <label>Notes <textarea id="pManNotes" rows="3"></textarea></label>
+        <p class="muted" id="pManMakeupNotesHint" hidden>${esc(MAKEUP_NOTES_HINT)}</p>
         <label>Custom note file (optional Word/PDF — not parsed) <input id="pManFile" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" /></label>
         <p class="muted">Missed sessions need a Frontline-style reason in the reason field or notes (e.g. Student Absence, Provider Absence, School Closed). Session attaches to the week of the date of service, split by the child’s program type / school signer when those differ.</p>
         <button type="button" class="btn-primary" id="pManSave">Submit session</button>
@@ -4350,17 +4510,27 @@ async function adminProviderDetail(providerId) {
       await adminProviderDetail(providerId);
     } catch (e) { setStatus(e.message, 'err'); }
   };
+  bindAdminMakeupNotes();
   document.getElementById('pManSave').onclick = async () => {
     const btn = document.getElementById('pManSave');
     try {
       const studentId = document.getElementById('pManStudent')?.value || '';
       const dateOfService = document.getElementById('pManDos')?.value?.trim() || '';
       const attendance = document.getElementById('pManAtt')?.value || 'attended';
-      const notes = document.getElementById('pManNotes')?.value || '';
+      const makeupOfEl = document.getElementById('pManMakeupOf');
+      const notesEl = document.getElementById('pManNotes');
       const cancelReason = document.getElementById('pManCancel')?.value?.trim() || '';
       const programType = document.getElementById('pManProgram')?.value?.trim() || '';
       if (!studentId) throw new Error('Select a child.');
       if (!dateOfService) throw new Error('Enter the date of service.');
+      if (attendance === 'makeup') {
+        const makeupOfSessionId = makeupOfEl?.value || '';
+        if (!makeupOfSessionId) {
+          throw new Error('Select the missed session this makeup covers. Each miss can only be made up once.');
+        }
+        applyMakeupNoteFromSelection(notesEl, makeupOfEl);
+      }
+      const notes = notesEl?.value || '';
       const fileInput = document.getElementById('pManFile');
       const file = fileInput?.files?.[0] || null;
       if (file) {
@@ -4394,6 +4564,7 @@ async function adminProviderDetail(providerId) {
         endTime: document.getElementById('pManEnd')?.value || '',
         attendance,
         cancelReason,
+        makeupOfSessionId: attendance === 'makeup' ? (makeupOfEl?.value || '') : '',
         cptLabel: document.getElementById('pManCpt')?.value?.trim() || '',
         notes,
       };
@@ -5169,6 +5340,145 @@ async function adminProviders() {
         await adminProviders();
       } catch (e) { setStatus(e.message, 'err'); }
     });
+  });
+}
+
+async function adminDistricts(opts = {}) {
+  if (opts.focusDistrictId) state.focusDistrictId = opts.focusDistrictId;
+  const out = await api('GET', '/admin/districts');
+  const districts = out.districts || [];
+  view(`
+    <div class="card entry-card">
+      <div class="entry-collapsed" id="addDistrictCollapsed">
+        <button type="button" class="btn-primary" id="openAddDistrict">Add district</button>
+      </div>
+      <div id="addDistrictForm" hidden>
+        <h2>Add district</h2>
+        <p class="muted">Create a district/payer (UFSD) with a shared timesheet signer. Buildings without their own signer use this district signer so one program type stays on one sheet.</p>
+        <label>District name <input id="dname" placeholder="e.g. Carle Place UFSD" /></label>
+        <label>Signer name <input id="dsignerName" /></label>
+        <label>Signer email <input id="dsignerEmail" type="email" /></label>
+        <div class="entry-form-actions">
+          <button class="btn-primary big" id="saveNewDistrict">Save district</button>
+          <button type="button" class="btn" id="cancelAddDistrict">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Districts</h2>
+      <p class="muted">Derived from school.district and caseload program types. Open a district to set the shared signer and see schools under it. Timesheets bin by program type and fall back to the district signer when a building has none.</p>
+      <table>
+        <tr><th>District</th><th>Signer</th><th>Schools</th><th></th></tr>
+        ${districts.map((d) => `<tr>
+          <td><button type="button" class="linkish" data-open-district="${esc(d.id)}">${esc(d.name)}</button>${d.persisted ? '' : ' <span class="muted">(from caseload)</span>'}</td>
+          <td>${esc(d.signerName || d.signerEmail || '—')}</td>
+          <td>${esc(String(d.schoolCount || 0))}</td>
+          <td><button type="button" class="btn" data-open-district="${esc(d.id)}">Open</button></td>
+        </tr>`).join('') || '<tr><td colspan="4">No districts yet. Add one or set school.district / program type on caseload.</td></tr>'}
+      </table>
+    </div>
+  `);
+
+  const setAddOpen = (open) => {
+    const c = document.getElementById('addDistrictCollapsed');
+    const f = document.getElementById('addDistrictForm');
+    if (c) c.hidden = open;
+    if (f) f.hidden = !open;
+  };
+  document.getElementById('openAddDistrict').onclick = () => setAddOpen(true);
+  document.getElementById('cancelAddDistrict').onclick = () => setAddOpen(false);
+  document.getElementById('saveNewDistrict').onclick = async () => {
+    try {
+      const outSave = await api('POST', '/admin/districts', {
+        name: document.getElementById('dname').value,
+        signerName: document.getElementById('dsignerName').value,
+        signerEmail: document.getElementById('dsignerEmail').value,
+      });
+      setStatus(outSave.message || 'District saved.', 'ok');
+      const id = outSave.district?.id || '';
+      if (id) await adminDistrictDetail(id);
+      else await adminDistricts();
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+  document.querySelectorAll('[data-open-district]').forEach((btn) => {
+    btn.addEventListener('click', () => adminDistrictDetail(btn.getAttribute('data-open-district')));
+  });
+
+  if (opts.focusDistrictId) {
+    await adminDistrictDetail(opts.focusDistrictId);
+  }
+}
+
+async function adminDistrictDetail(districtId) {
+  const out = await api('GET', `/admin/districts/${encodeURIComponent(districtId)}`);
+  const d = out.district;
+  if (!d) {
+    setStatus('District not found.', 'err');
+    return adminDistricts();
+  }
+  const schools = Array.isArray(d.schools) ? d.schools : [];
+  view(`
+    <div class="card">
+      <button type="button" class="btn" id="backDistricts">← Districts</button>
+      <h2>${esc(d.name || 'District')}</h2>
+      <p class="muted">${esc(String(d.schoolCount || schools.length || 0))} school(s). Timesheets for this program type use the district signer when a building has no signer of its own.</p>
+      <div class="row">
+        <label>District name <input id="dname" value="${esc(d.name || '')}" /></label>
+      </div>
+      <div class="row">
+        <label>Signer name <input id="dsignerName" value="${esc(d.signerName || '')}" /></label>
+        <label>Signer email <input id="dsignerEmail" type="email" value="${esc(d.signerEmail || '')}" /></label>
+      </div>
+      <button type="button" class="btn-primary" id="saveDistrict">Save district</button>
+      ${d.persisted && d.id && !String(d.id).startsWith('derived:')
+        ? '<button type="button" class="btn" id="deleteDistrict">Remove district</button>'
+        : '<p class="muted">Save once to persist this district and its signer.</p>'}
+    </div>
+    <div class="card">
+      <h3>Schools in this district</h3>
+      <p class="muted">Linked via school.district or children with this program type. Set school.district on a school to wire it here.</p>
+      <table>
+        <tr><th>School</th><th>Building signer</th><th></th></tr>
+        ${schools.map((s) => `<tr>
+          <td>${esc(s.name || s.id)}</td>
+          <td>${esc(s.signerName || s.signerEmail || '— (uses district signer)')}</td>
+          <td><button type="button" class="btn" data-open-school="${esc(s.id)}">Open school</button></td>
+        </tr>`).join('') || '<tr><td colspan="3">No schools linked yet. Set District on a school, or ensure caseload program type matches this name.</td></tr>'}
+      </table>
+    </div>
+  `);
+
+  document.getElementById('backDistricts').onclick = () => {
+    state.focusDistrictId = '';
+    adminDistricts();
+  };
+  document.getElementById('saveDistrict').onclick = async () => {
+    try {
+      const body = {
+        id: String(d.id || '').startsWith('derived:') ? '' : d.id,
+        name: document.getElementById('dname').value,
+        signerName: document.getElementById('dsignerName').value,
+        signerEmail: document.getElementById('dsignerEmail').value,
+      };
+      const saved = await api('POST', '/admin/districts', body);
+      setStatus(saved.message || 'District saved.', 'ok');
+      await adminDistrictDetail(saved.district?.id || d.id);
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+  const del = document.getElementById('deleteDistrict');
+  if (del) {
+    del.onclick = async () => {
+      try {
+        if (!confirm('Remove this district record? School district labels stay; only the saved signer entity is deleted.')) return;
+        const res = await api('DELETE', `/admin/districts/${encodeURIComponent(d.id)}`);
+        setStatus(res.message || 'District removed.', 'ok');
+        state.focusDistrictId = '';
+        await adminDistricts();
+      } catch (e) { setStatus(e.message, 'err'); }
+    };
+  }
+  document.querySelectorAll('[data-open-school]').forEach((btn) => {
+    btn.addEventListener('click', () => adminSchoolDetail(btn.getAttribute('data-open-school')));
   });
 }
 
@@ -8166,6 +8476,7 @@ document.getElementById('adminNav').onclick = (e) => {
   if (screen === 'providers') adminProviders();
   if (screen === 'mandates') adminMandates();
   if (screen === 'schools') adminSchools();
+  if (screen === 'districts') adminDistricts();
   if (screen === 'admins') adminAdmins();
   if (screen === 'reports') {
     state.reportView = '';

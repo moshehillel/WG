@@ -1,0 +1,26 @@
+TMS: timesheet bins by program type only; merge signed+unsigned Carle Place drafts
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+TMS_GIT_SHA (build define): 46ec9cf
+{
+    "CodeSha256": "zQM5Gb2we0z2NF7JjnYkrbNQV67Xee5P593G07cKFFs=",
+    "LastModified": "2026-09-16T15:18:04.000+0000",
+    "CodeSize": 2071353
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "TMS_GIT_SHA": "46ec9cf",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x",
+    "CodeSize": 2071353
+}
+HHA_USE_PRODUCTION=true preserved
+LIVE_OK: HHA_USE_PRODUCTION=true, CodeSize>=2MB
+
+Changes:
+1. timesheetBinKeyForParts is programType only (signer/school no longer split bins)
+2. GET /weeks folds same program drafts; prefers provider-signed fragment
+3. Draft list dedupe key drops signerEmail
+4. Upload/session routing prefers programType scope over building schoolId
+5. FE copy + app.js?v=119

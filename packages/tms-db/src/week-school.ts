@@ -1,3 +1,4 @@
+import { resolveSchoolOrDistrictSigner } from './districts.js';
 import type { MemoryStore } from './memory-store.js';
 import type { School, SessionRow, WeeklyPeriod } from './types.js';
 
@@ -16,30 +17,27 @@ export function normalizeProgramTypeKey(programType: string | undefined | null):
 }
 
 /**
- * School/signer part of a timesheet bin key.
- * Same signer email → same part (Madison: multiple buildings, one signer).
- * Otherwise split by schoolId (GM: different schools / different SignNow recipients).
+ * @deprecated Timesheets bin by program type only. Kept for callers that still
+ * compare signer strings; always returns the shared unsigned bucket.
  */
 export function schoolSignerBinPart(
-  school: Pick<School, 'id' | 'signerEmail'> | undefined | null,
+  _school?: Pick<School, 'id' | 'signerEmail'> | undefined | null,
 ): string {
-  const email = normalizeSignerEmail(school?.signerEmail);
-  if (email) return `signer:${email}`;
-  const id = String(school?.id || '').trim();
-  return id ? `school:${id}` : 'school:';
+  return 'signer:';
 }
 
 /**
- * Timesheet bin key: program type (district/payer) + school/signer.
- * Different program types (e.g. Island Park UFSD vs Carle Place UFSD) → separate timesheets.
- * Within the same program type, same signer email still merges buildings (Madison).
+ * Timesheet bin key: program type (district/payer) only.
+ * One bin per provider + weekStart + programType — buildings/signers inside a
+ * program never split the sheet (Carle Place Middle vs High, signed vs unsigned).
+ * Different program types (Island Park vs Carle Place) stay separate timesheets.
  */
 export function timesheetBinKeyForParts(
   programType: string | undefined | null,
-  school: Pick<School, 'id' | 'signerEmail'> | undefined | null,
+  _school?: Pick<School, 'id' | 'signerEmail'> | undefined | null,
 ): string {
   const pt = normalizeProgramTypeKey(programType);
-  return `program:${pt}|${schoolSignerBinPart(school)}`;
+  return `program:${pt}`;
 }
 
 /**
@@ -237,13 +235,14 @@ export function splitWeekBySchoolBins(
       (onlyProgram && week.programType !== onlyProgram)
     ) {
       const school = onlySchool ? store.data.schools.find((s) => s.id === onlySchool) : undefined;
+      const signer = resolveSchoolOrDistrictSigner(store, school, onlyProgram || week.programType);
       return [
         store.upsertWeek({
           ...week,
           schoolId: onlySchool || week.schoolId,
           programType: onlyProgram || week.programType,
-          signerName: school?.signerName || week.signerName,
-          signerEmail: school?.signerEmail || week.signerEmail,
+          signerName: signer.signerName || week.signerName,
+          signerEmail: signer.signerEmail || week.signerEmail,
         }),
       ];
     }
@@ -276,13 +275,14 @@ export function splitWeekBySchoolBins(
       (programType && week.programType !== programType)
     ) {
       const school = schoolId ? store.data.schools.find((s) => s.id === schoolId) : undefined;
+      const signer = resolveSchoolOrDistrictSigner(store, school, programType || week.programType);
       return [
         store.upsertWeek({
           ...week,
           schoolId: schoolId || week.schoolId,
           programType: programType || week.programType,
-          signerName: school?.signerName || week.signerName,
-          signerEmail: school?.signerEmail || week.signerEmail,
+          signerName: signer.signerName || week.signerName,
+          signerEmail: signer.signerEmail || week.signerEmail,
         }),
       ];
     }
@@ -316,12 +316,17 @@ export function splitWeekBySchoolBins(
   const keepSchool = keep.schoolId
     ? store.data.schools.find((s) => s.id === keep.schoolId)
     : undefined;
+  const keepSigner = resolveSchoolOrDistrictSigner(
+    store,
+    keepSchool,
+    keep.programType || week.programType,
+  );
   const kept = store.upsertWeek({
     ...week,
     schoolId: keep.schoolId || week.schoolId || '',
     programType: keep.programType || week.programType || '',
-    signerName: keepSchool?.signerName || week.signerName,
-    signerEmail: keepSchool?.signerEmail || week.signerEmail,
+    signerName: keepSigner.signerName || week.signerName,
+    signerEmail: keepSigner.signerEmail || week.signerEmail,
   });
   out.push(kept);
 
@@ -331,6 +336,7 @@ export function splitWeekBySchoolBins(
     const school = group.schoolId
       ? store.data.schools.find((s) => s.id === group.schoolId)
       : undefined;
+    const signer = resolveSchoolOrDistrictSigner(store, school, group.programType);
     const created = store.upsertWeek({
       id: newId(),
       providerId: week.providerId,
@@ -338,8 +344,8 @@ export function splitWeekBySchoolBins(
       schoolId: group.schoolId || '',
       programType: group.programType || '',
       status: 'draft',
-      signerName: school?.signerName || '',
-      signerEmail: school?.signerEmail || '',
+      signerName: signer.signerName || '',
+      signerEmail: signer.signerEmail || '',
       timesheetKey: '',
       signedKey: '',
       envelopeId: '',

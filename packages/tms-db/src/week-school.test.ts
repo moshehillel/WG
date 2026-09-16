@@ -13,14 +13,19 @@ function emptyStore() {
 }
 
 describe('week-school bins', () => {
-  it('groups schools that share a signer email', () => {
+  it('groups all schools into one bin when program type matches (signers ignored)', () => {
     expect(
-      timesheetBinKeyForSchool({ id: 'a', signerEmail: 'Principal@School.Test' }),
-    ).toBe(timesheetBinKeyForSchool({ id: 'b', signerEmail: 'principal@school.test' }));
-  });
-
-  it('splits schools with different signers', () => {
-    expect(timesheetBinKeyForSchool({ id: 'a', signerEmail: 'a@x.com' })).not.toBe(
+      timesheetBinKeyForParts('Carle Place UFSD', {
+        id: 'a',
+        signerEmail: 'a@x.com',
+      }),
+    ).toBe(
+      timesheetBinKeyForParts('Carle Place UFSD', {
+        id: 'b',
+        signerEmail: 'b@x.com',
+      }),
+    );
+    expect(timesheetBinKeyForSchool({ id: 'a', signerEmail: 'a@x.com' })).toBe(
       timesheetBinKeyForSchool({ id: 'b', signerEmail: 'b@x.com' }),
     );
   });
@@ -39,7 +44,32 @@ describe('week-school bins', () => {
     );
   });
 
-  it('splitWeekBySchoolBins moves other-signer sessions onto a new week', () => {
+  it('keeps unsigned buildings on one bin within the same program type', () => {
+    expect(
+      timesheetBinKeyForParts('Carle Place UFSD', {
+        id: 'middle',
+        signerEmail: '',
+      }),
+    ).toBe(
+      timesheetBinKeyForParts('Carle Place UFSD', {
+        id: 'high',
+        signerEmail: '',
+      }),
+    );
+    expect(
+      timesheetBinKeyForParts('Carle Place UFSD', {
+        id: 'middle',
+        signerEmail: '',
+      }),
+    ).not.toBe(
+      timesheetBinKeyForParts('Island Park UFSD', {
+        id: 'hegarty',
+        signerEmail: '',
+      }),
+    );
+  });
+
+  it('splitWeekBySchoolBins keeps different-signer sessions on one week (program-type bins)', () => {
     const store = emptyStore();
     const schoolA = store.upsertSchool({
       id: 'sa',
@@ -129,15 +159,9 @@ describe('week-school bins', () => {
     });
 
     const bins = splitWeekBySchoolBins(store, week, () => newId());
-    expect(bins).toHaveLength(2);
-    expect(store.data.weeks).toHaveLength(2);
-    const weekA = store.data.weeks.find((w) => w.schoolId === schoolA.id)!;
-    const weekB = store.data.weeks.find((w) => w.schoolId === schoolB.id)!;
-    expect(store.sessionsForWeek(weekA.id)).toHaveLength(1);
-    expect(store.sessionsForWeek(weekB.id)).toHaveLength(1);
-    expect(weekMatchesSchoolBin(store, weekA, schoolA.id)).toBe(true);
-    expect(weekMatchesSchoolBin(store, weekB, schoolB.id)).toBe(true);
-    expect(weekMatchesSchoolBin(store, weekA, schoolB.id)).toBe(false);
+    expect(bins).toHaveLength(1);
+    expect(store.data.weeks).toHaveLength(1);
+    expect(store.sessionsForWeek(week.id)).toHaveLength(2);
   });
 
   it('keeps same-signer buildings on one timesheet bin when program type matches', () => {
@@ -304,5 +328,88 @@ describe('week-school bins', () => {
     const ipWeek = store.data.weeks.find((w) => w.programType === 'Island Park UFSD')!;
     expect(weekMatchesSchoolBin(store, ipWeek, islandSchool.id, 'Island Park UFSD')).toBe(true);
     expect(weekMatchesSchoolBin(store, ipWeek, carleSchool.id, 'Carle Place UFSD')).toBe(false);
+  });
+
+  it('splitWeekBySchoolBins keeps unsigned same-program buildings on one week', () => {
+    const store = emptyStore();
+    const middle = store.upsertSchool({
+      id: 'mid',
+      name: 'Carle Place Middle',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const high = store.upsertSchool({
+      id: 'high',
+      name: 'Carle Place High',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const childA = store.upsertStudent({
+      id: 'ca',
+      schoolId: middle.id,
+      firstName: 'Maeve',
+      lastName: 'Leahy',
+      dob: '',
+      programId: '',
+      programType: 'Carle Place UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const childB = store.upsertStudent({
+      id: 'cb',
+      schoolId: high.id,
+      firstName: 'Zoey',
+      lastName: 'Seiling',
+      dob: '',
+      programId: '',
+      programType: 'Carle Place UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: 'w1',
+      providerId: 'p1',
+      weekStart: '2026-08-31',
+      status: 'draft',
+      programType: 'Carle Place UFSD',
+      schoolId: middle.id,
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    for (const [id, studentId] of [
+      ['s1', childA.id],
+      ['s2', childB.id],
+    ] as const) {
+      store.upsertSession({
+        id,
+        weekId: week.id,
+        studentId,
+        dateOfService: '09/02/2026',
+        beginTime: '1:00 pm',
+        endTime: '1:30 pm',
+        attendance: 'attended',
+        cancelReason: '',
+        makeupOfSessionId: '',
+        serviceType: 'PT',
+        location: 'school',
+        notes: id,
+        cptCodes: [],
+        cptLabel: '',
+        aiFlags: [],
+        aiBlock: false,
+      });
+    }
+    const bins = splitWeekBySchoolBins(store, week, () => newId());
+    expect(bins).toHaveLength(1);
+    expect(store.data.weeks).toHaveLength(1);
+    expect(store.sessionsForWeek(week.id)).toHaveLength(2);
   });
 });

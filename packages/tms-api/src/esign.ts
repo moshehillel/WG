@@ -433,11 +433,21 @@ async function sendFieldInvite(
   }
   const json = (await res.json()) as {
     id?: string;
+    invite_id?: string;
+    field_invite_id?: string;
     result?: string;
-    data?: Array<{ id?: string }>;
+    data?: Array<{ id?: string; invite_id?: string }>;
+    field_invites?: Array<{ id?: string }>;
   };
-  const fromData = Array.isArray(json.data) ? String(json.data[0]?.id || '').trim() : '';
-  return String(json.id || fromData || '').trim();
+  const fromData = Array.isArray(json.data)
+    ? String(json.data[0]?.id || json.data[0]?.invite_id || '').trim()
+    : '';
+  const fromFields = Array.isArray(json.field_invites)
+    ? String(json.field_invites[0]?.id || '').trim()
+    : '';
+  return String(
+    json.id || json.invite_id || json.field_invite_id || fromData || fromFields || '',
+  ).trim();
 }
 
 function formatMmDdYyyy(d: Date): string {
@@ -877,6 +887,24 @@ export async function createSignEnvelope(input: {
     });
   }
 
+  // SignNow field-invite responses sometimes omit id; recover from the document.
+  if (!inviteId && inviteMode === 'field') {
+    try {
+      const doc = await getDocumentJson(creds, bearer, documentId);
+      const invites = Array.isArray(doc.field_invites) ? doc.field_invites : [];
+      const match = invites.find(
+        (i) =>
+          String((i as { email?: string }).email || '')
+            .trim()
+            .toLowerCase() === to.toLowerCase() &&
+          String((i as { status?: string }).status || '').toLowerCase() !== 'fulfilled',
+      ) as { id?: string } | undefined;
+      inviteId = String(match?.id || (invites[0] as { id?: string } | undefined)?.id || '').trim();
+    } catch {
+      /* keep empty inviteId */
+    }
+  }
+
   console.info('[tms-esign] SignNow invite ok', {
     weekId: input.weekId,
     documentId,
@@ -895,6 +923,109 @@ export async function createSignEnvelope(input: {
     vendor: 'signnow',
     inviteId: inviteId || undefined,
   };
+}
+
+/**
+ * Resend a pending SignNow field invite email for an existing envelope.
+ * Uses field_request_id from document.fields (not field_invites[].id).
+ */
+export async function resendSignEnvelopeInvite(
+  envelopeId: string,
+  opts?: { toEmail?: string },
+): Promise<{ ok: boolean; resent: number; skipped?: boolean; detail?: string }> {
+  const id = String(envelopeId || '').trim();
+  if (!id || id.startsWith('email:')) return { ok: true, skipped: true, resent: 0 };
+
+  const creds = await resolveCreds();
+  if (!(await isSignNowConfigured())) {
+    return { ok: false, resent: 0, detail: 'SignNow is not configured.' };
+  }
+
+  const wantEmail = String(opts?.toEmail || '')
+    .trim()
+    .toLowerCase();
+  try {
+    const bearer = await getAccessToken(creds);
+    const doc = await getDocumentJson(creds, bearer, id);
+    const fieldInvites = Array.isArray(doc.field_invites) ? doc.field_invites : [];
+    const pending = fieldInvites.filter((raw) => {
+      const inv = raw as { email?: string; status?: string };
+      const st = String(inv.status || '').toLowerCase();
+      if (st && st !== 'pending' && st !== 'created') return false;
+      if (!wantEmail) return true;
+      return (
+        String(inv.email || '')
+          .trim()
+          .toLowerCase() === wantEmail
+      );
+    });
+    const fields = Array.isArray(doc.fields) ? doc.fields : [];
+    const requestIds = new Set<string>();
+    for (const raw of fields) {
+      const f = raw as { field_request_id?: string; role?: string; role_id?: string };
+      const fr = String(f.field_request_id || '').trim();
+      if (!fr) continue;
+      // Prefer Principal role fields when present.
+      const role = String(f.role || '').toLowerCase();
+      if (!role || role === 'principal' || role.includes('principal')) {
+        requestIds.add(fr);
+      }
+    }
+    // Fallback: any field_request_id on the document.
+    if (requestIds.size === 0) {
+      for (const raw of fields) {
+        const fr = String((raw as { field_request_id?: string }).field_request_id || '').trim();
+        if (fr) requestIds.add(fr);
+      }
+    }
+    // Last resort: try pending invite ids (may 400 on some accounts).
+    if (requestIds.size === 0) {
+      for (const raw of pending) {
+        const iid = String((raw as { id?: string }).id || '').trim();
+        if (iid) requestIds.add(iid);
+      }
+    }
+    if (requestIds.size === 0) {
+      return {
+        ok: false,
+        resent: 0,
+        detail: pending.length
+          ? 'Pending invite found but no field_request_id to resend.'
+          : 'No pending SignNow field invite on this document.',
+      };
+    }
+    let resent = 0;
+    const errors: string[] = [];
+    for (const requestId of requestIds) {
+      const res = await signNowFetch(
+        creds,
+        `/fieldinvite/${encodeURIComponent(requestId)}/resend`,
+        { method: 'PUT', bearer, headers: { 'Content-Type': 'application/json' } },
+      );
+      if (res.ok) {
+        resent += 1;
+      } else {
+        errors.push(`${requestId}:${res.status}:${await readErrorBody(res)}`);
+      }
+    }
+    console.info('[tms-esign] SignNow invite resend', {
+      documentId: id,
+      resent,
+      attempted: requestIds.size,
+      to: wantEmail || null,
+      errors: errors.length ? errors : undefined,
+    });
+    if (resent === 0) {
+      return { ok: false, resent: 0, detail: errors.join('; ') || 'Resend failed.' };
+    }
+    return { ok: true, resent };
+  } catch (err) {
+    return {
+      ok: false,
+      resent: 0,
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 /** Void a pending e-sign envelope (SignNow freeform cancel, or no-op for email stubs). */
