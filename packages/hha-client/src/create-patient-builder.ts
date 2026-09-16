@@ -24,7 +24,11 @@ export interface CreatePatientReferenceIds {
   evacuationZoneId: number;
 }
 
-const KNOWN_DISCIPLINES = ['OT', 'PT', 'ST', 'SLP', 'RN', 'HHA', 'PCA', 'SI', 'COTA', 'PTA'];
+// NOTE: 'SLP' is deliberately NOT a leading-token discipline. HHA's speech
+// discipline is 'SP'; CreatePatient with AcceptedServices Discipline "SLP"
+// is rejected with -411 (Invalid Accepted Services "SLP "). Leaving SLP out
+// here lets "SLP CHHA" / "SLP HC EVAL" fall through to the → 'SP' rule below.
+const KNOWN_DISCIPLINES = ['OT', 'PT', 'ST', 'SP', 'RN', 'HHA', 'PCA', 'SI', 'COTA', 'PTA'];
 
 export function mapServiceToDiscipline(serviceType: string | undefined): string {
   const s = (serviceType ?? '').toUpperCase();
@@ -36,7 +40,9 @@ export function mapServiceToDiscipline(serviceType: string | undefined): string 
   // Word-boundary checks — do NOT use bare includes('OT') (matches COTA).
   if (/\bPT\b/.test(s) || /\bPHYSICAL\b/.test(s)) return 'PT';
   if (/\bOT\b/.test(s) || /\bOCCUPATIONAL\b/.test(s)) return 'OT';
-  if (/\bST\b/.test(s) || /\bSLP\b/.test(s) || /\bSPEECH\b/.test(s)) return 'ST';
+  // ProviderSoft uses SLP; HHA GetDisciplines uses SP for speech.
+  if (/\bSLP\b/.test(s) || /\bSPEECH\b/.test(s)) return 'SP';
+  if (/\bST\b/.test(s)) return 'ST';
   if (/\bRN\b/.test(s)) return 'RN';
   if (/\bHHA\b/.test(s)) return 'HHA';
   if (/\bPCA\b/.test(s)) return 'PCA';
