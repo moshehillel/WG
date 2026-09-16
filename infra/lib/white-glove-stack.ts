@@ -785,13 +785,16 @@ export class WhiteGloveStack extends cdk.Stack {
       weekDay: 'MON-SUN',
       /** 21:00 UTC ≈ 5:00 PM EDT (4:00 PM EST). */
       hour: 21,
-      description: 'Nightly Gluck open + closure / new services / discharge (~5:00 PM Eastern)',
+      // discharge_service paused (Sep 2026 ops decision) — was closing sole placements
+      // and looking like full child discharge. Keep open + new service + Gluck closure only.
+      // verified_sessions / API Report stays on the separate Tuesday rule (also disabled).
+      description: 'Nightly Gluck open + closure + new services (~5:00 PM Eastern); discharge paused',
       enabled: false,
       stateMachine,
       input: {
         runId: events.EventField.fromPath('$.id'),
         dryRun: false,
-        reportKinds: ['opened_cases', 'closed_cases', 'discharge_service', 'new_services'],
+        reportKinds: ['opened_cases', 'closed_cases', 'new_services'],
       },
     });
 
