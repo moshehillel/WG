@@ -5,8 +5,7 @@ import {
   buildHhaRowException,
   buildRowException,
   lookupServiceCodeAlias,
-  mapMandateFrequencyToPeriod,
-  parseAuthMaximum,
+  resolveAuthMandate,
   partyDetailsFromRow,
 } from '@white-glove/shared';
 import type { IdempotencyStore } from './idempotency.js';
@@ -219,9 +218,9 @@ export async function processOpenedCases(options: {
     }
 
     const { pk, sk } = rowKey(reportKind, openedRowId(enriched));
-    // Include runId so historical replays with a new runId re-evaluate rows.
-    const idemSk = `${runId}#${sk}`;
-    if (!dryRun && (await store.alreadyProcessed(pk, idemSk))) {
+    // Durable across nights: successful case+service+start is never re-sent.
+    // (Unlike a runId-scoped key, which would retry every nightly execution.)
+    if (!dryRun && (await store.alreadyProcessed(pk, sk))) {
       skipped += 1;
       continue;
     }
@@ -304,21 +303,27 @@ export async function processOpenedCases(options: {
         endDate: enriched.endDate,
       });
       step = 'upsertAuthorization';
-      const period = mapMandateFrequencyToPeriod(enriched.mandateFrequency);
-      const maximum = parseAuthMaximum(enriched.mandateTimes);
-      // Period/Maximum must come from this PS row (or exact Authorization Number reuse in HHA).
+      const mandate = resolveAuthMandate({
+        mandateFrequency: enriched.mandateFrequency,
+        mandateTimes: enriched.mandateTimes,
+        extendedMandateFrequency: enriched.extendedMandateFrequency,
+        extendedMandateTimes: enriched.extendedMandateTimes,
+      });
+      // Period/Maximum must come from this PS row (Basic, or Extended when Basic is blank/0).
       // Never copy from a sibling auth.
-      if (!period || maximum === undefined) {
+      if (!mandate) {
         failed += 1;
         exceptions.push(
           buildRowException({
             code: 'missing_field',
-            message: `[${reportKind}] row=${enriched.caseId} invalid auth mandate — frequency "${enriched.mandateFrequency ?? ''}" / times "${enriched.mandateTimes ?? ''}"`,
+            message: `[${reportKind}] row=${enriched.caseId} invalid auth mandate — Basic frequency "${enriched.mandateFrequency ?? ''}" / times "${enriched.mandateTimes ?? ''}"; Extended frequency "${enriched.extendedMandateFrequency ?? ''}" / times "${enriched.extendedMandateTimes ?? ''}" (refusing CreatePatientAuthorization; would write Max Period = 0)`,
             reportKind,
             rowId: enriched.caseId,
             details: {
               mandateFrequency: enriched.mandateFrequency,
               mandateTimes: enriched.mandateTimes,
+              extendedMandateFrequency: enriched.extendedMandateFrequency,
+              extendedMandateTimes: enriched.extendedMandateTimes,
               ...enrichedParty,
             },
           }),
@@ -334,8 +339,8 @@ export async function processOpenedCases(options: {
         contractId,
         startDate: enriched.startDate,
         endDate: enriched.endDate,
-        period,
-        maximum,
+        period: mandate.period,
+        maximum: mandate.maximum,
       });
       if (mappingStore && enriched.startDate?.trim()) {
         await mappingStore.put({
@@ -380,7 +385,13 @@ export async function processOpenedCases(options: {
         });
       }
 
-      await store.markProcessed(pk, idemSk, { caseId: enriched.caseId, runId });
+      await store.markProcessed(pk, sk, {
+        caseId: enriched.caseId,
+        runId,
+        mandateSource: mandate.source,
+        period: mandate.period,
+        maximum: mandate.maximum,
+      });
       succeeded += 1;
       successes.push({ rowId: enriched.caseId, ...enrichedParty });
     } catch (err) {

@@ -149,4 +149,102 @@ describe('processOpenedCases', () => {
     expect(ex.details?.hhaServiceName).toBe('OT');
     expect(String(ex.details?.serviceCodeId)).toMatch(/OT/);
   });
+
+  it('uses Extended Mandate when Basic frequency is blank and times are 0', async () => {
+    const hha = new MockHhaClient();
+    // new_services requires the child to already exist in HHA.
+    await hha.upsertPatient({
+      caseId: 'NYS000000277',
+      firstName: 'TIDEMON',
+      lastName: 'DOUGLAS',
+    });
+    const authCalls: Array<{ period?: string; maximum?: number }> = [];
+    const original = hha.upsertAuthorization.bind(hha);
+    hha.upsertAuthorization = async (auth) => {
+      authCalls.push({ period: auth.period, maximum: auth.maximum });
+      return original(auth);
+    };
+
+    // no_evv program so this test isolates auth mandate fallback (not EVV visit).
+    const result = await processOpenedCases({
+      runId: 'run-ext-mandate',
+      reportKind: 'new_services',
+      hha,
+      store: new InMemoryIdempotencyStore(),
+      rows: [
+        {
+          ...baseOpen,
+          caseId: 'NYS000000277',
+          firstName: 'TIDEMON',
+          lastName: 'DOUGLAS',
+          programType: 'Herricks UFSD Therapy',
+          serviceCode: 'PT CHHA',
+          mandateFrequency: '',
+          mandateTimes: '0',
+          extendedMandateFrequency: 'Authorization',
+          extendedMandateTimes: '1',
+          authorizationNumber: 'approved',
+          startDate: '09/01/2026',
+          sourceReport: 'new_services',
+        },
+      ],
+    });
+
+    expect(result.succeeded).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(authCalls).toEqual([{ period: 'Entire Period', maximum: 1 }]);
+  });
+
+  it('does not retry a successful new_services row on a later runId', async () => {
+    const store = new InMemoryIdempotencyStore();
+    // no_evv program: durable skip should not depend on EVV placeholder success.
+    const row = {
+      ...baseOpen,
+      caseId: 'NYS000001701',
+      firstName: 'Sofia',
+      lastName: 'Kazani',
+      programType: 'Herricks UFSD Therapy',
+      serviceCode: 'PT CHHA',
+      mandateFrequency: '',
+      mandateTimes: '2',
+      extendedMandateFrequency: 'Weekly',
+      extendedMandateTimes: '2',
+      authorizationNumber: 'approved',
+      startDate: '09/14/2026',
+      sourceReport: 'new_services' as const,
+    };
+
+    const firstHha = new MockHhaClient();
+    await firstHha.upsertPatient({
+      caseId: row.caseId,
+      firstName: row.firstName,
+      lastName: row.lastName,
+    });
+    const first = await processOpenedCases({
+      runId: 'night-1',
+      reportKind: 'new_services',
+      hha: firstHha,
+      store,
+      rows: [row],
+    });
+    expect(first.succeeded).toBe(1);
+    expect(first.skipped).toBe(0);
+
+    const secondHha = new MockHhaClient();
+    await secondHha.upsertPatient({
+      caseId: row.caseId,
+      firstName: row.firstName,
+      lastName: row.lastName,
+    });
+    const second = await processOpenedCases({
+      runId: 'night-2',
+      reportKind: 'new_services',
+      hha: secondHha,
+      store,
+      rows: [row],
+    });
+    expect(second.succeeded).toBe(0);
+    expect(second.skipped).toBe(1);
+    expect(secondHha.calls.filter((c) => c === 'upsertAuthorization')).toHaveLength(0);
+  });
 });

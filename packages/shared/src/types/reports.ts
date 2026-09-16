@@ -12,10 +12,14 @@ export const OpenedCaseRowSchema = z.object({
   serviceCode: z.string().optional(),
   authorizationNumber: z.string().optional(),
   contractId: z.string().optional(),
-  /** Gluck "Times per Basic Mandate". */
+  /** Gluck / new service "Times per Basic Mandate". */
   mandateTimes: z.string().optional(),
-  /** Gluck "Basic Mandate Frequency" (Weekly, Monthly, Authorization, …). */
+  /** Gluck / new service "Basic Mandate Frequency" (Weekly, Monthly, Authorization, …). */
   mandateFrequency: z.string().optional(),
+  /** New service "Times per Extended Mandate" — used when Basic times/freq are blank or 0. */
+  extendedMandateTimes: z.string().optional(),
+  /** New service "Extended Mandate Frequency". */
+  extendedMandateFrequency: z.string().optional(),
   startDate: z.string().optional(),
   endDate: z.string().optional(),
   /** ProviderSoft "Provider Name" on Gluck open / new service (therapist for this service line). */
