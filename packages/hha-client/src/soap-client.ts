@@ -303,6 +303,18 @@ export class HhaSoapClient {
     return this.call('CreatePatient', innerBody);
   }
 
+  updatePatientDemographics(innerBody: string): Promise<SoapCallResult> {
+    return this.call('UpdatePatientDemographics', innerBody);
+  }
+
+  getPatientAddress(patientId: number): Promise<SoapCallResult> {
+    return this.call('GetPatientAddress', `<PatientID>${patientId}</PatientID>`);
+  }
+
+  getPatientDisciplines(patientId: number): Promise<SoapCallResult> {
+    return this.call('GetPatientDisciplines', `<PatientID>${patientId}</PatientID>`);
+  }
+
   getMobilityStatuses(): Promise<SoapCallResult> {
     return this.call('GetMobilityStatuses', '');
   }

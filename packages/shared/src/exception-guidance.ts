@@ -768,7 +768,7 @@ export function explainException(ex: PipelineException): ExplainedException {
           impact:
             'Visit was not created — patient AcceptedServices / placement discipline does not allow the billing service code on CreateSchedule.',
           action:
-            'Ensure CreatePatient AcceptedServices matches the therapy discipline (PT/OT/ST). For existing OT-locked patients, update AcceptedServices in HHA or recreate the patient with the correct discipline, then re-send.',
+            'Ensure CreatePatient AcceptedServices matches the therapy discipline (PT/OT/ST). For existing patients, automation calls UpdatePatientDemographics via ensureAcceptedServices before adding the new service; if that fails, update AcceptedServices in HHA UI or ask support.',
           rowRef,
           reportLabel: report,
           isPreview,

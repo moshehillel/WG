@@ -1,5 +1,5 @@
 import type { HhaClient } from '@white-glove/hha-client';
-import { AmbiguousPatientNameError } from '@white-glove/hha-client';
+import { AmbiguousPatientNameError, mapServiceToDiscipline } from '@white-glove/hha-client';
 import type { OpenedCaseRow, PipelineException, ProcessorResult, ProcessorSuccessRow } from '@white-glove/shared';
 import {
   buildHhaRowException,
@@ -293,6 +293,11 @@ export async function processOpenedCases(options: {
 
       step = 'upsertPatient';
       const patient = await hha.upsertPatient(openedCaseToHhaPatient(enriched));
+      const discipline = mapServiceToDiscipline(enriched.serviceCode);
+      if (discipline) {
+        step = 'ensureAcceptedServices';
+        await hha.ensureAcceptedServices(patient.id, [discipline]);
+      }
       step = 'upsertContract';
       const contract = await hha.upsertContract({
         patientId: patient.id,

@@ -130,6 +130,24 @@ export class MockHhaClient implements HhaClient {
     };
   }
 
+  readonly acceptedServicesByPatient = new Map<string, string[]>();
+
+  async ensureAcceptedServices(
+    patientId: string,
+    disciplines: string[],
+  ): Promise<import('./types.js').EnsureAcceptedServicesResult> {
+    this.calls.push('ensureAcceptedServices');
+    const before = this.acceptedServicesByPatient.get(patientId) ?? [];
+    const seen = new Set(before.map((d) => d.toUpperCase()));
+    const added = disciplines
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .filter((d) => !seen.has(d.toUpperCase()));
+    const after = [...before, ...added];
+    this.acceptedServicesByPatient.set(patientId, after);
+    return { updated: added.length > 0, before, after, added };
+  }
+
   async upsertPatient(patient: HhaPatient): Promise<UpsertResult> {
     this.calls.push('upsertPatient');
     const key =

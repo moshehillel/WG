@@ -29,6 +29,7 @@ Raw JSON: [hha-endpoint-probe-results.json](hha-endpoint-probe-results.json)
 | Visit/EVV read | `GetVisitInfoV3` | **`-9` method not authorized** for this app |
 | Create patient | `CreatePatient` | Reachable; validation `-73` Invalid DOB on minimal payload |
 | Update patient | `UpdatePatientDemographics` | Reachable; validation `-70` |
+| Expand AcceptedServices (existing patient) | `UpdatePatientDemographics` | **PASS (2026-09-16)** — see below |
 | Add placement | `AddPatientContract` | **Succeeded** with minimal payload on Patient `958000` (sandbox write works) |
 | Discharge/close | `UpdatePatientContract` | Reachable; requires `DischargeToID` (`-315`) |
 | Create auth | `CreatePatientAuthorization` | Reachable; requires `Period` (`-315`) |
@@ -99,4 +100,42 @@ Documented (returns `VisitEditReasonID` + action-taken info for a VisitId). Our 
 - **`ConfirmVisits`**: auth OK; ISO datetimes parse; requires valid **ReasonCode** (+ ActionCode). Lookup method `GetVisitEditReasonActionTaken` returns **`-9` not authorized** — need HHA to enable it or provide reason/action code list.
 - **`CreateSchedule`**: requires a non-empty `ScheduleType` whose allowed values are still unknown (common strings all `-74`).
 - Extra methods that **pass**: `GetBranches`, `GetNurses`, `GetLanguages`, `GetMissedVisitReasons`, `GetCaregiverDocumentType`, `GetCaregiverReferralSources`, `SearchCaregivers`.
+
+## AcceptedServices expand on existing patient — PASS (2026-09-16)
+
+**Goal:** For `new_services`, auto-widen the child's HHA `AcceptedServices` before AddPatientContract / auth / schedule.
+
+### Round 1 FAIL (incomplete payloads)
+
+**Probe:** `packages/hha-client/scripts/probe-accepted-services-update.mjs` against sandbox patient `958000` (before: `PCA, RN, PA`; intended add: `OT`).
+
+| Attempt | Payload | Result | AcceptedServices after |
+|---------|---------|--------|------------------------|
+| A–F | Various incomplete echoes | `-70`/`-74`/`-73`/`-315` | unchanged `PCA, RN, PA` |
+
+### Round 2 PASS (WSDL-complete UpdatePatientDemographics)
+
+**Probe:** `packages/hha-client/scripts/probe-accepted-services-deeper.mjs`
+
+**Working method:** `UpdatePatientDemographics` with:
+1. WSDL-required fields (`BirthDate`, `CoordinatorID*`, `ServiceRequestStartDate`, `AllowDuplicate`, `SourceOfAdmission`, `Team/Branch/Location`, wage-parity nils, …)
+2. **`<AcceptedServices><Discipline>…</Discipline></AcceptedServices>`** (office requires this — omit → `-315 Requires AcceptedServices`)
+3. **Existing `AddressID`** from `GetPatientAddress` (new address without ID → `-310` duplicate Addresses; omit address → `-315 Requires Zip 5`)
+4. **`EmergencyPreparedness`** with `MobilityStatusID` + `EvacuationZoneID` (`EvacuationLocationID` nil when 0)
+5. **Omit invalid `Zip4=0`** (use `xsi:nil`)
+
+| Attempt | Result | AcceptedServices after |
+|---------|--------|------------------------|
+| G1 same services + AddressID | **ErrorID=0** | `PCA, RN, PA` (unchanged) |
+| G2 expand with OT + AddressID | **ErrorID=0** | **`PCA, RN, OT, PA`** |
+| G7 AddressID+Zip only + expand | **ErrorID=0** | `PCA, RN, OT, PA` |
+
+**Also confirmed:**
+- `GetPatientDisciplines` is **read-only** (same allow-list as AcceptedServices); no `UpdatePatientDisciplines` on ASMX.
+- Phantom methods (`UpdatePatient`, `EditPatient`, `SavePatient`, `UpdatePatientDisciplines`, …) → HTTP 500 unrecognized SOAPAction.
+- `UpdatePatientClinicalInfo` / `UpdatePatientPreference` cannot set AcceptedServices.
+
+**Automation:** `HhaClient.ensureAcceptedServices(patientId, disciplines)` → used by `process-opened` / `new_services` and TMS week transfer before contract/schedule.
+
+**Note:** CreatePatient still sets AcceptedServices on create. SLP/speech → `SP` on create (PR #5).
 
