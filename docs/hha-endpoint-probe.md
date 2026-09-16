@@ -29,6 +29,7 @@ Raw JSON: [hha-endpoint-probe-results.json](hha-endpoint-probe-results.json)
 | Visit/EVV read | `GetVisitInfoV3` | **`-9` method not authorized** for this app |
 | Create patient | `CreatePatient` | Reachable; validation `-73` Invalid DOB on minimal payload |
 | Update patient | `UpdatePatientDemographics` | Reachable; validation `-70` |
+| Expand AcceptedServices (existing patient) | `UpdatePatientDemographics` | **FAIL (2026-09-16)** — see below |
 | Add placement | `AddPatientContract` | **Succeeded** with minimal payload on Patient `958000` (sandbox write works) |
 | Discharge/close | `UpdatePatientContract` | Reachable; requires `DischargeToID` (`-315`) |
 | Create auth | `CreatePatientAuthorization` | Reachable; requires `Period` (`-315`) |
@@ -99,4 +100,25 @@ Documented (returns `VisitEditReasonID` + action-taken info for a VisitId). Our 
 - **`ConfirmVisits`**: auth OK; ISO datetimes parse; requires valid **ReasonCode** (+ ActionCode). Lookup method `GetVisitEditReasonActionTaken` returns **`-9` not authorized** — need HHA to enable it or provide reason/action code list.
 - **`CreateSchedule`**: requires a non-empty `ScheduleType` whose allowed values are still unknown (common strings all `-74`).
 - Extra methods that **pass**: `GetBranches`, `GetNurses`, `GetLanguages`, `GetMissedVisitReasons`, `GetCaregiverDocumentType`, `GetCaregiverReferralSources`, `SearchCaregivers`.
+
+## AcceptedServices expand on existing patient — FAIL (2026-09-16)
+
+**Goal:** For `new_services`, auto-widen the child's HHA `AcceptedServices` before AddPatientContract / auth / schedule.
+
+**Candidate:** `UpdatePatientDemographics` with `<AcceptedServices><Discipline>…</Discipline></AcceptedServices>` (same shape as CreatePatient).
+
+**Probe:** `packages/hha-client/scripts/probe-accepted-services-update.mjs` against sandbox patient `958000` (before: `PCA, RN, PA`; intended add: `OT`).
+
+| Attempt | Payload | Result | AcceptedServices after |
+|---------|---------|--------|------------------------|
+| A | PatientID + AcceptedServices only | `-70` Invalid FirstName | unchanged |
+| B | ID + AcceptedServices only | `-70` Invalid FirstName | unchanged |
+| C | Echo name/DOB/gender/office + AcceptedServices | `-74` Invalid "CoordinatorID1" | unchanged |
+| D | Name + single new Discipline | `-73` Invalid Date Of Birth | unchanged |
+| E | Full CreatePatient-like echo + AcceptedServices | `-315` Requires "Zip 5" | unchanged |
+| F | Same as E with nested AcceptedService wrapper | `-315` Requires "Zip 5" | unchanged |
+
+**Verdict:** **No working sandbox path found.** `UpdatePatientDemographics` is reachable but never succeeded with AcceptedServices in these shapes; re-read after each attempt still showed `PCA, RN, PA`. Do **not** wire `new_services` to auto-allow disciplines until HHA documents a supported update method (or UI/ops remains required).
+
+**Note:** CreatePatient still sets AcceptedServices write-once. SLP/speech → `SP` on create (PR #5); GetDisciplines catalog lists `ST` as the speech discipline name — create-path `SP` is separate from this update FAIL.
 
