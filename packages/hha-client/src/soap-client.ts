@@ -265,7 +265,7 @@ export class HhaSoapClient {
       `<SearchFilters>
   <FirstName>${escapeXml(filters.firstName ?? '')}</FirstName>
   <LastName>${escapeXml(filters.lastName ?? '')}</LastName>
-  <Status>${escapeXml(filters.status ?? 'Active')}</Status>
+  <Status>${escapeXml(filters.status ?? 'All')}</Status>
 </SearchFilters>`,
     );
   }
