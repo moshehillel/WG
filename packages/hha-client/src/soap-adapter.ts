@@ -759,10 +759,11 @@ export class SoapHhaClientAdapter implements HhaClient {
     providerName: string | undefined,
     options?: { requireNameMatch?: boolean; acceptUniqueLastName?: boolean },
   ): Promise<string | undefined> {
+    // Status=All so inactive HHA caregivers still resolve (PS sync may schedule them).
     const result = await this.soap.searchCaregivers({
       firstName,
       lastName,
-      status: 'Active',
+      status: 'All',
     });
     if (!result.ok || !result.bodyXml) return undefined;
 
@@ -788,7 +789,7 @@ export class SoapHhaClientAdapter implements HhaClient {
       if (matched.length > 1) return matched[0];
       if (options?.requireNameMatch) {
         // Prod SearchCaregivers often returns <Caregivers><CaregiverID/> only.
-        // If exactly one Active caregiver shares this last name token, accept it.
+        // If exactly one caregiver shares this last name token, accept it.
         if (options.acceptUniqueLastName && ids.length === 1) return ids[0];
         return undefined;
       }
