@@ -94,12 +94,28 @@ export interface PatientDemoFields {
   zipCode?: string;
 }
 
+/** Result of ensuring HHA AcceptedServices includes required disciplines. */
+export interface EnsureAcceptedServicesResult {
+  updated: boolean;
+  before: string[];
+  after: string[];
+  added: string[];
+}
+
 export interface HhaClient {
   findPatient(options: FindPatientOptions): Promise<string | undefined>;
   /** Gender from GetPatientDemographics when PS row omits it (existing patient / new service). */
   getPatientGender(patientId: string): Promise<string | undefined>;
   /** Address + gender fields from GetPatientDemographics (one SOAP call). */
   getPatientDemographicsFields(patientId: string): Promise<PatientDemoFields>;
+  /**
+   * Ensure existing patient AcceptedServices includes the given disciplines
+   * (UpdatePatientDemographics). No-op when already present.
+   */
+  ensureAcceptedServices(
+    patientId: string,
+    disciplines: string[],
+  ): Promise<EnsureAcceptedServicesResult>;
   upsertPatient(patient: HhaPatient): Promise<UpsertResult>;
   upsertContract(contract: HhaContract): Promise<UpsertResult>;
   upsertAuthorization(auth: HhaAuthorization): Promise<UpsertResult>;

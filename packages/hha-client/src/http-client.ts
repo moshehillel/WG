@@ -57,6 +57,25 @@ export class HttpHhaClient implements HhaClient {
     return this.request('POST', '/patients/find', options);
   }
 
+  getPatientGender(patientId: string): Promise<string | undefined> {
+    return this.request('GET', `/patients/${encodeURIComponent(patientId)}/gender`);
+  }
+
+  getPatientDemographicsFields(
+    patientId: string,
+  ): Promise<import('./types.js').PatientDemoFields> {
+    return this.request('GET', `/patients/${encodeURIComponent(patientId)}/demographics`);
+  }
+
+  ensureAcceptedServices(
+    patientId: string,
+    disciplines: string[],
+  ): Promise<import('./types.js').EnsureAcceptedServicesResult> {
+    return this.request('POST', `/patients/${encodeURIComponent(patientId)}/accepted-services`, {
+      disciplines,
+    });
+  }
+
   upsertPatient(patient: HhaPatient): Promise<UpsertResult> {
     return this.request('POST', '/patients/upsert', patient);
   }

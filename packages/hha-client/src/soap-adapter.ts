@@ -23,6 +23,7 @@ import type {
   DischargeAllPlacementsOptions,
   DischargePlacementOptions,
   DischargeServiceUpdate,
+  EnsureAcceptedServicesResult,
   FindPatientOptions,
   HhaClient,
   PatientDemoFields,
@@ -30,6 +31,11 @@ import type {
   PendingCall,
   UpsertResult,
 } from './types.js';
+import {
+  buildUpdateAcceptedServicesBody,
+  mergeAcceptedServices,
+  parseDemoEchoFromXml,
+} from './update-accepted-services.js';
 import { caregiverSearchNameOrders, compareSessionClock, psDateToIso } from './hha-time.js';
 import {
   matchByName,
@@ -302,6 +308,82 @@ export class SoapHhaClientAdapter implements HhaClient {
       city: xmlFirstTag(xml, 'City') || undefined,
       state: xmlFirstTag(xml, 'State') || undefined,
       zipCode: zipCode?.trim() || undefined,
+    };
+  }
+
+  async ensureAcceptedServices(
+    patientId: string,
+    disciplines: string[],
+  ): Promise<EnsureAcceptedServicesResult> {
+    const wanted = disciplines.map((d) => d.trim()).filter(Boolean);
+    if (!wanted.length) {
+      return { updated: false, before: [], after: [], added: [] };
+    }
+
+    const pid = Number(patientId);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      throw new Error(`ensureAcceptedServices: invalid patientId "${patientId}"`);
+    }
+
+    const demoRes = await this.soap.getPatientDemographics(pid);
+    assertOk(demoRes, 'GetPatientDemographics');
+    const addrRes = await this.soap.getPatientAddress(pid);
+    assertOk(addrRes, 'GetPatientAddress');
+
+    const defaults = this.createPatientDefaults;
+    const echo = parseDemoEchoFromXml(pid, demoRes.bodyXml, addrRes.bodyXml, {
+      mobilityStatusId: String(defaults.mobilityStatusId),
+      evacuationZoneId: String(defaults.evacuationZoneId),
+      sourceOfAdmission: String(defaults.sourceOfAdmission),
+      teamId: String(defaults.teamId),
+      branchId: String(defaults.branchId),
+      locationId: String(defaults.locationId),
+      coordinatorId: String(defaults.coordinatorId),
+    });
+
+    const { merged, missing } = mergeAcceptedServices(echo.acceptedServices, wanted);
+    if (!missing.length) {
+      return {
+        updated: false,
+        before: echo.acceptedServices,
+        after: echo.acceptedServices,
+        added: [],
+      };
+    }
+
+    const body = buildUpdateAcceptedServicesBody({
+      ...echo,
+      acceptedServices: merged,
+    });
+    const upd = await this.soap.updatePatientDemographics(body);
+    assertOk(upd, 'UpdatePatientDemographics(AcceptedServices)');
+
+    const verify = await this.soap.getPatientDemographics(pid);
+    assertOk(verify, 'GetPatientDemographics(verify AcceptedServices)');
+    const afterEcho = parseDemoEchoFromXml(pid, verify.bodyXml, addrRes.bodyXml, {
+      mobilityStatusId: String(defaults.mobilityStatusId),
+      evacuationZoneId: String(defaults.evacuationZoneId),
+      sourceOfAdmission: String(defaults.sourceOfAdmission),
+      teamId: String(defaults.teamId),
+      branchId: String(defaults.branchId),
+      locationId: String(defaults.locationId),
+      coordinatorId: String(defaults.coordinatorId),
+    });
+
+    const afterUpper = new Set(afterEcho.acceptedServices.map((d) => d.toUpperCase()));
+    const stillMissing = missing.filter((d) => !afterUpper.has(d.toUpperCase()));
+    if (stillMissing.length) {
+      throw new Error(
+        `UpdatePatientDemographics reported success but AcceptedServices still missing [${stillMissing.join(', ')}] ` +
+          `(have [${afterEcho.acceptedServices.join(', ')}])`,
+      );
+    }
+
+    return {
+      updated: true,
+      before: echo.acceptedServices,
+      after: afterEcho.acceptedServices,
+      added: missing,
     };
   }
 

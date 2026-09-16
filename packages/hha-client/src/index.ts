@@ -3,12 +3,18 @@ export type {
   DischargeAllPlacementsOptions,
   DischargePlacementOptions,
   DischargeServiceUpdate,
+  EnsureAcceptedServicesResult,
   FindPatientOptions,
   HhaClient,
   PatientDemoFields,
   PatientPlacementSummary,
   UpsertResult,
 } from './types.js';
+export {
+  buildUpdateAcceptedServicesBody,
+  mergeAcceptedServices,
+  parseAcceptedServiceDisciplines,
+} from './update-accepted-services.js';
 export { activePlacements, parsePatientPlacements } from './placements.js';
 export type { PatientPlacement } from './placements.js';
 export { resolvePlacementForService } from './resolve-placement.js';

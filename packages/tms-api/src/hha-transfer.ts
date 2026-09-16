@@ -4,6 +4,7 @@ import {
   isInvalidHhaPatientError,
   isInvalidHhaVisitError,
   isTrustedHhaPatientId,
+  mapServiceToDiscipline,
   type HhaClient,
 } from '@white-glove/hha-client';
 import {
@@ -448,6 +449,14 @@ export async function transferLockedWeek(options: {
           `Service code "${billingServiceName}" not found in HHA billing codes for this contract — create it under the contract (case-insensitive name match)`,
         );
       }
+      // Existing HHA patients may be locked to PCA/RN/OT-only AcceptedServices.
+      // Expand allow-list before AddPatientContract / CreateSchedule.
+      const ensureDisc = mapServiceToDiscipline(
+        billingServiceName || discipline || session.serviceType || '',
+      );
+      if (ensureDisc) {
+        await hha.ensureAcceptedServices(patientId, [ensureDisc]);
+      }
       const contractStart =
         matchedMandate?.startOn?.trim() || session.dateOfService || undefined;
       await ensurePatientProgramContract({
@@ -586,7 +595,7 @@ export async function transferLockedWeek(options: {
       } else if (/only select OT Service Code/i.test(raw) || /Service code inconsistency/i.test(raw)) {
         message =
           `HHA patient AcceptedServices does not allow this visit’s service code (often OT-only patient + PT visit). ` +
-          `Recreate/update the patient with the correct discipline, then re-send. (${raw})`;
+          `Automation should have widened AcceptedServices via UpdatePatientDemographics; if this persists, check ensureAcceptedServices errors or update in HHA UI, then re-send. (${raw})`;
       } else if (/Timesheet Required from Configuration/i.test(raw)) {
         message =
           `HHA visit was scheduled but ConfirmVisits could not set Timesheet Approved (office timesheet configuration). ` +
