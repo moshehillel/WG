@@ -7,7 +7,7 @@ describe('merge-pipeline-input', () => {
       {
         runId: '28b5e15f-57e3-0665-a9ad-db496ca607e6',
         dryRun: false,
-        reportKinds: ['opened_cases', 'closed_cases', 'discharge_service', 'new_services'],
+        reportKinds: ['opened_cases', 'closed_cases', 'new_services'],
       },
       {} as never,
       () => undefined,
@@ -19,7 +19,7 @@ describe('merge-pipeline-input', () => {
       sandboxEmailFixtures: false,
       sandboxLiveFixtures: false,
       dateRanges: {},
-      reportKinds: ['opened_cases', 'closed_cases', 'discharge_service', 'new_services'],
+      reportKinds: ['opened_cases', 'closed_cases', 'new_services'],
       syncRetryCount: 0,
     });
   });

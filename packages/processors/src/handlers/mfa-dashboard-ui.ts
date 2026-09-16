@@ -82,7 +82,7 @@ input[type=date]{background:#0f172a;border:1px solid var(--border);color:var(--t
         <span class="dates">From <input type="date" data-from="new_services"/> To <input type="date" data-to="new_services"/></span></span></label>
       <label class="report"><input type="checkbox" data-kind="closed_cases"/><span><strong>Gluck closure</strong> <span class="muted">(Closure Date)</span>
         <span class="dates">From <input type="date" data-from="closed_cases"/> To <input type="date" data-to="closed_cases"/></span></span></label>
-      <label class="report"><input type="checkbox" data-kind="discharge_service"/><span><strong>Discharge service</strong> <span class="muted">(Service Discharge Date)</span>
+      <label class="report"><input type="checkbox" data-kind="discharge_service"/><span><strong>Discharge service</strong> <span class="muted">(paused — do not use unless ops explicitly re-enables; was over-closing sole placements)</span>
         <span class="dates">From <input type="date" data-from="discharge_service"/> To <input type="date" data-to="discharge_service"/></span></span></label>
       <label class="report"><input type="checkbox" data-kind="verified_sessions"/><span><strong>API Report</strong> <span class="muted">(Verified Date — visits)</span>
         <span class="dates">From <input type="date" data-from="verified_sessions"/> To <input type="date" data-to="verified_sessions"/></span></span></label>
@@ -167,7 +167,8 @@ input[type=date]{background:#0f172a;border:1px solid var(--border);color:var(--t
     });
   };
   document.getElementById('btnPresetCases').onclick = () => {
-    const caseKinds = { opened_cases:1, new_services:1, closed_cases:1, discharge_service:1, caregiver_codes:1 };
+    // Match nightly case reports: open + new service + closure (discharge paused Sep 2026).
+    const caseKinds = { opened_cases:1, new_services:1, closed_cases:1, caregiver_codes:1 };
     document.querySelectorAll('input[data-kind]').forEach(cb => {
       cb.checked = !!caseKinds[cb.getAttribute('data-kind')];
     });

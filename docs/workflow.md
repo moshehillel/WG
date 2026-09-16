@@ -40,6 +40,8 @@ To enable schedules (nightly cases ~5:00 PM Eastern; Tuesday sessions ~11:00 PM 
 
 `npm run deploy -w @white-glove/infra -- -c enableNightSchedule=true`
 
+Nightly case reports (when the EventBridge rule is enabled): `opened_cases`, `closed_cases`, `new_services` only. **`discharge_service` is paused** (Sep 2026). API Report / `verified_sessions` stays on the separate Tuesday rule (also disabled by default).
+
 Legacy 06:00 UTC daily: `-c enableDailySchedule=true`
 
 1. **Download** Lambda — production path is the **ECR bot image** (`npm run deploy:aws:live`). Plain `cdk deploy` does not rebuild it; re-enabling schedules only invokes the current image. See [providersoft-bot-aws.md](./providersoft-bot-aws.md).
