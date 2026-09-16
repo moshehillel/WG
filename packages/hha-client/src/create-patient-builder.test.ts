@@ -18,6 +18,55 @@ describe('create-patient-builder', () => {
     expect(mapServiceToDiscipline(undefined)).toBe('');
   });
 
+  it('maps SLP-led service types to HHA discipline "SP" (not "SLP")', () => {
+    // HHA rejects AcceptedServices Discipline "SLP" with -411; speech must be "SP".
+    expect(mapServiceToDiscipline('SLP CHHA')).toBe('SP');
+    expect(mapServiceToDiscipline('SLP HC EVAL')).toBe('SP');
+    expect(mapServiceToDiscipline('slp school')).toBe('SP');
+    expect(mapServiceToDiscipline('SLP')).toBe('SP');
+    expect(mapServiceToDiscipline('Speech Therapy')).toBe('SP');
+    // ST-led still maps to ST; bare SP passes through.
+    expect(mapServiceToDiscipline('ST CHHA')).toBe('ST');
+    expect(mapServiceToDiscipline('SP')).toBe('SP');
+  });
+
+  it('emits AcceptedServices Discipline "SP" for an SLP CHHA patient', () => {
+    const xml = buildCreatePatientBody(
+      {
+        firstName: 'Adam',
+        lastName: 'Martinez',
+        dateOfBirth: '2020-05-04',
+        caseId: '258267734',
+        serviceCode: 'SLP CHHA',
+        address1: '1 Main St',
+        city: 'Brooklyn',
+        state: 'NY',
+        zipCode: '11201',
+      },
+      {
+        officeId: 1025,
+        coordinatorId: 81103,
+        sourceOfAdmission: 9300,
+        branchId: 10073742,
+        teamId: 2036,
+        locationId: 12284,
+        mobilityStatusId: 2495,
+        evacuationZoneId: 10003239,
+        defaultGender: 'Male',
+      },
+      {
+        branchId: 10073742,
+        teamId: 2036,
+        locationId: 12284,
+        mobilityStatusId: 2495,
+        evacuationZoneId: 10003239,
+      },
+    );
+    expect(xml).toContain('<Discipline>SP</Discipline>');
+    expect(xml).not.toContain('<Discipline>SLP</Discipline>');
+    expect(xml).not.toContain('<Discipline>ST</Discipline>');
+  });
+
   it('omits AcceptedServices when discipline cannot be inferred (no silent OT)', () => {
     const xml = buildCreatePatientBody(
       {
