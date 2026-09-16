@@ -84,6 +84,15 @@ export function parseOpenedCases(content: string): OpenedCaseRow[] {
         'basic_mandate_frequency',
         'mandate_frequency',
       ),
+      extendedMandateTimes: firstField(
+        row,
+        'times_per_extended_mandate',
+        'extended_mandate_times',
+      ),
+      extendedMandateFrequency: firstField(
+        row,
+        'extended_mandate_frequency',
+      ),
       contractId: firstField(row, 'contract_id', 'contract'),
       intakeDate: firstField(row, 'date_of_intake', 'intake_date'),
       address1: firstField(row, 'childs_address', "child's_address", 'child_address', 'address'),
