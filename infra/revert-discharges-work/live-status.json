@@ -1,0 +1,306 @@
+[
+  {
+    "name": "Arshad",
+    "pid": "22854608",
+    "expect": "6812439",
+    "noDate": [
+      {
+        "placementId": "6812439",
+        "contractId": "61591",
+        "serviceName": "OT SOC/ROC OASIS",
+        "startDate": "2024-12-07",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>6812439</PlacementID><Contract><ID>61591</ID><Name>Extended Home Care Therapy</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2024-12-07</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>785140</ID><Name>OT SOC/ROC OASIS</Name><"
+      }
+    ],
+    "asOf0915": [
+      {
+        "placementId": "6812439",
+        "contractId": "61591",
+        "serviceName": "OT SOC/ROC OASIS",
+        "startDate": "2024-12-07",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>6812439</PlacementID><Contract><ID>61591</ID><Name>Extended Home Care Therapy</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2024-12-07</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>785140</ID><Name>OT SOC/ROC OASIS</Name><"
+      }
+    ],
+    "asOf0916": [
+      {
+        "placementId": "6812439",
+        "contractId": "61591",
+        "serviceName": "OT SOC/ROC OASIS",
+        "startDate": "2024-12-07",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>6812439</PlacementID><Contract><ID>61591</ID><Name>Extended Home Care Therapy</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2024-12-07</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>785140</ID><Name>OT SOC/ROC OASIS</Name><"
+      }
+    ]
+  },
+  {
+    "name": "Galeano",
+    "pid": "23012434",
+    "expect": "6897698",
+    "noDate": [
+      {
+        "placementId": "6897698",
+        "contractId": "61591",
+        "serviceName": "OT SOC/ROC OASIS",
+        "startDate": "2025-01-01",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>6897698</PlacementID><Contract><ID>61591</ID><Name>Extended Home Care Therapy</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-01-01</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>785140</ID><Name>OT SOC/ROC OASIS</Name><"
+      }
+    ],
+    "asOf0915": [
+      {
+        "placementId": "6897698",
+        "contractId": "61591",
+        "serviceName": "OT SOC/ROC OASIS",
+        "startDate": "2025-01-01",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>6897698</PlacementID><Contract><ID>61591</ID><Name>Extended Home Care Therapy</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-01-01</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>785140</ID><Name>OT SOC/ROC OASIS</Name><"
+      }
+    ],
+    "asOf0916": [
+      {
+        "placementId": "6897698",
+        "contractId": "61591",
+        "serviceName": "OT SOC/ROC OASIS",
+        "startDate": "2025-01-01",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>6897698</PlacementID><Contract><ID>61591</ID><Name>Extended Home Care Therapy</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-01-01</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>785140</ID><Name>OT SOC/ROC OASIS</Name><"
+      }
+    ]
+  },
+  {
+    "name": "Oliver",
+    "pid": "25788276",
+    "expect": null,
+    "noDate": [
+      {
+        "placementId": "8300861",
+        "contractId": "37925",
+        "serviceName": "OT",
+        "startDate": "2026-03-14",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>8300861</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2026-03-14</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313581</ID><Name>OT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0915": [
+      {
+        "placementId": "8300861",
+        "contractId": "37925",
+        "serviceName": "OT",
+        "startDate": "2026-03-14",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>8300861</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2026-03-14</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313581</ID><Name>OT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0916": [
+      {
+        "placementId": "8300861",
+        "contractId": "37925",
+        "serviceName": "OT",
+        "startDate": "2026-03-14",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>8300861</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2026-03-14</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313581</ID><Name>OT</Name></ServiceCode><Dischar"
+      }
+    ]
+  },
+  {
+    "name": "Porter",
+    "pid": "24555059",
+    "expect": "7909108",
+    "noDate": [
+      {
+        "placementId": "7909108",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-09-18",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>7909108</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-09-18</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0915": [
+      {
+        "placementId": "7909108",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-09-18",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>7909108</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-09-18</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0916": [
+      {
+        "placementId": "7909108",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-09-18",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>7909108</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-09-18</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ]
+  },
+  {
+    "name": "Rolon",
+    "pid": "24301609",
+    "expect": "7802393",
+    "noDate": [
+      {
+        "placementId": "7802393",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-07-15",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>7802393</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-07-15</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0915": [
+      {
+        "placementId": "7802393",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-07-15",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>7802393</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-07-15</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0916": [
+      {
+        "placementId": "7802393",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-07-15",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>7802393</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-07-15</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ]
+  },
+  {
+    "name": "Asunto",
+    "pid": "24617583",
+    "expect": "7935330",
+    "noDate": [
+      {
+        "placementId": "7935330",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-10-06",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>7935330</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-10-06</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0915": [
+      {
+        "placementId": "7935330",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-10-06",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>7935330</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-10-06</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0916": [
+      {
+        "placementId": "7935330",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-10-06",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>7935330</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-10-06</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ]
+  },
+  {
+    "name": "Downs",
+    "pid": "24865860",
+    "expect": "8045831",
+    "noDate": [
+      {
+        "placementId": "8045831",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-12-01",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>8045831</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-12-01</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0915": [
+      {
+        "placementId": "8045831",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-12-01",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>8045831</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-12-01</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0916": [
+      {
+        "placementId": "8045831",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2025-12-01",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>8045831</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2025-12-01</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ]
+  },
+  {
+    "name": "Navelgas",
+    "pid": "22680255",
+    "expect": "6711683",
+    "noDate": [
+      {
+        "placementId": "6711683",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2024-11-07",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>6711683</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2024-11-07</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0915": [
+      {
+        "placementId": "6711683",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2024-11-07",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>6711683</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2024-11-07</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ],
+    "asOf0916": [
+      {
+        "placementId": "6711683",
+        "contractId": "37925",
+        "serviceName": "PT",
+        "startDate": "2024-11-07",
+        "dischargeDate": "",
+        "rawHasDischargeTag": true,
+        "blockSnippet": "<PatientContractInfo><PlacementID>6711683</PlacementID><Contract><ID>37925</ID><Name>Americare Certified</Name></Contract><IsPrimaryContract>Yes</IsPrimaryContract><AltPatientID /><ServiceStartDate>2024-11-07</ServiceStartDate><SourceOfAdmission><ID>-1</ID><Name /></SourceOfAdmission><ServiceCode><ID>313582</ID><Name>PT</Name></ServiceCode><Dischar"
+      }
+    ]
+  }
+]

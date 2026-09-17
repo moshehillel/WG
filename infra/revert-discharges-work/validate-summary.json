@@ -1,0 +1,3315 @@
+{
+  "runId": "886d6a26-a989-a9d4-9e89-74f7a9bfeaef",
+  "ok": false,
+  "dryRun": false,
+  "sandbox": false,
+  "summary": {
+    "opened": {
+      "runId": "886d6a26-a989-a9d4-9e89-74f7a9bfeaef",
+      "reportKind": "opened_cases",
+      "processed": 9,
+      "succeeded": 6,
+      "skipped": 3,
+      "failed": 0,
+      "exceptions": [
+        {
+          "code": "skipped_by_rule",
+          "message": "[opened_cases] row=RCC00004951601 skipped: additional Gluck service line (OT CHHA begin 11/03/2025) — open child once; historical periods are not re-opened from Gluck (use new service for new begins)",
+          "reportKind": "opened_cases",
+          "rowId": "RCC00004951601",
+          "details": {
+            "triageReason": "gluck_historical_service_line",
+            "serviceCode": "OT CHHA",
+            "startDate": "11/03/2025",
+            "intakeDate": "09/15/2026",
+            "patientName": "ZAEEM IQBAL",
+            "caregiverName": "ARMSTRONG CARROL",
+            "providerName": "ARMSTRONG CARROL",
+            "firstName": "ZAEEM",
+            "lastName": "IQBAL",
+            "programType": "Royal Care Certified Services - Therapy"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[opened_cases] row=RCC00004951601 skipped: additional Gluck service line (OT CHHA begin 11/23/2025) — open child once; historical periods are not re-opened from Gluck (use new service for new begins)",
+          "reportKind": "opened_cases",
+          "rowId": "RCC00004951601",
+          "details": {
+            "triageReason": "gluck_historical_service_line",
+            "serviceCode": "OT CHHA",
+            "startDate": "11/23/2025",
+            "intakeDate": "09/15/2026",
+            "patientName": "ZAEEM IQBAL",
+            "caregiverName": "ARMSTRONG CARROL",
+            "providerName": "ARMSTRONG CARROL",
+            "firstName": "ZAEEM",
+            "lastName": "IQBAL",
+            "programType": "Royal Care Certified Services - Therapy"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[opened_cases] row=RCC00004951601 skipped: additional Gluck service line (OT HC Eval begin 10/29/2025) — open child once; historical periods are not re-opened from Gluck (use new service for new begins)",
+          "reportKind": "opened_cases",
+          "rowId": "RCC00004951601",
+          "details": {
+            "triageReason": "gluck_historical_service_line",
+            "serviceCode": "OT HC Eval",
+            "startDate": "10/29/2025",
+            "intakeDate": "09/15/2026",
+            "patientName": "ZAEEM IQBAL",
+            "caregiverName": "ARMSTRONG CARROL",
+            "providerName": "ARMSTRONG CARROL",
+            "firstName": "ZAEEM",
+            "lastName": "IQBAL",
+            "programType": "Royal Care Certified Services - Therapy"
+          }
+        }
+      ],
+      "successes": [
+        {
+          "rowId": "300095",
+          "patientName": "Aliceanne Gomez",
+          "caregiverName": "ARMSTRONG CARROL",
+          "providerName": "ARMSTRONG CARROL",
+          "firstName": "Aliceanne",
+          "lastName": "Gomez",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "RCC00004951601",
+          "patientName": "ZAEEM IQBAL",
+          "caregiverName": "BEAUCHAMP-FERRERO  RACHEL",
+          "providerName": "BEAUCHAMP-FERRERO  RACHEL",
+          "firstName": "ZAEEM",
+          "lastName": "IQBAL",
+          "programType": "Royal Care Certified Services - Therapy"
+        },
+        {
+          "rowId": "212259",
+          "patientName": "Mehedi Islam",
+          "caregiverName": "ARMSTRONG CARROL",
+          "providerName": "ARMSTRONG CARROL",
+          "firstName": "Mehedi",
+          "lastName": "Islam",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258272515",
+          "patientName": "JOHAN REYESREYES",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "JOHAN",
+          "lastName": "REYESREYES",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "266370",
+          "patientName": "Sriya Sankineni",
+          "caregiverName": "ARAGONES KRISHA",
+          "providerName": "ARAGONES KRISHA",
+          "firstName": "Sriya",
+          "lastName": "Sankineni",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "208859",
+          "patientName": "Guy Villarson",
+          "caregiverName": "ARMSTRONG CARROL",
+          "providerName": "ARMSTRONG CARROL",
+          "firstName": "Guy",
+          "lastName": "Villarson",
+          "programType": "Americare Certified"
+        }
+      ]
+    },
+    "closed": {
+      "runId": "886d6a26-a989-a9d4-9e89-74f7a9bfeaef",
+      "reportKind": "closed_cases",
+      "processed": 21,
+      "succeeded": 1,
+      "skipped": 20,
+      "failed": 0,
+      "exceptions": [
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1041368 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1041368",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Lojano Jhostin Aguilar",
+            "firstName": "Lojano Jhostin",
+            "lastName": "Aguilar",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1017247 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1017247",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Matias Chuchuca",
+            "firstName": "Matias",
+            "lastName": "Chuchuca",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1028810 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1028810",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "August Collins",
+            "firstName": "August",
+            "lastName": "Collins",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=861727 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "861727",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Laith Dayoub",
+            "firstName": "Laith",
+            "lastName": "Dayoub",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1034643 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1034643",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Jilisa Duodu",
+            "firstName": "Jilisa",
+            "lastName": "Duodu",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=936926 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "936926",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Jacey Giambattista",
+            "firstName": "Jacey",
+            "lastName": "Giambattista",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1030958 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1030958",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Eahba Gillen",
+            "firstName": "Eahba",
+            "lastName": "Gillen",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=917469 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "917469",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Luna Graciani",
+            "firstName": "Luna",
+            "lastName": "Graciani",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=890408 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "890408",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Yasmine Isa",
+            "firstName": "Yasmine",
+            "lastName": "Isa",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=946227 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "946227",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Elena Kodra",
+            "firstName": "Elena",
+            "lastName": "Kodra",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1039852 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1039852",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Reign Leon",
+            "firstName": "Reign",
+            "lastName": "Leon",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1030824 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1030824",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Reign Lora",
+            "firstName": "Reign",
+            "lastName": "Lora",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=954768 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "954768",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Ella Martinez",
+            "firstName": "Ella",
+            "lastName": "Martinez",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1041254 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1041254",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Lezama Abdiel Moncada",
+            "firstName": "Lezama Abdiel",
+            "lastName": "Moncada",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=867575 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "867575",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Jr. Angel Praylow",
+            "firstName": "Jr. Angel",
+            "lastName": "Praylow",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1031334 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1031334",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Delgado Armando Santibanez",
+            "firstName": "Delgado Armando",
+            "lastName": "Santibanez",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=994762 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "994762",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Legend Stephens",
+            "firstName": "Legend",
+            "lastName": "Stephens",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=889533 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "889533",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Leo Suriel",
+            "firstName": "Leo",
+            "lastName": "Suriel",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1003255 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1003255",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Maria Tortoso",
+            "firstName": "Maria",
+            "lastName": "Tortoso",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[closed_cases] row=1042650 skipped: Early Intervention case not sent to HHA",
+          "reportKind": "closed_cases",
+          "rowId": "1042650",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Alvarez Matias Zumba",
+            "firstName": "Alvarez Matias",
+            "lastName": "Zumba",
+            "programType": "Early Intervention"
+          }
+        }
+      ],
+      "successes": [
+        {
+          "rowId": "276502",
+          "patientName": "Levi Lyonsmompremier",
+          "firstName": "Levi",
+          "lastName": "Lyonsmompremier",
+          "programType": "Americare Certified"
+        }
+      ]
+    },
+    "sessions": {
+      "runId": "886d6a26-a989-a9d4-9e89-74f7a9bfeaef",
+      "reportKind": "verified_sessions",
+      "processed": 0,
+      "succeeded": 0,
+      "skipped": 0,
+      "failed": 0,
+      "exceptions": []
+    },
+    "newServices": {
+      "runId": "886d6a26-a989-a9d4-9e89-74f7a9bfeaef",
+      "reportKind": "new_services",
+      "processed": 167,
+      "succeeded": 139,
+      "skipped": 0,
+      "failed": 28,
+      "exceptions": [
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=02891799 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+          "reportKind": "new_services",
+          "rowId": "02891799",
+          "details": {
+            "step": "upsertContract",
+            "patientExternalId": "02891799",
+            "serviceCode": "OT HC Eval",
+            "serviceCodeId": "785140",
+            "hhaServiceName": "OT SOC/ROC OASIS",
+            "programType": "Extended Home Care Therapy",
+            "patientName": "HOORIA ARSHAD",
+            "caregiverName": "Duong Trish",
+            "providerName": "Duong Trish",
+            "firstName": "HOORIA",
+            "lastName": "ARSHAD"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=258270277 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+          "reportKind": "new_services",
+          "rowId": "258270277",
+          "details": {
+            "step": "upsertContract",
+            "patientExternalId": "258270277",
+            "serviceCode": "PT HC Eval",
+            "serviceCodeId": "313582",
+            "hhaServiceName": "PT",
+            "programType": "Americare Certified",
+            "patientName": "Michael Asunto",
+            "caregiverName": "MAMANGON MARYJOYCE",
+            "providerName": "MAMANGON MARYJOYCE",
+            "firstName": "Michael",
+            "lastName": "Asunto"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=P0100012448901 step=locateOrScheduleVisit: Provider \"JOHNSON MAYA\" not found in HHA",
+          "reportKind": "new_services",
+          "rowId": "P0100012448901",
+          "details": {
+            "step": "locateOrScheduleVisit",
+            "patientExternalId": "P0100012448901",
+            "serviceCode": "OT HC Eval",
+            "serviceCodeId": "313581",
+            "hhaServiceName": "OT",
+            "programType": "Americare Certified",
+            "patientName": "RIO BARROW",
+            "caregiverName": "JOHNSON MAYA",
+            "providerName": "JOHNSON MAYA",
+            "firstName": "RIO",
+            "lastName": "BARROW"
+          }
+        },
+        {
+          "code": "unmatched_patient",
+          "message": "[new_services] row=258272396 patient not found in HHA. No HHA write attempted.",
+          "reportKind": "new_services",
+          "rowId": "258272396",
+          "details": {
+            "patientName": "MALLARD VICTOR BARTH",
+            "caregiverName": "Saini Manveer",
+            "providerName": "Saini Manveer",
+            "firstName": "MALLARD VICTOR",
+            "lastName": "BARTH",
+            "programType": "Americare Certified"
+          }
+        },
+        {
+          "code": "unmatched_patient",
+          "message": "[new_services] row=06758329 patient not found in HHA. No HHA write attempted.",
+          "reportKind": "new_services",
+          "rowId": "06758329",
+          "details": {
+            "patientName": "Victor Carrion",
+            "caregiverName": "Ahmed Kamel",
+            "providerName": "Ahmed Kamel",
+            "firstName": "Victor",
+            "lastName": "Carrion",
+            "programType": "Extended Home Care Therapy"
+          }
+        },
+        {
+          "code": "missing_field",
+          "message": "[new_services] row=NYS000000277 invalid auth mandate — frequency \"\" / times \"0\" (refusing CreatePatientAuthorization; would write Max Period = 0)",
+          "reportKind": "new_services",
+          "rowId": "NYS000000277",
+          "details": {
+            "mandateTimes": "0",
+            "patientName": "TIDEMON DOUGLAS",
+            "caregiverName": "Wu Brian",
+            "providerName": "Wu Brian",
+            "firstName": "TIDEMON",
+            "lastName": "DOUGLAS",
+            "programType": "NYS Medical Indemnity Fund Therapy"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=258270803 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+          "reportKind": "new_services",
+          "rowId": "258270803",
+          "details": {
+            "step": "upsertContract",
+            "patientExternalId": "258270803",
+            "serviceCode": "PT CHHA",
+            "serviceCodeId": "313582",
+            "hhaServiceName": "PT",
+            "programType": "Americare Certified",
+            "patientName": "FIONA DOWNS",
+            "caregiverName": "BROOKS SARAH",
+            "providerName": "BROOKS SARAH",
+            "firstName": "FIONA",
+            "lastName": "DOWNS"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=04725821 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+          "reportKind": "new_services",
+          "rowId": "04725821",
+          "details": {
+            "step": "upsertContract",
+            "patientExternalId": "04725821",
+            "serviceCode": "OT CHHA EXTENDED",
+            "serviceCodeId": "785137",
+            "hhaServiceName": "Occupational Therapy",
+            "programType": "Extended Home Care Therapy",
+            "patientName": "HELENA GALEANOCARVAJAL",
+            "caregiverName": "OGBOE BRIANA",
+            "providerName": "OGBOE BRIANA",
+            "firstName": "HELENA",
+            "lastName": "GALEANOCARVAJAL"
+          }
+        },
+        {
+          "code": "missing_field",
+          "message": "[new_services] row=NYS000001581 invalid auth mandate — frequency \"\" / times \"0\" (refusing CreatePatientAuthorization; would write Max Period = 0)",
+          "reportKind": "new_services",
+          "rowId": "NYS000001581",
+          "details": {
+            "mandateTimes": "0",
+            "patientName": "Matteo Gonzalez",
+            "caregiverName": "Fox Stacy Lynn",
+            "providerName": "Fox Stacy Lynn",
+            "firstName": "Matteo",
+            "lastName": "Gonzalez",
+            "programType": "NYS Medical Indemnity Fund Therapy"
+          }
+        },
+        {
+          "code": "unknown_service_code",
+          "message": "[new_services] row=NYS000001357 service type \"PT NYS EVAL 107\" (mapped HHA \"PT Eval 97162 107\") not found in HHA billing codes for this contract — would fail CreatePatientAuthorization (Invalid ServiceCodeID)",
+          "reportKind": "new_services",
+          "rowId": "NYS000001357",
+          "details": {
+            "serviceCode": "PT NYS EVAL 107",
+            "hhaServiceName": "PT Eval 97162 107",
+            "programType": "NYS Medical Indemnity Fund Therapy",
+            "contractId": "30204",
+            "patientName": "Aniyah Hinson",
+            "caregiverName": "Wu Brian",
+            "providerName": "Wu Brian",
+            "firstName": "Aniyah",
+            "lastName": "Hinson"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=P0700012487601 step=upsertAuthorization: CreatePatientAuthorization failed: Both Skilled And Non-Skilled Types are not allowed. (ErrorID=-78) (ServiceCodeID=313581; ProviderSoft=\"OT HC Eval\").",
+          "reportKind": "new_services",
+          "rowId": "P0700012487601",
+          "details": {
+            "step": "upsertAuthorization",
+            "patientExternalId": "P0700012487601",
+            "serviceCode": "OT HC Eval",
+            "serviceCodeId": "313581",
+            "hhaServiceName": "OT",
+            "programType": "Americare Certified",
+            "patientName": "ZARIF A HOQUE",
+            "caregiverName": "COUTARD JUNELANDE",
+            "providerName": "COUTARD JUNELANDE",
+            "firstName": "ZARIF A",
+            "lastName": "HOQUE"
+          }
+        },
+        {
+          "code": "unknown_service_code",
+          "message": "[new_services] row=04737934 service type \"PT CHHA PREF\" not found in HHA billing codes for this contract — would fail CreatePatientAuthorization (Invalid ServiceCodeID)",
+          "reportKind": "new_services",
+          "rowId": "04737934",
+          "details": {
+            "serviceCode": "PT CHHA PREF",
+            "programType": "Preferred Certified Therapy",
+            "contractId": "71792",
+            "patientName": "Landon Hsu",
+            "caregiverName": "Florendo Rhyan",
+            "providerName": "Florendo Rhyan",
+            "firstName": "Landon",
+            "lastName": "Hsu"
+          }
+        },
+        {
+          "code": "unmatched_patient",
+          "message": "[new_services] row=06768112 patient not found in HHA. No HHA write attempted.",
+          "reportKind": "new_services",
+          "rowId": "06768112",
+          "details": {
+            "patientName": "STORI JOHNSON",
+            "caregiverName": "FORTUNE JOHANA",
+            "providerName": "FORTUNE JOHANA",
+            "firstName": "STORI",
+            "lastName": "JOHNSON",
+            "programType": "Extended Home Care Therapy"
+          }
+        },
+        {
+          "code": "missing_field",
+          "message": "[new_services] row=NYS000001701 invalid auth mandate — frequency \"\" / times \"2\" (refusing CreatePatientAuthorization; would write Max Period = 0)",
+          "reportKind": "new_services",
+          "rowId": "NYS000001701",
+          "details": {
+            "mandateTimes": "2",
+            "patientName": "Sofia Kazani",
+            "caregiverName": "VELIJA ADIL",
+            "providerName": "VELIJA ADIL",
+            "firstName": "Sofia",
+            "lastName": "Kazani",
+            "programType": "NYS Medical Indemnity Fund Therapy"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=258267734 step=upsertPatient: HHA CreatePatient failed: Invalid Accepted Services are \"SLP \" (ErrorID=-411)",
+          "reportKind": "new_services",
+          "rowId": "258267734",
+          "details": {
+            "step": "upsertPatient",
+            "patientExternalId": "258267734",
+            "serviceCode": "SLP CHHA",
+            "serviceCodeId": "313583",
+            "hhaServiceName": "ST",
+            "programType": "Americare Certified",
+            "patientName": "ADAM MARTINEZ",
+            "caregiverName": "JACKSON DONNICE",
+            "providerName": "JACKSON DONNICE",
+            "firstName": "ADAM",
+            "lastName": "MARTINEZ"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=258267421 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+          "reportKind": "new_services",
+          "rowId": "258267421",
+          "details": {
+            "step": "upsertContract",
+            "patientExternalId": "258267421",
+            "serviceCode": "PT CHHA",
+            "serviceCodeId": "313582",
+            "hhaServiceName": "PT",
+            "programType": "Americare Certified",
+            "patientName": "KARLANDREW NAVELGAS",
+            "caregiverName": "RUMBAOA SHERRY",
+            "providerName": "RUMBAOA SHERRY",
+            "firstName": "KARLANDREW",
+            "lastName": "NAVELGAS"
+          }
+        },
+        {
+          "code": "missing_field",
+          "message": "[new_services] row=NYS000000430 invalid auth mandate — frequency \"\" / times \"0\" (refusing CreatePatientAuthorization; would write Max Period = 0)",
+          "reportKind": "new_services",
+          "rowId": "NYS000000430",
+          "details": {
+            "mandateTimes": "0",
+            "patientName": "Lisbeth Paulinolabra",
+            "caregiverName": "Duong Trish",
+            "providerName": "Duong Trish",
+            "firstName": "Lisbeth",
+            "lastName": "Paulinolabra",
+            "programType": "NYS Medical Indemnity Fund Therapy"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=258272446 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+          "reportKind": "new_services",
+          "rowId": "258272446",
+          "details": {
+            "step": "upsertContract",
+            "patientExternalId": "258272446",
+            "serviceCode": "PT CHHA",
+            "serviceCodeId": "313582",
+            "hhaServiceName": "PT",
+            "programType": "Americare Certified",
+            "patientName": "EDMUND PICCIUTO",
+            "caregiverName": "Hart Jennifer",
+            "providerName": "Hart Jennifer",
+            "firstName": "EDMUND",
+            "lastName": "PICCIUTO"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=258270052 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+          "reportKind": "new_services",
+          "rowId": "258270052",
+          "details": {
+            "step": "upsertContract",
+            "patientExternalId": "258270052",
+            "serviceCode": "PT CHHA",
+            "serviceCodeId": "313582",
+            "hhaServiceName": "PT",
+            "programType": "Americare Certified",
+            "patientName": "ROY-AL PORTER",
+            "caregiverName": "WALKER BRETT",
+            "providerName": "WALKER BRETT",
+            "firstName": "ROY-AL",
+            "lastName": "PORTER"
+          }
+        },
+        {
+          "code": "unknown_service_code",
+          "message": "[new_services] row=082081547101 service type \"PT HC Eval\" not found in HHA billing codes for this contract — would fail CreatePatientAuthorization (Invalid ServiceCodeID)",
+          "reportKind": "new_services",
+          "rowId": "082081547101",
+          "details": {
+            "serviceCode": "PT HC Eval",
+            "programType": "Horizon NJ",
+            "contractId": "64723",
+            "patientName": "Yehoshua Rios",
+            "caregiverName": "Fox Stacy Lynn",
+            "providerName": "Fox Stacy Lynn",
+            "firstName": "Yehoshua",
+            "lastName": "Rios"
+          }
+        },
+        {
+          "code": "unknown_service_code",
+          "message": "[new_services] row=082081547101 service type \"OT CHHA\" not found in HHA billing codes for this contract — would fail CreatePatientAuthorization (Invalid ServiceCodeID)",
+          "reportKind": "new_services",
+          "rowId": "082081547101",
+          "details": {
+            "serviceCode": "OT CHHA",
+            "programType": "Horizon NJ",
+            "contractId": "64723",
+            "patientName": "Yehoshua Rios",
+            "caregiverName": "ROBINSON ALISHA",
+            "providerName": "ROBINSON ALISHA",
+            "firstName": "Yehoshua",
+            "lastName": "Rios"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=P0800016094701 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+          "reportKind": "new_services",
+          "rowId": "P0800016094701",
+          "details": {
+            "step": "upsertContract",
+            "patientExternalId": "P0800016094701",
+            "serviceCode": "OT HC Eval",
+            "serviceCodeId": "313581",
+            "hhaServiceName": "OT",
+            "programType": "Americare Certified",
+            "patientName": "Caleb Rolon",
+            "caregiverName": "Brathwaite Sara",
+            "providerName": "Brathwaite Sara",
+            "firstName": "Caleb",
+            "lastName": "Rolon"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=P0800016094701 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+          "reportKind": "new_services",
+          "rowId": "P0800016094701",
+          "details": {
+            "step": "upsertContract",
+            "patientExternalId": "P0800016094701",
+            "serviceCode": "PT HC Eval",
+            "serviceCodeId": "313582",
+            "hhaServiceName": "PT",
+            "programType": "Americare Certified",
+            "patientName": "Caleb Rolon",
+            "caregiverName": "MAMANGON MARYJOYCE",
+            "providerName": "MAMANGON MARYJOYCE",
+            "firstName": "Caleb",
+            "lastName": "Rolon"
+          }
+        },
+        {
+          "code": "unmatched_patient",
+          "message": "[new_services] row=258272398 patient not found in HHA. No HHA write attempted.",
+          "reportKind": "new_services",
+          "rowId": "258272398",
+          "details": {
+            "patientName": "ATIF SIDDIK",
+            "caregiverName": "Duong Trish",
+            "providerName": "Duong Trish",
+            "firstName": "ATIF",
+            "lastName": "SIDDIK",
+            "programType": "Americare Certified"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=209175 step=locateOrScheduleVisit: Provider \"PASCAL ALICIA\" not found in HHA",
+          "reportKind": "new_services",
+          "rowId": "209175",
+          "details": {
+            "step": "locateOrScheduleVisit",
+            "patientExternalId": "209175",
+            "serviceCode": "SLP HC EVAL",
+            "serviceCodeId": "1087120",
+            "hhaServiceName": "SLP HC EVAL",
+            "programType": "Americare Certified",
+            "patientName": "Xai Sims",
+            "caregiverName": "PASCAL ALICIA",
+            "providerName": "PASCAL ALICIA",
+            "firstName": "Xai",
+            "lastName": "Sims"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[new_services] row=06771684 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+          "reportKind": "new_services",
+          "rowId": "06771684",
+          "details": {
+            "step": "upsertContract",
+            "patientExternalId": "06771684",
+            "serviceCode": "OT CHHA EXTENDED",
+            "serviceCodeId": "785137",
+            "hhaServiceName": "Occupational Therapy",
+            "programType": "Extended Home Care Therapy",
+            "patientName": "MARTIN SOLOMON",
+            "caregiverName": "CLEARE KAYLA",
+            "providerName": "CLEARE KAYLA",
+            "firstName": "MARTIN",
+            "lastName": "SOLOMON"
+          }
+        },
+        {
+          "code": "unmatched_patient",
+          "message": "[new_services] row=290640 patient not found in HHA. No HHA write attempted.",
+          "reportKind": "new_services",
+          "rowId": "290640",
+          "details": {
+            "patientName": "Matthew Thoma",
+            "caregiverName": "JACKSON DONNICE",
+            "providerName": "JACKSON DONNICE",
+            "firstName": "Matthew",
+            "lastName": "Thoma",
+            "programType": "Americare Certified"
+          }
+        },
+        {
+          "code": "unmatched_patient",
+          "message": "[new_services] row=WZA157W25393 patient not found in HHA. No HHA write attempted.",
+          "reportKind": "new_services",
+          "rowId": "WZA157W25393",
+          "details": {
+            "patientName": "Wolf Elizander Windwer",
+            "caregiverName": "BROOKS SARAH",
+            "providerName": "BROOKS SARAH",
+            "firstName": "Wolf Elizander",
+            "lastName": "Windwer",
+            "programType": "Empire Bluecross Blueshield Therapy"
+          }
+        }
+      ],
+      "successes": [
+        {
+          "rowId": "166448",
+          "patientName": "Marwa Abdulmateen",
+          "caregiverName": "HOROWITZ  LEAH",
+          "providerName": "HOROWITZ  LEAH",
+          "firstName": "Marwa",
+          "lastName": "Abdulmateen",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "266963",
+          "patientName": "Rumaysah Abdulmateen",
+          "caregiverName": "HOROWITZ  LEAH",
+          "providerName": "HOROWITZ  LEAH",
+          "firstName": "Rumaysah",
+          "lastName": "Abdulmateen",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258272098",
+          "patientName": "SHAHYAN ADIL",
+          "caregiverName": "WEBB BRITTANY",
+          "providerName": "WEBB BRITTANY",
+          "firstName": "SHAHYAN",
+          "lastName": "ADIL",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0100017022201",
+          "patientName": "AIJAZ ALAM",
+          "caregiverName": "CESAIRE NATALIE",
+          "providerName": "CESAIRE NATALIE",
+          "firstName": "AIJAZ",
+          "lastName": "ALAM",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0700016238901",
+          "patientName": "Fayaad Alam",
+          "caregiverName": "RAJAGOPAL BANU",
+          "providerName": "RAJAGOPAL BANU",
+          "firstName": "Fayaad",
+          "lastName": "Alam",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0700016238901",
+          "patientName": "Fayaad Alam",
+          "caregiverName": "REVELLO LEAH",
+          "providerName": "REVELLO LEAH",
+          "firstName": "Fayaad",
+          "lastName": "Alam",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0300023773201",
+          "patientName": "AYAN ALI",
+          "caregiverName": "Balkissoon Samantha",
+          "providerName": "Balkissoon Samantha",
+          "firstName": "AYAN",
+          "lastName": "ALI",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258267496",
+          "patientName": "HASAN B ALI",
+          "caregiverName": "POZO MADELINE",
+          "providerName": "POZO MADELINE",
+          "firstName": "HASAN B",
+          "lastName": "ALI",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0100007475701",
+          "patientName": "Safa Ali",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "Safa",
+          "lastName": "Ali",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258267869",
+          "patientName": "HUSAYN B ALI",
+          "caregiverName": "POZO MADELINE",
+          "providerName": "POZO MADELINE",
+          "firstName": "HUSAYN B",
+          "lastName": "ALI",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258266830",
+          "patientName": "SYEDA ALIYKHAN",
+          "caregiverName": "RUMBAOA SHERRY",
+          "providerName": "RUMBAOA SHERRY",
+          "firstName": "SYEDA",
+          "lastName": "ALIYKHAN",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "04732544",
+          "patientName": "GRETA APPEL",
+          "caregiverName": "CLEARE KAYLA",
+          "providerName": "CLEARE KAYLA",
+          "firstName": "GRETA",
+          "lastName": "APPEL",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "102661",
+          "patientName": "Camden Asare",
+          "caregiverName": "Ineson Heather",
+          "providerName": "Ineson Heather",
+          "firstName": "Camden",
+          "lastName": "Asare",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258271917",
+          "patientName": "HAYTHAM ASLAOUI",
+          "caregiverName": "EVANS MYRLANDE",
+          "providerName": "EVANS MYRLANDE",
+          "firstName": "HAYTHAM",
+          "lastName": "ASLAOUI",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "04750818",
+          "patientName": "Homecare JUNNIE AUBIN",
+          "caregiverName": "FORTUNE JOHANA",
+          "providerName": "FORTUNE JOHANA",
+          "firstName": "Homecare JUNNIE",
+          "lastName": "AUBIN",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "04750818",
+          "patientName": "Homecare JUNNIE AUBIN",
+          "caregiverName": "FORTUNE JOHANA",
+          "providerName": "FORTUNE JOHANA",
+          "firstName": "Homecare JUNNIE",
+          "lastName": "AUBIN",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "04750818",
+          "patientName": "Homecare JUNNIE AUBIN",
+          "caregiverName": "FORTUNE JOHANA",
+          "providerName": "FORTUNE JOHANA",
+          "firstName": "Homecare JUNNIE",
+          "lastName": "AUBIN",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "P0500002151101",
+          "patientName": "Samuel Ausch",
+          "caregiverName": "Scarlett Kirmika",
+          "providerName": "Scarlett Kirmika",
+          "firstName": "Samuel",
+          "lastName": "Ausch",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0100021443901",
+          "patientName": "ALEXZANDER AZOR",
+          "caregiverName": "CESAIRE NATALIE",
+          "providerName": "CESAIRE NATALIE",
+          "firstName": "ALEXZANDER",
+          "lastName": "AZOR",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0100021443901",
+          "patientName": "ALEXZANDER AZOR",
+          "caregiverName": "INNES MATTHEW",
+          "providerName": "INNES MATTHEW",
+          "firstName": "ALEXZANDER",
+          "lastName": "AZOR",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0700003456101",
+          "patientName": "Haarie Babujee",
+          "caregiverName": "RAJAGOPAL BANU",
+          "providerName": "RAJAGOPAL BANU",
+          "firstName": "Haarie",
+          "lastName": "Babujee",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0100009925701",
+          "patientName": "Nygel Baptiste",
+          "caregiverName": "Walker Shavone",
+          "providerName": "Walker Shavone",
+          "firstName": "Nygel",
+          "lastName": "Baptiste",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0300012809101",
+          "patientName": "Seth Bernstein",
+          "caregiverName": "BEAUCHAMP-FERRERO  RACHEL",
+          "providerName": "BEAUCHAMP-FERRERO  RACHEL",
+          "firstName": "Seth",
+          "lastName": "Bernstein",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "254267",
+          "patientName": "Kemuel Bethea",
+          "caregiverName": "Dixon-Allen Dionne",
+          "providerName": "Dixon-Allen Dionne",
+          "firstName": "Kemuel",
+          "lastName": "Bethea",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "254271",
+          "patientName": "Zavier Bethea",
+          "caregiverName": "Dixon-Allen Dionne",
+          "providerName": "Dixon-Allen Dionne",
+          "firstName": "Zavier",
+          "lastName": "Bethea",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "269998",
+          "patientName": "Blake Bhimraj",
+          "caregiverName": "Dixon-Allen Dionne",
+          "providerName": "Dixon-Allen Dionne",
+          "firstName": "Blake",
+          "lastName": "Bhimraj",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "02887306",
+          "patientName": "YOSSELIN BONILLABENITEZ",
+          "caregiverName": "CLEARE KAYLA",
+          "providerName": "CLEARE KAYLA",
+          "firstName": "YOSSELIN",
+          "lastName": "BONILLABENITEZ",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "258267094",
+          "patientName": "JOHN BOYLE",
+          "caregiverName": "YU PIERE",
+          "providerName": "YU PIERE",
+          "firstName": "JOHN",
+          "lastName": "BOYLE",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500001776001",
+          "patientName": "Emma Brancocciocisner",
+          "caregiverName": "Scarlett Kirmika",
+          "providerName": "Scarlett Kirmika",
+          "firstName": "Emma",
+          "lastName": "Brancocciocisner",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "283550",
+          "patientName": "William Braswell",
+          "caregiverName": "Anim Derrick",
+          "providerName": "Anim Derrick",
+          "firstName": "William",
+          "lastName": "Braswell",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "02883297",
+          "patientName": "RAMIN CHOWDHURY",
+          "caregiverName": "FORTUNE JOHANA",
+          "providerName": "FORTUNE JOHANA",
+          "firstName": "RAMIN",
+          "lastName": "CHOWDHURY",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "02883297",
+          "patientName": "RAMIN CHOWDHURY",
+          "caregiverName": "FORTUNE JOHANA",
+          "providerName": "FORTUNE JOHANA",
+          "firstName": "RAMIN",
+          "lastName": "CHOWDHURY",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "258267113",
+          "patientName": "MACKENZIE COLORADO",
+          "caregiverName": "Ahmed Kamel",
+          "providerName": "Ahmed Kamel",
+          "firstName": "MACKENZIE",
+          "lastName": "COLORADO",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258265694",
+          "patientName": "RYAN DALTON",
+          "caregiverName": "ALMANSA ELIZABETH",
+          "providerName": "ALMANSA ELIZABETH",
+          "firstName": "RYAN",
+          "lastName": "DALTON",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258268816",
+          "patientName": "RYAN I DAOUD",
+          "caregiverName": "INNES MATTHEW",
+          "providerName": "INNES MATTHEW",
+          "firstName": "RYAN I",
+          "lastName": "DAOUD",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "255288",
+          "patientName": "Richard Depaoli",
+          "caregiverName": "Anim Derrick",
+          "providerName": "Anim Derrick",
+          "firstName": "Richard",
+          "lastName": "Depaoli",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "259251",
+          "patientName": "Chloe Diaz",
+          "caregiverName": "ANDERSON KEIVA",
+          "providerName": "ANDERSON KEIVA",
+          "firstName": "Chloe",
+          "lastName": "Diaz",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "259253",
+          "patientName": "Isaac Diaz",
+          "caregiverName": "ANDERSON KEIVA",
+          "providerName": "ANDERSON KEIVA",
+          "firstName": "Isaac",
+          "lastName": "Diaz",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258269089",
+          "patientName": "Jade Diaz",
+          "caregiverName": "POZO MADELINE",
+          "providerName": "POZO MADELINE",
+          "firstName": "Jade",
+          "lastName": "Diaz",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "259250",
+          "patientName": "Naomi Diaz",
+          "caregiverName": "ANDERSON KEIVA",
+          "providerName": "ANDERSON KEIVA",
+          "firstName": "Naomi",
+          "lastName": "Diaz",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "06770830",
+          "patientName": "Adam Elhayat",
+          "caregiverName": "Ahmed Kamel",
+          "providerName": "Ahmed Kamel",
+          "firstName": "Adam",
+          "lastName": "Elhayat",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "233500",
+          "patientName": "Aayan Firnaaz",
+          "caregiverName": "Anim Derrick",
+          "providerName": "Anim Derrick",
+          "firstName": "Aayan",
+          "lastName": "Firnaaz",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "281145",
+          "patientName": "Kaileena Forbescampbell",
+          "caregiverName": "Gargano Jenna",
+          "providerName": "Gargano Jenna",
+          "firstName": "Kaileena",
+          "lastName": "Forbescampbell",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "184244",
+          "patientName": "Nicholas Foy",
+          "caregiverName": "SYMONS EMILY",
+          "providerName": "SYMONS EMILY",
+          "firstName": "Nicholas",
+          "lastName": "Foy",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258268949",
+          "patientName": "Castro XAVIER Francis",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "Castro XAVIER",
+          "lastName": "Francis",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "69437",
+          "patientName": "JEREMIAH C FRANCIS",
+          "caregiverName": "Dixon-Allen Dionne",
+          "providerName": "Dixon-Allen Dionne",
+          "firstName": "JEREMIAH C",
+          "lastName": "FRANCIS",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0100002489001",
+          "patientName": "Malka Fruchthandler",
+          "caregiverName": "Ahmed Kamel",
+          "providerName": "Ahmed Kamel",
+          "firstName": "Malka",
+          "lastName": "Fruchthandler",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "K9058033604",
+          "patientName": "Enrique Garcia",
+          "caregiverName": "SYMONS EMILY",
+          "providerName": "SYMONS EMILY",
+          "firstName": "Enrique",
+          "lastName": "Garcia",
+          "programType": "GHI THERAPY"
+        },
+        {
+          "rowId": "258267285",
+          "patientName": "GARCIA GERLYN",
+          "caregiverName": "OGBOE BRIANA",
+          "providerName": "OGBOE BRIANA",
+          "firstName": "GARCIA",
+          "lastName": "GERLYN",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "258265546",
+          "patientName": "NOAH GERMAIN",
+          "caregiverName": "BORTZ MELLISSA",
+          "providerName": "BORTZ MELLISSA",
+          "firstName": "NOAH",
+          "lastName": "GERMAIN",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "121036",
+          "patientName": "Richard Goldsmith",
+          "caregiverName": "Anim Derrick",
+          "providerName": "Anim Derrick",
+          "firstName": "Richard",
+          "lastName": "Goldsmith",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "300095",
+          "patientName": "Aliceanne Gomez",
+          "caregiverName": "ARMSTRONG CARROL",
+          "providerName": "ARMSTRONG CARROL",
+          "firstName": "Aliceanne",
+          "lastName": "Gomez",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258272485",
+          "patientName": "DYLAN GONZALEZ",
+          "caregiverName": "CALDERON  ESTEFANY",
+          "providerName": "CALDERON  ESTEFANY",
+          "firstName": "DYLAN",
+          "lastName": "GONZALEZ",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500006284201",
+          "patientName": "Layla Gordon",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "Layla",
+          "lastName": "Gordon",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500006284201",
+          "patientName": "Layla Gordon",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "Layla",
+          "lastName": "Gordon",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500006283801",
+          "patientName": "Tyler Gordon",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "Tyler",
+          "lastName": "Gordon",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500006283801",
+          "patientName": "Tyler Gordon",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "Tyler",
+          "lastName": "Gordon",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258271245",
+          "patientName": "HARRY GREER",
+          "caregiverName": "EVANS MYRLANDE",
+          "providerName": "EVANS MYRLANDE",
+          "firstName": "HARRY",
+          "lastName": "GREER",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258271504",
+          "patientName": "SUNNY GUO",
+          "caregiverName": "Saini Manveer",
+          "providerName": "Saini Manveer",
+          "firstName": "SUNNY",
+          "lastName": "GUO",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258265711",
+          "patientName": "YUNUS HAFIZDEENGUO",
+          "caregiverName": "ANDERSON KEIVA",
+          "providerName": "ANDERSON KEIVA",
+          "firstName": "YUNUS",
+          "lastName": "HAFIZDEENGUO",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258265710",
+          "patientName": "YUSUF HAFIZDEENGUO",
+          "caregiverName": "ANDERSON KEIVA",
+          "providerName": "ANDERSON KEIVA",
+          "firstName": "YUSUF",
+          "lastName": "HAFIZDEENGUO",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0100012106701",
+          "patientName": "Justice Hall",
+          "caregiverName": "WRIGHT SHAKIRAH",
+          "providerName": "WRIGHT SHAKIRAH",
+          "firstName": "Justice",
+          "lastName": "Hall",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0100012106301",
+          "patientName": "Milez Hall",
+          "caregiverName": "WRIGHT SHAKIRAH",
+          "providerName": "WRIGHT SHAKIRAH",
+          "firstName": "Milez",
+          "lastName": "Hall",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "GR53839D",
+          "patientName": "Seamus HEANEY",
+          "caregiverName": "FORTUNE JOHANA",
+          "providerName": "FORTUNE JOHANA",
+          "firstName": "Seamus",
+          "lastName": "HEANEY",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "33726",
+          "patientName": "Luke Hernandez",
+          "caregiverName": "WALKER BRETT",
+          "providerName": "WALKER BRETT",
+          "firstName": "Luke",
+          "lastName": "Hernandez",
+          "programType": "Royal Care Certified Services - Therapy"
+        },
+        {
+          "rowId": "258269085",
+          "patientName": "JOEL HERNANDEZMORENO",
+          "caregiverName": "POZO MADELINE",
+          "providerName": "POZO MADELINE",
+          "firstName": "JOEL",
+          "lastName": "HERNANDEZMORENO",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0300004062101",
+          "patientName": "Yi Hou",
+          "caregiverName": "NAVELGAS MARIA THERESA",
+          "providerName": "NAVELGAS MARIA THERESA",
+          "firstName": "Yi",
+          "lastName": "Hou",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258266878",
+          "patientName": "TRISTAN HU",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "TRISTAN",
+          "lastName": "HU",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258267431",
+          "patientName": "HASHIM IMRAN",
+          "caregiverName": "FORTUNE JOHANA",
+          "providerName": "FORTUNE JOHANA",
+          "firstName": "HASHIM",
+          "lastName": "IMRAN",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "RCC00004951601",
+          "patientName": "ZAEEM IQBAL",
+          "caregiverName": "BEAUCHAMP-FERRERO  RACHEL",
+          "providerName": "BEAUCHAMP-FERRERO  RACHEL",
+          "firstName": "ZAEEM",
+          "lastName": "IQBAL",
+          "programType": "Royal Care Certified Services - Therapy"
+        },
+        {
+          "rowId": "212259",
+          "patientName": "Mehedi Islam",
+          "caregiverName": "ARMSTRONG CARROL",
+          "providerName": "ARMSTRONG CARROL",
+          "firstName": "Mehedi",
+          "lastName": "Islam",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "213099",
+          "patientName": "Ahsan Jallim",
+          "caregiverName": "Dixon-Allen Dionne",
+          "providerName": "Dixon-Allen Dionne",
+          "firstName": "Ahsan",
+          "lastName": "Jallim",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "U25136507",
+          "patientName": "Justin Joseph",
+          "caregiverName": "Balkissoon Samantha",
+          "providerName": "Balkissoon Samantha",
+          "firstName": "Justin",
+          "lastName": "Joseph",
+          "programType": "Cigna Therapy Services"
+        },
+        {
+          "rowId": "258270512",
+          "patientName": "Reet Kaur",
+          "caregiverName": "BOYCE TRUDY",
+          "providerName": "BOYCE TRUDY",
+          "firstName": "Reet",
+          "lastName": "Kaur",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "267026",
+          "patientName": "Mujahid Kenchi",
+          "caregiverName": "BOYCE TRUDY",
+          "providerName": "BOYCE TRUDY",
+          "firstName": "Mujahid",
+          "lastName": "Kenchi",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "202568",
+          "patientName": "Daisy Kilpatrick",
+          "caregiverName": "SUTTER EMILY",
+          "providerName": "SUTTER EMILY",
+          "firstName": "Daisy",
+          "lastName": "Kilpatrick",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "202570",
+          "patientName": "Poppy Kilpatrick",
+          "caregiverName": "SUTTER EMILY",
+          "providerName": "SUTTER EMILY",
+          "firstName": "Poppy",
+          "lastName": "Kilpatrick",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "04745208",
+          "patientName": "MANKAD LALJIJR",
+          "caregiverName": "BROOKS SARAH",
+          "providerName": "BROOKS SARAH",
+          "firstName": "MANKAD",
+          "lastName": "LALJIJR",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "258265977",
+          "patientName": "ADASA LAMY",
+          "caregiverName": "SAGESSE TIFFANY",
+          "providerName": "SAGESSE TIFFANY",
+          "firstName": "ADASA",
+          "lastName": "LAMY",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "235915",
+          "patientName": "Kyle Lin",
+          "caregiverName": "PINKHAS MELANIE",
+          "providerName": "PINKHAS MELANIE",
+          "firstName": "Kyle",
+          "lastName": "Lin",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0300009945601",
+          "patientName": "Enming Liu",
+          "caregiverName": "NAVELGAS MARIA THERESA",
+          "providerName": "NAVELGAS MARIA THERESA",
+          "firstName": "Enming",
+          "lastName": "Liu",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0300005152501",
+          "patientName": "Gavin Madelar",
+          "caregiverName": "NAVELGAS MARIA THERESA",
+          "providerName": "NAVELGAS MARIA THERESA",
+          "firstName": "Gavin",
+          "lastName": "Madelar",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0300005152501",
+          "patientName": "Gavin Madelar",
+          "caregiverName": "NAVELGAS MARIA THERESA",
+          "providerName": "NAVELGAS MARIA THERESA",
+          "firstName": "Gavin",
+          "lastName": "Madelar",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258265072",
+          "patientName": "Zahir Mahmud",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "Zahir",
+          "lastName": "Mahmud",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500004639801",
+          "patientName": "Zaida Mahmud",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "Zaida",
+          "lastName": "Mahmud",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500004639801",
+          "patientName": "Zaida Mahmud",
+          "caregiverName": "Scarlett Kirmika",
+          "providerName": "Scarlett Kirmika",
+          "firstName": "Zaida",
+          "lastName": "Mahmud",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500004640501",
+          "patientName": "Zain Mahmud",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "Zain",
+          "lastName": "Mahmud",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500004640501",
+          "patientName": "Zain Mahmud",
+          "caregiverName": "Scarlett Kirmika",
+          "providerName": "Scarlett Kirmika",
+          "firstName": "Zain",
+          "lastName": "Mahmud",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500010272901",
+          "patientName": "Zayan Mahmud",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "Zayan",
+          "lastName": "Mahmud",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0500010272901",
+          "patientName": "Zayan Mahmud",
+          "caregiverName": "Scarlett Kirmika",
+          "providerName": "Scarlett Kirmika",
+          "firstName": "Zayan",
+          "lastName": "Mahmud",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "K9032011803",
+          "patientName": "Lauren Manganelli",
+          "caregiverName": "ROSARIO MARILYN",
+          "providerName": "ROSARIO MARILYN",
+          "firstName": "Lauren",
+          "lastName": "Manganelli",
+          "programType": "GHI THERAPY"
+        },
+        {
+          "rowId": "258270035",
+          "patientName": "ABIGAIL MAZZULLO",
+          "caregiverName": "DELLORUSSO ALESSANDRA",
+          "providerName": "DELLORUSSO ALESSANDRA",
+          "firstName": "ABIGAIL",
+          "lastName": "MAZZULLO",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "04724192",
+          "patientName": "JAIRO M MENDOZA",
+          "caregiverName": "RAJAGOPAL BANU",
+          "providerName": "RAJAGOPAL BANU",
+          "firstName": "JAIRO M",
+          "lastName": "MENDOZA",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "04724192",
+          "patientName": "JAIRO M MENDOZA",
+          "caregiverName": "RAJAGOPAL BANU",
+          "providerName": "RAJAGOPAL BANU",
+          "firstName": "JAIRO M",
+          "lastName": "MENDOZA",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "258267400",
+          "patientName": "JULIANA MENDOZAFUENTES",
+          "caregiverName": "RAJAGOPAL BANU",
+          "providerName": "RAJAGOPAL BANU",
+          "firstName": "JULIANA",
+          "lastName": "MENDOZAFUENTES",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "P0100002551601",
+          "patientName": "Brandon Metzvanderpool",
+          "caregiverName": "Scarlett Kirmika",
+          "providerName": "Scarlett Kirmika",
+          "firstName": "Brandon",
+          "lastName": "Metzvanderpool",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258267773",
+          "patientName": "SEBA MOHAMED",
+          "caregiverName": "PERETZ DEBRA",
+          "providerName": "PERETZ DEBRA",
+          "firstName": "SEBA",
+          "lastName": "MOHAMED",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258271735",
+          "patientName": "AYDEN MOK",
+          "caregiverName": "Saini Manveer",
+          "providerName": "Saini Manveer",
+          "firstName": "AYDEN",
+          "lastName": "MOK",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258266227",
+          "patientName": "LUCAS MORGAN",
+          "caregiverName": "Saini Manveer",
+          "providerName": "Saini Manveer",
+          "firstName": "LUCAS",
+          "lastName": "MORGAN",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0300016449601",
+          "patientName": "Christopher Morrison",
+          "caregiverName": "SMARTT TYRONE",
+          "providerName": "SMARTT TYRONE",
+          "firstName": "Christopher",
+          "lastName": "Morrison",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258265631",
+          "patientName": "JACOB MUNGUIA",
+          "caregiverName": "ALMANSA ELIZABETH",
+          "providerName": "ALMANSA ELIZABETH",
+          "firstName": "JACOB",
+          "lastName": "MUNGUIA",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258268718",
+          "patientName": "JOSEPH J NAUTAROBLES",
+          "caregiverName": "REVELLO LEAH",
+          "providerName": "REVELLO LEAH",
+          "firstName": "JOSEPH J",
+          "lastName": "NAUTAROBLES",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258271580",
+          "patientName": "JOSHUA NWOKO",
+          "caregiverName": "WEBB BRITTANY",
+          "providerName": "WEBB BRITTANY",
+          "firstName": "JOSHUA",
+          "lastName": "NWOKO",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "56885",
+          "patientName": "Arthur Okun",
+          "caregiverName": "Anim Derrick",
+          "providerName": "Anim Derrick",
+          "firstName": "Arthur",
+          "lastName": "Okun",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258271581",
+          "patientName": "SHIVE PAUL",
+          "caregiverName": "WEBB BRITTANY",
+          "providerName": "WEBB BRITTANY",
+          "firstName": "SHIVE",
+          "lastName": "PAUL",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258266081",
+          "patientName": "HERNANDEZ JAYLIN DAR PEREZ",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "HERNANDEZ JAYLIN DAR",
+          "lastName": "PEREZ",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "268744",
+          "patientName": "Aamara Peters",
+          "caregiverName": "BOYCE TRUDY",
+          "providerName": "BOYCE TRUDY",
+          "firstName": "Aamara",
+          "lastName": "Peters",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "228279",
+          "patientName": "Adrianna Pogil",
+          "caregiverName": "SUTTER EMILY",
+          "providerName": "SUTTER EMILY",
+          "firstName": "Adrianna",
+          "lastName": "Pogil",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258272147",
+          "patientName": "EREN PRUTHI",
+          "caregiverName": "SIMETI ALEXANDRA",
+          "providerName": "SIMETI ALEXANDRA",
+          "firstName": "EREN",
+          "lastName": "PRUTHI",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258267530",
+          "patientName": "ZARETH QUIZHPILEMA",
+          "caregiverName": "Ahmed Kamel",
+          "providerName": "Ahmed Kamel",
+          "firstName": "ZARETH",
+          "lastName": "QUIZHPILEMA",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "02886248",
+          "patientName": "Auraha Rahman",
+          "caregiverName": "Balkissoon Samantha",
+          "providerName": "Balkissoon Samantha",
+          "firstName": "Auraha",
+          "lastName": "Rahman",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258271958",
+          "patientName": "AHMED RAIYAN",
+          "caregiverName": "FORTUNE JOHANA",
+          "providerName": "FORTUNE JOHANA",
+          "firstName": "AHMED",
+          "lastName": "RAIYAN",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258271067",
+          "patientName": "YSABELLA RAMIREZ",
+          "caregiverName": "ROSARIO MARILYN",
+          "providerName": "ROSARIO MARILYN",
+          "firstName": "YSABELLA",
+          "lastName": "RAMIREZ",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258270635",
+          "patientName": "DILLAN Reid",
+          "caregiverName": "FORTUNE JOHANA",
+          "providerName": "FORTUNE JOHANA",
+          "firstName": "DILLAN",
+          "lastName": "Reid",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258272515",
+          "patientName": "JOHAN REYESREYES",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "JOHAN",
+          "lastName": "REYESREYES",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258269804",
+          "patientName": "OTNIEL RIVERA",
+          "caregiverName": "POZO MADELINE",
+          "providerName": "POZO MADELINE",
+          "firstName": "OTNIEL",
+          "lastName": "RIVERA",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0300023742401",
+          "patientName": "CARLOS ROBLES",
+          "caregiverName": "PINKHAS MELANIE",
+          "providerName": "PINKHAS MELANIE",
+          "firstName": "CARLOS",
+          "lastName": "ROBLES",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0300023742401",
+          "patientName": "CARLOS ROBLES",
+          "caregiverName": "PINKHAS MELANIE",
+          "providerName": "PINKHAS MELANIE",
+          "firstName": "CARLOS",
+          "lastName": "ROBLES",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258271967",
+          "patientName": "RYAN ROSOW",
+          "caregiverName": "FORTUNE JOHANA",
+          "providerName": "FORTUNE JOHANA",
+          "firstName": "RYAN",
+          "lastName": "ROSOW",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0300009381401",
+          "patientName": "Michael Rubio",
+          "caregiverName": "Martin Karena",
+          "providerName": "Martin Karena",
+          "firstName": "Michael",
+          "lastName": "Rubio",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "266370",
+          "patientName": "Sriya Sankineni",
+          "caregiverName": "ARAGONES KRISHA",
+          "providerName": "ARAGONES KRISHA",
+          "firstName": "Sriya",
+          "lastName": "Sankineni",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0100018368901",
+          "patientName": "PRESTON SANTAMARIA",
+          "caregiverName": "SYMONS EMILY",
+          "providerName": "SYMONS EMILY",
+          "firstName": "PRESTON",
+          "lastName": "SANTAMARIA",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "295036",
+          "patientName": "Theodore Sattler",
+          "caregiverName": "Anim Derrick",
+          "providerName": "Anim Derrick",
+          "firstName": "Theodore",
+          "lastName": "Sattler",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "271061",
+          "patientName": "Melissa Seherish",
+          "caregiverName": "BOYCE TRUDY",
+          "providerName": "BOYCE TRUDY",
+          "firstName": "Melissa",
+          "lastName": "Seherish",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "271061",
+          "patientName": "Melissa Seherish",
+          "caregiverName": "BOYCE TRUDY",
+          "providerName": "BOYCE TRUDY",
+          "firstName": "Melissa",
+          "lastName": "Seherish",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258271653",
+          "patientName": "SIKDER SHAFAT",
+          "caregiverName": "OGBOE BRIANA",
+          "providerName": "OGBOE BRIANA",
+          "firstName": "SIKDER",
+          "lastName": "SHAFAT",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258270633",
+          "patientName": "Keyan Sharif",
+          "caregiverName": "BOYCE TRUDY",
+          "providerName": "BOYCE TRUDY",
+          "firstName": "Keyan",
+          "lastName": "Sharif",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258268727",
+          "patientName": "Freddie Skinner",
+          "caregiverName": "BROOKS SARAH",
+          "providerName": "BROOKS SARAH",
+          "firstName": "Freddie",
+          "lastName": "Skinner",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "230973",
+          "patientName": "Akhri Smith",
+          "caregiverName": "Dixon-Allen Dionne",
+          "providerName": "Dixon-Allen Dionne",
+          "firstName": "Akhri",
+          "lastName": "Smith",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258272145",
+          "patientName": "LEVI SMITH",
+          "caregiverName": "SIMETI ALEXANDRA",
+          "providerName": "SIMETI ALEXANDRA",
+          "firstName": "LEVI",
+          "lastName": "SMITH",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258267495",
+          "patientName": "ETHAN R SOH",
+          "caregiverName": "POZO MADELINE",
+          "providerName": "POZO MADELINE",
+          "firstName": "ETHAN R",
+          "lastName": "SOH",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258266431",
+          "patientName": "ALIZA TOLBERT",
+          "caregiverName": "LEUNG KA MEI",
+          "providerName": "LEUNG KA MEI",
+          "firstName": "ALIZA",
+          "lastName": "TOLBERT",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "3HZN22549700",
+          "patientName": "Felice Vazquez",
+          "caregiverName": "FERMANO ANDREW",
+          "providerName": "FERMANO ANDREW",
+          "firstName": "Felice",
+          "lastName": "Vazquez",
+          "programType": "Horizon Commercial NJ Therapy"
+        },
+        {
+          "rowId": "258267146",
+          "patientName": "MATTHIAS VELASQUEZ",
+          "caregiverName": "BOYCE TRUDY",
+          "providerName": "BOYCE TRUDY",
+          "firstName": "MATTHIAS",
+          "lastName": "VELASQUEZ",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258267147",
+          "patientName": "NATHANIEL VELASQUEZ",
+          "caregiverName": "BOYCE TRUDY",
+          "providerName": "BOYCE TRUDY",
+          "firstName": "NATHANIEL",
+          "lastName": "VELASQUEZ",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "144037",
+          "patientName": "Elijah Vidale",
+          "caregiverName": "Dixon-Allen Dionne",
+          "providerName": "Dixon-Allen Dionne",
+          "firstName": "Elijah",
+          "lastName": "Vidale",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "273289",
+          "patientName": "KARTER WILLIAMS",
+          "caregiverName": "Raiford April",
+          "providerName": "Raiford April",
+          "firstName": "KARTER",
+          "lastName": "WILLIAMS",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "273283",
+          "patientName": "Khloe Williams",
+          "caregiverName": "Raiford April",
+          "providerName": "Raiford April",
+          "firstName": "Khloe",
+          "lastName": "Williams",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258269494",
+          "patientName": "Leo Xia",
+          "caregiverName": "Shah Nikita",
+          "providerName": "Shah Nikita",
+          "firstName": "Leo",
+          "lastName": "Xia",
+          "programType": "Americare Certified"
+        }
+      ]
+    },
+    "discharge": {
+      "runId": "886d6a26-a989-a9d4-9e89-74f7a9bfeaef",
+      "reportKind": "discharge_service",
+      "processed": 17,
+      "succeeded": 7,
+      "skipped": 7,
+      "failed": 3,
+      "exceptions": [
+        {
+          "code": "hha_api_error",
+          "message": "[discharge_service] row=258272396 step=dischargeService: HHA patient not found for caseId=\"258272396\" — cannot discharge safely",
+          "reportKind": "discharge_service",
+          "rowId": "258272396",
+          "details": {
+            "step": "dischargeService",
+            "serviceCode": "OT HC Eval",
+            "startDate": "08/26/2026",
+            "dischargeDate": "09/15/2026",
+            "patientName": "MALLARD VICTOR BARTH",
+            "firstName": "MALLARD VICTOR",
+            "lastName": "BARTH",
+            "programType": "Americare Certified"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[discharge_service] row=282389 step=dischargeService: Ambiguous HHA discharge: patient has 1 active placement(s); no HHA placement matches report Service Type \"SLP HC EVAL\" / Service Begin Date \"06/23/2026\". Coordinator: verify both fields match the active service line in HHA exactly.",
+          "reportKind": "discharge_service",
+          "rowId": "282389",
+          "details": {
+            "step": "dischargeService",
+            "serviceCode": "SLP HC EVAL",
+            "startDate": "06/23/2026",
+            "dischargeDate": "09/15/2026",
+            "patientName": "Jaxxon Godbee",
+            "firstName": "Jaxxon",
+            "lastName": "Godbee",
+            "programType": "Americare Certified"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[discharge_service] row=1029641 skipped: Early Intervention not sent to HHA",
+          "reportKind": "discharge_service",
+          "rowId": "1029641",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Sloan Greiner",
+            "firstName": "Sloan",
+            "lastName": "Greiner",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "hha_api_error",
+          "message": "[discharge_service] row=04737934 step=dischargeService: Ambiguous HHA discharge: patient has 1 active placement(s); no HHA placement matches report Service Type \"PT HC Eval\" / Service Begin Date \"09/03/2026\". Coordinator: verify both fields match the active service line in HHA exactly.",
+          "reportKind": "discharge_service",
+          "rowId": "04737934",
+          "details": {
+            "step": "dischargeService",
+            "serviceCode": "PT HC Eval",
+            "startDate": "09/03/2026",
+            "dischargeDate": "09/15/2026",
+            "patientName": "Landon Hsu",
+            "firstName": "Landon",
+            "lastName": "Hsu",
+            "programType": "Preferred Certified Therapy"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[discharge_service] row=1052849 skipped: Early Intervention not sent to HHA",
+          "reportKind": "discharge_service",
+          "rowId": "1052849",
+          "details": {
+            "triageReason": "early_intervention",
+            "patientName": "Andrea Obaje",
+            "firstName": "Andrea",
+            "lastName": "Obaje",
+            "programType": "Early Intervention"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[discharge_service] row=258271503 skipped: already discharged / no active HHA placements",
+          "reportKind": "discharge_service",
+          "rowId": "258271503",
+          "details": {
+            "triageReason": "already_discharged",
+            "serviceCode": "OT HC Eval",
+            "startDate": "08/09/2026",
+            "dischargeDate": "09/15/2026",
+            "patientName": "MADISON OLIVER",
+            "firstName": "MADISON",
+            "lastName": "OLIVER",
+            "programType": "Americare Certified"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[discharge_service] row=258271503 skipped: already discharged / no active HHA placements",
+          "reportKind": "discharge_service",
+          "rowId": "258271503",
+          "details": {
+            "triageReason": "already_discharged",
+            "serviceCode": "OT HC Eval",
+            "startDate": "09/09/2026",
+            "dischargeDate": "09/15/2026",
+            "patientName": "MADISON OLIVER",
+            "firstName": "MADISON",
+            "lastName": "OLIVER",
+            "programType": "Americare Certified"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[discharge_service] row=258270052 skipped: already discharged / no active HHA placements",
+          "reportKind": "discharge_service",
+          "rowId": "258270052",
+          "details": {
+            "triageReason": "already_discharged",
+            "serviceCode": "PT HC Eval",
+            "startDate": "08/01/2026",
+            "dischargeDate": "09/15/2026",
+            "patientName": "ROY-AL PORTER",
+            "firstName": "ROY-AL",
+            "lastName": "PORTER",
+            "programType": "Americare Certified"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[discharge_service] row=258270052 skipped: already discharged / no active HHA placements",
+          "reportKind": "discharge_service",
+          "rowId": "258270052",
+          "details": {
+            "triageReason": "already_discharged",
+            "serviceCode": "PT HC Eval",
+            "startDate": "09/01/2026",
+            "dischargeDate": "09/15/2026",
+            "patientName": "ROY-AL PORTER",
+            "firstName": "ROY-AL",
+            "lastName": "PORTER",
+            "programType": "Americare Certified"
+          }
+        },
+        {
+          "code": "skipped_by_rule",
+          "message": "[discharge_service] row=P0800016094701 skipped: already discharged / no active HHA placements",
+          "reportKind": "discharge_service",
+          "rowId": "P0800016094701",
+          "details": {
+            "triageReason": "already_discharged",
+            "serviceCode": "PT HC Eval",
+            "startDate": "08/10/2026",
+            "dischargeDate": "09/15/2026",
+            "patientName": "Caleb Rolon",
+            "firstName": "Caleb",
+            "lastName": "Rolon",
+            "programType": "Americare Certified"
+          }
+        }
+      ],
+      "successes": [
+        {
+          "rowId": "02891799",
+          "patientName": "HOORIA ARSHAD",
+          "firstName": "HOORIA",
+          "lastName": "ARSHAD",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "04725821",
+          "patientName": "HELENA GALEANOCARVAJAL",
+          "firstName": "HELENA",
+          "lastName": "GALEANOCARVAJAL",
+          "programType": "Extended Home Care Therapy"
+        },
+        {
+          "rowId": "258271503",
+          "patientName": "MADISON OLIVER",
+          "firstName": "MADISON",
+          "lastName": "OLIVER",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258272446",
+          "patientName": "EDMUND PICCIUTO",
+          "firstName": "EDMUND",
+          "lastName": "PICCIUTO",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "258270052",
+          "patientName": "ROY-AL PORTER",
+          "firstName": "ROY-AL",
+          "lastName": "PORTER",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "P0800016094701",
+          "patientName": "Caleb Rolon",
+          "firstName": "Caleb",
+          "lastName": "Rolon",
+          "programType": "Americare Certified"
+        },
+        {
+          "rowId": "06771684",
+          "patientName": "MARTIN SOLOMON",
+          "firstName": "MARTIN",
+          "lastName": "SOLOMON",
+          "programType": "Extended Home Care Therapy"
+        }
+      ]
+    }
+  },
+  "exceptions": [
+    {
+      "code": "skipped_by_rule",
+      "message": "[opened_cases] row=RCC00004951601 skipped: additional Gluck service line (OT CHHA begin 11/03/2025) — open child once; historical periods are not re-opened from Gluck (use new service for new begins)",
+      "reportKind": "opened_cases",
+      "rowId": "RCC00004951601",
+      "details": {
+        "triageReason": "gluck_historical_service_line",
+        "serviceCode": "OT CHHA",
+        "startDate": "11/03/2025",
+        "intakeDate": "09/15/2026",
+        "patientName": "ZAEEM IQBAL",
+        "caregiverName": "ARMSTRONG CARROL",
+        "providerName": "ARMSTRONG CARROL",
+        "firstName": "ZAEEM",
+        "lastName": "IQBAL",
+        "programType": "Royal Care Certified Services - Therapy"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[opened_cases] row=RCC00004951601 skipped: additional Gluck service line (OT CHHA begin 11/23/2025) — open child once; historical periods are not re-opened from Gluck (use new service for new begins)",
+      "reportKind": "opened_cases",
+      "rowId": "RCC00004951601",
+      "details": {
+        "triageReason": "gluck_historical_service_line",
+        "serviceCode": "OT CHHA",
+        "startDate": "11/23/2025",
+        "intakeDate": "09/15/2026",
+        "patientName": "ZAEEM IQBAL",
+        "caregiverName": "ARMSTRONG CARROL",
+        "providerName": "ARMSTRONG CARROL",
+        "firstName": "ZAEEM",
+        "lastName": "IQBAL",
+        "programType": "Royal Care Certified Services - Therapy"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[opened_cases] row=RCC00004951601 skipped: additional Gluck service line (OT HC Eval begin 10/29/2025) — open child once; historical periods are not re-opened from Gluck (use new service for new begins)",
+      "reportKind": "opened_cases",
+      "rowId": "RCC00004951601",
+      "details": {
+        "triageReason": "gluck_historical_service_line",
+        "serviceCode": "OT HC Eval",
+        "startDate": "10/29/2025",
+        "intakeDate": "09/15/2026",
+        "patientName": "ZAEEM IQBAL",
+        "caregiverName": "ARMSTRONG CARROL",
+        "providerName": "ARMSTRONG CARROL",
+        "firstName": "ZAEEM",
+        "lastName": "IQBAL",
+        "programType": "Royal Care Certified Services - Therapy"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=02891799 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+      "reportKind": "new_services",
+      "rowId": "02891799",
+      "details": {
+        "step": "upsertContract",
+        "patientExternalId": "02891799",
+        "serviceCode": "OT HC Eval",
+        "serviceCodeId": "785140",
+        "hhaServiceName": "OT SOC/ROC OASIS",
+        "programType": "Extended Home Care Therapy",
+        "patientName": "HOORIA ARSHAD",
+        "caregiverName": "Duong Trish",
+        "providerName": "Duong Trish",
+        "firstName": "HOORIA",
+        "lastName": "ARSHAD"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=258270277 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+      "reportKind": "new_services",
+      "rowId": "258270277",
+      "details": {
+        "step": "upsertContract",
+        "patientExternalId": "258270277",
+        "serviceCode": "PT HC Eval",
+        "serviceCodeId": "313582",
+        "hhaServiceName": "PT",
+        "programType": "Americare Certified",
+        "patientName": "Michael Asunto",
+        "caregiverName": "MAMANGON MARYJOYCE",
+        "providerName": "MAMANGON MARYJOYCE",
+        "firstName": "Michael",
+        "lastName": "Asunto"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=P0100012448901 step=locateOrScheduleVisit: Provider \"JOHNSON MAYA\" not found in HHA",
+      "reportKind": "new_services",
+      "rowId": "P0100012448901",
+      "details": {
+        "step": "locateOrScheduleVisit",
+        "patientExternalId": "P0100012448901",
+        "serviceCode": "OT HC Eval",
+        "serviceCodeId": "313581",
+        "hhaServiceName": "OT",
+        "programType": "Americare Certified",
+        "patientName": "RIO BARROW",
+        "caregiverName": "JOHNSON MAYA",
+        "providerName": "JOHNSON MAYA",
+        "firstName": "RIO",
+        "lastName": "BARROW"
+      }
+    },
+    {
+      "code": "unmatched_patient",
+      "message": "[new_services] row=258272396 patient not found in HHA. No HHA write attempted.",
+      "reportKind": "new_services",
+      "rowId": "258272396",
+      "details": {
+        "patientName": "MALLARD VICTOR BARTH",
+        "caregiverName": "Saini Manveer",
+        "providerName": "Saini Manveer",
+        "firstName": "MALLARD VICTOR",
+        "lastName": "BARTH",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "unmatched_patient",
+      "message": "[new_services] row=06758329 patient not found in HHA. No HHA write attempted.",
+      "reportKind": "new_services",
+      "rowId": "06758329",
+      "details": {
+        "patientName": "Victor Carrion",
+        "caregiverName": "Ahmed Kamel",
+        "providerName": "Ahmed Kamel",
+        "firstName": "Victor",
+        "lastName": "Carrion",
+        "programType": "Extended Home Care Therapy"
+      }
+    },
+    {
+      "code": "missing_field",
+      "message": "[new_services] row=NYS000000277 invalid auth mandate — frequency \"\" / times \"0\" (refusing CreatePatientAuthorization; would write Max Period = 0)",
+      "reportKind": "new_services",
+      "rowId": "NYS000000277",
+      "details": {
+        "mandateTimes": "0",
+        "patientName": "TIDEMON DOUGLAS",
+        "caregiverName": "Wu Brian",
+        "providerName": "Wu Brian",
+        "firstName": "TIDEMON",
+        "lastName": "DOUGLAS",
+        "programType": "NYS Medical Indemnity Fund Therapy"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=258270803 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+      "reportKind": "new_services",
+      "rowId": "258270803",
+      "details": {
+        "step": "upsertContract",
+        "patientExternalId": "258270803",
+        "serviceCode": "PT CHHA",
+        "serviceCodeId": "313582",
+        "hhaServiceName": "PT",
+        "programType": "Americare Certified",
+        "patientName": "FIONA DOWNS",
+        "caregiverName": "BROOKS SARAH",
+        "providerName": "BROOKS SARAH",
+        "firstName": "FIONA",
+        "lastName": "DOWNS"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=04725821 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+      "reportKind": "new_services",
+      "rowId": "04725821",
+      "details": {
+        "step": "upsertContract",
+        "patientExternalId": "04725821",
+        "serviceCode": "OT CHHA EXTENDED",
+        "serviceCodeId": "785137",
+        "hhaServiceName": "Occupational Therapy",
+        "programType": "Extended Home Care Therapy",
+        "patientName": "HELENA GALEANOCARVAJAL",
+        "caregiverName": "OGBOE BRIANA",
+        "providerName": "OGBOE BRIANA",
+        "firstName": "HELENA",
+        "lastName": "GALEANOCARVAJAL"
+      }
+    },
+    {
+      "code": "missing_field",
+      "message": "[new_services] row=NYS000001581 invalid auth mandate — frequency \"\" / times \"0\" (refusing CreatePatientAuthorization; would write Max Period = 0)",
+      "reportKind": "new_services",
+      "rowId": "NYS000001581",
+      "details": {
+        "mandateTimes": "0",
+        "patientName": "Matteo Gonzalez",
+        "caregiverName": "Fox Stacy Lynn",
+        "providerName": "Fox Stacy Lynn",
+        "firstName": "Matteo",
+        "lastName": "Gonzalez",
+        "programType": "NYS Medical Indemnity Fund Therapy"
+      }
+    },
+    {
+      "code": "unknown_service_code",
+      "message": "[new_services] row=NYS000001357 service type \"PT NYS EVAL 107\" (mapped HHA \"PT Eval 97162 107\") not found in HHA billing codes for this contract — would fail CreatePatientAuthorization (Invalid ServiceCodeID)",
+      "reportKind": "new_services",
+      "rowId": "NYS000001357",
+      "details": {
+        "serviceCode": "PT NYS EVAL 107",
+        "hhaServiceName": "PT Eval 97162 107",
+        "programType": "NYS Medical Indemnity Fund Therapy",
+        "contractId": "30204",
+        "patientName": "Aniyah Hinson",
+        "caregiverName": "Wu Brian",
+        "providerName": "Wu Brian",
+        "firstName": "Aniyah",
+        "lastName": "Hinson"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=P0700012487601 step=upsertAuthorization: CreatePatientAuthorization failed: Both Skilled And Non-Skilled Types are not allowed. (ErrorID=-78) (ServiceCodeID=313581; ProviderSoft=\"OT HC Eval\").",
+      "reportKind": "new_services",
+      "rowId": "P0700012487601",
+      "details": {
+        "step": "upsertAuthorization",
+        "patientExternalId": "P0700012487601",
+        "serviceCode": "OT HC Eval",
+        "serviceCodeId": "313581",
+        "hhaServiceName": "OT",
+        "programType": "Americare Certified",
+        "patientName": "ZARIF A HOQUE",
+        "caregiverName": "COUTARD JUNELANDE",
+        "providerName": "COUTARD JUNELANDE",
+        "firstName": "ZARIF A",
+        "lastName": "HOQUE"
+      }
+    },
+    {
+      "code": "unknown_service_code",
+      "message": "[new_services] row=04737934 service type \"PT CHHA PREF\" not found in HHA billing codes for this contract — would fail CreatePatientAuthorization (Invalid ServiceCodeID)",
+      "reportKind": "new_services",
+      "rowId": "04737934",
+      "details": {
+        "serviceCode": "PT CHHA PREF",
+        "programType": "Preferred Certified Therapy",
+        "contractId": "71792",
+        "patientName": "Landon Hsu",
+        "caregiverName": "Florendo Rhyan",
+        "providerName": "Florendo Rhyan",
+        "firstName": "Landon",
+        "lastName": "Hsu"
+      }
+    },
+    {
+      "code": "unmatched_patient",
+      "message": "[new_services] row=06768112 patient not found in HHA. No HHA write attempted.",
+      "reportKind": "new_services",
+      "rowId": "06768112",
+      "details": {
+        "patientName": "STORI JOHNSON",
+        "caregiverName": "FORTUNE JOHANA",
+        "providerName": "FORTUNE JOHANA",
+        "firstName": "STORI",
+        "lastName": "JOHNSON",
+        "programType": "Extended Home Care Therapy"
+      }
+    },
+    {
+      "code": "missing_field",
+      "message": "[new_services] row=NYS000001701 invalid auth mandate — frequency \"\" / times \"2\" (refusing CreatePatientAuthorization; would write Max Period = 0)",
+      "reportKind": "new_services",
+      "rowId": "NYS000001701",
+      "details": {
+        "mandateTimes": "2",
+        "patientName": "Sofia Kazani",
+        "caregiverName": "VELIJA ADIL",
+        "providerName": "VELIJA ADIL",
+        "firstName": "Sofia",
+        "lastName": "Kazani",
+        "programType": "NYS Medical Indemnity Fund Therapy"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=258267734 step=upsertPatient: HHA CreatePatient failed: Invalid Accepted Services are \"SLP \" (ErrorID=-411)",
+      "reportKind": "new_services",
+      "rowId": "258267734",
+      "details": {
+        "step": "upsertPatient",
+        "patientExternalId": "258267734",
+        "serviceCode": "SLP CHHA",
+        "serviceCodeId": "313583",
+        "hhaServiceName": "ST",
+        "programType": "Americare Certified",
+        "patientName": "ADAM MARTINEZ",
+        "caregiverName": "JACKSON DONNICE",
+        "providerName": "JACKSON DONNICE",
+        "firstName": "ADAM",
+        "lastName": "MARTINEZ"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=258267421 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+      "reportKind": "new_services",
+      "rowId": "258267421",
+      "details": {
+        "step": "upsertContract",
+        "patientExternalId": "258267421",
+        "serviceCode": "PT CHHA",
+        "serviceCodeId": "313582",
+        "hhaServiceName": "PT",
+        "programType": "Americare Certified",
+        "patientName": "KARLANDREW NAVELGAS",
+        "caregiverName": "RUMBAOA SHERRY",
+        "providerName": "RUMBAOA SHERRY",
+        "firstName": "KARLANDREW",
+        "lastName": "NAVELGAS"
+      }
+    },
+    {
+      "code": "missing_field",
+      "message": "[new_services] row=NYS000000430 invalid auth mandate — frequency \"\" / times \"0\" (refusing CreatePatientAuthorization; would write Max Period = 0)",
+      "reportKind": "new_services",
+      "rowId": "NYS000000430",
+      "details": {
+        "mandateTimes": "0",
+        "patientName": "Lisbeth Paulinolabra",
+        "caregiverName": "Duong Trish",
+        "providerName": "Duong Trish",
+        "firstName": "Lisbeth",
+        "lastName": "Paulinolabra",
+        "programType": "NYS Medical Indemnity Fund Therapy"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=258272446 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+      "reportKind": "new_services",
+      "rowId": "258272446",
+      "details": {
+        "step": "upsertContract",
+        "patientExternalId": "258272446",
+        "serviceCode": "PT CHHA",
+        "serviceCodeId": "313582",
+        "hhaServiceName": "PT",
+        "programType": "Americare Certified",
+        "patientName": "EDMUND PICCIUTO",
+        "caregiverName": "Hart Jennifer",
+        "providerName": "Hart Jennifer",
+        "firstName": "EDMUND",
+        "lastName": "PICCIUTO"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=258270052 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+      "reportKind": "new_services",
+      "rowId": "258270052",
+      "details": {
+        "step": "upsertContract",
+        "patientExternalId": "258270052",
+        "serviceCode": "PT CHHA",
+        "serviceCodeId": "313582",
+        "hhaServiceName": "PT",
+        "programType": "Americare Certified",
+        "patientName": "ROY-AL PORTER",
+        "caregiverName": "WALKER BRETT",
+        "providerName": "WALKER BRETT",
+        "firstName": "ROY-AL",
+        "lastName": "PORTER"
+      }
+    },
+    {
+      "code": "unknown_service_code",
+      "message": "[new_services] row=082081547101 service type \"PT HC Eval\" not found in HHA billing codes for this contract — would fail CreatePatientAuthorization (Invalid ServiceCodeID)",
+      "reportKind": "new_services",
+      "rowId": "082081547101",
+      "details": {
+        "serviceCode": "PT HC Eval",
+        "programType": "Horizon NJ",
+        "contractId": "64723",
+        "patientName": "Yehoshua Rios",
+        "caregiverName": "Fox Stacy Lynn",
+        "providerName": "Fox Stacy Lynn",
+        "firstName": "Yehoshua",
+        "lastName": "Rios"
+      }
+    },
+    {
+      "code": "unknown_service_code",
+      "message": "[new_services] row=082081547101 service type \"OT CHHA\" not found in HHA billing codes for this contract — would fail CreatePatientAuthorization (Invalid ServiceCodeID)",
+      "reportKind": "new_services",
+      "rowId": "082081547101",
+      "details": {
+        "serviceCode": "OT CHHA",
+        "programType": "Horizon NJ",
+        "contractId": "64723",
+        "patientName": "Yehoshua Rios",
+        "caregiverName": "ROBINSON ALISHA",
+        "providerName": "ROBINSON ALISHA",
+        "firstName": "Yehoshua",
+        "lastName": "Rios"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=P0800016094701 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+      "reportKind": "new_services",
+      "rowId": "P0800016094701",
+      "details": {
+        "step": "upsertContract",
+        "patientExternalId": "P0800016094701",
+        "serviceCode": "OT HC Eval",
+        "serviceCodeId": "313581",
+        "hhaServiceName": "OT",
+        "programType": "Americare Certified",
+        "patientName": "Caleb Rolon",
+        "caregiverName": "Brathwaite Sara",
+        "providerName": "Brathwaite Sara",
+        "firstName": "Caleb",
+        "lastName": "Rolon"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=P0800016094701 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+      "reportKind": "new_services",
+      "rowId": "P0800016094701",
+      "details": {
+        "step": "upsertContract",
+        "patientExternalId": "P0800016094701",
+        "serviceCode": "PT HC Eval",
+        "serviceCodeId": "313582",
+        "hhaServiceName": "PT",
+        "programType": "Americare Certified",
+        "patientName": "Caleb Rolon",
+        "caregiverName": "MAMANGON MARYJOYCE",
+        "providerName": "MAMANGON MARYJOYCE",
+        "firstName": "Caleb",
+        "lastName": "Rolon"
+      }
+    },
+    {
+      "code": "unmatched_patient",
+      "message": "[new_services] row=258272398 patient not found in HHA. No HHA write attempted.",
+      "reportKind": "new_services",
+      "rowId": "258272398",
+      "details": {
+        "patientName": "ATIF SIDDIK",
+        "caregiverName": "Duong Trish",
+        "providerName": "Duong Trish",
+        "firstName": "ATIF",
+        "lastName": "SIDDIK",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=209175 step=locateOrScheduleVisit: Provider \"PASCAL ALICIA\" not found in HHA",
+      "reportKind": "new_services",
+      "rowId": "209175",
+      "details": {
+        "step": "locateOrScheduleVisit",
+        "patientExternalId": "209175",
+        "serviceCode": "SLP HC EVAL",
+        "serviceCodeId": "1087120",
+        "hhaServiceName": "SLP HC EVAL",
+        "programType": "Americare Certified",
+        "patientName": "Xai Sims",
+        "caregiverName": "PASCAL ALICIA",
+        "providerName": "PASCAL ALICIA",
+        "firstName": "Xai",
+        "lastName": "Sims"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[new_services] row=06771684 step=upsertContract: HHA AddPatientContract failed: New placement overlaps with an existing placement. (ErrorID=-74)",
+      "reportKind": "new_services",
+      "rowId": "06771684",
+      "details": {
+        "step": "upsertContract",
+        "patientExternalId": "06771684",
+        "serviceCode": "OT CHHA EXTENDED",
+        "serviceCodeId": "785137",
+        "hhaServiceName": "Occupational Therapy",
+        "programType": "Extended Home Care Therapy",
+        "patientName": "MARTIN SOLOMON",
+        "caregiverName": "CLEARE KAYLA",
+        "providerName": "CLEARE KAYLA",
+        "firstName": "MARTIN",
+        "lastName": "SOLOMON"
+      }
+    },
+    {
+      "code": "unmatched_patient",
+      "message": "[new_services] row=290640 patient not found in HHA. No HHA write attempted.",
+      "reportKind": "new_services",
+      "rowId": "290640",
+      "details": {
+        "patientName": "Matthew Thoma",
+        "caregiverName": "JACKSON DONNICE",
+        "providerName": "JACKSON DONNICE",
+        "firstName": "Matthew",
+        "lastName": "Thoma",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "unmatched_patient",
+      "message": "[new_services] row=WZA157W25393 patient not found in HHA. No HHA write attempted.",
+      "reportKind": "new_services",
+      "rowId": "WZA157W25393",
+      "details": {
+        "patientName": "Wolf Elizander Windwer",
+        "caregiverName": "BROOKS SARAH",
+        "providerName": "BROOKS SARAH",
+        "firstName": "Wolf Elizander",
+        "lastName": "Windwer",
+        "programType": "Empire Bluecross Blueshield Therapy"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1041368 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1041368",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Lojano Jhostin Aguilar",
+        "firstName": "Lojano Jhostin",
+        "lastName": "Aguilar",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1017247 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1017247",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Matias Chuchuca",
+        "firstName": "Matias",
+        "lastName": "Chuchuca",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1028810 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1028810",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "August Collins",
+        "firstName": "August",
+        "lastName": "Collins",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=861727 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "861727",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Laith Dayoub",
+        "firstName": "Laith",
+        "lastName": "Dayoub",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1034643 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1034643",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Jilisa Duodu",
+        "firstName": "Jilisa",
+        "lastName": "Duodu",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=936926 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "936926",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Jacey Giambattista",
+        "firstName": "Jacey",
+        "lastName": "Giambattista",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1030958 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1030958",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Eahba Gillen",
+        "firstName": "Eahba",
+        "lastName": "Gillen",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=917469 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "917469",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Luna Graciani",
+        "firstName": "Luna",
+        "lastName": "Graciani",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=890408 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "890408",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Yasmine Isa",
+        "firstName": "Yasmine",
+        "lastName": "Isa",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=946227 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "946227",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Elena Kodra",
+        "firstName": "Elena",
+        "lastName": "Kodra",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1039852 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1039852",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Reign Leon",
+        "firstName": "Reign",
+        "lastName": "Leon",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1030824 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1030824",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Reign Lora",
+        "firstName": "Reign",
+        "lastName": "Lora",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=954768 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "954768",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Ella Martinez",
+        "firstName": "Ella",
+        "lastName": "Martinez",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1041254 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1041254",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Lezama Abdiel Moncada",
+        "firstName": "Lezama Abdiel",
+        "lastName": "Moncada",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=867575 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "867575",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Jr. Angel Praylow",
+        "firstName": "Jr. Angel",
+        "lastName": "Praylow",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1031334 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1031334",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Delgado Armando Santibanez",
+        "firstName": "Delgado Armando",
+        "lastName": "Santibanez",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=994762 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "994762",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Legend Stephens",
+        "firstName": "Legend",
+        "lastName": "Stephens",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=889533 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "889533",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Leo Suriel",
+        "firstName": "Leo",
+        "lastName": "Suriel",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1003255 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1003255",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Maria Tortoso",
+        "firstName": "Maria",
+        "lastName": "Tortoso",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[closed_cases] row=1042650 skipped: Early Intervention case not sent to HHA",
+      "reportKind": "closed_cases",
+      "rowId": "1042650",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Alvarez Matias Zumba",
+        "firstName": "Alvarez Matias",
+        "lastName": "Zumba",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[discharge_service] row=258272396 step=dischargeService: HHA patient not found for caseId=\"258272396\" — cannot discharge safely",
+      "reportKind": "discharge_service",
+      "rowId": "258272396",
+      "details": {
+        "step": "dischargeService",
+        "serviceCode": "OT HC Eval",
+        "startDate": "08/26/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "MALLARD VICTOR BARTH",
+        "firstName": "MALLARD VICTOR",
+        "lastName": "BARTH",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[discharge_service] row=282389 step=dischargeService: Ambiguous HHA discharge: patient has 1 active placement(s); no HHA placement matches report Service Type \"SLP HC EVAL\" / Service Begin Date \"06/23/2026\". Coordinator: verify both fields match the active service line in HHA exactly.",
+      "reportKind": "discharge_service",
+      "rowId": "282389",
+      "details": {
+        "step": "dischargeService",
+        "serviceCode": "SLP HC EVAL",
+        "startDate": "06/23/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "Jaxxon Godbee",
+        "firstName": "Jaxxon",
+        "lastName": "Godbee",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=1029641 skipped: Early Intervention not sent to HHA",
+      "reportKind": "discharge_service",
+      "rowId": "1029641",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Sloan Greiner",
+        "firstName": "Sloan",
+        "lastName": "Greiner",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[discharge_service] row=04737934 step=dischargeService: Ambiguous HHA discharge: patient has 1 active placement(s); no HHA placement matches report Service Type \"PT HC Eval\" / Service Begin Date \"09/03/2026\". Coordinator: verify both fields match the active service line in HHA exactly.",
+      "reportKind": "discharge_service",
+      "rowId": "04737934",
+      "details": {
+        "step": "dischargeService",
+        "serviceCode": "PT HC Eval",
+        "startDate": "09/03/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "Landon Hsu",
+        "firstName": "Landon",
+        "lastName": "Hsu",
+        "programType": "Preferred Certified Therapy"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=1052849 skipped: Early Intervention not sent to HHA",
+      "reportKind": "discharge_service",
+      "rowId": "1052849",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Andrea Obaje",
+        "firstName": "Andrea",
+        "lastName": "Obaje",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=258271503 skipped: already discharged / no active HHA placements",
+      "reportKind": "discharge_service",
+      "rowId": "258271503",
+      "details": {
+        "triageReason": "already_discharged",
+        "serviceCode": "OT HC Eval",
+        "startDate": "08/09/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "MADISON OLIVER",
+        "firstName": "MADISON",
+        "lastName": "OLIVER",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=258271503 skipped: already discharged / no active HHA placements",
+      "reportKind": "discharge_service",
+      "rowId": "258271503",
+      "details": {
+        "triageReason": "already_discharged",
+        "serviceCode": "OT HC Eval",
+        "startDate": "09/09/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "MADISON OLIVER",
+        "firstName": "MADISON",
+        "lastName": "OLIVER",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=258270052 skipped: already discharged / no active HHA placements",
+      "reportKind": "discharge_service",
+      "rowId": "258270052",
+      "details": {
+        "triageReason": "already_discharged",
+        "serviceCode": "PT HC Eval",
+        "startDate": "08/01/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "ROY-AL PORTER",
+        "firstName": "ROY-AL",
+        "lastName": "PORTER",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=258270052 skipped: already discharged / no active HHA placements",
+      "reportKind": "discharge_service",
+      "rowId": "258270052",
+      "details": {
+        "triageReason": "already_discharged",
+        "serviceCode": "PT HC Eval",
+        "startDate": "09/01/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "ROY-AL PORTER",
+        "firstName": "ROY-AL",
+        "lastName": "PORTER",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=P0800016094701 skipped: already discharged / no active HHA placements",
+      "reportKind": "discharge_service",
+      "rowId": "P0800016094701",
+      "details": {
+        "triageReason": "already_discharged",
+        "serviceCode": "PT HC Eval",
+        "startDate": "08/10/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "Caleb Rolon",
+        "firstName": "Caleb",
+        "lastName": "Rolon",
+        "programType": "Americare Certified"
+      }
+    }
+  ],
+  "exceptionCount": 61
+}

@@ -1,0 +1,37 @@
+{
+  "runAt": "2026-09-17T01:48:30.309Z",
+  "toId": "341",
+  "reasonId": "36883",
+  "toSample": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><GetPatientDischargeToResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integration\"><GetPatientDischargeToResult><Result Status=\"Success\"><ErrorInfo><ErrorID>0</ErrorID><ErrorMessage /></ErrorInfo><Details /></Result><PatientDischargeToRasons><PatientDischargeToRason><Patient",
+  "attempts": [
+    {
+      "label": "discharge NEW 8596091",
+      "toId": "341",
+      "reasonId": "36883",
+      "ok": false,
+      "eid": "-56",
+      "msg": "Patient ID is an invalid for current Agency.",
+      "status": "Failure"
+    },
+    {
+      "label": "discharge NEW 8596091 yesterday",
+      "toId": "341",
+      "reasonId": "36883",
+      "ok": false,
+      "eid": "-56",
+      "msg": "Patient ID is an invalid for current Agency.",
+      "status": "Failure"
+    },
+    {
+      "label": "reactivate OLD omit date",
+      "ok": false,
+      "eid": "-74",
+      "msg": "Invalid \"DischargeToID\""
+    }
+  ],
+  "contractsAfter": {
+    "eid": "-56",
+    "msg": "Patient ID is an invalid for current Agency.",
+    "placements": []
+  }
+}

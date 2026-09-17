@@ -1,0 +1,32 @@
+{
+  "results": [
+    {
+      "label": "empty+reason blank",
+      "ok": false,
+      "fault": "Server was unable to read request. ---&gt; There is an error in XML document (1, 603). ---&gt; The string '' is not a valid AllXsd value."
+    },
+    {
+      "label": "omit date + reason blank",
+      "ok": false,
+      "eid": "-315",
+      "msg": "Requires \"Contract Discharge Reason Description\"",
+      "status": "Failure"
+    },
+    {
+      "label": "far future date",
+      "ok": false,
+      "eid": "-315",
+      "msg": "Requires \"DischargeToID\"",
+      "status": "Failure"
+    }
+  ],
+  "afterDisc": [],
+  "beforeDisc": [
+    {
+      "place": "6812439",
+      "disc": "2026-09-15"
+    }
+  ],
+  "afterEid": "0",
+  "beforeEid": "0"
+}

@@ -1,0 +1,78 @@
+{
+  "reasonPreview": [],
+  "toPreview": [],
+  "results": [
+    {
+      "label": "xsi:nil DischargeDate",
+      "ok": false,
+      "eid": "-315",
+      "msg": "Requires \"Contract Discharge Reason Description\"",
+      "status": "Failure"
+    },
+    {
+      "label": "1900-01-01",
+      "ok": false,
+      "eid": "-16",
+      "msg": "Invalid Date",
+      "status": "Failure"
+    },
+    {
+      "label": "with reason+to empty date via min date 0001",
+      "ok": false,
+      "eid": "-16",
+      "msg": "Invalid Date",
+      "status": "Failure"
+    }
+  ],
+  "snaps": {
+    "2026-09-14": {
+      "ok": "Success",
+      "eid": "0",
+      "placements": [
+        {
+          "placementId": "6812439",
+          "start": "2024-12-07",
+          "disc": "2026-09-15",
+          "svc": "785140",
+          "contract": "61591"
+        }
+      ]
+    },
+    "2026-09-15": {
+      "ok": "Success",
+      "eid": "0",
+      "placements": [
+        {
+          "placementId": "6812439",
+          "start": "2024-12-07",
+          "disc": "2026-09-15",
+          "svc": "785140",
+          "contract": "61591"
+        }
+      ]
+    },
+    "2026-09-16": {
+      "ok": "Success",
+      "eid": "0",
+      "placements": []
+    },
+    "2026-09-20": {
+      "ok": "Success",
+      "eid": "0",
+      "placements": []
+    },
+    "2024-12-07": {
+      "ok": "Success",
+      "eid": "0",
+      "placements": [
+        {
+          "placementId": "6812439",
+          "start": "2024-12-07",
+          "disc": "2026-09-15",
+          "svc": "785140",
+          "contract": "61591"
+        }
+      ]
+    }
+  }
+}

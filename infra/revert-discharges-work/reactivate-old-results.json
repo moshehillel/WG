@@ -1,0 +1,975 @@
+{
+  "runAt": "2026-09-16T20:08:42.555Z",
+  "strategy": "REVERT only: UpdatePatientContract to clear DischargeDate on ORIGINAL placements. No AddPatientContract. Mistaken new placements from earlier session are documented, not created again.",
+  "dischargeRefs": {
+    "reasonId": "36883"
+  },
+  "summary": {
+    "reactivate_failed_api_cannot_clear_discharge": 9,
+    "old_already_active": 1
+  },
+  "results": [
+    {
+      "name": "Hooria Arshad",
+      "caseId": "02891799",
+      "patientId": "22854608",
+      "oldPlacementId": "6812439",
+      "source": "discharge_service success",
+      "outcome": "reactivate_failed_api_cannot_clear_discharge",
+      "manualFollowUp": true,
+      "oldPlacement": {
+        "placementId": "6812439",
+        "contractId": "61591",
+        "contractName": "Extended Home Care Therapy",
+        "svc": "785140",
+        "svcName": "OT SOC/ROC OASIS",
+        "start": "2024-12-07",
+        "disc": "2026-09-15"
+      },
+      "mistakenNewPlacementsCreatedEarlier": [
+        {
+          "placementId": "8596053",
+          "contractId": "61591",
+          "contractName": "Extended Home Care Therapy",
+          "svc": "785140",
+          "svcName": "OT SOC/ROC OASIS",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ],
+      "otherActivePlacements": [],
+      "clearAttempt": {
+        "ok": false,
+        "tried": [
+          {
+            "label": "UpdateDischargeDate true + xsi:nil DischargeDate",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit DischargeDate + note",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit date + reason/to ids",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true + xsi:nil + reason/to",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          }
+        ]
+      },
+      "entAttempt": {
+        "attempted": true,
+        "ok": false,
+        "tried": [
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/discharge",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          },
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/update",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          }
+        ]
+      },
+      "allPlacements": [
+        {
+          "placementId": "6812439",
+          "contractId": "61591",
+          "contractName": "Extended Home Care Therapy",
+          "svc": "785140",
+          "svcName": "OT SOC/ROC OASIS",
+          "start": "2024-12-07",
+          "disc": "2026-09-15"
+        },
+        {
+          "placementId": "8596053",
+          "contractId": "61591",
+          "contractName": "Extended Home Care Therapy",
+          "svc": "785140",
+          "svcName": "OT SOC/ROC OASIS",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ]
+    },
+    {
+      "name": "Helena Galeanocarvajal",
+      "caseId": "04725821",
+      "patientId": "23012434",
+      "oldPlacementId": "6897698",
+      "source": "discharge_service success",
+      "outcome": "reactivate_failed_api_cannot_clear_discharge",
+      "manualFollowUp": true,
+      "oldPlacement": {
+        "placementId": "6897698",
+        "contractId": "61591",
+        "contractName": "Extended Home Care Therapy",
+        "svc": "785140",
+        "svcName": "OT SOC/ROC OASIS",
+        "start": "2025-01-01",
+        "disc": "2026-09-15"
+      },
+      "mistakenNewPlacementsCreatedEarlier": [
+        {
+          "placementId": "8596089",
+          "contractId": "61591",
+          "contractName": "Extended Home Care Therapy",
+          "svc": "785140",
+          "svcName": "OT SOC/ROC OASIS",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ],
+      "otherActivePlacements": [],
+      "clearAttempt": {
+        "ok": false,
+        "tried": [
+          {
+            "label": "UpdateDischargeDate true + xsi:nil DischargeDate",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit DischargeDate + note",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit date + reason/to ids",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true + xsi:nil + reason/to",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          }
+        ]
+      },
+      "entAttempt": {
+        "attempted": true,
+        "ok": false,
+        "tried": [
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/discharge",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          },
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/update",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          }
+        ]
+      },
+      "allPlacements": [
+        {
+          "placementId": "8596089",
+          "contractId": "61591",
+          "contractName": "Extended Home Care Therapy",
+          "svc": "785140",
+          "svcName": "OT SOC/ROC OASIS",
+          "start": "2026-09-16",
+          "disc": ""
+        },
+        {
+          "placementId": "6897698",
+          "contractId": "61591",
+          "contractName": "Extended Home Care Therapy",
+          "svc": "785140",
+          "svcName": "OT SOC/ROC OASIS",
+          "start": "2025-01-01",
+          "disc": "2026-09-15"
+        }
+      ]
+    },
+    {
+      "name": "Madison Oliver",
+      "caseId": "258271503",
+      "patientId": "25788276",
+      "oldPlacementId": "8300861",
+      "source": "discharge_service success",
+      "outcome": "reactivate_failed_api_cannot_clear_discharge",
+      "manualFollowUp": true,
+      "oldPlacement": {
+        "placementId": "8300861",
+        "contractId": "37925",
+        "contractName": "Americare Certified",
+        "svc": "313581",
+        "svcName": "OT",
+        "start": "2026-03-14",
+        "disc": "2026-09-15"
+      },
+      "mistakenNewPlacementsCreatedEarlier": [
+        {
+          "placementId": "8596090",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313581",
+          "svcName": "OT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ],
+      "otherActivePlacements": [],
+      "clearAttempt": {
+        "ok": false,
+        "tried": [
+          {
+            "label": "UpdateDischargeDate true + xsi:nil DischargeDate",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit DischargeDate + note",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit date + reason/to ids",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true + xsi:nil + reason/to",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          }
+        ]
+      },
+      "entAttempt": {
+        "attempted": true,
+        "ok": false,
+        "tried": [
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/discharge",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          },
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/update",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          }
+        ]
+      },
+      "allPlacements": [
+        {
+          "placementId": "8596090",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313581",
+          "svcName": "OT",
+          "start": "2026-09-16",
+          "disc": ""
+        },
+        {
+          "placementId": "8300861",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313581",
+          "svcName": "OT",
+          "start": "2026-03-14",
+          "disc": "2026-09-15"
+        }
+      ]
+    },
+    {
+      "name": "Edmund Picciuto",
+      "caseId": "258272446",
+      "patientId": "26372249",
+      "oldPlacementId": "8522217",
+      "source": "discharge_service success",
+      "outcome": "reactivate_failed_api_cannot_clear_discharge",
+      "manualFollowUp": true,
+      "oldPlacement": {
+        "placementId": "8522217",
+        "contractId": "37925",
+        "contractName": "Americare Certified",
+        "svc": "313582",
+        "svcName": "PT",
+        "start": "2026-07-04",
+        "disc": "2026-09-15"
+      },
+      "mistakenNewPlacementsCreatedEarlier": [
+        {
+          "placementId": "8596091",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ],
+      "otherActivePlacements": [],
+      "clearAttempt": {
+        "ok": false,
+        "tried": [
+          {
+            "label": "UpdateDischargeDate true + xsi:nil DischargeDate",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit DischargeDate + note",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit date + reason/to ids",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true + xsi:nil + reason/to",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          }
+        ]
+      },
+      "entAttempt": {
+        "attempted": true,
+        "ok": false,
+        "tried": [
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/discharge",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          },
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/update",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          }
+        ]
+      },
+      "allPlacements": [
+        {
+          "placementId": "8596091",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        },
+        {
+          "placementId": "8522217",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-07-04",
+          "disc": "2026-09-15"
+        }
+      ]
+    },
+    {
+      "name": "Roy-Al Porter",
+      "caseId": "258270052",
+      "patientId": "24555059",
+      "oldPlacementId": "7909108",
+      "source": "discharge_service success",
+      "outcome": "reactivate_failed_api_cannot_clear_discharge",
+      "manualFollowUp": true,
+      "oldPlacement": {
+        "placementId": "7909108",
+        "contractId": "37925",
+        "contractName": "Americare Certified",
+        "svc": "313582",
+        "svcName": "PT",
+        "start": "2025-09-18",
+        "disc": "2026-09-15"
+      },
+      "mistakenNewPlacementsCreatedEarlier": [
+        {
+          "placementId": "8596092",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ],
+      "otherActivePlacements": [],
+      "clearAttempt": {
+        "ok": false,
+        "tried": [
+          {
+            "label": "UpdateDischargeDate true + xsi:nil DischargeDate",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit DischargeDate + note",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit date + reason/to ids",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true + xsi:nil + reason/to",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          }
+        ]
+      },
+      "entAttempt": {
+        "attempted": true,
+        "ok": false,
+        "tried": [
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/discharge",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          },
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/update",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          }
+        ]
+      },
+      "allPlacements": [
+        {
+          "placementId": "7909108",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2025-09-18",
+          "disc": "2026-09-15"
+        },
+        {
+          "placementId": "8596092",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ]
+    },
+    {
+      "name": "Caleb Rolon",
+      "caseId": "P0800016094701",
+      "patientId": "24301609",
+      "oldPlacementId": "7802393",
+      "source": "discharge_service success",
+      "outcome": "reactivate_failed_api_cannot_clear_discharge",
+      "manualFollowUp": true,
+      "oldPlacement": {
+        "placementId": "7802393",
+        "contractId": "37925",
+        "contractName": "Americare Certified",
+        "svc": "313582",
+        "svcName": "PT",
+        "start": "2025-07-15",
+        "disc": "2026-09-15"
+      },
+      "mistakenNewPlacementsCreatedEarlier": [
+        {
+          "placementId": "8596093",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ],
+      "otherActivePlacements": [],
+      "clearAttempt": {
+        "ok": false,
+        "tried": [
+          {
+            "label": "UpdateDischargeDate true + xsi:nil DischargeDate",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit DischargeDate + note",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit date + reason/to ids",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true + xsi:nil + reason/to",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          }
+        ]
+      },
+      "entAttempt": {
+        "attempted": true,
+        "ok": false,
+        "tried": [
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/discharge",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          },
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/update",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          }
+        ]
+      },
+      "allPlacements": [
+        {
+          "placementId": "8596093",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        },
+        {
+          "placementId": "7802393",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2025-07-15",
+          "disc": "2026-09-15"
+        }
+      ]
+    },
+    {
+      "name": "Martin Solomon",
+      "caseId": "06771684",
+      "patientId": "26367422",
+      "oldPlacementId": "8519959",
+      "source": "discharge_service success",
+      "outcome": "old_already_active",
+      "manualFollowUp": false,
+      "oldPlacement": {
+        "placementId": "8519959",
+        "contractId": "61591",
+        "contractName": "Extended Home Care Therapy",
+        "start": "2026-09-08",
+        "disc": ""
+      },
+      "mistakenNewPlacementsCreatedEarlier": [],
+      "otherActivePlacements": [
+        {
+          "placementId": "8519959",
+          "contractId": "61591",
+          "contractName": "Extended Home Care Therapy",
+          "start": "2026-09-08",
+          "disc": ""
+        }
+      ],
+      "allPlacements": [
+        {
+          "placementId": "8519959",
+          "contractId": "61591",
+          "contractName": "Extended Home Care Therapy",
+          "start": "2026-09-08",
+          "disc": ""
+        }
+      ]
+    },
+    {
+      "name": "Michael Asunto",
+      "caseId": "258270277",
+      "patientId": "24617583",
+      "oldPlacementId": "7935330",
+      "source": "meeting overlap",
+      "outcome": "reactivate_failed_api_cannot_clear_discharge",
+      "manualFollowUp": true,
+      "oldPlacement": {
+        "placementId": "7935330",
+        "contractId": "37925",
+        "contractName": "Americare Certified",
+        "svc": "313582",
+        "svcName": "PT",
+        "start": "2025-10-06",
+        "disc": "2026-09-09"
+      },
+      "mistakenNewPlacementsCreatedEarlier": [
+        {
+          "placementId": "8596094",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ],
+      "otherActivePlacements": [],
+      "clearAttempt": {
+        "ok": false,
+        "tried": [
+          {
+            "label": "UpdateDischargeDate true + xsi:nil DischargeDate",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit DischargeDate + note",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit date + reason/to ids",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true + xsi:nil + reason/to",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          }
+        ]
+      },
+      "entAttempt": {
+        "attempted": true,
+        "ok": false,
+        "tried": [
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/discharge",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          },
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/update",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          }
+        ]
+      },
+      "allPlacements": [
+        {
+          "placementId": "7935330",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2025-10-06",
+          "disc": "2026-09-09"
+        },
+        {
+          "placementId": "8596094",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ]
+    },
+    {
+      "name": "Fiona Downs",
+      "caseId": "258270803",
+      "patientId": "24865860",
+      "oldPlacementId": "8045831",
+      "source": "meeting overlap",
+      "outcome": "reactivate_failed_api_cannot_clear_discharge",
+      "manualFollowUp": true,
+      "oldPlacement": {
+        "placementId": "8045831",
+        "contractId": "37925",
+        "contractName": "Americare Certified",
+        "svc": "313582",
+        "svcName": "PT",
+        "start": "2025-12-01",
+        "disc": "2026-09-10"
+      },
+      "mistakenNewPlacementsCreatedEarlier": [
+        {
+          "placementId": "8596095",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ],
+      "otherActivePlacements": [],
+      "clearAttempt": {
+        "ok": false,
+        "tried": [
+          {
+            "label": "UpdateDischargeDate true + xsi:nil DischargeDate",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit DischargeDate + note",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit date + reason/to ids",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true + xsi:nil + reason/to",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          }
+        ]
+      },
+      "entAttempt": {
+        "attempted": true,
+        "ok": false,
+        "tried": [
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/discharge",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          },
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/update",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          }
+        ]
+      },
+      "allPlacements": [
+        {
+          "placementId": "8045831",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2025-12-01",
+          "disc": "2026-09-10"
+        },
+        {
+          "placementId": "8596095",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ]
+    },
+    {
+      "name": "Karlandrew Navelgas",
+      "caseId": "258267421",
+      "patientId": "22680255",
+      "oldPlacementId": "6711683",
+      "source": "meeting overlap",
+      "outcome": "reactivate_failed_api_cannot_clear_discharge",
+      "manualFollowUp": true,
+      "oldPlacement": {
+        "placementId": "6711683",
+        "contractId": "37925",
+        "contractName": "Americare Certified",
+        "svc": "313582",
+        "svcName": "PT",
+        "start": "2024-11-07",
+        "disc": "2026-09-10"
+      },
+      "mistakenNewPlacementsCreatedEarlier": [
+        {
+          "placementId": "8596097",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ],
+      "otherActivePlacements": [],
+      "clearAttempt": {
+        "ok": false,
+        "tried": [
+          {
+            "label": "UpdateDischargeDate true + xsi:nil DischargeDate",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit DischargeDate + note",
+            "ok": false,
+            "eid": "-315",
+            "msg": "Requires \"Contract Discharge Reason\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true omit date + reason/to ids",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          },
+          {
+            "label": "UpdateDischargeDate true + xsi:nil + reason/to",
+            "ok": false,
+            "eid": "-310",
+            "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+            "status": "Failure",
+            "http": 400
+          }
+        ]
+      },
+      "entAttempt": {
+        "attempted": true,
+        "ok": false,
+        "tried": [
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/discharge",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          },
+          {
+            "url": "https://app.hhaexchange.com/api/ent/patients/contracts/update",
+            "http": 401,
+            "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+          }
+        ]
+      },
+      "allPlacements": [
+        {
+          "placementId": "6711683",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2024-11-07",
+          "disc": "2026-09-10"
+        },
+        {
+          "placementId": "8596097",
+          "contractId": "37925",
+          "contractName": "Americare Certified",
+          "svc": "313582",
+          "svcName": "PT",
+          "start": "2026-09-16",
+          "disc": ""
+        }
+      ]
+    }
+  ]
+}

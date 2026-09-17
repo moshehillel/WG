@@ -1,0 +1,121 @@
+{
+  "Arshad control contracts": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": [
+      {
+        "placementId": "6812439",
+        "disc": "ACTIVE",
+        "start": "2024-12-07",
+        "svc": "OT SOC/ROC OASIS"
+      }
+    ]
+  },
+  "Picciuto contracts 26372249": {
+    "status": "Failure",
+    "eid": "-56",
+    "msg": "Patient ID is an invalid for current Agency.",
+    "ids": [],
+    "placements": []
+  },
+  "Picciuto demog 26372249": {
+    "status": "Failure",
+    "eid": "-56",
+    "msg": "Patient ID is an invalid for current Agency.",
+    "ids": [],
+    "placements": []
+  },
+  "search Active Edmund": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search Discharged Edmund": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search All Edmund": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search Waiting Edmund": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search Hospitalized Edmund": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search Hold last": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search All last": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search All admission": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search All MR": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search empty status admission": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search DOB 09/02/2009": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search DOB 2009-09-02": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  },
+  "search DOB 9/2/2009": {
+    "status": "Success",
+    "eid": "0",
+    "msg": "",
+    "ids": [],
+    "placements": []
+  }
+}
