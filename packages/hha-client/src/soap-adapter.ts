@@ -73,12 +73,19 @@ import {
   resolvePayCodeIdFromCatalog,
   type PayCodeRow,
 } from './pay-code-resolve.js';
-import { activePlacements, parsePatientPlacements } from './placements.js';
+import {
+  activePlacements,
+  findReusableContractPlacement,
+  isPlacementOverlapFault,
+  parsePatientPlacements,
+} from './placements.js';
 import { resolvePlacementForService } from './resolve-placement.js';
 import { resolveServiceCodeIdsFromRows } from './resolve-service-code-order.js';
 import {
   buildConfirmVisitsBody,
   buildConfirmVisitsEvvBody,
+  isAlreadyBilledConfirmFault,
+  isVisitAlreadyPayConfirmedXml,
   parseTimesheetFlags,
   parseVisitConfirmTimes,
   parseVisitEditReasonPairs,
@@ -478,35 +485,60 @@ export class SoapHhaClientAdapter implements HhaClient {
   }
 
   async upsertContract(contract: HhaContract): Promise<UpsertResult> {
-    const startIso =
+    const startIso = (
       psDateToIso(contract.startDate) ??
       contract.startDate ??
-      new Date().toISOString().slice(0, 10);
-    const visitDate = startIso.slice(0, 10);
-    const existing = await this.soap.getPatientContracts(Number(contract.patientId), visitDate);
-    assertOk(existing, 'GetPatientContracts');
+      new Date().toISOString().slice(0, 10)
+    ).slice(0, 10);
+    // Cover/reuse must use session DOS when provided — GetPatientContracts(mandateStart)
+    // can omit placements that start after mandate begin (then Add → -74 with nothing to reuse).
+    const coverDate = (
+      psDateToIso(contract.visitDate) ??
+      contract.visitDate ??
+      startIso
+    ).slice(0, 10);
 
     if (!contract.contractExternalId) {
       throw new Error('AddPatientContract requires ContractID from GetContracts / report mapping');
     }
 
-    if (existing.bodyXml) {
-      const targetContract = contract.contractExternalId;
-      const targetStart = startIso.slice(0, 10);
-      const active = activePlacements(parsePatientPlacements(existing.bodyXml));
-      const duplicate = active.find((p) => {
-        if (p.contractId !== targetContract) return false;
-        if (!p.startDate?.trim() || !targetStart) return false;
-        const placementStart = (psDateToIso(p.startDate) ?? p.startDate).slice(0, 10);
-        return placementStart === targetStart;
+    const reuseOpts = {
+      contractId: contract.contractExternalId,
+      visitDate: coverDate,
+      serviceCodeId: contract.serviceCodeId,
+    };
+
+    const tryReuse = async (forDate: string) => {
+      const res = await this.soap.getPatientContracts(Number(contract.patientId), forDate);
+      assertOk(res, 'GetPatientContracts');
+      return findReusableContractPlacement(parsePatientPlacements(res.bodyXml ?? ''), {
+        ...reuseOpts,
+        visitDate: forDate,
       });
-      if (duplicate) {
-        return { id: duplicate.placementId, created: false };
-      }
-      const sameContract = active.filter((p) => p.contractId === targetContract);
-      if (sameContract.length === 1) {
-        return { id: sameContract[0]!.placementId, created: false };
-      }
+    };
+
+    /** PatientID-only inventory — finds already-ACTIVE rows VisitDate filter can hide. */
+    const tryReuseAll = async () => {
+      const res = await this.soap.getPatientContractsAll(Number(contract.patientId));
+      assertOk(res, 'GetPatientContracts');
+      return findReusableContractPlacement(parsePatientPlacements(res.bodyXml ?? ''), reuseOpts);
+    };
+
+    let beforeAdd = await tryReuse(coverDate);
+    if (beforeAdd.kind === 'none' && coverDate !== startIso) {
+      beforeAdd = await tryReuse(startIso);
+    }
+    if (beforeAdd.kind === 'none') {
+      beforeAdd = await tryReuseAll();
+    }
+    if (beforeAdd.kind === 'reuse') {
+      return { id: beforeAdd.placement.placementId, created: false };
+    }
+    if (beforeAdd.kind === 'ambiguous') {
+      throw new Error(
+        `Ambiguous HHA placements for ContractID ${contract.contractExternalId} covering ${coverDate}: ` +
+          `${beforeAdd.placements.length} candidates — cannot safely reuse or AddPatientContract`,
+      );
     }
 
     const result = await this.soap.call(
@@ -522,6 +554,30 @@ export class SoapHhaClientAdapter implements HhaClient {
       }
 </PatientContractInfo>`,
     );
+
+    if (!result.ok && isPlacementOverlapFault(result.errorId, result.errorMessage)) {
+      // Prefer DOS cover, then mandate start, then PatientID-only — overlap often means a
+      // placement exists that date-filtered GetPatientContracts did not return.
+      let afterOverlap = await tryReuse(coverDate);
+      if (afterOverlap.kind === 'none' && coverDate !== startIso) {
+        afterOverlap = await tryReuse(startIso);
+      }
+      if (afterOverlap.kind === 'none') {
+        afterOverlap = await tryReuseAll();
+      }
+      if (afterOverlap.kind === 'reuse') {
+        return { id: afterOverlap.placement.placementId, created: false };
+      }
+      if (afterOverlap.kind === 'ambiguous') {
+        throw new Error(
+          `HHA AddPatientContract overlap (ErrorID=-74) but ${afterOverlap.placements.length} ` +
+            `ContractID ${contract.contractExternalId} placements cover ${coverDate} — ambiguous reuse`,
+        );
+      }
+      // Overlap with a different ContractID (or no covering same-contract row).
+      assertOk(result, 'AddPatientContract');
+    }
+
     assertOk(result, 'AddPatientContract');
     const placementId =
       pickId(result.raw, ['PlacementID', 'PatientContractID', 'ID']) ??
@@ -760,6 +816,9 @@ export class SoapHhaClientAdapter implements HhaClient {
         );
       })();
 
+    // Already billed / timesheet-approved — EVV re-confirm is a no-op for payroll.
+    if (isVisitAlreadyPayConfirmedXml(info.bodyXml)) return;
+
     const visitFlags = parseTimesheetFlags(info.bodyXml);
     const reasonPairs = await this.resolveConfirmReasonPairs(numericId);
     if (!reasonPairs.length) {
@@ -782,6 +841,8 @@ export class SoapHhaClientAdapter implements HhaClient {
         });
         const result = await this.soap.confirmVisitEvv(body);
         if (result.ok) return;
+        // -401 Already Billed = visit is done in HHA for payroll — treat as success.
+        if (isAlreadyBilledConfirmFault(result.errorId, result.errorMessage)) return;
         errors.push(
           `reason=${pair.reasonCode} action=${pair.actionCode}: ${result.errorMessage ?? result.status} (${result.errorId ?? '-'})`,
         );
@@ -1257,6 +1318,9 @@ export class SoapHhaClientAdapter implements HhaClient {
     }
     assertOk(info, 'GetVisitInfoV2');
 
+    // Already billed or timesheet-approved — skip ConfirmVisits (avoids -401 fail loops on Retry).
+    if (isVisitAlreadyPayConfirmedXml(info.bodyXml)) return;
+
     const times =
       parseVisitConfirmTimes(info.bodyXml) ??
       (() => {
@@ -1286,6 +1350,8 @@ export class SoapHhaClientAdapter implements HhaClient {
         });
         const result = await this.soap.confirmVisit(body);
         if (result.ok) return;
+        // -401 Already Billed = visit is done in HHA for payroll — treat as success.
+        if (isAlreadyBilledConfirmFault(result.errorId, result.errorMessage)) return;
         errors.push(
           `reason=${pair.reasonCode} action=${pair.actionCode} ts=${flags.timesheetRequired}/${flags.timesheetApproved}: ${result.errorMessage ?? result.status} (${result.errorId ?? '-'})`,
         );

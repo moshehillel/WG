@@ -25,8 +25,15 @@ export const HhaContractSchema = z.object({
   contractExternalId: z.string().optional(),
   serviceCode: z.string().optional(),
   serviceCodeId: z.string().optional(),
+  /** Preferred AddPatientContract StartDate (mandate begin when known). */
   startDate: z.string().optional(),
   endDate: z.string().optional(),
+  /**
+   * Session / visit DOS for cover-date reuse + GetPatientContracts.
+   * When set, reuse looks for placements covering this date (not only startDate).
+   * Avoids -74 when mandate start is before an existing placement’s ServiceStartDate.
+   */
+  visitDate: z.string().optional(),
 });
 
 export type HhaContract = z.infer<typeof HhaContractSchema>;

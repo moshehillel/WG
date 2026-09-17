@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { HhaClockingDetails, HhaPatient, HhaVisit } from '@white-glove/shared';
 import { lookupContractId, lookupServiceCode, lookupServiceCodeAlias } from '@white-glove/shared';
 import { stripLeadingZerosFromNumericId } from './create-patient-builder.js';
+import { findReusableContractPlacement } from './placements.js';
 import { resolvePlacementForService } from './resolve-placement.js';
 import { isTrustedHhaPatientId, toFindPatientOptions } from './resolve-patient-id.js';
 import type {
@@ -168,15 +169,27 @@ export class MockHhaClient implements HhaClient {
     this.calls.push('upsertContract');
     const patientKey = contract.patientId;
     const list = this.placementsByPatient.get(patientKey) ?? [];
-    const existing = list.find(
-      (p) =>
-        !p.dischargeDate &&
-        p.contractId === contract.contractExternalId &&
-        p.startDate === contract.startDate,
-    );
-    if (existing) return { id: existing.placementId, created: false };
+    const visitDate = contract.startDate ?? new Date().toISOString().slice(0, 10);
+    if (contract.contractExternalId) {
+      const reused = findReusableContractPlacement(
+        list.map((p) => ({
+          placementId: p.placementId,
+          contractId: p.contractId,
+          serviceCodeId: p.serviceCodeId,
+          startDate: p.startDate,
+          dischargeDate: p.dischargeDate,
+        })),
+        {
+          contractId: contract.contractExternalId,
+          visitDate,
+          serviceCodeId: contract.serviceCodeId,
+        },
+      );
+      if (reused.kind === 'reuse') return { id: reused.placement.placementId, created: false };
+    }
     const placementId = randomUUID();
-    const serviceCodeId = lookupServiceCode(contract.serviceCode)?.hhaCode;
+    const serviceCodeId =
+      contract.serviceCodeId ?? lookupServiceCode(contract.serviceCode)?.hhaCode;
     list.push({
       placementId,
       contractId: contract.contractExternalId,
