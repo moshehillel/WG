@@ -72,12 +72,13 @@ export function mergeAcceptedServices(
   current: string[],
   ensure: string[],
 ): { merged: string[]; missing: string[] } {
-  const seen = new Set(current.map((d) => d.toUpperCase()));
+  // Trim so HHA echo values like "SP " / "ST " do not poison equality or XML.
+  const merged = current.map((d) => d.trim()).filter(Boolean);
+  const seen = new Set(merged.map((d) => d.toUpperCase()));
   const missing = ensure
     .map((d) => d.trim())
     .filter(Boolean)
     .filter((d) => !seen.has(d.toUpperCase()));
-  const merged = [...current];
   for (const d of missing) {
     merged.push(d);
     seen.add(d.toUpperCase());

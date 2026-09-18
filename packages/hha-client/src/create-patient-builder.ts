@@ -24,15 +24,15 @@ export interface CreatePatientReferenceIds {
   evacuationZoneId: number;
 }
 
-// NOTE: 'SLP' is deliberately NOT a leading-token discipline. HHA's speech
-// discipline is 'SP'; CreatePatient with AcceptedServices Discipline "SLP"
-// is rejected with -411 (Invalid Accepted Services "SLP "). Leaving SLP out
-// here lets "SLP CHHA" / "SLP HC EVAL" fall through to the → 'SP' rule below.
-const KNOWN_DISCIPLINES = ['OT', 'PT', 'ST', 'SP', 'RN', 'HHA', 'PCA', 'SI', 'COTA', 'PTA'];
+// NOTE: 'SLP' is deliberately NOT a leading-token discipline. HHA AcceptedServices
+// rejects "SLP" and "SP" (-411 Invalid Accepted Services). This agency's speech
+// discipline is "ST" (same as GetDisciplines / CreateSchedule). Leaving SLP out
+// here lets "SLP CHHA" / "SLP HC EVAL" fall through to the → 'ST' rule below.
+const KNOWN_DISCIPLINES = ['OT', 'PT', 'ST', 'RN', 'HHA', 'PCA', 'SI', 'COTA', 'PTA'];
 
 export function mapServiceToDiscipline(serviceType: string | undefined): string {
-  const s = (serviceType ?? '').toUpperCase();
-  const first = s.trim().split(/\s+/)[0] ?? '';
+  const s = (serviceType ?? '').toUpperCase().trim();
+  const first = s.split(/\s+/)[0] ?? '';
   const token = first.replace(/[^A-Z]/g, '');
   // Prefer the leading discipline token (PT school 30 → PT, COTA → COTA).
   if (token && KNOWN_DISCIPLINES.includes(token)) return token;
@@ -40,8 +40,9 @@ export function mapServiceToDiscipline(serviceType: string | undefined): string 
   // Word-boundary checks — do NOT use bare includes('OT') (matches COTA).
   if (/\bPT\b/.test(s) || /\bPHYSICAL\b/.test(s)) return 'PT';
   if (/\bOT\b/.test(s) || /\bOCCUPATIONAL\b/.test(s)) return 'OT';
-  // ProviderSoft uses SLP; HHA GetDisciplines uses SP for speech.
-  if (/\bSLP\b/.test(s) || /\bSPEECH\b/.test(s)) return 'SP';
+  // ProviderSoft uses SLP; HHA AcceptedServices / GetDisciplines use ST for speech.
+  // PR #5 mapped to SP, but prod UpdatePatientDemographics rejects "SP " / "SP".
+  if (/\bSLP\b/.test(s) || /\bSPEECH\b/.test(s) || token === 'SP') return 'ST';
   if (/\bST\b/.test(s)) return 'ST';
   if (/\bRN\b/.test(s)) return 'RN';
   if (/\bHHA\b/.test(s)) return 'HHA';

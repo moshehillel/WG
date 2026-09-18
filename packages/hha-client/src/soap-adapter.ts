@@ -370,8 +370,10 @@ export class SoapHhaClientAdapter implements HhaClient {
       coordinatorId: String(defaults.coordinatorId),
     });
 
-    const afterUpper = new Set(afterEcho.acceptedServices.map((d) => d.toUpperCase()));
-    const stillMissing = missing.filter((d) => !afterUpper.has(d.toUpperCase()));
+    const afterUpper = new Set(
+      afterEcho.acceptedServices.map((d) => d.trim().toUpperCase()).filter(Boolean),
+    );
+    const stillMissing = missing.filter((d) => !afterUpper.has(d.trim().toUpperCase()));
     if (stillMissing.length) {
       throw new Error(
         `UpdatePatientDemographics reported success but AcceptedServices still missing [${stillMissing.join(', ')}] ` +
@@ -1032,17 +1034,17 @@ export class SoapHhaClientAdapter implements HhaClient {
 
   async resolveDisciplineId(serviceType: string | undefined): Promise<string | undefined> {
     await this.loadDisciplineCache();
-    const token = extractDisciplineFromServiceType(serviceType);
+    const token = extractDisciplineFromServiceType(serviceType)?.trim();
     if (token) {
-      // ProviderSoft SLP → HHA GetDisciplines SP (not SLP/-411, not legacy ST).
-      const hhaName = token === 'SLP' ? 'SP' : token;
+      // ProviderSoft SLP / mistaken SP → HHA GetDisciplines ST (AcceptedServices rejects SP).
+      const hhaName = token === 'SLP' || token === 'SP' ? 'ST' : token;
       const match = matchByName(hhaName, this.disciplineCache ?? []);
       if (match) return match.id;
     }
     const canonicalDiscipline: Record<string, string> = {
       'occupational therapy': 'OT',
       'physical therapy': 'PT',
-      'speech therapy': 'SP',
+      'speech therapy': 'ST',
     };
     const mapped = canonicalDiscipline[normalizeRefName(serviceType ?? '')];
     if (mapped) {
