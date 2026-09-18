@@ -216,6 +216,15 @@ export class HhaSoapClient {
     );
   }
 
+  /**
+   * PatientID-only GetPatientContracts — returns active + discharged rows.
+   * VisitDate-filtered calls can omit placements (e.g. start after mandate begin),
+   * which then makes AddPatientContract fail with -74 and nothing to reuse.
+   */
+  getPatientContractsAll(patientId: number): Promise<SoapCallResult> {
+    return this.call('GetPatientContracts', `<PatientID>${patientId}</PatientID>`);
+  }
+
   searchVisits(filters: {
     patientId?: number;
     caregiverId?: number;

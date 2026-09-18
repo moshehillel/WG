@@ -1,0 +1,16 @@
+{
+  "Rule": "WhiteGloveStack-NightlyCaseReportsSchedule20498DCD-BuDJo8jy9dRx",
+  "Targets": [
+    {
+      "Id": "Target0",
+      "Arn": "arn:aws:states:us-east-1:065194293782:stateMachine:PipelineStateMachine88B77A5B-eJgbrZEUeDAf",
+      "RoleArn": "arn:aws:iam::065194293782:role/WhiteGloveStack-PipelineStateMachineEventsRoleE4B26-O2vSdA8wMYO1",
+      "InputTransformer": {
+        "InputPathsMap": {
+          "id": "$.id"
+        },
+        "InputTemplate": "{\"sandbox\":false,\"sandboxEmailFixtures\":false,\"sandboxLiveFixtures\":false,\"runId\":<id>,\"dryRun\":false,\"reportKinds\":[\"opened_cases\",\"closed_cases\",\"new_services\"]}"
+      }
+    }
+  ]
+}

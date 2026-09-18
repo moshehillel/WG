@@ -1,0 +1,333 @@
+{
+  "runAt": "2026-09-17T01:42:42.205Z",
+  "strategy": "For the five overlap kids: discharge mistaken NEW #8596xxx if ACTIVE; try reactivate OLD if discharged. No AddPatientContract. No discharge_service re-enable.",
+  "dischargeRefs": {
+    "toId": "",
+    "reasonId": "36883"
+  },
+  "dischargeDateUsed": "2026-09-17",
+  "summary": {
+    "patient_or_contracts_unavailable": 1,
+    "fixed_old_active_new_cleared": 4
+  },
+  "results": [
+    {
+      "name": "Edmund Picciuto",
+      "caseId": "258272446",
+      "seededPatientId": "26372249",
+      "oldPlacementId": "8522217",
+      "newPlacementId": "8596091",
+      "resolvedPatientId": "26372249",
+      "search": {
+        "patientId": null,
+        "attempts": [
+          {
+            "how": "name EDMUND PICCIUTO",
+            "ok": true,
+            "eid": "0",
+            "msg": "",
+            "ids": []
+          },
+          {
+            "how": "name Edmund Picciuto",
+            "ok": true,
+            "eid": "0",
+            "msg": "",
+            "ids": []
+          },
+          {
+            "how": "admission 258272446",
+            "ok": true,
+            "eid": "0",
+            "msg": "",
+            "ids": []
+          },
+          {
+            "how": "mr 258272446",
+            "ok": true,
+            "eid": "0",
+            "msg": "",
+            "ids": []
+          },
+          {
+            "how": "name Status=All Edmund Picciuto",
+            "ok": true,
+            "eid": "0",
+            "msg": "",
+            "ids": []
+          },
+          {
+            "how": "admission Status=All 258272446",
+            "ok": true,
+            "eid": "0",
+            "msg": "",
+            "ids": []
+          },
+          {
+            "how": "mr Status=All 258272446",
+            "ok": true,
+            "eid": "0",
+            "msg": "",
+            "ids": []
+          }
+        ]
+      },
+      "before": {
+        "contractsOk": false,
+        "eid": "-56",
+        "msg": "Patient ID is an invalid for current Agency.",
+        "placements": [],
+        "old": null,
+        "new": null
+      },
+      "actions": {},
+      "after": null,
+      "outcome": "patient_or_contracts_unavailable",
+      "needsUi": true,
+      "notes": [
+        "seeded PatientID 26372249 contracts eid=-56 msg=Patient ID is an invalid for current Agency. count=0",
+        "search Status=All found no PatientID"
+      ]
+    },
+    {
+      "name": "Fiona Downs",
+      "caseId": "258270803",
+      "seededPatientId": "24865860",
+      "oldPlacementId": "8045831",
+      "newPlacementId": "8596095",
+      "resolvedPatientId": "24865860",
+      "search": null,
+      "before": {
+        "contractsOk": true,
+        "eid": "0",
+        "msg": "",
+        "placements": [
+          {
+            "placementId": "8045831",
+            "state": "ACTIVE",
+            "start": "2025-12-01",
+            "svc": "PT",
+            "contract": "Americare Certified"
+          }
+        ],
+        "old": {
+          "placementId": "8045831",
+          "state": "ACTIVE"
+        },
+        "new": null
+      },
+      "actions": {
+        "dischargeNew": {
+          "skipped": true,
+          "reason": "NEW placement not in contract list"
+        },
+        "reactivateOld": {
+          "skipped": true,
+          "reason": "old already ACTIVE"
+        }
+      },
+      "after": {
+        "placements": [
+          {
+            "placementId": "8045831",
+            "state": "ACTIVE",
+            "start": "2025-12-01",
+            "svc": "PT",
+            "contract": "Americare Certified"
+          }
+        ],
+        "old": {
+          "placementId": "8045831",
+          "state": "ACTIVE"
+        },
+        "new": null
+      },
+      "outcome": "fixed_old_active_new_cleared",
+      "needsUi": false,
+      "notes": [
+        "NEW #8596095 not found on patient (already gone or wrong PatientID)",
+        "OLD #8045831 already ACTIVE"
+      ]
+    },
+    {
+      "name": "Helena Galeanocarvajal",
+      "caseId": "04725821",
+      "seededPatientId": "23012434",
+      "oldPlacementId": "6897698",
+      "newPlacementId": "8596089",
+      "resolvedPatientId": "23012434",
+      "search": null,
+      "before": {
+        "contractsOk": true,
+        "eid": "0",
+        "msg": "",
+        "placements": [
+          {
+            "placementId": "6897698",
+            "state": "ACTIVE",
+            "start": "2025-01-01",
+            "svc": "OT SOC/ROC OASIS",
+            "contract": "Extended Home Care Therapy"
+          }
+        ],
+        "old": {
+          "placementId": "6897698",
+          "state": "ACTIVE"
+        },
+        "new": null
+      },
+      "actions": {
+        "dischargeNew": {
+          "skipped": true,
+          "reason": "NEW placement not in contract list"
+        },
+        "reactivateOld": {
+          "skipped": true,
+          "reason": "old already ACTIVE"
+        }
+      },
+      "after": {
+        "placements": [
+          {
+            "placementId": "6897698",
+            "state": "ACTIVE",
+            "start": "2025-01-01",
+            "svc": "OT SOC/ROC OASIS",
+            "contract": "Extended Home Care Therapy"
+          }
+        ],
+        "old": {
+          "placementId": "6897698",
+          "state": "ACTIVE"
+        },
+        "new": null
+      },
+      "outcome": "fixed_old_active_new_cleared",
+      "needsUi": false,
+      "notes": [
+        "NEW #8596089 not found on patient (already gone or wrong PatientID)",
+        "OLD #6897698 already ACTIVE"
+      ]
+    },
+    {
+      "name": "Hooria Arshad",
+      "caseId": "02891799",
+      "seededPatientId": "22854608",
+      "oldPlacementId": "6812439",
+      "newPlacementId": "8596053",
+      "resolvedPatientId": "22854608",
+      "search": null,
+      "before": {
+        "contractsOk": true,
+        "eid": "0",
+        "msg": "",
+        "placements": [
+          {
+            "placementId": "6812439",
+            "state": "ACTIVE",
+            "start": "2024-12-07",
+            "svc": "OT SOC/ROC OASIS",
+            "contract": "Extended Home Care Therapy"
+          }
+        ],
+        "old": {
+          "placementId": "6812439",
+          "state": "ACTIVE"
+        },
+        "new": null
+      },
+      "actions": {
+        "dischargeNew": {
+          "skipped": true,
+          "reason": "NEW placement not in contract list"
+        },
+        "reactivateOld": {
+          "skipped": true,
+          "reason": "old already ACTIVE"
+        }
+      },
+      "after": {
+        "placements": [
+          {
+            "placementId": "6812439",
+            "state": "ACTIVE",
+            "start": "2024-12-07",
+            "svc": "OT SOC/ROC OASIS",
+            "contract": "Extended Home Care Therapy"
+          }
+        ],
+        "old": {
+          "placementId": "6812439",
+          "state": "ACTIVE"
+        },
+        "new": null
+      },
+      "outcome": "fixed_old_active_new_cleared",
+      "needsUi": false,
+      "notes": [
+        "NEW #8596053 not found on patient (already gone or wrong PatientID)",
+        "OLD #6812439 already ACTIVE"
+      ]
+    },
+    {
+      "name": "Karlandrew Navelgas",
+      "caseId": "258267421",
+      "seededPatientId": "22680255",
+      "oldPlacementId": "6711683",
+      "newPlacementId": "8596097",
+      "resolvedPatientId": "22680255",
+      "search": null,
+      "before": {
+        "contractsOk": true,
+        "eid": "0",
+        "msg": "",
+        "placements": [
+          {
+            "placementId": "6711683",
+            "state": "ACTIVE",
+            "start": "2024-11-07",
+            "svc": "PT",
+            "contract": "Americare Certified"
+          }
+        ],
+        "old": {
+          "placementId": "6711683",
+          "state": "ACTIVE"
+        },
+        "new": null
+      },
+      "actions": {
+        "dischargeNew": {
+          "skipped": true,
+          "reason": "NEW placement not in contract list"
+        },
+        "reactivateOld": {
+          "skipped": true,
+          "reason": "old already ACTIVE"
+        }
+      },
+      "after": {
+        "placements": [
+          {
+            "placementId": "6711683",
+            "state": "ACTIVE",
+            "start": "2024-11-07",
+            "svc": "PT",
+            "contract": "Americare Certified"
+          }
+        ],
+        "old": {
+          "placementId": "6711683",
+          "state": "ACTIVE"
+        },
+        "new": null
+      },
+      "outcome": "fixed_old_active_new_cleared",
+      "needsUi": false,
+      "notes": [
+        "NEW #8596097 not found on patient (already gone or wrong PatientID)",
+        "OLD #6711683 already ACTIVE"
+      ]
+    }
+  ]
+}

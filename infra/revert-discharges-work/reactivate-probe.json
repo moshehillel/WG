@@ -1,0 +1,83 @@
+[
+  {
+    "name": "Arshad",
+    "place": "6812439",
+    "tried": [
+      {
+        "i": 0,
+        "ok": false,
+        "eid": "-74",
+        "msg": "Invalid \"DischargeToID\"",
+        "status": "Failure"
+      },
+      {
+        "i": 1,
+        "ok": false,
+        "eid": "-310",
+        "msg": "\"Atleast one update required!\"",
+        "status": "Failure"
+      },
+      {
+        "i": 2,
+        "ok": false,
+        "eid": "-310",
+        "msg": "\"Cannot save the entry! The placement period overlaps with another placement!\"",
+        "status": "Failure"
+      }
+    ],
+    "after": [
+      {
+        "placementId": "8596053",
+        "disc": "(empty)",
+        "start": "2026-09-16"
+      }
+    ],
+    "hist": [
+      {
+        "placementId": "6812439",
+        "disc": "2026-09-15",
+        "start": "2024-12-07"
+      }
+    ]
+  },
+  {
+    "name": "Solomon",
+    "place": "8519959",
+    "tried": [
+      {
+        "i": 0,
+        "ok": false,
+        "eid": "-74",
+        "msg": "Invalid \"DischargeToID\"",
+        "status": "Failure"
+      },
+      {
+        "i": 1,
+        "ok": false,
+        "eid": "-310",
+        "msg": "\"Atleast one update required!\"",
+        "status": "Failure"
+      },
+      {
+        "i": 2,
+        "ok": true,
+        "eid": "0",
+        "status": "Success"
+      }
+    ],
+    "after": [
+      {
+        "placementId": "8519959",
+        "disc": "(empty)",
+        "start": "2026-09-08"
+      }
+    ],
+    "hist": [
+      {
+        "placementId": "8519959",
+        "disc": "(empty)",
+        "start": "2026-09-08"
+      }
+    ]
+  }
+]

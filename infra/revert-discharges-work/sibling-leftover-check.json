@@ -1,0 +1,48 @@
+{
+  "runAt": "2026-09-17T01:47:02.291Z",
+  "APPLY": false,
+  "rows": [
+    {
+      "name": "Roy-Al Porter",
+      "patientId": "24555059",
+      "before": [
+        "#7909108:ACTIVE"
+      ],
+      "old": "ACTIVE",
+      "neu": "missing",
+      "discharge": null,
+      "after": [
+        "#7909108:ACTIVE"
+      ],
+      "leftoverNewActive": false
+    },
+    {
+      "name": "Michael Asunto",
+      "patientId": "24617583",
+      "before": [
+        "#7935330:ACTIVE"
+      ],
+      "old": "ACTIVE",
+      "neu": "missing",
+      "discharge": null,
+      "after": [
+        "#7935330:ACTIVE"
+      ],
+      "leftoverNewActive": false
+    },
+    {
+      "name": "Caleb Rolon",
+      "patientId": "24301609",
+      "before": [
+        "#7802393:ACTIVE"
+      ],
+      "old": "ACTIVE",
+      "neu": "missing",
+      "discharge": null,
+      "after": [
+        "#7802393:ACTIVE"
+      ],
+      "leftoverNewActive": false
+    }
+  ]
+}

@@ -1,0 +1,215 @@
+{
+  "runId": "886d6a26-a989-a9d4-9e89-74f7a9bfeaef",
+  "reportKind": "discharge_service",
+  "processed": 17,
+  "succeeded": 7,
+  "skipped": 7,
+  "failed": 3,
+  "exceptions": [
+    {
+      "code": "hha_api_error",
+      "message": "[discharge_service] row=258272396 step=dischargeService: HHA patient not found for caseId=\"258272396\" — cannot discharge safely",
+      "reportKind": "discharge_service",
+      "rowId": "258272396",
+      "details": {
+        "step": "dischargeService",
+        "serviceCode": "OT HC Eval",
+        "startDate": "08/26/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "MALLARD VICTOR BARTH",
+        "firstName": "MALLARD VICTOR",
+        "lastName": "BARTH",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[discharge_service] row=282389 step=dischargeService: Ambiguous HHA discharge: patient has 1 active placement(s); no HHA placement matches report Service Type \"SLP HC EVAL\" / Service Begin Date \"06/23/2026\". Coordinator: verify both fields match the active service line in HHA exactly.",
+      "reportKind": "discharge_service",
+      "rowId": "282389",
+      "details": {
+        "step": "dischargeService",
+        "serviceCode": "SLP HC EVAL",
+        "startDate": "06/23/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "Jaxxon Godbee",
+        "firstName": "Jaxxon",
+        "lastName": "Godbee",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=1029641 skipped: Early Intervention not sent to HHA",
+      "reportKind": "discharge_service",
+      "rowId": "1029641",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Sloan Greiner",
+        "firstName": "Sloan",
+        "lastName": "Greiner",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "hha_api_error",
+      "message": "[discharge_service] row=04737934 step=dischargeService: Ambiguous HHA discharge: patient has 1 active placement(s); no HHA placement matches report Service Type \"PT HC Eval\" / Service Begin Date \"09/03/2026\". Coordinator: verify both fields match the active service line in HHA exactly.",
+      "reportKind": "discharge_service",
+      "rowId": "04737934",
+      "details": {
+        "step": "dischargeService",
+        "serviceCode": "PT HC Eval",
+        "startDate": "09/03/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "Landon Hsu",
+        "firstName": "Landon",
+        "lastName": "Hsu",
+        "programType": "Preferred Certified Therapy"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=1052849 skipped: Early Intervention not sent to HHA",
+      "reportKind": "discharge_service",
+      "rowId": "1052849",
+      "details": {
+        "triageReason": "early_intervention",
+        "patientName": "Andrea Obaje",
+        "firstName": "Andrea",
+        "lastName": "Obaje",
+        "programType": "Early Intervention"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=258271503 skipped: already discharged / no active HHA placements",
+      "reportKind": "discharge_service",
+      "rowId": "258271503",
+      "details": {
+        "triageReason": "already_discharged",
+        "serviceCode": "OT HC Eval",
+        "startDate": "08/09/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "MADISON OLIVER",
+        "firstName": "MADISON",
+        "lastName": "OLIVER",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=258271503 skipped: already discharged / no active HHA placements",
+      "reportKind": "discharge_service",
+      "rowId": "258271503",
+      "details": {
+        "triageReason": "already_discharged",
+        "serviceCode": "OT HC Eval",
+        "startDate": "09/09/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "MADISON OLIVER",
+        "firstName": "MADISON",
+        "lastName": "OLIVER",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=258270052 skipped: already discharged / no active HHA placements",
+      "reportKind": "discharge_service",
+      "rowId": "258270052",
+      "details": {
+        "triageReason": "already_discharged",
+        "serviceCode": "PT HC Eval",
+        "startDate": "08/01/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "ROY-AL PORTER",
+        "firstName": "ROY-AL",
+        "lastName": "PORTER",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=258270052 skipped: already discharged / no active HHA placements",
+      "reportKind": "discharge_service",
+      "rowId": "258270052",
+      "details": {
+        "triageReason": "already_discharged",
+        "serviceCode": "PT HC Eval",
+        "startDate": "09/01/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "ROY-AL PORTER",
+        "firstName": "ROY-AL",
+        "lastName": "PORTER",
+        "programType": "Americare Certified"
+      }
+    },
+    {
+      "code": "skipped_by_rule",
+      "message": "[discharge_service] row=P0800016094701 skipped: already discharged / no active HHA placements",
+      "reportKind": "discharge_service",
+      "rowId": "P0800016094701",
+      "details": {
+        "triageReason": "already_discharged",
+        "serviceCode": "PT HC Eval",
+        "startDate": "08/10/2026",
+        "dischargeDate": "09/15/2026",
+        "patientName": "Caleb Rolon",
+        "firstName": "Caleb",
+        "lastName": "Rolon",
+        "programType": "Americare Certified"
+      }
+    }
+  ],
+  "successes": [
+    {
+      "rowId": "02891799",
+      "patientName": "HOORIA ARSHAD",
+      "firstName": "HOORIA",
+      "lastName": "ARSHAD",
+      "programType": "Extended Home Care Therapy"
+    },
+    {
+      "rowId": "04725821",
+      "patientName": "HELENA GALEANOCARVAJAL",
+      "firstName": "HELENA",
+      "lastName": "GALEANOCARVAJAL",
+      "programType": "Extended Home Care Therapy"
+    },
+    {
+      "rowId": "258271503",
+      "patientName": "MADISON OLIVER",
+      "firstName": "MADISON",
+      "lastName": "OLIVER",
+      "programType": "Americare Certified"
+    },
+    {
+      "rowId": "258272446",
+      "patientName": "EDMUND PICCIUTO",
+      "firstName": "EDMUND",
+      "lastName": "PICCIUTO",
+      "programType": "Americare Certified"
+    },
+    {
+      "rowId": "258270052",
+      "patientName": "ROY-AL PORTER",
+      "firstName": "ROY-AL",
+      "lastName": "PORTER",
+      "programType": "Americare Certified"
+    },
+    {
+      "rowId": "P0800016094701",
+      "patientName": "Caleb Rolon",
+      "firstName": "Caleb",
+      "lastName": "Rolon",
+      "programType": "Americare Certified"
+    },
+    {
+      "rowId": "06771684",
+      "patientName": "MARTIN SOLOMON",
+      "firstName": "MARTIN",
+      "lastName": "SOLOMON",
+      "programType": "Extended Home Care Therapy"
+    }
+  ]
+}

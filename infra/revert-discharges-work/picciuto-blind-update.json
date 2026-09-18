@@ -1,0 +1,23 @@
+{
+  "dischargeNew": {
+    "http": 400,
+    "status": "Failure",
+    "eid": "-315",
+    "msg": "Requires \"DischargeToID\"",
+    "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><UpdatePatientContractResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integ"
+  },
+  "reactivateOld": {
+    "http": 400,
+    "status": "Failure",
+    "eid": "-56",
+    "msg": "Patient ID is an invalid for current Agency.",
+    "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><UpdatePatientContractResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integ"
+  },
+  "contractsAgain": {
+    "http": 400,
+    "status": "Failure",
+    "eid": "-56",
+    "msg": "Patient ID is an invalid for current Agency.",
+    "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><GetPatientContractsResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integra"
+  }
+}
