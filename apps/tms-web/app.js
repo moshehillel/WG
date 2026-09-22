@@ -3830,16 +3830,20 @@ async function adminChildDetail(studentId, opts = {}) {
         </div>
         ${bulkBar('child-sessions')}
         <table>
-          <tr>${bulkTh('child-sessions')}<th>Date</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
-          ${filteredSessions.map((x) => `<tr>
+          <tr>${bulkTh('child-sessions')}<th>Date</th><th>Time</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
+          ${filteredSessions.map((x) => {
+            const time = [x.beginTime, x.endTime].filter(Boolean).join('–') || '—';
+            return `<tr>
             ${bulkTd('child-sessions', x.id)}
             <td>${esc(x.dateOfService)}</td>
+            <td>${esc(time)}</td>
             <td>${esc(x.weekStart || '—')}</td>
             <td>${esc(x.weekStatus || '—')}</td>
             <td>${esc(x.attendance)}</td>
             <td>${esc(x.notes || '')}</td>
             <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
-          </tr>`).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
+          </tr>`;
+          }).join('') || '<tr><td colspan="8">No sessions in this date range.</td></tr>'}
         </table>
       </div>
 
