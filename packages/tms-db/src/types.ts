@@ -32,6 +32,15 @@ export interface School {
   createdAt: string;
 }
 
+/** Persisted district / payer entity (signer for timesheets when school has none). */
+export interface District {
+  id: string;
+  name: string;
+  signerName: string;
+  signerEmail: string;
+  createdAt?: string;
+}
+
 /** Per-school academic calendar: year bounds + closed days (holidays/breaks). */
 export interface SchoolCalendar {
   schoolId: string;
@@ -95,7 +104,7 @@ export interface Student {
   createdAt: string;
 }
 
-export type MandateKind = 'regular' | 'makeup_auth';
+export type MandateKind = 'regular' | 'makeup_auth' | 'makeup_weekly';
 
 export interface Mandate {
   id: string;
@@ -103,7 +112,10 @@ export interface Mandate {
   providerId: string;
   serviceType: string;
   discipline: Discipline | '';
-  /** makeup_auth = leftover makeup pool (does not consume weekly mandate). */
+  /**
+   * makeup_auth = leftover makeup pool (does not consume weekly mandate).
+   * makeup_weekly = weekly-cadence makeup authorization (freq like Weekly; unlinked makeups may use it).
+   */
   mandateKind?: MandateKind;
   /**
    * Sessions allowed per calendar week when frequencyKind is weekly (or omitted).
@@ -178,6 +190,7 @@ export const ADDITIONAL_SERVICE_TYPES = [
   'progress_report',
   'consultation',
   'meetings',
+  'documentation',
   'paid_absence',
 ] as const;
 
@@ -188,6 +201,7 @@ export const ADDITIONAL_SERVICE_LABELS: Record<AdditionalServiceType, string> = 
   progress_report: 'Progress report',
   consultation: 'Consultation',
   meetings: 'Meetings',
+  documentation: 'Documentation',
   paid_absence: 'Paid absence',
 };
 
@@ -212,7 +226,7 @@ export interface SessionRow {
   cancelReason: string;
   makeupOfSessionId: string;
   serviceType: string;
-  /** Eval / progress report / consultation / meetings — empty for PDF caseload visits. */
+  /** Eval / progress report / consultation / meetings / documentation — empty for PDF caseload visits. */
   additionalServiceType?: AdditionalServiceType | '';
   location: string;
   notes: string;
@@ -357,6 +371,7 @@ export interface AuditEvent {
 export interface TmsSnapshot {
   users: AppUser[];
   schools: School[];
+  districts: District[];
   schoolCalendars: SchoolCalendar[];
   providers: Provider[];
   adminNotes: AdminNote[];
@@ -377,6 +392,7 @@ export function emptySnapshot(): TmsSnapshot {
   return {
     users: [],
     schools: [],
+    districts: [],
     schoolCalendars: [],
     providers: [],
     adminNotes: [],

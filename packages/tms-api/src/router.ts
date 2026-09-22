@@ -1003,7 +1003,10 @@ function parseNoteTags(b: Record<string, unknown>, existing: string[] = []): str
 }
 
 function parseMandateKind(raw: unknown, fallback: MandateKind = 'regular'): MandateKind {
-  return String(raw || fallback) === 'makeup_auth' ? 'makeup_auth' : 'regular';
+  const v = String(raw || fallback);
+  if (v === 'makeup_auth') return 'makeup_auth';
+  if (v === 'makeup_weekly') return 'makeup_weekly';
+  return 'regular';
 }
 
 function parseNullableNumber(v: unknown): number | null {
@@ -1285,6 +1288,48 @@ export async function handleTmsRequest(
       (w) => w.envelopeId === envelopeId || w.id === envelopeId.replace(/^email:/, ''),
     );
     if (!week) return json(404, { error: 'Envelope week not found.' });
+
+    // Locker #38: refuse to lock if any session still lacks a required no-peer note.
+    const lockSessions = store.sessionsForWeek(week.id);
+    const lockSoloErrors: string[] = [];
+    for (const s of lockSessions) {
+      if (isAdditionalServiceType(s.additionalServiceType || '')) continue;
+      const dayPeers = providerDaySessions(
+        store.data.sessions,
+        store.data.weeks,
+        week.providerId,
+        s.dateOfService,
+        s.id,
+      );
+      const soloNoteErr = soloGroupMandateNoteError({
+        notes: s.notes,
+        serviceType: s.serviceType,
+        studentId: s.studentId,
+        attendance: s.attendance,
+        mandates: store.data.mandates,
+        presentGroupPeerCount: presentGroupPeerCount({
+          candidate: s,
+          peers: dayPeers,
+          mandates: store.data.mandates,
+        }),
+      });
+      if (soloNoteErr) {
+        const who = studentNameById(store).get(s.studentId) || s.studentId;
+        lockSoloErrors.push(`${s.dateOfService} ${who}: ${soloNoteErr}`);
+      }
+    }
+    if (lockSoloErrors.length) {
+      console.warn('[tms-esign] lock refused — solo-group note locker', {
+        weekId: week.id,
+        envelopeId,
+        errors: lockSoloErrors,
+      });
+      return json(400, {
+        error: lockSoloErrors[0],
+        errors: lockSoloErrors,
+        locked: false,
+      });
+    }
 
     const signedKey = `tms/signed/${week.id}.pdf`;
     const timesheetKey = week.timesheetKey || `tms/timesheets/${week.id}.pdf`;
@@ -2541,11 +2586,24 @@ export async function handleTmsRequest(
         id: newId(),
         studentId,
         providerId: String(b.providerId || ''),
-        serviceType: String(b.serviceType || (mandateKind === 'makeup_auth' ? 'Makeup authorization' : '')),
+        serviceType: String(
+          b.serviceType ||
+            (mandateKind === 'makeup_auth' || mandateKind === 'makeup_weekly'
+              ? 'Makeup authorization'
+              : ''),
+        ),
         discipline,
         mandateKind,
-        frequencyPerWeek: frequencyKind === 'school_day_cycle' || mandateKind === 'makeup_auth' ? 0 : (Number.isFinite(freq) ? freq : 0),
-        frequencyKind: mandateKind === 'makeup_auth' ? 'weekly' : frequencyKind,
+        frequencyPerWeek:
+          frequencyKind === 'school_day_cycle' || mandateKind === 'makeup_auth'
+            ? 0
+            : Number.isFinite(freq)
+              ? freq
+              : 0,
+        frequencyKind:
+          mandateKind === 'makeup_auth' || mandateKind === 'makeup_weekly'
+            ? 'weekly'
+            : frequencyKind,
         sessionsPerPeriod: Number.isFinite(sessionsPerPeriod) ? sessionsPerPeriod : 0,
         periodSchoolDays:
           frequencyKind === 'school_day_cycle' ? Number(b.periodSchoolDays || 6) : undefined,
@@ -2618,7 +2676,10 @@ export async function handleTmsRequest(
           : frequencyKind === 'school_day_cycle'
           ? 0
           : Number.isFinite(freq) ? freq : existing.frequencyPerWeek,
-        frequencyKind: mandateKind === 'makeup_auth' ? 'weekly' : frequencyKind,
+        frequencyKind:
+          mandateKind === 'makeup_auth' || mandateKind === 'makeup_weekly'
+            ? 'weekly'
+            : frequencyKind,
         sessionsPerPeriod: Number.isFinite(Number(sessionsPerPeriod)) ? Number(sessionsPerPeriod) : existing.sessionsPerPeriod,
         periodSchoolDays: frequencyKind === 'school_day_cycle'
           ? (Number.isFinite(Number(periodSchoolDays)) ? Number(periodSchoolDays) : existing.periodSchoolDays || 6)
@@ -3719,8 +3780,9 @@ export async function handleTmsRequest(
       });
       const already = existingKeys.get(key);
       if (already) {
-        // Exact duplicate (same child+DOS+times+attendance) of an already-saved session → skip.
+        // Exact duplicate (same child+DOS+times+attendance) of an already-saved session → skip save.
         // Missed vs attended at the same slot are different records and must not collide.
+        // Locker #38 still re-validates below — duplicate skip must never bypass the note gate.
         skipped.push({
           id: already.id,
           studentId: already.studentId,
@@ -3973,8 +4035,21 @@ export async function handleTmsRequest(
     }
 
     // Solo-group note locker after the full batch is known so same-slot peers count.
+    // Also re-check exact-duplicate skips against the existing saved row — re-import must
+    // never silently accept a non-compliant solo-group session that slipped in earlier.
     if (!failed.length) {
-      for (const item of pending) {
+      const pendingByDos = pending.map((p) => p.session);
+      const toCheck: Array<{ session: SessionRow; studentName: string }> = [
+        ...pending,
+        ...skipped
+          .map((sk) => {
+            const session = store.data.sessions.find((s) => s.id === sk.id);
+            return session ? { session, studentName: sk.studentName } : null;
+          })
+          .filter((x): x is { session: SessionRow; studentName: string } => Boolean(x)),
+      ];
+      for (const item of toCheck) {
+        if (isAdditionalServiceType(item.session.additionalServiceType || '')) continue;
         const dayPeers = [
           ...providerDaySessions(
             store.data.sessions,
@@ -3983,9 +4058,9 @@ export async function handleTmsRequest(
             item.session.dateOfService,
             item.session.id,
           ),
-          ...pending
-            .map((p) => p.session)
-            .filter((s) => s.id !== item.session.id && s.dateOfService === item.session.dateOfService),
+          ...pendingByDos.filter(
+            (s) => s.id !== item.session.id && s.dateOfService === item.session.dateOfService,
+          ),
         ];
         const soloNoteErr = soloGroupMandateNoteError({
           notes: item.session.notes,
@@ -4242,7 +4317,7 @@ export async function handleTmsRequest(
       additionalServiceType = rawAdditional;
     } else {
       return json(400, {
-        error: 'Pick a valid additional service: Eval, Progress report, Consultation, Meetings, or Paid absence.',
+        error: 'Pick a valid additional service: Eval, Progress report, Consultation, Meetings, Documentation, or Paid absence.',
       });
     }
     const serviceTypeFromAdditional = additionalServiceType
@@ -4566,6 +4641,39 @@ export async function handleTmsRequest(
       return json(400, {
         error: overMandateSummary(check.errors),
         errors: check.errors,
+      });
+    }
+    const soloNoteErrors: string[] = [];
+    for (const s of sessions) {
+      if (isAdditionalServiceType(s.additionalServiceType || '')) continue;
+      const dayPeers = providerDaySessions(
+        store.data.sessions,
+        store.data.weeks,
+        week.providerId,
+        s.dateOfService,
+        s.id,
+      );
+      const soloNoteErr = soloGroupMandateNoteError({
+        notes: s.notes,
+        serviceType: s.serviceType,
+        studentId: s.studentId,
+        attendance: s.attendance,
+        mandates: store.data.mandates,
+        presentGroupPeerCount: presentGroupPeerCount({
+          candidate: s,
+          peers: dayPeers,
+          mandates: store.data.mandates,
+        }),
+      });
+      if (soloNoteErr) {
+        const who = studentNameById(store).get(s.studentId) || s.studentId;
+        soloNoteErrors.push(`${s.dateOfService} ${who}: ${soloNoteErr}`);
+      }
+    }
+    if (soloNoteErrors.length) {
+      return json(400, {
+        error: soloNoteErrors[0],
+        errors: soloNoteErrors,
       });
     }
     const provider = store.data.providers.find((p) => p.id === week!.providerId);

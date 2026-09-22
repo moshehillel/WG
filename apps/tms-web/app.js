@@ -1086,11 +1086,12 @@ const ADDITIONAL_SERVICE_LABELS = {
   progress_report: 'Progress report',
   consultation: 'Consultation',
   meetings: 'Meetings',
+  documentation: 'Documentation',
   paid_absence: 'Paid absence',
 };
 
 function additionalServiceOptions(selected) {
-  return ['eval', 'progress_report', 'consultation', 'meetings', 'paid_absence']
+  return ['eval', 'progress_report', 'consultation', 'meetings', 'documentation', 'paid_absence']
     .map((v) => `<option value="${v}"${selected === v ? ' selected' : ''}>${esc(ADDITIONAL_SERVICE_LABELS[v])}</option>`)
     .join('');
 }
@@ -1293,7 +1294,7 @@ function mandateFreqLabel(m) {
   return `${n} / week`;
 }
 
-/** Type dropdown: Weekly / 6-Day / Monthly / Makeup auth (old Madison UX). */
+/** Type dropdown: Weekly / 6-Day / Monthly / Makeup auth / Makeup- Weekly. */
 function mandateTypeOptions(selected) {
   const cur = String(selected || 'weekly');
   return [
@@ -1301,20 +1302,57 @@ function mandateTypeOptions(selected) {
     ['school_day_cycle', '6-Day Cycle'],
     ['monthly', 'Monthly'],
     ['makeup_auth', 'Makeup auth'],
+    ['makeup_weekly', 'Makeup- Weekly'],
   ]
     .map(([v, label]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${label}</option>`)
     .join('');
+}
+
+const MANDATE_DISCIPLINES = ['OT', 'PT', 'SLP'];
+
+/** Infer OT/PT/SLP from Related Service / billing-style text (matches API/caseload). */
+function disciplineFromServiceTypeUi(serviceType) {
+  const s = String(serviceType || '').toUpperCase();
+  if (/\bSLP\b|\bSPEECH\b|\bLANGUAGE\b/.test(s)) return 'SLP';
+  if (/\bOT\b|\bOCCUPATIONAL\b/.test(s)) return 'OT';
+  if (/\bPT\b|\bPHYSICAL\b/.test(s)) return 'PT';
+  return '';
+}
+
+function disciplineDefaultServiceType(discipline) {
+  if (discipline === 'PT') return 'Physical Therapy';
+  if (discipline === 'OT') return 'Occupational Therapy';
+  if (discipline === 'SLP') return 'Speech';
+  return '';
+}
+
+function mandateDisciplineOptions(selected) {
+  const cur = String(selected || '');
+  return [
+    '<option value="">Select…</option>',
+    ...MANDATE_DISCIPLINES.map(
+      (d) => `<option value="${d}"${cur === d ? ' selected' : ''}>${d}</option>`,
+    ),
+  ].join('');
+}
+
+function resolveMandateDiscipline(explicit, serviceType) {
+  const raw = String(explicit || '').trim().toUpperCase();
+  if (MANDATE_DISCIPLINES.includes(raw)) return raw;
+  return disciplineFromServiceTypeUi(serviceType);
 }
 
 /** Map Type select → mandateKind + frequencyKind. */
 function parseMandateTypeValue(typeVal) {
   const v = String(typeVal || 'weekly');
   if (v === 'makeup_auth') return { mandateKind: 'makeup_auth', frequencyKind: 'weekly' };
+  if (v === 'makeup_weekly') return { mandateKind: 'makeup_weekly', frequencyKind: 'weekly' };
   if (v === 'school_day_cycle' || v === 'monthly') return { mandateKind: 'regular', frequencyKind: v };
   return { mandateKind: 'regular', frequencyKind: 'weekly' };
 }
 
 function mandateTypeValueFromMandate(m) {
+  if (m?.mandateKind === 'makeup_weekly') return 'makeup_weekly';
   if (m?.mandateKind === 'makeup_auth') return 'makeup_auth';
   if (m?.frequencyKind === 'school_day_cycle') return 'school_day_cycle';
   if (m?.frequencyKind === 'monthly') return 'monthly';
@@ -1330,6 +1368,7 @@ function bindMandateEditor(opts) {
       const panel = document.getElementById(panelId);
       if (!m || !panel) return;
       const typeVal = mandateTypeValueFromMandate(m);
+      const discVal = resolveMandateDiscipline(m.discipline, m.serviceType);
       panel.hidden = false;
       panel.innerHTML = `
         <h3>Edit mandate</h3>
@@ -1342,7 +1381,12 @@ function bindMandateEditor(opts) {
           </label>
         </div>
         <div class="row">
-          <label>Service type <input id="emService" value="${esc(m.serviceType || '')}" /></label>
+          <label>Discipline
+            <select id="emDisc">${mandateDisciplineOptions(discVal)}</select>
+          </label>
+          <label>Service type <input id="emService" value="${esc(m.serviceType || '')}" placeholder="Physical Therapy" /></label>
+        </div>
+        <div class="row">
           <label>Type
             <select id="emKind">${mandateTypeOptions(typeVal)}</select>
           </label>
@@ -1385,10 +1429,23 @@ function bindMandateEditor(opts) {
           const { mandateKind, frequencyKind } = parseMandateTypeValue(document.getElementById('emKind').value);
           const ratioGroup = document.getElementById('emRatio').value === 'group';
           const groupSize = groupSizeRaw === '' ? (ratioGroup ? 2 : 1) : Number(groupSizeRaw);
+          const serviceTypeRaw = document.getElementById('emService').value;
+          const discipline = resolveMandateDiscipline(
+            document.getElementById('emDisc').value,
+            serviceTypeRaw,
+          );
+          if (!discipline) throw new Error('Select a discipline (OT, PT, or SLP).');
+          const serviceType =
+            String(serviceTypeRaw || '').trim() ||
+            (mandateKind === 'makeup_auth' || mandateKind === 'makeup_weekly'
+              ? disciplineDefaultServiceType(discipline)
+              : '') ||
+            serviceTypeRaw;
           await api('PATCH', `/admin/mandates/${id}`, {
             studentId: document.getElementById('emStudent').value,
             providerId: document.getElementById('emProvider').value,
-            serviceType: document.getElementById('emService').value,
+            discipline,
+            serviceType,
             mandateKind,
             ratioGroup,
             durationMinutes: durationRaw === '' ? null : Number(durationRaw),
@@ -2296,11 +2353,7 @@ async function therapistHome(statusFlash) {
         <label>Service type
           <select id="additionalServiceType">
             <option value="">Select…</option>
-            <option value="eval">Eval</option>
-            <option value="progress_report">Progress report</option>
-            <option value="consultation">Consultation</option>
-            <option value="meetings">Meetings</option>
-            <option value="paid_absence">Paid absence</option>
+            ${additionalServiceOptions()}
           </select>
         </label>
         <label>Student
@@ -3262,6 +3315,10 @@ async function adminDash() {
     const qs = q.toString();
     const listed = await api('GET', `/admin/weeks${qs ? `?${qs}` : ''}`);
     weeks = Array.isArray(listed?.weeks) ? listed.weeks : [];
+    // Client-side guard: API must honor weekStart; keep UI truthful if an old deploy leaks rows.
+    if (!weeksAll && weeksWeekStart) {
+      weeks = weeks.filter((w) => String(w.weekStart || '').trim() === weeksWeekStart);
+    }
   } catch (err) {
     console.warn('admin weeks load failed', err);
     weeks = [];
@@ -3358,12 +3415,12 @@ async function adminDash() {
       ${bulkBar('weeks')}
       <div class="table-wrap">
       <table>
-        <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>School</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
+        <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>District</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
         ${weeks.map((w) => `<tr data-week-row="${esc(w.id)}" class="${String(w.hhaStatus) === 'failed' ? 'hha-failed-row' : ''}">
           ${bulkTd('weeks', w.id)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.providerName || '—')}</td>
-          <td>${esc(w.schoolName || w.district || '—')}</td>
+          <td>${esc(w.programType || w.district || w.schoolName || '—')}</td>
           <td>${esc(w.sessionCount)}</td>
           <td>${esc(w.status)}</td>
           <td>${esc(w.signerName || w.signerEmail || '—')}</td>
@@ -5803,7 +5860,7 @@ async function adminMandates() {
       </div>
       <div id="addMandateForm" hidden>
         <h2>Add mandate manually</h2>
-        <p class="muted"><strong>Type</strong> is <strong>Weekly</strong>, <strong>6-Day Cycle</strong>, <strong>Monthly</strong>, or <strong>Makeup auth</strong>. Makeup auth uses a remaining session pool; unlinked makeups use Makeup auth, miss-linked makeups do not.</p>
+        <p class="muted"><strong>Type</strong> is <strong>Weekly</strong>, <strong>6-Day Cycle</strong>, <strong>Monthly</strong>, <strong>Makeup auth</strong>, or <strong>Makeup- Weekly</strong>. Makeup auth uses a remaining session pool; Makeup- Weekly uses a weekly makeup frequency (same Freq / count as Weekly). Unlinked makeups use Makeup auth or Makeup- Weekly; miss-linked makeups do not. Choose a <strong>Discipline</strong> (OT / PT / SLP) for every mandate, including makeup types.</p>
         <div class="row">
           <label>Student
             <select id="manStudent">${studentOptions(students)}</select>
@@ -5813,7 +5870,12 @@ async function adminMandates() {
           </label>
         </div>
         <div class="row">
-          <label>Service type <input id="manService" placeholder="PT School" /></label>
+          <label>Discipline
+            <select id="manDisc">${mandateDisciplineOptions('')}</select>
+          </label>
+          <label>Service type <input id="manService" placeholder="Physical Therapy" /></label>
+        </div>
+        <div class="row">
           <label>Type
             <select id="manKind">${mandateTypeOptions('weekly')}</select>
           </label>
@@ -5932,7 +5994,13 @@ async function adminMandates() {
       const durationMinutes = durationRaw === '' ? null : Number(durationRaw);
       const ratioGroup = document.getElementById('manRatio').value === 'group';
       const groupSize = groupSizeRaw === '' ? (ratioGroup ? 2 : 1) : Number(groupSizeRaw);
+      const serviceTypeRaw = document.getElementById('manService').value;
+      const discipline = resolveMandateDiscipline(
+        document.getElementById('manDisc').value,
+        serviceTypeRaw,
+      );
       if (!studentId) throw new Error('Select a student.');
+      if (!discipline) throw new Error('Select a discipline (OT, PT, or SLP).');
       if (!Number.isFinite(freq) || freq < 0) throw new Error('Enter frequency or makeup count.');
       if (durationMinutes != null && (!Number.isFinite(durationMinutes) || durationMinutes <= 0)) {
         throw new Error('Duration must be a positive number of minutes.');
@@ -5940,10 +6008,16 @@ async function adminMandates() {
       if (!Number.isFinite(groupSize) || groupSize <= 0) {
         throw new Error('Group size must be a positive number.');
       }
+      const serviceType =
+        String(serviceTypeRaw || '').trim() ||
+        (mandateKind === 'makeup_auth' || mandateKind === 'makeup_weekly'
+          ? disciplineDefaultServiceType(discipline) || 'Makeup authorization'
+          : '');
       const out = await api('POST', '/admin/mandates', {
         studentId,
         providerId: document.getElementById('manProvider').value,
-        serviceType: document.getElementById('manService').value || (mandateKind === 'makeup_auth' ? 'Makeup authorization' : ''),
+        discipline,
+        serviceType,
         mandateKind,
         ratioGroup,
         durationMinutes,
