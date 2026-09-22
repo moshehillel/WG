@@ -3600,6 +3600,26 @@ export async function handleTmsRequest(
     for (const row of ordered) {
       const label = formatUploadRowLabel(row);
       const display = String(row.studentName || '').trim() || 'Unknown';
+      if (!String(row.studentName || '').trim()) {
+        console.warn('upload-sessions empty-name slice', {
+          providerId,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          sliceHead: String(row.sourceSlice || '')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 320),
+        });
+        failed.push({
+          studentName: display,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: Could not read the student name from this PDF row. Re-export/re-scan the note so the child name and program id appear next to the date/time, then try again.`,
+        });
+        continue;
+      }
       const student = resolveStudent(row.studentName);
       if (!student) {
         failed.push({

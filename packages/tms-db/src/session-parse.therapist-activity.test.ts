@@ -128,4 +128,64 @@ Astacio, Wiglishai
     expect(rows[0]?.cptUnits).toBe(2);
     expect(rows[0]?.signed).toBe(true);
   });
+
+  it('does not treat note scraps or therapist credentials as student names', () => {
+    const noteFrag = `
+Therapist Activity Printed: 9/17/2026
+09/17/26 In: 11:00 AM Out: 11:30 AM Preschool
+However, with prompting the student produced the target sound.
+Notes Entered: 9/17/2026
+Signed: 9/17/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+Page 1 of 1 Astacio, Wiglishai
+`;
+    const credOnly = `
+Therapist Activity Printed: 9/16/2026
+09/16/26 In: 09:30 AM Out: 10:00 AM Preschool
+Signed: 9/16/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+Page 1 of 1 Astacio, Wiglishai
+`;
+    expect(parseTherapistActivityText(noteFrag)[0]?.studentName).toBe('');
+    expect(parseTherapistActivityText(credOnly)[0]?.studentName).toBe('');
+  });
+
+  it('recovers child name before ICD/CPT when CBRS is missing from the extract', () => {
+    const noCbrs = `
+Therapist Activity Printed: 9/16/2026
+09/16/26 In: 09:30 AM Out: 10:00 AM Preschool DAVIS, MICHAEL F80.2 92507x1
+Michael participated well in the session.
+Notes Entered: 9/16/2026
+Signed: 9/16/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+Page 1 of 1 Astacio, Wiglishai
+`;
+    const rows = parseTherapistActivityText(noCbrs);
+    expect(rows[0]?.studentName).toMatch(/^DAVIS,\s*MICHAEL$/i);
+  });
+
+  it('recovers child name emitted before the In/Out clock row', () => {
+    const nameBeforeClock = `
+Therapist Activity Printed: 9/16/2026
+Date / Time Setting Child ICD/CPT Codes Notes
+DAVIS, MICHAEL CBRS2627S000934513(ST-I) F80.2 92507x1
+09/16/26 In: 09:30 AM Out: 10:00 AM Preschool
+Michael participated well in the session.
+Notes Entered: 9/16/2026
+Signed: 9/16/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+Page 1 of 1 Astacio, Wiglishai
+`;
+    const rows = parseTherapistActivityText(nameBeforeClock);
+    expect(rows[0]?.studentName).toMatch(/^DAVIS,\s*MICHAEL$/i);
+  });
+
+  it('skips junk LAST, FIRST then still catches the real child before CBRS', () => {
+    const junkThenReal = `
+Therapist Activity Printed: 9/17/2026
+09/17/26 In: 11:00 AM Out: 11:30 AM Preschool
+However, with prompting DAVIS, MICHAEL CBRS2627S000934513(ST-I) F80.2 92507x1
+the student produced the target sound.
+Notes Entered: 9/17/2026
+Signed: 9/17/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+`;
+    const rows = parseTherapistActivityText(junkThenReal);
+    expect(rows[0]?.studentName).toMatch(/^DAVIS,\s*MICHAEL$/i);
+  });
 });

@@ -103,12 +103,28 @@ function scrubPeerAbsentPhrases(notes: string): string {
     .trim();
 }
 
+/** Frontline "Log Type / Notes" label — text before the colon is attendance status. */
+const FRONTLINE_LOG_TYPE_LEAD_RE =
+  /^\s*((?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|Make[\s-]?up))\s*:/i;
+
 export function attendanceFromNotes(
   notes: string,
   timeIn: string,
   timeOut: string,
 ): ParsedSessionNote['attendance'] {
   const n = String(notes || '');
+  // Prefer Log Type before the colon (Frontline "Log Type / Notes" column).
+  const lead = n.match(FRONTLINE_LOG_TYPE_LEAD_RE);
+  if (lead) {
+    const label = lead[1] || '';
+    if (/^Service\s+Provided$/i.test(label)) {
+      if (MAKEUP_RE.test(n) && /make[\s-]?up\s+(?:for|session)/i.test(n)) return 'makeup';
+      return 'attended';
+    }
+    if (/^Make[\s-]?up$/i.test(label)) return 'makeup';
+    // Provider Absence / Student Not Available / School Closed / etc.
+    return 'missed';
+  }
   if (
     /provider absence|student absence|student not available|student not in school|student absent/i.test(
       n,
@@ -151,6 +167,112 @@ function cleanStudentName(raw: string): string {
     .replace(/,\s*$/, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/** Credential / degree tokens that Therapist Activity appends after the provider name. */
+const CREDENTIAL_NAME_TOKEN =
+  /^(?:m\.?s\.?|m\.?a\.?|ph\.?d\.?|ed\.?d\.?|dpt|otd|otr(?:\/l)?|ccc(?:-?slp)?|slp|tssld|pt|ot|r?pt|msed|maed)$/i;
+
+/**
+ * Common note / header words that the loose `LAST, FIRST` fallback can steal when
+ * CBRS / (ST-I) is missing from a PDF slice (e.g. "However, with prompting…").
+ */
+const NOTE_FRAGMENT_NAME_TOKEN =
+  /^(?:however|with|without|the|and|but|when|then|during|after|before|while|although|because|therefore|student|students|therapist|provider|session|notes|signed|cosigned|preschool|school|clinic|home|telehealth|make|made|makeup|absent|absence|cancelled|canceled|participated|required|presented|transitioned|prompting|support|target|sound|sounds|peer|peers|group|individual)$/i;
+
+/**
+ * Reject therapist credentials and clinical-note scraps as student names.
+ * Used after both the CBRS-anchored matcher and the loose fallback.
+ */
+export function isPlausibleStudentName(last: string, first: string): boolean {
+  const l = String(last || '').replace(/\s+/g, ' ').trim();
+  const f = String(first || '').replace(/\s+/g, ' ').trim();
+  if (!l || !f) return false;
+  if (l.length < 2 || f.length < 2) return false;
+  if (CREDENTIAL_NAME_TOKEN.test(l) || CREDENTIAL_NAME_TOKEN.test(f)) return false;
+  if (NOTE_FRAGMENT_NAME_TOKEN.test(l) || NOTE_FRAGMENT_NAME_TOKEN.test(f)) return false;
+  // Real Frontline / Activity child names are Title/UPPER; lowercase first token is note text.
+  if (/^[a-z]/.test(f)) return false;
+  return true;
+}
+
+function takeStudentName(last: string, first: string): string {
+  if (!isPlausibleStudentName(last, first)) return '';
+  return cleanStudentName(`${last}, ${first}`);
+}
+
+/** LAST, FIRST (optional III/Jr/Sr) — shared by Therapist Activity name anchors. */
+const ACTIVITY_LAST_FIRST =
+  '([A-Z][A-Za-z0-9\'.-]+(?:\\s+(?:III|II|IV|Jr\\.?|Sr\\.?))?),\\s*([A-Za-z][A-Za-z\'.-]+)';
+
+/**
+ * Pick the best plausible LAST, FIRST from regex matches (prefer later hits —
+ * closer to CBRS/ICD/CPT — and skip credential / note-fragment false names).
+ */
+function firstPlausibleActivityName(
+  matches: Iterable<RegExpMatchArray>,
+  preferLast = true,
+): string {
+  const list = [...matches];
+  const ordered = preferLast ? list.reverse() : list;
+  for (const m of ordered) {
+    const name = takeStudentName(m[1] || '', m[2] || '');
+    if (name) return name;
+  }
+  return '';
+}
+
+/**
+ * Therapist Activity child name from a session slice.
+ * 1) Before CBRS / (ST-I)  2) Before ICD or CPTxN (when program id dropped from Tj)
+ * 3) Loose LAST, FIRST in the pre-notes header window (all candidates)
+ * 4) Optional lookback just before the date/time (name emitted before the clock row)
+ */
+export function extractTherapistActivityStudentName(
+  slice: string,
+  opts?: { afterTimes?: string; lookback?: string },
+): string {
+  const body = String(slice || '');
+  if (!body && !opts?.lookback) return '';
+
+  const cbrsRe = new RegExp(
+    `\\b${ACTIVITY_LAST_FIRST}\\b(?=\\s*(?:CBRS|\\([A-Z]{2,4}))`,
+    'g',
+  );
+  let name = firstPlausibleActivityName(body.matchAll(cbrsRe));
+  if (name) return name;
+
+  // When CBRS/(ST-…) is missing from the extract, Child still usually sits right
+  // before ICD (F80.2) or CPT (92507x1). Do not require CBRS for those rows.
+  const icdCptRe = new RegExp(
+    `\\b${ACTIVITY_LAST_FIRST}\\b(?=\\s*(?:[A-TV-Z]\\d{2}(?:\\.\\d+)?\\b|\\d{4,5}\\s*[xX×]\\s*\\d))`,
+    'g',
+  );
+  name = firstPlausibleActivityName(body.matchAll(icdCptRe));
+  if (name) return name;
+
+  const afterTimes = opts?.afterTimes ?? body;
+  const headerWindow =
+    afterTimes.split(
+      /\b(?:Notes\s+Entered|Signed:|Cosigned:|Meets\s+Medicaid|925\d{2}|97\d{3}|961\d{2}|975\d{2})/i,
+    )[0] || afterTimes;
+  // Loose: first-name must be Title/UPPER so "However, with" never wins.
+  const looseTitleRe = new RegExp(
+    `\\b([A-Z][A-Za-z0-9'.-]+(?:\\s+(?:III|II|IV|Jr\\.?|Sr\\.?))?),\\s*([A-Z][A-Za-z'.-]+)\\b`,
+    'g',
+  );
+  name = firstPlausibleActivityName(headerWindow.matchAll(looseTitleRe), false);
+  if (name) return name;
+
+  const lookback = String(opts?.lookback || '');
+  if (lookback) {
+    name = firstPlausibleActivityName(lookback.matchAll(cbrsRe));
+    if (name) return name;
+    name = firstPlausibleActivityName(lookback.matchAll(icdCptRe));
+    if (name) return name;
+  }
+
+  return '';
 }
 
 function isServiceTypeSchoolLabel(name: string): boolean {
@@ -405,22 +527,14 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
     const groupMatch = slice.match(/#\s*Children\s*in\s*Group:\s*(\d+)/i);
     const groupSize = groupMatch ? Number(groupMatch[1]) : 0;
 
-    // Prefer "LAST, FIRST" (optional III/Jr) immediately before program id / (ST-I).
-    const nameRe =
-      /\b([A-Z][A-Za-z0-9'.-]+(?:\s+(?:III|II|IV|Jr\.?|Sr\.?))?),\s*([A-Za-z][A-Za-z'.-]+)\b(?=\s*(?:CBRS|\([A-Z]{2,4}))/g;
-    const nameHits = [...slice.matchAll(nameRe)];
-    let studentName = '';
-    if (nameHits.length) {
-      const last = nameHits[nameHits.length - 1]!;
-      studentName = cleanStudentName(`${last[1]}, ${last[2]}`);
-    }
-    if (!studentName) {
-      const afterTimes = slice.slice(hit.endIdx - hit.idx);
-      const nameHit = afterTimes.match(
-        /\b([A-Z][A-Za-z0-9'.-]+(?:\s+(?:III|II|IV|Jr\.?|Sr\.?))?),\s*([A-Za-z][A-Za-z'.-]+)\b/,
-      );
-      if (nameHit) studentName = cleanStudentName(`${nameHit[1]}, ${nameHit[2]}`);
-    }
+    // Look back only immediately before this clock row (not the whole prior session)
+    // so Child+CBRS emitted before In:/Out: still binds, without stealing the prior child.
+    const lookback = flat.slice(Math.max(0, hit.idx - 180), hit.idx);
+    const afterTimes = slice.slice(hit.endIdx - hit.idx);
+    const studentName = extractTherapistActivityStudentName(slice, {
+      afterTimes,
+      lookback,
+    });
 
     // Allow split tokens like (ST 1 - G) from Tj extraction.
     const svcCode = (slice.match(/\(([A-Z]{2,4}\s*\d?\s*-?\s*[IG])\)/i) || [])[1] || '';
@@ -498,6 +612,25 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
   return rows;
 }
 
+/** Log Type label that opens a Frontline clinical / absence note block. */
+const FRONTLINE_LOG_TYPE_IN_BLOB_RE =
+  /(?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|Make[\s-]?up)\s*:/gi;
+
+/** Ends a note block so the next slash-date can be a real service-date row again. */
+const FRONTLINE_NOTE_BOUNDARY_RE =
+  /Provider\s+Signature\s*\/?\s*Credentials|Telehealth\s*:|Student\s+Name\s*:/gi;
+
+/** End index of the last regex match in `s`, or -1. */
+function lastMatchEnd(re: RegExp, s: string): number {
+  let last = -1;
+  re.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s))) {
+    last = (m.index ?? 0) + m[0].length;
+  }
+  return last;
+}
+
 /** True when this slash-date is a Frontline service-date row (not From/To/DOB/makeup). */
 function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   const before = blob.slice(Math.max(0, idx - 64), idx);
@@ -509,6 +642,17 @@ function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   if (new RegExp(`${MAKEUP_COVERED_DATE_PREFIX}\\s*:?\\s*$`, 'i').test(before)) {
     return false;
   }
+  // Service dates sit on their own line (Frontline column). Mid-sentence dates like
+  // "first attend date 9/15/26" must not truncate the parent session or invent misses.
+  const linePrefix = blob.slice(Math.max(0, idx - 12), idx);
+  if (!/(?:^|[\r\n])[ \t]*$/.test(linePrefix)) return false;
+  // Dates inside a filled Log Type / Notes body (after Service Provided: …) before
+  // Signature/Telehealth are not service-date rows. Empty absence labels
+  // ("Provider Absence:\n09/03/…") still allow the next DOS on the following line.
+  const lookback = blob.slice(Math.max(0, idx - 2500), idx);
+  const logTypeEnd = lastMatchEnd(FRONTLINE_LOG_TYPE_IN_BLOB_RE, lookback);
+  const boundaryEnd = lastMatchEnd(FRONTLINE_NOTE_BOUNDARY_RE, lookback);
+  if (logTypeEnd > boundaryEnd && /\S/.test(lookback.slice(logTypeEnd))) return false;
   return true;
 }
 
