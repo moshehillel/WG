@@ -73,7 +73,7 @@ function summarizeCpt(found: Array<{ code: string; units: number }>): CptCoverag
   return { codes, totalUnits, procedures };
 }
 
-/** Untimed speech/language CPT codes — 1 unit covers the whole session (not 15-min). */
+/** Untimed / session-based CPT codes — 1 unit covers the whole session (not 15-min). */
 const UNTIMED_SESSION_CPT = new Set([
   '92507',
   '92508',
@@ -82,6 +82,8 @@ const UNTIMED_SESSION_CPT = new Set([
   '92523',
   '92524',
   '92610',
+  // Therapeutic procedure(s), group (2+) — Frontline bills one 97150 per visit.
+  '97150',
 ]);
 
 export function cptCodesAreUntimedSession(codes: string[]): boolean {
@@ -108,7 +110,7 @@ export function cptDurationError(
     return null;
   }
   const required = requiredCptUnitsForDuration(minutes);
-  // 92507/92508 etc. are session-based (1 unit), not timed 15-min codes.
+  // 92507/92508/97150 etc. are session-based (1 unit), not timed 15-min codes.
   if (cptCodesAreUntimedSession(coverage.codes) && coverage.totalUnits >= 1) return null;
   if (coverage.totalUnits >= required) return null;
   if (!coverage.codes.length) {

@@ -73,6 +73,13 @@ describe('CPT duration units', () => {
     expect(cptDurationError('9:00 am', '9:30 am', '97110x1', 'attended')).toMatch(/need 2 unit/i);
   });
 
+  it('allows group CPT 97150x1 for a 30-minute session', () => {
+    expect(cptDurationError('9:00 am', '9:30 am', '97150x1', 'attended')).toBeNull();
+    expect(cptDurationError('9:30 am', '10:00 am', 'CPT: 97150 Units: 1', 'attended')).toBeNull();
+    // Timed individual codes still need 15-min coverage.
+    expect(cptDurationError('9:00 am', '9:30 am', '97110x1', 'attended')).toMatch(/need 2 unit/i);
+  });
+
   it('parses CPT from weekly session text slices', () => {
     const rows = parseWeeklySessionText(`
 Student Name: Odne, Aiden
