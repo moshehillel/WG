@@ -1115,6 +1115,36 @@ export const SERVICE_CODE_ALIAS_MAP: readonly ServiceCodeAlias[] = [
     hhaServiceCodeName: "PT Eval 97162",
   },
   {
+    programType: "Horizon NJ",
+    providerSoftCode: "OT CHHA",
+    hhaServiceCodeName: "OT S9129",
+  },
+  {
+    programType: "Horizon NJ",
+    providerSoftCode: "OT HC Eval",
+    hhaServiceCodeName: "OT S9129",
+  },
+  {
+    programType: "Horizon NJ",
+    providerSoftCode: "PT CHHA",
+    hhaServiceCodeName: "PT S9131",
+  },
+  {
+    programType: "Horizon NJ",
+    providerSoftCode: "PT HC Eval",
+    hhaServiceCodeName: "PT S9131",
+  },
+  {
+    programType: "Horizon NJ",
+    providerSoftCode: "SLP CHHA",
+    hhaServiceCodeName: "ST S9128",
+  },
+  {
+    programType: "Horizon NJ",
+    providerSoftCode: "SLP HC EVAL",
+    hhaServiceCodeName: "ST S9128",
+  },
+  {
     programType: "Hughes Roger",
     providerSoftCode: "SLP CHHA",
     hhaServiceCodeName: "ST",
@@ -1632,8 +1662,8 @@ export const SERVICE_CODE_ALIAS_MAP: readonly ServiceCodeAlias[] = [
   {
     programType: "NYS Medical Indemnity Fund Therapy",
     providerSoftCode: "PT NYS EVAL 107",
-    // Sheet row 357: "PT Eval 97162 107" (no dash). Matching is dash/space tolerant.
-    hhaServiceCodeName: "PT Eval 97162 107",
+    // Contract billing name is CPT 97161. 97162 is not on this contract.
+    hhaServiceCodeName: "PT Eval 97161 107",
   },
   {
     programType: "NYS Medical Indemnity Fund Therapy",
@@ -1826,7 +1856,7 @@ export const SERVICE_CODE_ALIAS_MAP: readonly ServiceCodeAlias[] = [
     hhaServiceCodeName: "PT school group",
   },
   {
-    programType: "Preferred Certified",
+    programType: "Preferred Certified Therapy",
     providerSoftCode: "PT CHHA PREF",
     hhaServiceCodeName: "Physical Therapy",
   },
