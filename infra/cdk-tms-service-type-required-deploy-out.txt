@@ -1,0 +1,25 @@
+LIVE_OK: service type required before entry and HHA pay code
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+TMS_GIT_SHA (build define): c1b7dae-svc-type
+{
+    "CodeSha256": "CeQIOFvuNrk1v6itcTlR9cspobtbmxp/i0WtxdHyBdM=",
+    "LastModified": "2026-09-23T20:27:48.000+0000",
+    "CodeSize": 2104001
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "TMS_GIT_SHA": "223ddfb-allxsd-date",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA_USE_PRODUCTION=true preserved (unchanged)
+
+Changes:
+1. Blank session service type does not fall back to provider discipline (no PT pay code)
+2. Upload and manual create/edit return "Service type is required."
+3. HHA transfer fails that session before pay-code build
+4. Clock times are not stored as the service type (9:30 is not a 1:1 ratio)
+5. FE: admin manual session requires service type (app.js?v=130)
+

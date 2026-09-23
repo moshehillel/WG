@@ -35,6 +35,7 @@ import {
   noteCopyPasteError,
   missedSessionReasonError,
   sessionSignatureError,
+  sessionServiceTypeRequiredError,
   sessionOverlapError,
   providerDaySessions,
   presentGroupPeerCount,
@@ -78,6 +79,8 @@ import {
   districtLabelForStudent,
   listDistrictDirectory,
   findDistrictByName,
+  findDistrictDirectoryRow,
+  decodeDistrictPathId,
   resolveSchoolOrDistrictSigner,
   weekHhaRollup,
   normalizeProgramTypeKey,
@@ -1900,6 +1903,14 @@ export async function handleTmsRequest(
 
   if (req.method === 'GET' && path === '/admin/districts') {
     return adminUser(() => {
+      // Detail lookup via query so derived ids (`derived:carle place`) are not
+      // stuck in a percent-encoded path segment (API Gateway rawPath).
+      const lookup = String(req.query.id || req.query.districtId || '').trim();
+      if (lookup) {
+        const row = findDistrictDirectoryRow(store, lookup);
+        if (!row) return json(404, { error: 'District not found.' });
+        return json(200, { district: row });
+      }
       const districts = listDistrictDirectory(store);
       return json(200, { districts });
     });
@@ -1952,11 +1963,9 @@ export async function handleTmsRequest(
 
   if (req.method === 'GET' && /^\/admin\/districts\/[^/]+$/.test(path)) {
     return adminUser(() => {
-      const id = path.split('/')[3];
-      const directory = listDistrictDirectory(store);
-      const row =
-        directory.find((d) => d.id === id) ||
-        directory.find((d) => d.name.toLowerCase() === decodeURIComponent(id).toLowerCase());
+      // rawPath keeps encoding (`derived%3Acarle%20place`); match real ids,
+      // derived keys, and district names.
+      const row = findDistrictDirectoryRow(store, path.split('/')[3]);
       if (!row) return json(404, { error: 'District not found.' });
       return json(200, { district: row });
     });
@@ -1964,7 +1973,7 @@ export async function handleTmsRequest(
 
   if (req.method === 'DELETE' && /^\/admin\/districts\/[^/]+$/.test(path)) {
     return adminUser(() => {
-      const id = path.split('/')[3];
+      const id = decodeDistrictPathId(path.split('/')[3]);
       if (!id || id.startsWith('derived:')) {
         return json(400, { error: 'Derived districts cannot be deleted; remove school.district / program type labels instead.' });
       }
@@ -3809,6 +3818,18 @@ export async function handleTmsRequest(
         aiBlock: false,
       };
 
+      const serviceTypeErr = sessionServiceTypeRequiredError(session.serviceType);
+      if (serviceTypeErr) {
+        failed.push({
+          studentName,
+          dateOfService: row.dateOfService,
+          beginTime: row.beginTime,
+          endTime: row.endTime,
+          error: `${label}: ${serviceTypeErr}`,
+        });
+        continue;
+      }
+
       const projectedSessions = [
         ...store.sessionsForWeek(targetWeek.id),
         ...pending.filter((p) => p.session.weekId === targetWeek.id).map((p) => p.session),
@@ -4426,6 +4447,8 @@ export async function handleTmsRequest(
     if (additionalServiceType && !b.serviceType) {
       session.serviceType = serviceTypeFromAdditional;
     }
+    const serviceTypeErr = sessionServiceTypeRequiredError(session.serviceType);
+    if (serviceTypeErr) return json(400, { error: serviceTypeErr, errors: [serviceTypeErr] });
     if (session.attendance === 'missed') {
       session.beginTime = '';
       session.endTime = '';

@@ -5,6 +5,7 @@ import {
   ensurePatientAuthorizationForVisit,
   mandateToAuthPeriodMaximum,
   resolveHhaPatientId,
+  sessionDiscipline,
   tmsAuthorizationNumber,
   transferLockedWeek,
 } from './hha-transfer.js';
@@ -29,6 +30,15 @@ function seedSchoolMandate(
     createdAt: nowIso(),
   });
 }
+
+describe('sessionDiscipline', () => {
+  it('uses the session service type and does not invent PT from the provider when it is blank', () => {
+    expect(sessionDiscipline({ serviceType: 'ST Individual' }, 'PT')).toBe('ST');
+    expect(sessionDiscipline({ serviceType: '' }, 'PT')).toBeUndefined();
+    expect(sessionDiscipline({ serviceType: '   ' }, 'PT')).toBeUndefined();
+    expect(sessionDiscipline({ serviceType: 'Eval' }, 'OT')).toBe('OT');
+  });
+});
 
 describe('mandateToAuthPeriodMaximum / tmsAuthorizationNumber', () => {
   it('uses same-day Entire Period with visit/mandate duration minutes (WG school pattern)', () => {
@@ -584,7 +594,7 @@ describe('transferLockedWeek Program Id', () => {
     expect(visit?.serviceCode).toBe('PT school 30');
   });
 
-  it('group mandate billing uses school group; rewrites legacy individual stamp', async () => {
+  it('solo group-mandate visit bills individual service and individual pay', async () => {
     const store = new MemoryStore();
     const provider = store.upsertProvider({
       id: newId(),
@@ -640,10 +650,10 @@ describe('transferLockedWeek Program Id', () => {
       makeupOfSessionId: '',
       serviceType: 'PT School Group',
       location: 'School',
-      notes: 'ok',
+      notes: 'No group available — seen individually',
       aiFlags: [],
     });
-    // Legacy wrong stamp (individual); transfer must use school group for group mandate.
+    // Group mandate stamp; solo visit must rewrite to individual service + individual pay.
     store.upsertMandate({
       id: newId(),
       studentId: student.id,
@@ -654,7 +664,7 @@ describe('transferLockedWeek Program Id', () => {
       ratioGroup: true,
       groupSize: 2,
       durationMinutes: 30,
-      billingServiceName: 'PT school 30',
+      billingServiceName: 'PT school group 30',
       sourcePdfKey: 'caseload-csv',
       parsedAt: nowIso(),
       startOn: '2026-09-02',
@@ -666,7 +676,8 @@ describe('transferLockedWeek Program Id', () => {
     hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-30');
     hha.serviceCodesByName.set('PT SCHOOL GROUP 30', 'sc-pt-grp-30');
     hha.payCodes.set('PT $70', 'pay-pt-70');
-    hha.payCodes.set('PT Group $34', 'pay-pt-grp-34');
+    hha.payCodes.set('PT GROUP $34', 'pay-pt-grp-34');
+    hha.payCodes.set('AM PT $34', 'pay-am-pt-34');
 
     const result = await transferLockedWeek({
       store,
@@ -677,7 +688,262 @@ describe('transferLockedWeek Program Id', () => {
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
     const visit = [...hha.visits.values()][0];
+    expect(visit?.serviceCode).toBe('PT school 30');
+    expect(visit?.payRate).toBe('70');
+  });
+
+  it('multi-peer group visit bills group service and group pay', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: 34,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const studentA = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Ana',
+      lastName: 'Binaj',
+      dob: '',
+      programId: '1012074',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const studentB = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Ben',
+      lastName: 'Cole',
+      dob: '',
+      programId: '1012075',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '998',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    const sessionA = store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: studentA.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School Group',
+      location: 'School',
+      notes: 'group',
+      aiFlags: [],
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: studentB.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School Group',
+      location: 'School',
+      notes: 'group',
+      aiFlags: [],
+    });
+    for (const sid of [studentA.id, studentB.id]) {
+      store.upsertMandate({
+        id: newId(),
+        studentId: sid,
+        providerId: provider.id,
+        serviceType: 'Physical Therapy',
+        discipline: 'PT',
+        frequencyPerWeek: 2,
+        ratioGroup: true,
+        groupSize: 2,
+        durationMinutes: 30,
+        billingServiceName: 'PT school group 30',
+        sourcePdfKey: 'caseload-csv',
+        parsedAt: nowIso(),
+        startOn: '2026-09-02',
+        endOn: '2027-06-25',
+        createdAt: nowIso(),
+      });
+    }
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-30');
+    hha.serviceCodesByName.set('PT SCHOOL GROUP 30', 'sc-pt-grp-30');
+    hha.payCodes.set('PT $70', 'pay-pt-70');
+    hha.payCodes.set('PT GROUP $34', 'pay-pt-grp-34');
+    hha.payCodes.set('AM PT $34', 'pay-am-pt-34');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    const visits = [...hha.visits.values()];
+    expect(visits.length).toBeGreaterThanOrEqual(1);
+    const visitA = visits.find((v) => v.patientId === '999') ?? visits[0];
+    expect(visitA?.serviceCode).toBe('PT school group 30');
+    expect(visitA?.payRate).toBe('34');
+    void sessionA;
+  });
+
+  it('group mandate billing uses school group; rewrites legacy individual stamp', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: 34,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const studentA = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Ana',
+      lastName: 'Binaj',
+      dob: '',
+      programId: '1012074',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const studentB = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Ben',
+      lastName: 'Cole',
+      dob: '',
+      programId: '1012075',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '998',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: studentA.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School Group',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: studentB.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School Group',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    // Legacy wrong stamp (individual); multi-peer transfer must use school group.
+    for (const sid of [studentA.id, studentB.id]) {
+      store.upsertMandate({
+        id: newId(),
+        studentId: sid,
+        providerId: provider.id,
+        serviceType: 'Physical Therapy',
+        discipline: 'PT',
+        frequencyPerWeek: 2,
+        ratioGroup: true,
+        groupSize: 2,
+        durationMinutes: 30,
+        billingServiceName: 'PT school 30',
+        sourcePdfKey: 'caseload-csv',
+        parsedAt: nowIso(),
+        startOn: '2026-09-02',
+        endOn: '2027-06-25',
+        createdAt: nowIso(),
+      });
+    }
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-30');
+    hha.serviceCodesByName.set('PT SCHOOL GROUP 30', 'sc-pt-grp-30');
+    hha.payCodes.set('PT $70', 'pay-pt-70');
+    hha.payCodes.set('PT GROUP $34', 'pay-pt-grp-34');
+    hha.payCodes.set('AM PT $34', 'pay-am-pt-34');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    const visit = [...hha.visits.values()].find((v) => v.patientId === '999');
     expect(visit?.serviceCode).toBe('PT school group 30');
+    expect(visit?.payRate).toBe('34');
   });
 
   it('hard-fails session when pay code missing in HHA', async () => {
@@ -768,6 +1034,90 @@ describe('transferLockedWeek Program Id', () => {
     expect(result.ok).toBe(false);
     expect(result.transferred).toBe(0);
     expect(result.errors[0]).toMatch(/Pay code "OT \$62\.5" not found/);
+    expect(result.errors[0]).toMatch(/^Kid One · 2026-09-01 09:00–09:30:/);
+  });
+
+  it('labels missing provider pay-rate errors with child · DOS · time', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'James',
+      lastName: 'Therapist',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Elizabeth',
+      lastName: 'Klicpera',
+      dob: '',
+      programId: '1',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-09-07',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-08',
+      beginTime: '10:00 am',
+      endTime: '10:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-30');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]).toMatch(
+      /^Elizabeth Klicpera · 2026-09-08 10:00 am–10:30 am: No HHA pay code rate for session/,
+    );
+    expect(store.data.weeks.find((w) => w.id === week.id)?.hhaError).toMatch(
+      /^Elizabeth Klicpera · 2026-09-08 10:00 am–10:30 am: No HHA pay code rate for session/,
+    );
   });
 
   it('hard-fails session when billing service code missing in HHA', async () => {
@@ -857,6 +1207,7 @@ describe('transferLockedWeek Program Id', () => {
     });
     expect(result.ok).toBe(false);
     expect(result.errors[0]).toMatch(/Service code "OT school 30" not found/);
+    expect(result.errors[0]).toMatch(/^Kid One · /);
   });
 
   it('uses payRateEval for eval session pay code (OT $rate)', async () => {
@@ -934,6 +1285,84 @@ describe('transferLockedWeek Program Id', () => {
     expect(result.ok).toBe(true);
     expect(result.transferred).toBe(1);
     expect(hha.calls).toContain('resolvePayCodeId');
+  });
+
+  it('fails a session with no service type and does not emit the provider PT pay code', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Kyrie',
+      lastName: 'Spencer',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: 52.5,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Fred',
+      lastName: 'Keller',
+      dob: '',
+      programId: '1',
+      programType: 'Fred S. Keller School',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-01',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: '',
+      location: 'School',
+      notes: 'Service Provided: speech session with no service type on the note',
+      aiFlags: [],
+    });
+
+    const hha = new MockHhaClient();
+    hha.payCodes.set('PT $52.5', '300564');
+    hha.payCodes.set('ST $52.5', '299841');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.transferred).toBe(0);
+    expect(result.errors[0]).toMatch(/Service type is required/i);
+    expect(result.errors.join(' ')).not.toMatch(/PT \$/);
+    expect(hha.calls).not.toContain('resolvePayCodeId');
+    expect(hha.calls).not.toContain('locateOrScheduleVisit');
   });
 
   it('saves resolved HHA caregiver id onto the provider for next transfer', async () => {
@@ -1242,7 +1671,7 @@ describe('transferLockedWeek GetVisitInfoV2 -415 after schedule', () => {
     expect(tr?.lastError).toMatch(/ConfirmVisits|VisitID|-415/i);
   });
 
-  it('re-send re-runs auth + approveVisit on already-confirmed transfers (pay flags)', async () => {
+  it('skips already-confirmed transfers with VisitID (no re-ConfirmVisits on Retry)', async () => {
     const store = new MemoryStore();
     const provider = store.upsertProvider({
       id: newId(),
@@ -1321,21 +1750,286 @@ describe('transferLockedWeek GetVisitInfoV2 -415 after schedule', () => {
     const hha = new MockHhaClient();
     hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
     hha.payCodes.set('PT $70', 'pay-pt-70');
-    hha.visits.set('1331688458', {
-      id: '1331688458',
-      patientId: '24745304',
-      visitDate: '2026-09-04',
-      startTime: '10:05 am',
-      endTime: '10:35 am',
-      approved: false,
-    });
 
     const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
     expect(result.ok).toBe(true);
     expect(result.transferred).toBe(1);
-    expect(hha.calls).toContain('upsertAuthorization');
-    expect(hha.calls).toContain('approveVisit');
+    expect(hha.calls).not.toContain('approveVisit');
+    expect(hha.calls).not.toContain('upsertAuthorization');
     expect(store.transferForSession(session.id)?.status).toBe('confirmed');
+  });
+
+  it('heals failed transfers whose lastError is Already Billed (-401)', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'James',
+      lastName: 'Vasaturo',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: 34,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Kid',
+      lastName: 'One',
+      dob: '2018-01-01',
+      programId: '909062926',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '24745304',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-09-07',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'failed',
+      hhaError:
+        'ConfirmVisits failed for visit 1331688458: Visit is already Billed (-401)',
+    });
+    const session = store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-08',
+      beginTime: '10:05 am',
+      endTime: '10:35 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.upsertTransfer({
+      id: newId(),
+      sessionId: session.id,
+      weekId: week.id,
+      status: 'failed',
+      hhaVisitId: '1331688458',
+      lastError:
+        'ConfirmVisits failed for visit 1331688458 after 22 reason pair(s): reason=107 action=111 ts=Yes/Yes: Visit is already Billed (-401)',
+      payloadHash: 'old',
+      updatedAt: nowIso(),
+    });
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+      serviceType: 'PT School',
+    });
+
+    const hha = new MockHhaClient();
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+    expect(result.ok).toBe(true);
+    expect(result.transferred).toBe(1);
+    expect(result.errors).toEqual([]);
+    expect(store.transferForSession(session.id)?.status).toBe('confirmed');
+    expect(store.transferForSession(session.id)?.lastError).toBe('');
+    expect(store.data.weeks.find((w) => w.id === week.id)?.hhaError).toBe('');
+    expect(store.data.weeks.find((w) => w.id === week.id)?.hhaStatus).toBe('confirmed');
+    expect(hha.calls).not.toContain('approveVisit');
+  });
+
+  it('fails with #38 note error (not pay-rate) when group-mandate solo lacks no-peer note', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'James',
+      lastName: 'Vasaturo',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Elizabeth',
+      lastName: 'Klicpera',
+      dob: '',
+      programId: '1',
+      programType: 'Madison-Oneida BOCES',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-09-07',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-10',
+      beginTime: '10:00 am',
+      endTime: '10:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'Service Provided: fine motor only',
+      aiFlags: [],
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'PT School Group',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      ratioGroup: true,
+      durationMinutes: 30,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+
+    const hha = new MockHhaClient();
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]).toMatch(/no peer was available|no partner available|seen individually/i);
+    expect(result.errors[0]).not.toMatch(/No HHA pay code rate/i);
+  });
+
+  it('transfers when Elizabeth-style no-peer note is present', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'James',
+      lastName: 'Vasaturo',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: 34,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Elizabeth',
+      lastName: 'Klicpera',
+      dob: '',
+      programId: '1012074',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-09-07',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-10',
+      beginTime: '10:00 am',
+      endTime: '10:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes:
+        'Student can not be seen in a group as there is no one appropriate to group her with',
+      aiFlags: [],
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      ratioGroup: true,
+      groupSize: 2,
+      durationMinutes: 30,
+      billingServiceName: 'PT school group 30',
+      sourcePdfKey: 'caseload-csv',
+      parsedAt: nowIso(),
+      startOn: '2026-09-02',
+      endOn: '2027-06-25',
+      createdAt: nowIso(),
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-30');
+    hha.serviceCodesByName.set('PT SCHOOL GROUP 30', 'sc-pt-grp-30');
+    hha.payCodes.set('PT $70', 'pay-pt-70');
+    hha.payCodes.set('PT GROUP $34', 'pay-pt-grp-34');
+    hha.payCodes.set('AM PT $34', 'pay-am-pt-34');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
   });
 });
 

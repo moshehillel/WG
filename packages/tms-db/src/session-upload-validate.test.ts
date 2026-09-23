@@ -8,9 +8,20 @@ import {
   parseCptCoverage,
   requiredCptUnitsForDuration,
   sessionIsSigned,
+  sessionServiceTypeRequiredError,
   sessionSignatureError,
 } from './session-upload-validate.js';
 import { mergeFrontlineSplitCptRows, parseWeeklySessionText } from './session-parse.js';
+
+describe('service type required', () => {
+  it('flags a blank service type and allows a real one', () => {
+    expect(sessionServiceTypeRequiredError('')).toBe('Service type is required.');
+    expect(sessionServiceTypeRequiredError('   ')).toBe('Service type is required.');
+    expect(sessionServiceTypeRequiredError(undefined)).toBe('Service type is required.');
+    expect(sessionServiceTypeRequiredError('PT School')).toBeNull();
+    expect(sessionServiceTypeRequiredError('Eval')).toBeNull();
+  });
+});
 
 describe('CPT duration units', () => {
   it('requires 2 units for 30 minutes', () => {

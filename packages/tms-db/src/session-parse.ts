@@ -881,9 +881,10 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       beginTime = '';
       endTime = '';
     }
+    // Group ratio only (1:1, 2:1). Clock times like 9:30 must not become the service type.
     const ratio = absenceOnly
       ? ''
-      : (slice.match(/\b([1-9]\s*:\s*[1-9]\d?)\b/) || [])[1] || '';
+      : (slice.match(/\b([1-4]\s*:\s*1)\b/) || [])[1] || '';
     const location = schoolFromSlice(slice);
     // Real building / Setting wins. District header is the match key only when Setting is not a school.
     const schoolName = location || reportSchool || districtHeader;

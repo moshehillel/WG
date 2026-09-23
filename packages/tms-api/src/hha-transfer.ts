@@ -1,19 +1,24 @@
 import { createHash } from 'node:crypto';
 import {
   inferCreateScheduleType,
+  isAlreadyBilledConfirmFault,
   isInvalidHhaPatientError,
   isInvalidHhaVisitError,
   isTrustedHhaPatientId,
   mapServiceToDiscipline,
+  payCodeLookupCandidates,
+  psDateToIso,
   type HhaClient,
 } from '@white-glove/hha-client';
 import {
   buildPayCodeName,
   buildSchoolBillingServiceName,
   extractDisciplineFromServiceType,
+  isGroupSchoolBillingServiceName,
   isIndividualSchoolBillingServiceName,
 } from '@white-glove/shared';
 import {
+  labelHhaTransferError,
   mandateDurationMinutesForSession,
   newId,
   nowIso,
@@ -24,6 +29,10 @@ import {
   sessionDurationMinutes,
   sessionPayCodeRate,
   sessionUsesGroupPayRate,
+  soloGroupMandateNoteError,
+  sessionServiceTypeRequiredError,
+  isAdditionalServiceType,
+  weekHhaErrorFromTransfers,
   weekHhaRollup,
   type Mandate,
   type MemoryStore,
@@ -137,8 +146,10 @@ export async function ensurePatientProgramContract(options: {
   hha: HhaClient;
   patientId: string;
   programType: string | undefined;
-  /** Mandate start when known; else visit / session date. */
+  /** Mandate start when known; else visit / session date (AddPatientContract StartDate). */
   startDate?: string;
+  /** Session DOS — used for GetPatientContracts cover-date reuse (avoids -74 miss). */
+  visitDate?: string;
   /** School billing ServiceCodeID (e.g. PT School 30) — set on placement when HHA allows. */
   serviceCodeId?: string;
   serviceCode?: string;
@@ -154,6 +165,7 @@ export async function ensurePatientProgramContract(options: {
     patientId,
     contractExternalId: String(contractNum),
     startDate: options.startDate?.trim() || undefined,
+    visitDate: options.visitDate?.trim() || options.startDate?.trim() || undefined,
     serviceCodeId: options.serviceCodeId,
     serviceCode: options.serviceCode,
   });
@@ -194,15 +206,11 @@ export function mandateToAuthPeriodMaximum(
 }
 
 function authDateIso(raw: string | undefined, fallback: string): string {
-  const t = (raw || '').trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
-  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(t)) {
-    const [mm, dd, yyyy] = t.split('/');
-    return `${yyyy}-${mm!.padStart(2, '0')}-${dd!.padStart(2, '0')}`;
-  }
-  const fb = fallback.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(fb)) return fb;
-  return fb.slice(0, 10);
+  const primary = psDateToIso(raw);
+  if (primary && /^\d{4}-\d{2}-\d{2}$/.test(primary)) return primary;
+  const fb = psDateToIso(fallback);
+  if (fb && /^\d{4}-\d{2}-\d{2}$/.test(fb)) return fb;
+  return (fallback || '').trim().slice(0, 10);
 }
 
 /**
@@ -306,6 +314,7 @@ async function locateOrScheduleVisitWithPatientRecovery(options: {
       patientId,
       programType: options.visit.programType ?? live.programType,
       startDate: options.visit.visitDate,
+      visitDate: options.visit.visitDate,
     });
 
 
@@ -329,20 +338,26 @@ async function locateOrScheduleVisitWithPatientRecovery(options: {
   }
 }
 
-/** Discipline for pay/billing: session Service Type token, else provider discipline. */
+/**
+ * Discipline for pay/billing from the session Service Type token.
+ * Provider discipline is used only when the session has a non-blank service type
+ * that is not itself a discipline (Eval, Paid absence). A blank service type
+ * must never become the provider's stored discipline (for example PT).
+ */
 export function sessionDiscipline(
   session: Pick<SessionRow, 'serviceType'>,
   providerDiscipline: string | undefined,
 ): string | undefined {
   const fromSession = extractDisciplineFromServiceType(session.serviceType);
-  // Additional labels like "Eval" / "Paid absence" are not disciplines — fall back.
   const sessionOk =
     fromSession &&
     ['OT', 'PT', 'SLP', 'ST', 'SI', 'COTA', 'PTA'].includes(fromSession)
       ? fromSession
       : undefined;
+  if (sessionOk) return sessionOk;
+  if (!String(session.serviceType || '').trim()) return undefined;
+  // Additional labels like "Eval" / "Paid absence" are not disciplines — fall back.
   return (
-    sessionOk ||
     extractDisciplineFromServiceType(providerDiscipline) ||
     providerDiscipline?.trim().toUpperCase() ||
     undefined
@@ -367,13 +382,48 @@ export async function transferLockedWeek(options: {
   let transferred = 0;
   for (const session of sessions) {
     const existing = store.transferForSession(session.id);
-    // Do not skip prior confirmed transfers — older pushes could be TMS-confirmed while HHA
-    // still lacked Auth / Confirmed / TimesheetApproved. Re-send re-runs auth + ConfirmVisits.
+    const priorVisitId = existing?.hhaVisitId?.trim() || '';
+    const priorVisitIdOk = /^\d+$/.test(priorVisitId);
+    const alreadyBilledErr = isAlreadyBilledConfirmFault(undefined, existing?.lastError);
+    // Moshe rule: never resync sessions that already entered HHA successfully.
+    // Hard-skip confirmed/ok, Already Billed (-401), and transfers with VisitID that
+    // already succeeded (do not re-CreateSchedule / re-ConfirmVisits).
+    if (existing?.status === 'confirmed' || existing?.status === 'sent') {
+      if (existing.status === 'confirmed' || priorVisitIdOk) {
+        transferred += 1;
+        continue;
+      }
+    }
+    if (priorVisitIdOk && alreadyBilledErr) {
+      store.upsertTransfer({
+        ...existing!,
+        status: 'confirmed',
+        lastError: '',
+        updatedAt: nowIso(),
+      });
+      transferred += 1;
+      continue;
+    }
+    if (existing?.status === 'failed' && priorVisitIdOk && alreadyBilledErr) {
+      store.upsertTransfer({
+        ...existing,
+        status: 'confirmed',
+        lastError: '',
+        updatedAt: nowIso(),
+      });
+      transferred += 1;
+      continue;
+    }
     const student = store.data.students.find((s) => s.id === session.studentId);
-    let scheduledVisitId = existing?.hhaVisitId?.trim() || '';
+    let scheduledVisitId = priorVisitId;
     try {
       if (!provider) {
         throw new Error('No provider on week for HHA pay/service codes');
+      }
+
+      const serviceTypeErr = sessionServiceTypeRequiredError(session.serviceType);
+      if (serviceTypeErr) {
+        throw new Error(serviceTypeErr);
       }
 
       const discipline = sessionDiscipline(session, provider.discipline);
@@ -382,26 +432,64 @@ export async function transferLockedWeek(options: {
       const mandateMinutes = mandateDurationMinutesForSession(session, store.data.mandates);
       const billingKind = sessionBillingKind(session);
       // School billing duration bucket from mandate (not Frontline clock rounding).
-      const billingDurationMinutes = billingKind === 'school' ? mandateMinutes : clockMinutes;
-      // Prefer name stored at caseload import; fall back for legacy mandates.
-      // Group mandate billing stays "school group" even for solo-group sessions
-      // (pay rate may still be individual when no peers present).
+      // Fall back to session clock when mandate is unmatched / missing RS Duration —
+      // otherwise buildSchoolBillingServiceName fails with duration=(missing).
+      const billingDurationMinutes =
+        billingKind === 'school' ? (mandateMinutes ?? clockMinutes) : clockMinutes;
+      // Peers first: Moshe rule — never bill group while paying individual.
+      // Solo / no-peer → individual service code AND individual pay.
+      // True multi-peer groups → group billing + group/AM pay.
+      const ratePeers = providerDaySessions(
+        store.data.sessions,
+        store.data.weeks,
+        week.providerId,
+        session.dateOfService,
+        session.id,
+      );
+      const payOpts = {
+        presentGroupPeerCount: presentGroupPeerCount({
+          candidate: session,
+          peers: ratePeers,
+          mandates: store.data.mandates,
+        }),
+        mandateDurationMinutes: mandateMinutes,
+      };
+      // Locker #38: hard-fail with the note error — never fall through to a confusing pay-rate miss.
+      if (!isAdditionalServiceType(session.additionalServiceType || '')) {
+        const soloNoteErr = soloGroupMandateNoteError({
+          notes: session.notes || '',
+          serviceType: session.serviceType || '',
+          studentId: session.studentId,
+          attendance: session.attendance,
+          mandates: store.data.mandates,
+          presentGroupPeerCount: payOpts.presentGroupPeerCount,
+        });
+        if (soloNoteErr) {
+          throw new Error(soloNoteErr);
+        }
+      }
+      const useGroupPay = sessionUsesGroupPayRate(session, payOpts);
       const isGroupMandate =
         Boolean(matchedMandate?.ratioGroup) ||
         (matchedMandate?.groupSize != null && Number(matchedMandate.groupSize) > 1);
+      // Group billing only when this visit also uses group pay (peers present).
+      const useGroupBilling = billingKind === 'school' && isGroupMandate && useGroupPay;
       const storedBillingName =
         billingKind === 'school' ? matchedMandate?.billingServiceName?.trim() : '';
-      const storedWrongForGroup =
-        billingKind === 'school' &&
-        isGroupMandate &&
-        isIndividualSchoolBillingServiceName(storedBillingName);
+      // Multi-peer: rewrite legacy individual stamp → group.
+      // Solo: rewrite group stamp → individual (never group-bill + individual-pay).
+      const storedOkForVisit =
+        Boolean(storedBillingName) &&
+        (useGroupBilling
+          ? !isIndividualSchoolBillingServiceName(storedBillingName)
+          : !isGroupSchoolBillingServiceName(storedBillingName));
       const billingServiceName =
-        (storedBillingName && !storedWrongForGroup ? storedBillingName : '') ||
+        (storedOkForVisit ? storedBillingName : '') ||
         buildSchoolBillingServiceName({
           discipline,
           kind: billingKind,
           durationMinutes: billingDurationMinutes,
-          group: billingKind === 'school' ? isGroupMandate : false,
+          group: useGroupBilling,
         });
       if (!billingServiceName) {
         throw new Error(
@@ -464,6 +552,7 @@ export async function transferLockedWeek(options: {
         patientId,
         programType: student?.programType,
         startDate: contractStart,
+        visitDate: session.dateOfService,
         serviceCodeId,
         serviceCode: billingServiceName,
       });
@@ -483,24 +572,9 @@ export async function transferLockedWeek(options: {
         visitDurationMinutes: clockMinutes ?? matchedMandate?.durationMinutes ?? undefined,
       });
 
-      const ratePeers = providerDaySessions(
-        store.data.sessions,
-        store.data.weeks,
-        week.providerId,
-        session.dateOfService,
-        session.id,
-      );
-      const payOpts = {
-        presentGroupPeerCount: presentGroupPeerCount({
-          candidate: session,
-          peers: ratePeers,
-          mandates: store.data.mandates,
-        }),
-        mandateDurationMinutes: mandateMinutes,
-      };
       const rate = sessionPayCodeRate(provider, session, payOpts);
       const pay = buildPayCodeName(discipline, rate ?? undefined, {
-        group: sessionUsesGroupPayRate(session, payOpts),
+        group: useGroupPay,
       });
       if (!pay) {
         throw new Error(
@@ -509,8 +583,11 @@ export async function transferLockedWeek(options: {
       }
       const payCodeId = await hha.resolvePayCodeId(pay.payCodeName);
       if (!payCodeId) {
+        const tried = payCodeLookupCandidates(pay.payCodeName);
+        const triedNote =
+          tried.length > 1 ? ` (also tried ${tried.filter((n) => n !== pay.payCodeName).join(', ')})` : '';
         throw new Error(
-          `Pay code "${pay.payCodeName}" not found in HHA GetPayRateCodes — create pay code with that exact name`,
+          `Pay code "${pay.payCodeName}" not found in HHA GetPayRateCodes${triedNote} — create pay code with that exact name or AM equivalent`,
         );
       }
 
@@ -582,6 +659,22 @@ export async function transferLockedWeek(options: {
       transferred += 1;
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
+      // -401 Already Billed: visit is done in HHA for payroll — keep/restore confirmed, do not fail week.
+      if (isAlreadyBilledConfirmFault(undefined, raw)) {
+        const visitFromErr = scheduledVisitId || raw.match(/visit\s+(\d{6,})/i)?.[1] || '';
+        store.upsertTransfer({
+          id: existing?.id || newId(),
+          sessionId: session.id,
+          weekId: week.id,
+          status: 'confirmed',
+          hhaVisitId: visitFromErr || existing?.hhaVisitId || '',
+          lastError: '',
+          payloadHash: hashSession(session),
+          updatedAt: nowIso(),
+        });
+        transferred += 1;
+        continue;
+      }
       // Surface clearer admin text for overloaded ErrorID=-310 variants.
       let message = raw;
       if (/Overlapping shifts are not allowed/i.test(raw) || /Your shift is overlapping with Patient/i.test(raw)) {
@@ -605,6 +698,10 @@ export async function transferLockedWeek(options: {
           `HHA visit was scheduled but ConfirmVisits could not read the VisitID yet (ErrorID=-415). ` +
           `Re-send to confirm + approve timesheet — VisitID ${scheduledVisitId || '(unknown)'}. (${raw})`;
       }
+      const childName = student
+        ? `${student.firstName} ${student.lastName}`.trim()
+        : '';
+      message = labelHhaTransferError(message, { childName, session });
       const visitFromErr = scheduledVisitId || raw.match(/visit\s+(\d{6,})/i)?.[1] || '';
       errors.push(message);
       store.upsertTransfer({
@@ -624,7 +721,8 @@ export async function transferLockedWeek(options: {
     ...week,
     // Derive from all eligible sessions — never mark the week confirmed while failures remain.
     hhaStatus: rollup.status,
-    hhaError: errors.length ? errors.join('\n') : rollup.status === 'failed' ? week.hhaError || '' : '',
+    // Triage text = currently-failed transfers only (do not keep stale -401 blobs after heal).
+    hhaError: weekHhaErrorFromTransfers(store, week.id),
   });
   store.audit(options.actorId, 'hha_transfer', `week:${week.id}`, null, {
     transferred,

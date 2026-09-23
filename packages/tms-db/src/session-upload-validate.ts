@@ -284,6 +284,17 @@ export function sessionIsSigned(slice: string): boolean {
   return false;
 }
 
+/** Shown when a session is saved or sent to HHA with a blank service type. */
+export const SERVICE_TYPE_REQUIRED_ERROR = 'Service type is required.';
+
+/** Block entry and HHA pay-code naming when the session itself has no service type. */
+export function sessionServiceTypeRequiredError(
+  serviceType: string | undefined | null,
+): string | null {
+  if (String(serviceType || '').trim()) return null;
+  return SERVICE_TYPE_REQUIRED_ERROR;
+}
+
 export function sessionSignatureError(slice: string, attendance: string): string | null {
   if (attendance !== 'attended' && attendance !== 'makeup') return null;
   if (sessionIsSigned(slice)) return null;

@@ -5028,3 +5028,126 @@ describe('TMS admin manual session custom note archive', () => {
     );
   });
 });
+
+describe('service type required on entry', () => {
+  it('rejects manual create and edit when service type is blank', async () => {
+    const { store, provider } = storeWithTherapist();
+    const parsed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 2x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    const studentId = (parsed.body as { student: { id: string } }).student.id;
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { weekStart: '2026-09-21', providerId: provider.id },
+    });
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+
+    const created = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/22/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: balance work in gym',
+      },
+    });
+    expect(created.status).toBe(400);
+    expect((created.body as { error: string }).error).toMatch(/Service type is required/i);
+    expect(store.data.sessions).toHaveLength(0);
+
+    const saved = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/22/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: balance work in gym',
+        serviceType: 'PT School',
+      },
+    });
+    expect(saved.status).toBe(200);
+    const sessionId = (saved.body as { session: { id: string } }).session.id;
+
+    const cleared = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: adminH,
+      query: {},
+      body: {
+        id: sessionId,
+        weekId,
+        studentId,
+        dateOfService: '09/22/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: balance work in gym',
+        serviceType: '',
+      },
+    });
+    expect(cleared.status).toBe(400);
+    expect((cleared.body as { error: string }).error).toMatch(/Service type is required/i);
+    expect(store.data.sessions.find((s) => s.id === sessionId)?.serviceType).toBe('PT School');
+  });
+
+  it('blocks upload of a note that has no service type', async () => {
+    const { store, provider } = storeWithTherapist();
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 1x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    const pdfText = [
+      'Student Name: Odne, Aiden',
+      'Service Provider: Pat Lee',
+      '09/22/2026 9:00 am 9:30 am',
+      'Service Provided: balance work in gym',
+      '97110x2',
+      signedBlock('Sep 22 2026 9:35AM'),
+    ].join('\n');
+    const uploaded = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-09-21', pdfText },
+    });
+    expect(uploaded.status).toBe(200);
+    const body = uploaded.body as {
+      ok: boolean;
+      saved: unknown[];
+      failed: Array<{ error: string }>;
+    };
+    expect(body.ok).toBe(false);
+    expect(body.saved).toHaveLength(0);
+    expect(body.failed.some((f) => /Service type is required/i.test(f.error))).toBe(true);
+    expect(store.data.sessions).toHaveLength(0);
+  });
+});
