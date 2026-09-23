@@ -203,14 +203,21 @@ describe('resolveServiceCodeIdFromRows (map before name)', () => {
     ).toBe('e-ot');
   });
 
-  it('maps NYS PT EVAL 107 to sheet HHA name (no dash) and tolerates dash variants', () => {
+  it('maps NYS PT EVAL 107 to CPT 97161 and tolerates dash variants on other evals', () => {
     expect(
       resolveServiceCodeIdFromRows({
         serviceType: 'PT NYS EVAL 107',
         programType: 'NYS Medical Indemnity Fund Therapy',
-        rows: [{ id: 'nys-107', name: 'PT Eval 97162 107' }],
+        rows: [{ id: 'nys-107', name: 'PT Eval 97161 107' }],
       }),
     ).toBe('nys-107');
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT NYS EVAL 107',
+        programType: 'NYS Medical Indemnity Fund Therapy',
+        rows: [{ id: 'wrong-cpt', name: 'PT Eval 97162 107' }],
+      }),
+    ).toBeUndefined();
     expect(
       resolveServiceCodeIdFromRows({
         serviceType: 'PT NYS EVAL 104',
@@ -219,6 +226,70 @@ describe('resolveServiceCodeIdFromRows (map before name)', () => {
         rows: [{ id: 'nys-104', name: 'PT Eval 97162-104' }],
       }),
     ).toBe('nys-104');
+  });
+
+  it('maps Horizon NJ and Preferred Certified Therapy service types to HHA billing names', () => {
+    const horizon = [
+      { id: 'pt', name: 'PT S9131' },
+      { id: 'ot', name: 'OT S9129' },
+      { id: 'st', name: 'ST S9128' },
+    ];
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT CHHA',
+        programType: 'Horizon NJ',
+        rows: horizon,
+      }),
+    ).toBe('pt');
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT HC Eval',
+        programType: 'Horizon NJ',
+        rows: horizon,
+      }),
+    ).toBe('pt');
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'OT CHHA',
+        programType: 'Horizon NJ',
+        rows: horizon,
+      }),
+    ).toBe('ot');
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'OT HC Eval',
+        programType: 'Horizon NJ',
+        rows: horizon,
+      }),
+    ).toBe('ot');
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'SLP CHHA',
+        programType: 'Horizon NJ',
+        rows: horizon,
+      }),
+    ).toBe('st');
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'SLP HC EVAL',
+        programType: 'Horizon NJ',
+        rows: horizon,
+      }),
+    ).toBe('st');
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT CHHA PREF',
+        programType: 'Preferred Certified Therapy',
+        rows: [{ id: 'pref', name: 'Physical Therapy' }],
+      }),
+    ).toBe('pref');
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT CHHA PREF',
+        programType: 'Preferred Certified',
+        rows: [{ id: 'pref', name: 'Physical Therapy' }],
+      }),
+    ).toBeUndefined();
   });
 
   it('returns every contract row that shares the aliased HHA billing name', () => {
