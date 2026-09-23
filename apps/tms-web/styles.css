@@ -1437,6 +1437,16 @@ body.is-app main {
   font-size: 1.15rem;
 }
 .modal-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.modal-panel.sign-name-panel {
+  width: min(28rem, 100%);
+  position: relative;
+  z-index: 2;
+}
+.sign-name-panel .modal-actions {
+  margin-top: 0.85rem;
+  justify-content: flex-end;
+}
+.modal-backdrop#providerSignModal { z-index: 140; }
 .timesheet-table { margin-top: 0.55rem; }
 
 /* ---- Luna support chatbot ---- */

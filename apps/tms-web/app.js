@@ -1101,6 +1101,16 @@ function additionalServiceLabel(value) {
   return ADDITIONAL_SERVICE_LABELS[value] || String(value);
 }
 
+/** Admin/therapist table cell: badge for additional services, else serviceType. */
+function sessionServiceCellHtml(s) {
+  const addl = additionalServiceLabel(s?.additionalServiceType);
+  if (addl) {
+    return `<span class="pill-warn" title="Additional service">Additional: ${esc(addl)}</span>`;
+  }
+  const svc = String(s?.serviceType || '').trim();
+  return esc(svc || '—');
+}
+
 function studentOptions(students, selected) {
   const sorted = [...(students || [])].sort((a, b) => {
     const la = `${a.firstName || ''} ${a.lastName || ''}`.trim() || a.id;
@@ -2019,6 +2029,80 @@ function bindLetterTabs(getRows, getName) {
   apply();
 }
 
+/** In-page name field. window.prompt is not focusable in this portal. */
+function askSignatureName(nameGuess) {
+  return new Promise((resolve) => {
+    document.getElementById('providerSignModal')?.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'providerSignModal';
+    backdrop.className = 'modal-backdrop';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.setAttribute('aria-labelledby', 'providerSignTitle');
+    backdrop.innerHTML = `
+      <div class="modal-panel sign-name-panel">
+        <div class="modal-head">
+          <h2 id="providerSignTitle">Sign timesheet</h2>
+        </div>
+        <p>Type your full name to sign this timesheet.</p>
+        <label for="providerSignName">Provider name
+          <input id="providerSignName" type="text" autocomplete="name" enterkeyhint="done" value="${esc(nameGuess || '')}" />
+        </label>
+        <p id="providerSignError" class="err-inline" hidden></p>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="providerSignCancel">Cancel</button>
+          <button type="button" class="btn-primary" id="providerSignOk">Sign</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(backdrop);
+    const input = backdrop.querySelector('#providerSignName');
+    const err = backdrop.querySelector('#providerSignError');
+    const cancelBtn = backdrop.querySelector('#providerSignCancel');
+    const okBtn = backdrop.querySelector('#providerSignOk');
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      backdrop.remove();
+      resolve(value);
+    };
+    const submitName = () => {
+      const name = String(input?.value || '').trim();
+      if (!name) {
+        if (err) {
+          err.hidden = false;
+          err.textContent = 'Enter your name to sign the timesheet.';
+        }
+        input?.focus();
+        return;
+      }
+      finish(name);
+    };
+    if (cancelBtn) cancelBtn.onclick = () => finish(null);
+    if (okBtn) okBtn.onclick = () => submitName();
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) finish(null);
+    });
+    input?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitName();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(null);
+      }
+    });
+    const focusName = () => {
+      if (!input || settled) return;
+      input.focus();
+      input.select();
+    };
+    requestAnimationFrame(focusName);
+    setTimeout(focusName, 0);
+  });
+}
+
 async function therapistHome(statusFlash) {
   clearActionToast();
   clearUploadIssues();
@@ -2031,6 +2115,7 @@ async function therapistHome(statusFlash) {
   let signerName = '';
   let signerEmail = '';
   let providerId = '';
+  let providerDisplayName = '';
   let schoolDistrict = '';
   let loadFailed = null;
   let schools = [];
@@ -2039,6 +2124,7 @@ async function therapistHome(statusFlash) {
   try {
     let me = await api('GET', '/me');
     providerId = me.provider?.id || '';
+    providerDisplayName = `${me.provider?.firstName || ''} ${me.provider?.lastName || ''}`.trim();
     schools = me.schools || [];
     programTypes = Array.isArray(me.programTypes) ? me.programTypes.filter(Boolean) : [];
     programTypes = [...new Set(programTypes.map((p) => String(p).trim()).filter(Boolean))].sort((a, b) =>
@@ -2098,6 +2184,7 @@ async function therapistHome(statusFlash) {
         `/me?programType=${encodeURIComponent(state.selectedProgramType)}`,
       );
       state.meSettings = me.settings || state.meSettings;
+      providerDisplayName = `${me.provider?.firstName || ''} ${me.provider?.lastName || ''}`.trim() || providerDisplayName;
     }
     const dues = (me.dueDates || []).filter((d) => d.status !== 'done');
     const alerts = me.alerts || [];
@@ -2538,7 +2625,6 @@ async function therapistHome(statusFlash) {
               String(w).toLowerCase().includes(String(name).toLowerCase()),
           );
           const rowClass = hard ? 'hard' : flags.length || underChild ? 'warn' : '';
-          const serviceLabel = additionalServiceLabel(s.additionalServiceType) || s.serviceType || '—';
           const cpt = s.cptLabel || (s.cptCodes || []).join(', ') || '—';
           const canEditAddl = Boolean(s.additionalServiceType) && canMutateExisting;
           const canRemove = canMutateExisting;
@@ -2559,7 +2645,7 @@ async function therapistHome(statusFlash) {
                 ${canEditRow ? `<button type="button" class="icon-btn" data-edit-session="${esc(s.id)}" title="Edit" aria-label="Edit">${pencilIcon()}</button>` : ''}
                 ${canRemove ? `<button type="button" class="btn" data-remove-session="${esc(s.id)}">Remove</button>` : ''}
               </td>`;
-          return `<tr class="${rowClass}" data-session-json="${esc(JSON.stringify(payload))}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${esc(serviceLabel)}</td><td>${esc(cpt)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${esc(s.notes || '')}</td>${actions}</tr>`;
+          return `<tr class="${rowClass}" data-session-json="${esc(JSON.stringify(payload))}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${sessionServiceCellHtml(s)}</td><td>${esc(cpt)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${esc(s.notes || '')}</td>${actions}</tr>`;
         }).join('') || `<tr><td colspan="8">No sessions recorded yet.</td></tr>`}
       </table>
     </div>` : ''}
@@ -2673,12 +2759,8 @@ async function therapistHome(statusFlash) {
       id = detail.week?.id || '';
     }
     if (!id) throw new Error('Week not found.');
-    const nameGuess = String(
-      state.last?.me?.provider?.firstName
-        ? `${state.last.me.provider.firstName} ${state.last.me.provider.lastName || ''}`.trim()
-        : state.email || 'Therapist',
-    ).trim();
-    const signatureName = prompt('Type your full name to sign this timesheet:', nameGuess);
+    const nameGuess = providerDisplayName || String(state.email || '').trim();
+    const signatureName = await askSignatureName(nameGuess);
     if (signatureName == null) return null;
     if (!String(signatureName || '').trim()) throw new Error('Enter your name to sign the timesheet.');
     return api('POST', `/weeks/${id}/provider-sign`, {
@@ -2909,13 +2991,15 @@ async function therapistHome(statusFlash) {
     };
   });
 
-  if (isPriorPane || isArchivePane) return;
+  // Draft list has Sign/Send row actions only — no #upload/#add session chrome.
+  if (isPriorPane || isArchivePane || isDraftList) return;
 
   const viewEl = document.getElementById('view');
   if (!canImport) {
-    viewEl.onclick = null;
+    if (viewEl) viewEl.onclick = null;
     return;
   }
+  if (!viewEl) return;
 
   bindMakeupPickers();
 
@@ -2964,8 +3048,9 @@ async function therapistHome(statusFlash) {
     }
   };
 
-  document.getElementById('upload').onclick = async () => {
-    const btn = document.getElementById('upload');
+  const uploadBtn = document.getElementById('upload');
+  if (uploadBtn) uploadBtn.onclick = async () => {
+    const btn = uploadBtn;
     try {
       const file = document.getElementById('pdfFile').files[0];
       if (!file) throw apiError('Select a notes PDF first.', { errors: ['Select a notes PDF first.'] });
@@ -3039,8 +3124,9 @@ async function therapistHome(statusFlash) {
     }
   };
 
-  document.getElementById('add').onclick = async () => {
-    const btn = document.getElementById('add');
+  const addBtn = document.getElementById('add');
+  if (addBtn) addBtn.onclick = async () => {
+    const btn = addBtn;
     try {
       if (!state.weekId) {
         if (!providerId) throw new Error('This week is not open yet. Contact the office to complete your provider profile.');
@@ -3830,7 +3916,7 @@ async function adminChildDetail(studentId, opts = {}) {
         </div>
         ${bulkBar('child-sessions')}
         <table>
-          <tr>${bulkTh('child-sessions')}<th>Date</th><th>Time</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
+          <tr>${bulkTh('child-sessions')}<th>Date</th><th>Time</th><th>Week</th><th>Status</th><th>Service</th><th>Attendance</th><th>Notes</th><th></th></tr>
           ${filteredSessions.map((x) => {
             const time = [x.beginTime, x.endTime].filter(Boolean).join('–') || '—';
             return `<tr>
@@ -3839,11 +3925,12 @@ async function adminChildDetail(studentId, opts = {}) {
             <td>${esc(time)}</td>
             <td>${esc(x.weekStart || '—')}</td>
             <td>${esc(x.weekStatus || '—')}</td>
+            <td>${sessionServiceCellHtml(x)}</td>
             <td>${esc(x.attendance)}</td>
             <td>${esc(x.notes || '')}</td>
             <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
           </tr>`;
-          }).join('') || '<tr><td colspan="8">No sessions in this date range.</td></tr>'}
+          }).join('') || '<tr><td colspan="9">No sessions in this date range.</td></tr>'}
         </table>
       </div>
 
@@ -4263,28 +4350,31 @@ async function adminProviderDetail(providerId) {
         </div>
         ${bulkBar('prov-sessions')}
         <table>
-          <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Child</th><th>School</th><th>District</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
+          <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Time</th><th>Child</th><th>School</th><th>District</th><th>Week</th><th>Status</th><th>Service</th><th>Attendance</th><th>Notes</th><th></th></tr>
           ${filteredSessions.map((x) => {
             const hard = Boolean(x.aiBlock);
             const flags = x.aiFlags || [];
             const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
+            const time = [x.beginTime, x.endTime].filter(Boolean).join(' – ') || '—';
             return `<tr class="${rowClass}">
             ${bulkTd('prov-sessions', x.id)}
             <td>${esc(x.dateOfService)}</td>
+            <td>${esc(time)}</td>
             <td>${childNameLink(x.studentId, x.studentName || '—')}</td>
             <td>${esc(x.schoolName || '—')}</td>
             <td>${esc(x.district || '—')}</td>
             <td>${esc(x.weekStart || '—')}</td>
             <td>${esc(x.weekStatus || '—')}</td>
+            <td>${sessionServiceCellHtml(x)}</td>
             <td>${esc(x.attendance)}</td>
             <td>${esc(x.notes || '')}${flags.length ? `<div class="muted">${esc(flags.join('; '))}</div>` : ''}</td>
             <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
           </tr>`;
-          }).join('') || '<tr><td colspan="9">No sessions in this date range.</td></tr>'}
+          }).join('') || '<tr><td colspan="11">No sessions in this date range.</td></tr>'}
         </table>
 
         <h3 style="margin-top:1.25rem">Manual session + custom note</h3>
-        <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note (linked to this provider / week).</p>
+        <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note (linked to this provider / week). Optional additional-service type (Eval, Documentation, etc.) shows in the Service column above.</p>
         <div class="row">
           <label>Child
             <select id="pManStudent">${(mandates || []).map((m) => `<option value="${esc(m.studentId)}">${esc(m.studentName || m.studentId)}</option>`).join('') || '<option value="">No caseload children</option>'}</select>
@@ -4292,6 +4382,12 @@ async function adminProviderDetail(providerId) {
           <label>Date of service <input id="pManDos" placeholder="MM/DD/YYYY" /></label>
         </div>
         <div class="row">
+          <label>Additional service (optional)
+            <select id="pManAddlType">
+              <option value="">Regular session</option>
+              ${additionalServiceOptions()}
+            </select>
+          </label>
           <label>Attendance
             <select id="pManAtt">
               <option value="attended">attended</option>
@@ -4299,6 +4395,8 @@ async function adminProviderDetail(providerId) {
               <option value="makeup">makeup</option>
             </select>
           </label>
+        </div>
+        <div class="row">
           <label>Program type (optional)
             <select id="pManProgram">
               <option value="">Auto (from child)</option>
@@ -4348,7 +4446,7 @@ async function adminProviderDetail(providerId) {
         <p class="muted" id="pSendTimesheetHint" hidden></p>
 
         <h3 style="margin-top:1.25rem">Additional services</h3>
-        <p class="muted">Same service types as the therapist workspace, including paid absence.</p>
+        <p class="muted">Same service types as the therapist workspace, including paid absence. Saved rows show as <strong>Additional: …</strong> in the Service column above (or use the optional type on Manual session when attaching a custom note).</p>
         <div class="row">
           <label>Service type
             <select id="pAddlType">
@@ -4617,6 +4715,7 @@ async function adminProviderDetail(providerId) {
         schoolId: childSchoolId || undefined,
         programType: programType || undefined,
       });
+      const additionalServiceType = document.getElementById('pManAddlType')?.value || '';
       const payload = {
         weekId: ensured.week?.id,
         studentId,
@@ -4629,6 +4728,7 @@ async function adminProviderDetail(providerId) {
         cptLabel: document.getElementById('pManCpt')?.value?.trim() || '',
         notes,
       };
+      if (additionalServiceType) payload.additionalServiceType = additionalServiceType;
       if (file) {
         payload.fileName = file.name;
         payload.fileBase64 = await fileToBase64(file);
@@ -5462,7 +5562,11 @@ async function adminDistricts(opts = {}) {
     } catch (e) { setStatus(e.message, 'err'); }
   };
   document.querySelectorAll('[data-open-district]').forEach((btn) => {
-    btn.addEventListener('click', () => adminDistrictDetail(btn.getAttribute('data-open-district')));
+    btn.addEventListener('click', () => {
+      adminDistrictDetail(btn.getAttribute('data-open-district')).catch((e) =>
+        setStatus(e.message || 'Could not open this district.', 'err'),
+      );
+    });
   });
 
   if (opts.focusDistrictId) {
@@ -5471,7 +5575,21 @@ async function adminDistricts(opts = {}) {
 }
 
 async function adminDistrictDetail(districtId) {
-  const out = await api('GET', `/admin/districts/${encodeURIComponent(districtId)}`);
+  const id = String(districtId || '').trim();
+  if (!id) {
+    setStatus('District not found.', 'err');
+    return adminDistricts();
+  }
+  let out;
+  try {
+    // Query id avoids a path segment with ":" and spaces (`derived:carle place`),
+    // which API Gateway leaves percent-encoded on rawPath and the old lookup 404'd.
+    const byQuery = await api('GET', `/admin/districts?${new URLSearchParams({ id }).toString()}`);
+    out = byQuery?.district ? byQuery : await api('GET', `/admin/districts/${encodeURIComponent(id)}`);
+  } catch (e) {
+    setStatus(e.message || 'Could not open this district.', 'err');
+    return;
+  }
   const d = out.district;
   if (!d) {
     setStatus('District not found.', 'err');
