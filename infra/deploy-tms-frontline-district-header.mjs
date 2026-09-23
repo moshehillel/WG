@@ -90,10 +90,41 @@ if (!bundled.includes('District\\s*\\/\\s*Agency')) {
 console.log('bundled', outfile, 'bytes', bundled.length, 'SHA', gitSha);
 
 if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-sh(
-  `powershell -NoProfile -Command "Compress-Archive -Path '${outfile.replace(/'/g, "''")}' -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force"`,
-  { cwd: __dirname },
+// Compress-Archive fails when esbuild still has index.mjs open. Copy with shared read, then store as index.mjs.
+const packCopy = outfile.replace(/\.mjs$/, '.pack.mjs');
+const ps1 = path.join(__dirname, '.zip-frontline-district-header.ps1');
+fs.writeFileSync(
+  ps1,
+  `
+$ErrorActionPreference = 'Stop'
+$src = '${outfile.replace(/'/g, "''")}'
+$copy = '${packCopy.replace(/'/g, "''")}'
+$zipPath = '${zipPath.replace(/'/g, "''")}'
+$in = [System.IO.File]::Open($src, 'Open', 'Read', 'ReadWrite')
+try {
+  $out = [System.IO.File]::Create($copy)
+  try { $in.CopyTo($out) } finally { $out.Close() }
+} finally { $in.Close() }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+$zip = [System.IO.Compression.ZipFile]::Open($zipPath, 'Create')
+try {
+  [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $copy, 'index.mjs') | Out-Null
+} finally { $zip.Dispose() }
+`,
 );
+try {
+  sh(`powershell -NoProfile -File "${ps1}"`, { cwd: __dirname });
+} finally {
+  try {
+    fs.unlinkSync(ps1);
+  } catch {
+    /* ignore */
+  }
+}
+if (!fs.existsSync(zipPath)) {
+  throw new Error(`Zip was not created: ${zipPath}`);
+}
 
 const beforeEnv = JSON.parse(
   execSync(
