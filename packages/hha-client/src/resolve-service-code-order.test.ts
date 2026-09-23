@@ -91,6 +91,33 @@ describe('resolveServiceCodeIdFromRows (map before name)', () => {
     ).toBe('9');
   });
 
+  it('does not fall back from PT school group 30 to bare PT School Group', () => {
+    // Moshe: no strip-duration remap — exact name only.
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT school group 30',
+        programType: 'Valley Stream School District Thirty',
+        rows: [
+          { id: '1158913', name: 'PT School Group' },
+          { id: '1087127', name: 'PT School 30' },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
+  it('matches exact PT School Group 30 when present on contract', () => {
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT school group 30',
+        programType: 'Westbury UFSD',
+        rows: [
+          { id: 'legacy', name: 'PT School Group' },
+          { id: '1406274', name: 'PT School Group 30' },
+        ],
+      }),
+    ).toBe('1406274');
+  });
+
   it('matches mixed-case PS names to HHA billing names and SERVICE_CODE_MAP', () => {
     expect(
       resolveServiceCodeIdFromRows({

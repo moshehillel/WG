@@ -8,6 +8,8 @@
  * Sending a new Address without AddressID → -310 duplicate Addresses.
  */
 
+import { psDateToIso } from './hha-time.js';
+
 export interface AcceptedServicesDemoEcho {
   patientId: number;
   firstName: string;
@@ -52,11 +54,8 @@ function asDateTime(value: string | undefined, fallback: string): string {
   const v = (value ?? '').trim();
   if (!v) return fallback.includes('T') ? fallback : `${fallback}T00:00:00`;
   if (/^\d{4}-\d{2}-\d{2}T/.test(v)) return v;
-  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return `${v.slice(0, 10)}T00:00:00`;
-  const m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (m) {
-    return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}T00:00:00`;
-  }
+  const day = psDateToIso(v);
+  if (day && /^\d{4}-\d{2}-\d{2}$/.test(day)) return `${day}T00:00:00`;
   return v;
 }
 

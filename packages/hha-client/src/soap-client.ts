@@ -1,4 +1,12 @@
 import { XMLParser } from 'fast-xml-parser';
+import { psDateToIso } from './hha-time.js';
+
+/** SOAP AllXsd date. Leaves non-dates untouched so callers still see their raw value. */
+function soapDate(value: string): string {
+  const iso = psDateToIso(value);
+  if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  return value;
+}
 
 const NS = 'https://www.hhaexchange.com/apis/hhaws.integration';
 const parser = new XMLParser({
@@ -212,7 +220,7 @@ export class HhaSoapClient {
     return this.call(
       'GetPatientContracts',
       `<PatientID>${patientId}</PatientID>
-  <VisitDate>${escapeXml(visitDate)}</VisitDate>`,
+  <VisitDate>${escapeXml(soapDate(visitDate))}</VisitDate>`,
     );
   }
 
@@ -234,8 +242,8 @@ export class HhaSoapClient {
   }): Promise<SoapCallResult> {
     // Do not send CaregiverID=0 (Invalid caregiver ID). Office searches max 1-day range.
     const parts = [
-      `<StartDate>${escapeXml(filters.startDate)}</StartDate>`,
-      `<EndDate>${escapeXml(filters.endDate)}</EndDate>`,
+      `<StartDate>${escapeXml(soapDate(filters.startDate))}</StartDate>`,
+      `<EndDate>${escapeXml(soapDate(filters.endDate))}</EndDate>`,
     ];
     if (filters.patientId) parts.push(`<PatientID>${filters.patientId}</PatientID>`);
     if (filters.caregiverId) parts.push(`<CaregiverID>${filters.caregiverId}</CaregiverID>`);
@@ -287,8 +295,8 @@ export class HhaSoapClient {
     endDate: string;
   }): Promise<SoapCallResult> {
     const parts = [
-      `<StartDate>${escapeXml(filters.startDate)}</StartDate>`,
-      `<EndDate>${escapeXml(filters.endDate)}</EndDate>`,
+      `<StartDate>${escapeXml(soapDate(filters.startDate))}</StartDate>`,
+      `<EndDate>${escapeXml(soapDate(filters.endDate))}</EndDate>`,
     ];
     if (filters.officeId) parts.push(`<OfficeID>${filters.officeId}</OfficeID>`);
     if (filters.patientId) parts.push(`<PatientID>${filters.patientId}</PatientID>`);

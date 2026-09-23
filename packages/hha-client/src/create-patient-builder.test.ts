@@ -18,19 +18,19 @@ describe('create-patient-builder', () => {
     expect(mapServiceToDiscipline(undefined)).toBe('');
   });
 
-  it('maps SLP-led service types to HHA discipline "SP" (not "SLP")', () => {
-    // HHA rejects AcceptedServices Discipline "SLP" with -411; speech must be "SP".
-    expect(mapServiceToDiscipline('SLP CHHA')).toBe('SP');
-    expect(mapServiceToDiscipline('SLP HC EVAL')).toBe('SP');
-    expect(mapServiceToDiscipline('slp school')).toBe('SP');
-    expect(mapServiceToDiscipline('SLP')).toBe('SP');
-    expect(mapServiceToDiscipline('Speech Therapy')).toBe('SP');
-    // ST-led still maps to ST; bare SP passes through.
+  it('maps SLP-led service types to HHA discipline "ST" (not "SLP" or "SP")', () => {
+    // HHA rejects AcceptedServices "SLP" and "SP" with -411; speech must be "ST".
+    expect(mapServiceToDiscipline('SLP CHHA')).toBe('ST');
+    expect(mapServiceToDiscipline('SLP HC EVAL')).toBe('ST');
+    expect(mapServiceToDiscipline('slp school')).toBe('ST');
+    expect(mapServiceToDiscipline('SLP')).toBe('ST');
+    expect(mapServiceToDiscipline('Speech Therapy')).toBe('ST');
     expect(mapServiceToDiscipline('ST CHHA')).toBe('ST');
-    expect(mapServiceToDiscipline('SP')).toBe('SP');
+    expect(mapServiceToDiscipline('SP')).toBe('ST');
+    expect(mapServiceToDiscipline('SP ')).toBe('ST');
   });
 
-  it('emits AcceptedServices Discipline "SP" for an SLP CHHA patient', () => {
+  it('emits AcceptedServices Discipline "ST" for an SLP CHHA patient', () => {
     const xml = buildCreatePatientBody(
       {
         firstName: 'Adam',
@@ -62,9 +62,9 @@ describe('create-patient-builder', () => {
         evacuationZoneId: 10003239,
       },
     );
-    expect(xml).toContain('<Discipline>SP</Discipline>');
+    expect(xml).toContain('<Discipline>ST</Discipline>');
     expect(xml).not.toContain('<Discipline>SLP</Discipline>');
-    expect(xml).not.toContain('<Discipline>ST</Discipline>');
+    expect(xml).not.toContain('<Discipline>SP</Discipline>');
   });
 
   it('omits AcceptedServices when discipline cannot be inferred (no silent OT)', () => {

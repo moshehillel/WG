@@ -21,13 +21,23 @@ export function extractHhaMinutes(s: string | undefined): number | null {
   return Number(m[1]) * 60 + Number(m[2]);
 }
 
-/** ProviderSoft M/D/YYYY → ISO date. */
+/**
+ * HHA SOAP AllXsd xs:date. Always YYYY-MM-DD from ISO, M/D/YYYY, MM/DD/YYYY, or MM/DD/YY.
+ * Two-digit years: 00–69 → 2000s, 70–99 → 1900s (school DOS 09/16/26 → 2026-09-16).
+ */
 export function psDateToIso(d: string | undefined): string | undefined {
   if (!d?.trim()) return undefined;
-  const m = d.trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (!m) return d.trim().slice(0, 10);
-  const [, mm, dd, yyyy] = m;
-  return `${yyyy}-${mm!.padStart(2, '0')}-${dd!.padStart(2, '0')}`;
+  const t = d.trim();
+  const iso = t.match(/^(\d{4}-\d{2}-\d{2})(?:[T\s].*)?$/);
+  if (iso) return iso[1];
+  const m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})(?:\s+.*)?$/);
+  if (!m) return t.slice(0, 10);
+  const mm = m[1]!.padStart(2, '0');
+  const dd = m[2]!.padStart(2, '0');
+  const yearRaw = m[3]!;
+  const yearNum = Number(yearRaw);
+  const year = yearRaw.length === 4 ? yearNum : yearNum <= 69 ? 2000 + yearNum : 1900 + yearNum;
+  return `${year}-${mm}-${dd}`;
 }
 
 /** "4:30 PM" → "1630" for CreateSchedule ScheduleStartTime. */

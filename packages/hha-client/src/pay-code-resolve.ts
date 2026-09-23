@@ -35,9 +35,25 @@ function matchRateOnPrefix(
   return undefined;
 }
 
+function firstExact(
+  byExact: Map<string, string>,
+  candidates: string[],
+): string | undefined {
+  for (const cand of candidates) {
+    const hit = byExact.get(cand.toUpperCase());
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 /**
  * Resolve pay code name (OT $70, OT Group $34, or legacy OT70) to HHA PayCodeID.
  * HHA names use formats like "OT $70" / "OT Group $34"; SLP in PS maps to ST in HHA.
+ *
+ * Live White Glove rename for group rates (GetPayRateCodes):
+ *   TMS `{Disc} Group $Y` → try `{Disc} Group $Y` / `AM {Disc} Group $Y` first,
+ *   else fall back to `AM {Disc} $Y` (strip "Group", keep/add "AM ").
+ * Applies to every discipline/rate, not a single code.
  */
 export function resolvePayCodeIdFromCatalog(
   psPayCodeName: string,
@@ -56,42 +72,59 @@ export function resolvePayCodeIdFromCatalog(
   if (byExact.has(key)) return byExact.get(key);
   if (byNorm.has(key.replace(/\s+/g, ''))) return byNorm.get(key.replace(/\s+/g, ''));
 
-  const groupM = key.match(/^([A-Z]{2,4})\s+GROUP\s+\$?\s*(\d+(?:\.\d+)?)$/);
+  // Strip leading AM so callers can pass either TMS or catalog form.
+  const bareKey = key.replace(/^AM\s+/, '');
+
+  const groupM = bareKey.match(/^([A-Z]{2,4})\s+GROUP\s+\$?\s*(\d+(?:\.\d+)?)$/);
   if (groupM) {
     const disc = groupM[1]!;
     const rate = groupM[2]!;
     const stDisc = disc === 'SLP' ? 'ST' : disc;
     const rateNum = Number(rate);
-    for (const cand of [
+    const groupHit = firstExact(byExact, [
       `${stDisc} GROUP $${rate}`,
       `${disc} GROUP $${rate}`,
       `${stDisc} Group $${rate}`,
       `${disc} Group $${rate}`,
-    ]) {
-      const hit = byExact.get(cand.toUpperCase());
-      if (hit) return hit;
-    }
-    return matchRateOnPrefix(
+      `AM ${stDisc} GROUP $${rate}`,
+      `AM ${disc} GROUP $${rate}`,
+      `AM ${stDisc} Group $${rate}`,
+      `AM ${disc} Group $${rate}`,
+    ]);
+    if (groupHit) return groupHit;
+    const groupPrefixHit = matchRateOnPrefix(
       hhaRows,
-      [`${stDisc} GROUP $`, `${disc} GROUP $`],
+      [`${stDisc} GROUP $`, `${disc} GROUP $`, `AM ${stDisc} GROUP $`, `AM ${disc} GROUP $`],
       rateNum,
     );
+    if (groupPrefixHit) return groupPrefixHit;
+    // Group-named missing → AM {Disc} $rate (WG: "PT Group $34" → "AM PT $34").
+    const amIndiv = firstExact(byExact, [`AM ${stDisc} $${rate}`, `AM ${disc} $${rate}`]);
+    if (amIndiv) return amIndiv;
+    return matchRateOnPrefix(hhaRows, [`AM ${stDisc} $`, `AM ${disc} $`], rateNum);
   }
 
-  const dollarM = key.match(/^([A-Z]{2,4})\s+\$(\d+(?:\.\d+)?)$/);
+  const dollarM = bareKey.match(/^([A-Z]{2,4})\s+\$(\d+(?:\.\d+)?)$/);
   if (dollarM) {
     const disc = dollarM[1]!;
     const rate = dollarM[2]!;
     const stDisc = disc === 'SLP' ? 'ST' : disc;
     const rateNum = Number(rate);
-    for (const cand of [`${stDisc} $${rate}`, `${disc} $${rate}`]) {
-      const hit = byExact.get(cand.toUpperCase());
-      if (hit) return hit;
-    }
-    return matchRateOnPrefix(hhaRows, [`${stDisc} $`, `${disc} $`], rateNum);
+    const dollarHit = firstExact(byExact, [
+      `${stDisc} $${rate}`,
+      `${disc} $${rate}`,
+      `AM ${stDisc} $${rate}`,
+      `AM ${disc} $${rate}`,
+    ]);
+    if (dollarHit) return dollarHit;
+    return matchRateOnPrefix(
+      hhaRows,
+      [`${stDisc} $`, `${disc} $`, `AM ${stDisc} $`, `AM ${disc} $`],
+      rateNum,
+    );
   }
 
-  const m = key.match(/^([A-Z]{2,4})(\d+(?:\.\d+)?)$/);
+  const m = bareKey.match(/^([A-Z]{2,4})(\d+(?:\.\d+)?)$/);
   if (!m) return undefined;
 
   const disc = m[1]!;
@@ -99,18 +132,25 @@ export function resolvePayCodeIdFromCatalog(
   const stDisc = disc === 'SLP' ? 'ST' : disc;
   const rateNum = Number(rate);
 
-  for (const cand of [`${stDisc} $${rate}`, `${disc} $${rate}`]) {
-    const hit = byExact.get(cand.toUpperCase());
-    if (hit) return hit;
-  }
+  const compactHit = firstExact(byExact, [
+    `${stDisc} $${rate}`,
+    `${disc} $${rate}`,
+    `AM ${stDisc} $${rate}`,
+    `AM ${disc} $${rate}`,
+  ]);
+  if (compactHit) return compactHit;
 
   // Dollar-sign rows: exact rate only (OT70 must not match OT $70.50).
-  const dollarHit = matchRateOnPrefix(hhaRows, [`${stDisc} $`, `${disc} $`], rateNum);
+  const dollarHit = matchRateOnPrefix(
+    hhaRows,
+    [`${stDisc} $`, `${disc} $`, `AM ${stDisc} $`, `AM ${disc} $`],
+    rateNum,
+  );
   if (dollarHit) return dollarHit;
 
   // Bare format without "$", e.g. "PT 65".
   for (const row of hhaRows) {
-    const bare = row.name.toUpperCase().match(/^([A-Z]{2,4})\s+(\d+(?:\.\d+)?)/);
+    const bare = row.name.toUpperCase().match(/^(?:AM\s+)?([A-Z]{2,4})\s+(\d+(?:\.\d+)?)/);
     if (!bare || (bare[1] !== stDisc && bare[1] !== disc)) continue;
     if (Math.abs(Number(bare[2]) - rateNum) < 0.01) return row.id;
   }
@@ -127,8 +167,31 @@ export function resolveHhaPayCodeName(
   return hhaRows.find((row) => row.id === id)?.name;
 }
 
+/**
+ * Names we try when a Group pay code is missing (for clearer "not found" errors).
+ * e.g. "PT Group $34" → ["PT Group $34", "AM PT Group $34", "AM PT $34"].
+ */
+export function payCodeLookupCandidates(psPayCodeName: string): string[] {
+  const key = normalizePsPayCodeName(psPayCodeName);
+  if (!key) return [];
+  const bareKey = key.replace(/^AM\s+/, '');
+  const groupM = bareKey.match(/^([A-Z]{2,4})\s+GROUP\s+\$?\s*(\d+(?:\.\d+)?)$/);
+  if (!groupM) return [psPayCodeName.trim()].filter(Boolean);
+  const disc = groupM[1]!;
+  const rate = groupM[2]!;
+  const stDisc = disc === 'SLP' ? 'ST' : disc;
+  const out = [
+    `${stDisc} Group $${rate}`,
+    disc !== stDisc ? `${disc} Group $${rate}` : '',
+    `AM ${stDisc} Group $${rate}`,
+    disc !== stDisc ? `AM ${disc} Group $${rate}` : '',
+    `AM ${stDisc} $${rate}`,
+    disc !== stDisc ? `AM ${disc} $${rate}` : '',
+  ].filter(Boolean);
+  return [...new Set(out)];
+}
+
 export {
   pickFirstPayCodeForDiscipline,
   type FallbackPayCodePick,
 } from '@white-glove/shared';
-

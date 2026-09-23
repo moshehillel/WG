@@ -47,6 +47,15 @@ describe('buildCreateScheduleBody', () => {
     expect(xml).not.toContain('09/04/2026');
   });
 
+  it('converts MM/DD/YY VisitDate to YYYY-MM-DD for AllXsd', () => {
+    const xml = buildCreateScheduleBody({
+      ...base,
+      visitDate: '09/16/26',
+    });
+    expect(xml).toContain('<VisitDate>2026-09-16</VisitDate>');
+    expect(xml).not.toContain('09/16/26');
+  });
+
   it('keeps ISO VisitDate unchanged', () => {
     const xml = buildCreateScheduleBody({
       ...base,

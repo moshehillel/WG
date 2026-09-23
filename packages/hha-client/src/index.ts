@@ -15,8 +15,15 @@ export {
   mergeAcceptedServices,
   parseAcceptedServiceDisciplines,
 } from './update-accepted-services.js';
-export { activePlacements, parsePatientPlacements } from './placements.js';
-export type { PatientPlacement } from './placements.js';
+export {
+  activePlacements,
+  findReusableContractPlacement,
+  isPlacementOverlapFault,
+  normalizePlacementDate,
+  parsePatientPlacements,
+  placementCoversDate,
+} from './placements.js';
+export type { PatientPlacement, ReuseContractPlacementResult } from './placements.js';
 export { resolvePlacementForService } from './resolve-placement.js';
 export { AmbiguousPatientNameError } from './patient-errors.js';
 export {
@@ -87,10 +94,16 @@ export {
 export {
   mergePayCodeRows,
   parsePayCodeReferenceXml,
+  payCodeLookupCandidates,
   resolveHhaPayCodeName,
   resolvePayCodeIdFromCatalog,
 } from './pay-code-resolve.js';
 export type { PayCodeRow } from './pay-code-resolve.js';
+export {
+  isAlreadyBilledConfirmFault,
+  isVisitAlreadyBilledXml,
+  isVisitAlreadyPayConfirmedXml,
+} from './visit-confirm.js';
 export { pickFirstPayCodeForDiscipline } from '@white-glove/shared';
 export type { FallbackPayCodePick } from '@white-glove/shared';
 export type {

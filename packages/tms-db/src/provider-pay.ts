@@ -122,7 +122,7 @@ export function sessionBillingKind(
   if (additional === 'eval' || /\beval\b/i.test(session.serviceType || '')) return 'eval';
   if (
     additional ||
-    /\b(progress\s*report|consultation|meetings?|paid\s*absence|additional)\b/i.test(
+    /\b(progress\s*report|consultation|meetings?|documentation|paid\s*absence|additional)\b/i.test(
       session.serviceType || '',
     )
   ) {

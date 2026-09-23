@@ -84,6 +84,8 @@ export function buildSchoolBillingServiceName(input: {
 
 /** Individual school duration name, e.g. `PT school 30` (no "group"). */
 const INDIVIDUAL_SCHOOL_BILLING_RE = /^(OT|PT|SLP)\s+school\s+(30|42|45|60)$/i;
+/** Group school duration name, e.g. `PT school group 30`. */
+const GROUP_SCHOOL_BILLING_RE = /^(OT|PT|SLP)\s+school\s+group\s+(30|42|45|60)$/i;
 
 /**
  * True when `name` is an individual school duration code (missing "group").
@@ -91,4 +93,9 @@ const INDIVIDUAL_SCHOOL_BILLING_RE = /^(OT|PT|SLP)\s+school\s+(30|42|45|60)$/i;
  */
 export function isIndividualSchoolBillingServiceName(name: string | undefined): boolean {
   return INDIVIDUAL_SCHOOL_BILLING_RE.test(String(name || '').trim());
+}
+
+/** True when `name` is a group school duration code (`… school group {bucket}`). */
+export function isGroupSchoolBillingServiceName(name: string | undefined): boolean {
+  return GROUP_SCHOOL_BILLING_RE.test(String(name || '').trim());
 }

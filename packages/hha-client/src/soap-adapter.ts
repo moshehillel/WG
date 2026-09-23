@@ -12,6 +12,7 @@ import {
 } from '@white-glove/shared';
 import {
   lookupContractId,
+  normalizeContractName,
   lookupServiceCode,
   lookupServiceCodeAlias,
   hasServiceCodeAlias,

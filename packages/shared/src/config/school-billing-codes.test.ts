@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   SCHOOL_BILLING_SERVICE_NAMES,
   buildSchoolBillingServiceName,
+  isGroupSchoolBillingServiceName,
   isIndividualSchoolBillingServiceName,
   nearestSchoolDurationBucket,
   normalizeSchoolBillingDiscipline,
@@ -93,5 +94,7 @@ describe('school-billing-codes', () => {
     expect(isIndividualSchoolBillingServiceName('PT school 30')).toBe(true);
     expect(isIndividualSchoolBillingServiceName('PT school group 30')).toBe(false);
     expect(isIndividualSchoolBillingServiceName('OT School eval')).toBe(false);
+    expect(isGroupSchoolBillingServiceName('PT school group 30')).toBe(true);
+    expect(isGroupSchoolBillingServiceName('PT school 30')).toBe(false);
   });
 });

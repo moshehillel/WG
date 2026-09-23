@@ -142,6 +142,98 @@ describe('phase 2–3', () => {
     expect(store.data.weeks[0]?.status).toBe('locked');
   });
 
+  it('refuses to lock when solo-group #38 note is missing', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 72,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Aiden',
+      lastName: 'Odne',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'PT School Group',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      ratioGroup: true,
+      durationMinutes: 30,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: 'week-lock-refuse',
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'submitted',
+      signerName: 'Principal',
+      signerEmail: 'p@school.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: 'env-refuse-38',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-01',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'Service Provided: gait only',
+      aiFlags: [],
+    });
+    const res = await handleTmsRequest(
+      store,
+      {
+        method: 'POST',
+        path: '/webhooks/esign',
+        headers: {},
+        query: {},
+        body: { envelopeId: week.envelopeId, event: 'completed' },
+      },
+      { hha: new MockHhaClient() },
+    );
+    expect(res.status).toBe(400);
+    expect((res.body as { error: string }).error).toMatch(
+      /no peer was available|no partner available|seen individually/i,
+    );
+    expect(store.data.weeks.find((w) => w.id === week.id)?.status).toBe('submitted');
+  });
+
   it('builds a PDF timesheet and extracts PDF text', () => {
     const pdf = buildTimesheetPdf({
       week: {

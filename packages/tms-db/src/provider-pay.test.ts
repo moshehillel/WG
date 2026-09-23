@@ -259,6 +259,8 @@ describe('provider pay rates', () => {
     expect(sessionBillingKind(sess())).toBe('school');
     expect(sessionBillingKind(sess({ additionalServiceType: 'eval' }))).toBe('eval');
     expect(sessionBillingKind(sess({ additionalServiceType: 'progress_report' }))).toBe('additional');
+    expect(sessionBillingKind(sess({ additionalServiceType: 'documentation' }))).toBe('additional');
     expect(sessionBillingKind(sess({ serviceType: 'OT Eval' }))).toBe('eval');
+    expect(sessionBillingKind(sess({ serviceType: 'Documentation' }))).toBe('additional');
   });
 });

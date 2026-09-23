@@ -579,6 +579,21 @@ describe('solo group → individual pay (absent peers)', () => {
     for (const phrase of ok) {
       expect(notesMentionNoPeerAvailable(`Service Provided: ${phrase}`)).toBe(true);
     }
+    expect(notesMentionNoPeerAvailable('Service Provided: Group not available LE strengthening')).toBe(
+      true,
+    );
+    expect(notesMentionNoPeerAvailable('Service Provided: no group available')).toBe(true);
     expect(notesMentionNoPeerAvailable('Service Provided: fine motor only')).toBe(false);
+  });
+
+  it('accepts Elizabeth-style cannot-group / no-one-appropriate wording', () => {
+    const elizabeth =
+      'Student can not be seen in a group as there is no one appropriate to group her with';
+    expect(notesMentionNoPeerAvailable(elizabeth)).toBe(true);
+    expect(notesMentionNoPeerAvailable(`Service Provided: ${elizabeth}`)).toBe(true);
+    expect(notesMentionNoPeerAvailable('cannot be seen in a group today')).toBe(true);
+    expect(notesMentionNoPeerAvailable('no one appropriate to group him with')).toBe(true);
+    expect(notesMentionNoPeerAvailable('not appropriate to group her with peers')).toBe(true);
+    expect(notesMentionNoPeerAvailable('Student worked on LE strengthening')).toBe(false);
   });
 });

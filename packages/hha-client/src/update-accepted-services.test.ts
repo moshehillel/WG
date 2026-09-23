@@ -20,6 +20,13 @@ describe('mergeAcceptedServices', () => {
       missing: [],
     });
   });
+
+  it('trims trailing spaces on current and ensure disciplines', () => {
+    expect(mergeAcceptedServices(['PCA', 'SP '], ['ST', ' PCA '])).toEqual({
+      merged: ['PCA', 'SP', 'ST'],
+      missing: ['ST'],
+    });
+  });
 });
 
 describe('parseAcceptedServiceDisciplines', () => {

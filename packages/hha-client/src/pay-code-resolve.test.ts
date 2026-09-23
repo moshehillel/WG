@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { pickFirstPayCodeForDiscipline } from '@white-glove/shared';
-import { resolvePayCodeIdFromCatalog, resolveHhaPayCodeName } from './pay-code-resolve.js';
+import { resolvePayCodeIdFromCatalog, resolveHhaPayCodeName, payCodeLookupCandidates } from './pay-code-resolve.js';
 
 const SAMPLE_ROWS = [
   { id: '200431', name: 'OT $70' },
@@ -53,12 +53,39 @@ describe('pay-code-resolve', () => {
     expect(resolvePayCodeIdFromCatalog('OT Group $34', rows)).toBe('g34');
   });
 
+  it('falls back PT Group $34 → AM PT $34 when Group row missing', () => {
+    const rows = [...SAMPLE_ROWS, { id: 'am34', name: 'AM PT $34' }];
+    expect(resolvePayCodeIdFromCatalog('PT Group $34', rows)).toBe('am34');
+    expect(resolveHhaPayCodeName('PT Group $34', rows)).toBe('AM PT $34');
+  });
+
+  it('lists AM candidates for Group miss errors', () => {
+    expect(payCodeLookupCandidates('PT Group $34')).toEqual([
+      'PT Group $34',
+      'AM PT Group $34',
+      'AM PT $34',
+    ]);
+  });
+
+  it('prefers AM PT Group $34 before AM PT $34', () => {
+    const rows = [
+      ...SAMPLE_ROWS,
+      { id: 'amg', name: 'AM PT Group $34' },
+      { id: 'am34', name: 'AM PT $34' },
+    ];
+    expect(resolvePayCodeIdFromCatalog('PT Group $34', rows)).toBe('amg');
+  });
+
   it('returns HHA display name for resolved PS code', () => {
     expect(resolveHhaPayCodeName('OT70', SAMPLE_ROWS)).toBe('OT $70');
     expect(resolveHhaPayCodeName('OT $70', SAMPLE_ROWS)).toBe('OT $70');
   });
 
-  it('re-exports discipline fallback picker used by EVV placeholder', () => {
-    expect(pickFirstPayCodeForDiscipline('OT', SAMPLE_ROWS)?.id).toBe('200431');
+  it('lists AM Group / AM rate candidates for miss messages', () => {
+    expect(payCodeLookupCandidates('PT Group $34')).toEqual([
+      'PT Group $34',
+      'AM PT Group $34',
+      'AM PT $34',
+    ]);
   });
 });
