@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  findStudentForActivityName,
   isTherapistActivityText,
   parseTherapistActivityText,
   parseWeeklySessionText,
@@ -187,5 +188,47 @@ Signed: 9/17/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
 `;
     const rows = parseTherapistActivityText(junkThenReal);
     expect(rows[0]?.studentName).toMatch(/^DAVIS,\s*MICHAEL$/i);
+  });
+
+  it('captures compound last names with a single-letter initial before CBRS', () => {
+    const text = `
+Therapist Activity Printed: 9/17/2026
+09/16/26 In: 09:30 AM Out: 10:00 AM Therapy Room CROSSLAND LIPSCOMB J, TYRIQUE CBRS2627W0094441(ST- I) F80.2 92507x1
+Tyrique transitioned to his initial speech therapy session.
+Notes Entered: 9/16/2026
+Signed: 9/16/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+09/16/26 In: 10:00 AM Out: 10:30 AM Therapy Room JR, MICHAEL CBRS2627S0011111(ST-I) F80.2 92507x1
+Michael participated well.
+Notes Entered: 9/16/2026
+Signed: 9/16/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+09/17/26 In: 11:00 AM Out: 11:30 AM Therapy Room CROSSLAND LIPSCOMB J, TYRIQUE CBRS2627W0094441(ST- I) F80.2 92507x1
+Tyrique transitioned well into the therapy room.
+Notes Entered: 9/17/2026
+Signed: 9/17/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+09/17/26 In: 11:30 AM Out: 12:00 PM Therapy Room JR, MICHAEL CBRS2627S0011111(ST-I) F80.2 92507x1
+Michael participated well.
+Notes Entered: 9/17/2026
+Signed: 9/17/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+Page 1 of 1 Astacio, Wiglishai
+`;
+    const rows = parseTherapistActivityText(text);
+    expect(rows.map((r) => r.studentName)).toEqual([
+      'CROSSLAND LIPSCOMB J, TYRIQUE',
+      'JR, MICHAEL',
+      'CROSSLAND LIPSCOMB J, TYRIQUE',
+      'JR, MICHAEL',
+    ]);
+    expect(rows[0]?.serviceType).toMatch(/Speech Individual/i);
+  });
+
+  it('matches Crossland-Lipscomb, Tyrique and does not alias JR, MICHAEL to Davis', () => {
+    const students = [
+      { firstName: 'Tyrique', lastName: 'Crossland-Lipscomb' },
+      { firstName: 'Michael', lastName: 'Davis' },
+    ];
+    expect(
+      findStudentForActivityName(students, 'CROSSLAND LIPSCOMB J, TYRIQUE')?.lastName,
+    ).toBe('Crossland-Lipscomb');
+    expect(findStudentForActivityName(students, 'JR, MICHAEL')).toBeUndefined();
   });
 });

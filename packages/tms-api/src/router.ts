@@ -15,7 +15,6 @@ import {
   purgeOrphanProviders,
   lastServiceByStudent,
   adminInternalNotesReport,
-  mappingName,
   missingNotes,
   sessionNotesReport,
   weekProgressReport,
@@ -41,7 +40,7 @@ import {
   presentGroupPeerCount,
   mandateDurationMinutesForSession,
   soloGroupMandateNoteError,
-  splitPersonName,
+  findStudentForActivityName,
   therapistCanEdit,
   therapistCanImportOrAddServices,
   therapistCanMutateExistingSession,
@@ -3637,17 +3636,8 @@ export async function handleTmsRequest(
       }
     }
 
-    const resolveStudent = (studentName: string) => {
-      const person = splitPersonName(studentName);
-      const mapped = mappingName(studentName);
-      return (
-        store.findStudentByName(person.first, person.last) ||
-        store.findStudentByName(mapped.first, mapped.last) ||
-        (person.last && person.first
-          ? store.findStudentByName(person.last, person.first)
-          : undefined)
-      );
-    };
+    const resolveStudent = (studentName: string) =>
+      findStudentForActivityName(store.data.students, studentName);
 
     // Sort so earlier sessions claim mandate slots first when some exceed.
     const ordered = [...parsed].sort((a, b) => {

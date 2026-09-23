@@ -64,6 +64,9 @@ if (!parseSrc.includes('extractTherapistActivityStudentName')) {
 if (!parseSrc.includes('[A-TV-Z]\\d{2}')) {
   throw new Error('session-parse missing ICD/CPT name anchor — abort');
 }
+if (!parseSrc.includes('activityStudentNameKey') || !parseSrc.includes('CROSSLAND LIPSCOMB')) {
+  throw new Error('session-parse missing compound last-name capture — abort');
+}
 
 const routerSrc = fs.readFileSync(path.join(repoRoot, 'packages/tms-api/src/router.ts'), 'utf8');
 if (!routerSrc.includes('Could not read the student name from this PDF row')) {
@@ -73,7 +76,7 @@ if (!routerSrc.includes('upload-sessions empty-name slice')) {
   throw new Error('router missing empty-name slice logging — abort');
 }
 
-const gitSha = `${readGitSha()}-parse-name-capture`;
+const gitSha = `${readGitSha()}-parse-compound-name`;
 fs.mkdirSync(outDir, { recursive: true });
 for (const f of fs.readdirSync(outDir)) fs.unlinkSync(path.join(outDir, f));
 
@@ -104,6 +107,9 @@ if (!bundled.includes('Could not read the student name from this PDF row')) {
 }
 if (!bundled.includes('upload-sessions empty-name slice')) {
   throw new Error('bundled missing empty-name slice logging — abort');
+}
+if (!bundled.includes('Therapy') || !bundled.includes('Room')) {
+  throw new Error('bundled missing compound-name setting guard — abort');
 }
 console.log('bundled', outfile, 'bytes', bundled.length, 'SHA', gitSha);
 

@@ -178,7 +178,18 @@ const CREDENTIAL_NAME_TOKEN =
  * CBRS / (ST-I) is missing from a PDF slice (e.g. "However, with prompting…").
  */
 const NOTE_FRAGMENT_NAME_TOKEN =
-  /^(?:however|with|without|the|and|but|when|then|during|after|before|while|although|because|therefore|student|students|therapist|provider|session|notes|signed|cosigned|preschool|school|clinic|home|telehealth|make|made|makeup|absent|absence|cancelled|canceled|participated|required|presented|transitioned|prompting|support|target|sound|sounds|peer|peers|group|individual)$/i;
+  /^(?:however|with|without|the|and|but|when|then|during|after|before|while|although|because|therefore|student|students|therapist|provider|session|notes|signed|cosigned|preschool|school|clinic|home|telehealth|therapy|room|setting|children|make|made|makeup|absent|absence|cancelled|canceled|participated|required|presented|transitioned|prompting|support|target|sound|sounds|peer|peers|group|individual)$/i;
+
+function activityNameTokenRejected(token: string): boolean {
+  const raw = String(token || '').trim();
+  const bare = raw.replace(/\./g, '');
+  if (!raw) return true;
+  // Single-letter middle initial is allowed inside a multi-word last name ("LIPSCOMB J").
+  if (/^[A-Za-z]$/.test(bare)) return false;
+  if (CREDENTIAL_NAME_TOKEN.test(raw) || CREDENTIAL_NAME_TOKEN.test(bare)) return true;
+  if (NOTE_FRAGMENT_NAME_TOKEN.test(raw) || NOTE_FRAGMENT_NAME_TOKEN.test(bare)) return true;
+  return false;
+}
 
 /**
  * Reject therapist credentials and clinical-note scraps as student names.
@@ -191,19 +202,47 @@ export function isPlausibleStudentName(last: string, first: string): boolean {
   if (l.length < 2 || f.length < 2) return false;
   if (CREDENTIAL_NAME_TOKEN.test(l) || CREDENTIAL_NAME_TOKEN.test(f)) return false;
   if (NOTE_FRAGMENT_NAME_TOKEN.test(l) || NOTE_FRAGMENT_NAME_TOKEN.test(f)) return false;
+  if (l.split(/\s+/).some(activityNameTokenRejected)) return false;
+  if (f.split(/\s+/).some(activityNameTokenRejected)) return false;
   // Real Frontline / Activity child names are Title/UPPER; lowercase first token is note text.
   if (/^[a-z]/.test(f)) return false;
+  // Last name must contain a real word, not only an initial.
+  if (!l.split(/\s+/).some((t) => t.replace(/\./g, '').length >= 2)) return false;
   return true;
 }
 
-function takeStudentName(last: string, first: string): string {
-  if (!isPlausibleStudentName(last, first)) return '';
-  return cleanStudentName(`${last}, ${first}`);
+/**
+ * "SOTO D. SOTO" is the same surname printed twice around an initial.
+ * Keep the final copy so the child stays "SOTO, DAVID".
+ */
+function collapseRepeatedActivityLast(last: string): string {
+  const tokens = String(last || '').split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) return tokens.join(' ');
+  const key = (t: string) => t.replace(/\./g, '').toLowerCase();
+  const multi = tokens.filter((t) => key(t).length >= 2);
+  const surname = multi[multi.length - 1];
+  if (!surname) return tokens.join(' ');
+  const k = key(surname);
+  const idxs = tokens.map((t, i) => (key(t) === k ? i : -1)).filter((i) => i >= 0);
+  if (idxs.length >= 2) return tokens.slice(idxs[idxs.length - 1]!).join(' ');
+  return tokens.join(' ');
 }
 
-/** LAST, FIRST (optional III/Jr/Sr) — shared by Therapist Activity name anchors. */
-const ACTIVITY_LAST_FIRST =
-  '([A-Z][A-Za-z0-9\'.-]+(?:\\s+(?:III|II|IV|Jr\\.?|Sr\\.?))?),\\s*([A-Za-z][A-Za-z\'.-]+)';
+function takeStudentName(last: string, first: string): string {
+  const collapsed = collapseRepeatedActivityLast(last);
+  if (!isPlausibleStudentName(collapsed, first)) return '';
+  return cleanStudentName(`${collapsed}, ${first}`);
+}
+
+/**
+ * One last-name word: a normal name, suffix (III/Jr), or a single-letter initial.
+ * Setting/header words (Therapy, Room, Preschool, …) cannot start the name.
+ */
+const ACTIVITY_LAST_WORD =
+  "(?!Therapy\\b|Room\\b|Preschool\\b|School\\b|Clinic\\b|Home\\b|Telehealth\\b|Office\\b|Classroom\\b|Community\\b|Setting\\b|However\\b|With\\b|Signed\\b|Notes\\b|Make\\b|Children\\b|Group\\b|Date\\b|Time\\b|Child\\b)[A-Z][A-Za-z0-9'.-]*";
+
+/** LAST[, extra words / initial], FIRST — e.g. MORTE III, ROBERTO and CROSSLAND LIPSCOMB J, TYRIQUE. */
+const ACTIVITY_LAST_FIRST = `(${ACTIVITY_LAST_WORD}(?:\\s+${ACTIVITY_LAST_WORD}){0,3}),\\s*([A-Za-z][A-Za-z'.-]+)`;
 
 /**
  * Pick the best plausible LAST, FIRST from regex matches (prefer later hits —
@@ -258,7 +297,7 @@ export function extractTherapistActivityStudentName(
     )[0] || afterTimes;
   // Loose: first-name must be Title/UPPER so "However, with" never wins.
   const looseTitleRe = new RegExp(
-    `\\b([A-Z][A-Za-z0-9'.-]+(?:\\s+(?:III|II|IV|Jr\\.?|Sr\\.?))?),\\s*([A-Z][A-Za-z'.-]+)\\b`,
+    `\\b(${ACTIVITY_LAST_WORD}(?:\\s+${ACTIVITY_LAST_WORD}){0,3}),\\s*([A-Z][A-Za-z'.-]+)\\b`,
     'g',
   );
   name = firstPlausibleActivityName(headerWindow.matchAll(looseTitleRe), false);
@@ -902,6 +941,67 @@ export function mappingName(raw: string): { first: string; last: string } {
   const parts = String(raw || '').trim().split(/\s+/).filter(Boolean);
   if (parts.length <= 1) return { first: parts[0] ?? '', last: '' };
   return { first: parts[parts.length - 1] ?? '', last: parts.slice(0, -1).join(' ') };
+}
+
+/**
+ * Compare key for Activity names vs caseload.
+ * Hyphens match spaces (Crossland-Lipscomb vs CROSSLAND LIPSCOMB).
+ * A trailing single-letter initial is ignored (LIPSCOMB J vs Lipscomb).
+ * Different surnames stay different — JR, MICHAEL does not match Davis, Michael.
+ */
+export function activityStudentNameKey(first: string, last: string): string {
+  const norm = (s: string) =>
+    String(s || '')
+      .toLowerCase()
+      .replace(/[-']/g, ' ')
+      .replace(/[^a-z0-9\s]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const f = norm(first);
+  const l = norm(last).replace(/\s+[a-z]$/, '').trim();
+  return `${l}|${f}`;
+}
+
+type NamedStudent = { firstName: string; lastName: string };
+
+function exactStudentName<T extends NamedStudent>(
+  students: readonly T[],
+  first: string,
+  last: string,
+): T | undefined {
+  const f = first.trim().toLowerCase();
+  const l = last.trim().toLowerCase();
+  if (!f || !l) return undefined;
+  return students.find(
+    (s) => s.firstName.trim().toLowerCase() === f && s.lastName.trim().toLowerCase() === l,
+  );
+}
+
+/**
+ * Resolve a parsed Activity/Frontline name to one caseload student.
+ * Exact match first. Then one unique hyphen/initial-insensitive hit.
+ * Ambiguous loose hits are not returned.
+ */
+export function findStudentForActivityName<T extends NamedStudent>(
+  students: readonly T[],
+  rawName: string,
+): T | undefined {
+  const person = splitPersonName(rawName);
+  const mapped = mappingName(rawName);
+  const exact =
+    exactStudentName(students, person.first, person.last) ||
+    exactStudentName(students, mapped.first, mapped.last) ||
+    (person.first && person.last
+      ? exactStudentName(students, person.last, person.first)
+      : undefined);
+  if (exact) return exact;
+  const key = activityStudentNameKey(person.first, person.last);
+  const [lastKey, firstKey] = key.split('|');
+  if (!lastKey || !firstKey) return undefined;
+  const loose = students.filter(
+    (s) => activityStudentNameKey(s.firstName, s.lastName) === key,
+  );
+  return loose.length === 1 ? loose[0] : undefined;
 }
 
 export function nameKey(first: string, last: string): string {
