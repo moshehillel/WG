@@ -1,0 +1,24 @@
+LIVE_OK: mandateKind makeup_weekly
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+TMS_GIT_SHA (build define): f913472
+{
+    "CodeSha256": "4xBlzrXEbhAIzecHakWYDRYYRI4lzLdXfCGF2FAgW6c=",
+    "LastModified": "2026-09-22T17:39:40.000+0000",
+    "CodeSize": 2098211
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "TMS_GIT_SHA": "921d2f3-frontline-logtype-sign",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA_USE_PRODUCTION=true preserved (unchanged)
+
+Changes:
+1. MandateKind includes makeup_weekly
+2. API create/update accepts mandateKind=makeup_weekly (weekly freq)
+3. Unlinked makeups may use Makeup-Weekly when no Makeup-auth pool
+4. FE: Makeup- Weekly in Type dropdown (app.js?v=124)
+

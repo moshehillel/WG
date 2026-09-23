@@ -15,7 +15,9 @@ import type { Discipline, FrequencyKind, Mandate, MandateKind, SchoolCalendar, S
 export function schoolBillingServiceNameForMandate(
   mandate: Pick<Mandate, 'discipline' | 'durationMinutes' | 'mandateKind' | 'ratioGroup' | 'groupSize'>,
 ): string | undefined {
-  if (mandate.mandateKind === 'makeup_auth') return undefined;
+  if (mandate.mandateKind === 'makeup_auth' || mandate.mandateKind === 'makeup_weekly') {
+    return undefined;
+  }
   const group =
     Boolean(mandate.ratioGroup) ||
     (mandate.groupSize != null && Number(mandate.groupSize) > 1);
@@ -177,7 +179,14 @@ export function notesMentionNoPeerAvailable(notes: string): boolean {
         `|\\b(?:${who})\\s+(?:were\\s+|was\\s+|are\\s+|is\\s+)?(?:not\\s+|un)?available\\b` +
         `|\\bno\\s+other\\s+(?:${otherWho})s?\\b` +
         `|\\b(?:other\\s+)?(?:${otherWho})s?.{0,32}(?:absent|unavailable|missing)\\b` +
-        `|\\b(?:his|her|their|the)\\s+(?:${who})\\s+(?:is|was|are|were)\\s+absent\\b`,
+        `|\\b(?:his|her|their|the)\\s+(?:${who})\\s+(?:is|was|are|were)\\s+absent\\b` +
+        // Therapists often write "Group not available" for solo-group (no peer).
+        `|\\bgroups?\\s+(?:was\\s+|were\\s+|is\\s+|are\\s+)?(?:not\\s+)?(?:un)?available\\b` +
+        `|\\bno\\s+group\\s+available\\b` +
+        // Elizabeth-style: "can not be seen in a group" / "no one appropriate to group…"
+        `|\\bcan(?:\\s*not|not)\\s+be\\s+seen\\s+in\\s+(?:a\\s+)?group\\b` +
+        `|\\bno\\s+one\\s+appropriate\\s+to\\s+group\\b` +
+        `|\\bnot\\s+appropriate\\s+to\\s+group\\b`,
       'i',
     ).test(n)
   ) {
@@ -216,6 +225,7 @@ export function sessionIsSoloGroupViaNote(session: Pick<SessionRow, 'serviceType
 
 export function mandateKindOf(mandate: Mandate | undefined): MandateKind {
   if (!mandate) return 'regular';
+  if (mandate.mandateKind === 'makeup_weekly') return 'makeup_weekly';
   if (mandate.mandateKind === 'makeup_auth') return 'makeup_auth';
   if (/\bmakeup\b|make[\s-]?up/i.test(mandate.serviceType || '')) return 'makeup_auth';
   return 'regular';
@@ -223,6 +233,15 @@ export function mandateKindOf(mandate: Mandate | undefined): MandateKind {
 
 export function isMakeupAuthMandate(mandate: Mandate | undefined): boolean {
   return mandateKindOf(mandate) === 'makeup_auth';
+}
+
+export function isMakeupWeeklyMandate(mandate: Mandate | undefined): boolean {
+  return mandateKindOf(mandate) === 'makeup_weekly';
+}
+
+/** Leftover pool or weekly makeup authorization — not a basic attended-session mandate. */
+export function isMakeupKindMandate(mandate: Mandate | undefined): boolean {
+  return isMakeupAuthMandate(mandate) || isMakeupWeeklyMandate(mandate);
 }
 
 /** Makeup linked to a prior missed session does not consume the weekly mandate. */
@@ -296,9 +315,10 @@ export function assignSessionsToMandates(
     const soloGroupViaNote = sessionIsSoloGroupViaNote(s);
     let preferred = candidates[0];
     if (s.attendance === 'makeup' && !s.makeupOfSessionId) {
-      // Unlinked makeups consume leftover makeup-auth; miss-linked makeups do not.
+      // Unlinked makeups: Makeup auth pool first, then Makeup-Weekly; miss-linked do not.
       preferred =
         candidates.find((m) => isMakeupAuthMandate(m)) ||
+        candidates.find((m) => isMakeupWeeklyMandate(m)) ||
         (soloGroupViaNote
           ? candidates.find((m) => m.ratioGroup)
           : undefined) ||
@@ -307,34 +327,34 @@ export function assignSessionsToMandates(
     } else if (s.attendance === 'makeup' && s.makeupOfSessionId) {
       preferred =
         (soloGroupViaNote
-          ? candidates.find((m) => !isMakeupAuthMandate(m) && m.ratioGroup)
+          ? candidates.find((m) => !isMakeupKindMandate(m) && m.ratioGroup)
           : undefined) ||
-        candidates.find((m) => !isMakeupAuthMandate(m) && Boolean(m.ratioGroup) === Boolean(sessGroup)) ||
-        candidates.find((m) => !isMakeupAuthMandate(m)) ||
+        candidates.find((m) => !isMakeupKindMandate(m) && Boolean(m.ratioGroup) === Boolean(sessGroup)) ||
+        candidates.find((m) => !isMakeupKindMandate(m)) ||
         candidates[0];
     } else if (soloGroupViaNote) {
       // Solo group / no-partner note → group mandate frequency (not individual).
       preferred =
-        candidates.find((m) => !isMakeupAuthMandate(m) && m.ratioGroup) ||
-        candidates.find((m) => !isMakeupAuthMandate(m)) ||
+        candidates.find((m) => !isMakeupKindMandate(m) && m.ratioGroup) ||
+        candidates.find((m) => !isMakeupKindMandate(m)) ||
         candidates[0];
     } else if (sessGroup === false) {
       // True individual / 1:1 without no-partner note → individual mandate first.
       // Never force these onto a group mandate when both exist.
       preferred =
-        candidates.find((m) => !isMakeupAuthMandate(m) && !m.ratioGroup) ||
-        candidates.find((m) => !isMakeupAuthMandate(m)) ||
+        candidates.find((m) => !isMakeupKindMandate(m) && !m.ratioGroup) ||
+        candidates.find((m) => !isMakeupKindMandate(m)) ||
         candidates[0];
     } else if (sessGroup === true) {
       preferred =
-        candidates.find((m) => !isMakeupAuthMandate(m) && m.ratioGroup) ||
-        candidates.find((m) => !isMakeupAuthMandate(m)) ||
+        candidates.find((m) => !isMakeupKindMandate(m) && m.ratioGroup) ||
+        candidates.find((m) => !isMakeupKindMandate(m)) ||
         candidates[0];
     } else if (candidates.length > 1) {
       // No ratio signal — prefer individual when both exist so group slots aren't double-spent.
       preferred =
-        candidates.find((m) => !isMakeupAuthMandate(m) && !m.ratioGroup) ||
-        candidates.find((m) => !isMakeupAuthMandate(m)) ||
+        candidates.find((m) => !isMakeupKindMandate(m) && !m.ratioGroup) ||
+        candidates.find((m) => !isMakeupKindMandate(m)) ||
         candidates[0];
     }
     byMandateId.get(preferred.id)!.push(s);
@@ -413,7 +433,7 @@ function overMandateMessage(
   counted: SessionRow[],
   used: number,
   allowed: number,
-  kind: 'weekly' | 'makeup_auth' | 'school_day_cycle' | 'monthly',
+  kind: 'weekly' | 'makeup_auth' | 'makeup_weekly' | 'school_day_cycle' | 'monthly',
 ): string {
   const who = whoLabel(opts);
   const slots = counted.map(sessionSlotWithNoteContext).filter(Boolean).join('; ');
@@ -429,6 +449,13 @@ function overMandateMessage(
     return (
       `This exceeds the makeup authorization for ${who}:${slotBit} ` +
       `Authorization allows ${allowed} leftover makeup session(s); this would make it ${used}.` +
+      (reasonBit || ' Reason from note: makeup session.')
+    );
+  }
+  if (kind === 'makeup_weekly') {
+    return (
+      `This exceeds the Makeup-Weekly authorization for ${who}:${slotBit} ` +
+      `Allows ${allowed} makeup session(s) per week; this would make it ${used}.` +
       (reasonBit || ' Reason from note: makeup session.')
     );
   }
@@ -481,16 +508,34 @@ export function checkMandate(
     );
     const used = pool.length;
     const over = allowed > 0 && used > allowed;
+    // Leftover makeup-auth capacity is not a yellow week warning — only over-auth blocks.
+    // Basic under-mandate warnings still come from regular weekly/monthly/cycle checks.
     return {
       used,
       allowed,
       over,
-      under: allowed > 0 && used < allowed,
-      message: over
-        ? overMandateMessage(opts, pool, used, allowed, 'makeup_auth')
-        : allowed > 0 && used < allowed
-          ? `Makeup authorization${opts.studentLabel ? ` for ${opts.studentLabel}` : ''}: ${used} of ${allowed} leftover makeup session(s).`
-          : '',
+      under: false,
+      message: over ? overMandateMessage(opts, pool, used, allowed, 'makeup_auth') : '',
+    };
+  }
+
+  if (isMakeupWeeklyMandate(mandate) && mandate) {
+    const allowed = weeklyAllowedSessions(mandate) || 0;
+    // Weekly cadence for unlinked makeups in this week slice (assigned or student week rows).
+    const pool = weekSessions.filter(
+      (s) =>
+        !isAdditionalServiceSession(s) &&
+        s.attendance === 'makeup' &&
+        !s.makeupOfSessionId,
+    );
+    const used = pool.length;
+    const over = allowed > 0 && used > allowed;
+    return {
+      used,
+      allowed,
+      over,
+      under: false,
+      message: over ? overMandateMessage(opts, pool, used, allowed, 'makeup_weekly') : '',
     };
   }
 
@@ -748,7 +793,9 @@ export function checkMandatesForWeek(
         monthAnchorDos,
       });
       if (result.over || result.missingMandate) errors.push(result.message);
-      else if (result.under) warnings.push(result.message);
+      else if (result.under && !isMakeupKindMandate(studentMandates[0])) {
+        warnings.push(result.message);
+      }
       continue;
     }
 
@@ -777,7 +824,7 @@ export function checkMandatesForWeek(
     }
     const hasGroupUnder = mandateResults.some(
       ({ mandate, result }) =>
-        !isMakeupAuthMandate(mandate) &&
+        !isMakeupKindMandate(mandate) &&
         mandate.ratioGroup &&
         result.under &&
         !result.over &&
@@ -790,7 +837,7 @@ export function checkMandatesForWeek(
         // the note must say no partner available so frequency counts toward group.
         if (
           hasGroupUnder &&
-          !isMakeupAuthMandate(mandate) &&
+          !isMakeupKindMandate(mandate) &&
           !mandate.ratioGroup &&
           result.over &&
           !/Reason from note:/i.test(msg)
@@ -799,7 +846,7 @@ export function checkMandatesForWeek(
             ' If this session covers the group mandate, the note must say no partner available (or group partner absent / makeup session).';
         }
         errors.push(msg);
-      } else if (result.under) {
+      } else if (result.under && !isMakeupKindMandate(mandate)) {
         warnings.push(result.message);
       }
     }

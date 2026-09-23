@@ -103,12 +103,28 @@ function scrubPeerAbsentPhrases(notes: string): string {
     .trim();
 }
 
+/** Frontline "Log Type / Notes" label — text before the colon is attendance status. */
+const FRONTLINE_LOG_TYPE_LEAD_RE =
+  /^\s*((?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|Make[\s-]?up))\s*:/i;
+
 export function attendanceFromNotes(
   notes: string,
   timeIn: string,
   timeOut: string,
 ): ParsedSessionNote['attendance'] {
   const n = String(notes || '');
+  // Prefer Log Type before the colon (Frontline "Log Type / Notes" column).
+  const lead = n.match(FRONTLINE_LOG_TYPE_LEAD_RE);
+  if (lead) {
+    const label = lead[1] || '';
+    if (/^Service\s+Provided$/i.test(label)) {
+      if (MAKEUP_RE.test(n) && /make[\s-]?up\s+(?:for|session)/i.test(n)) return 'makeup';
+      return 'attended';
+    }
+    if (/^Make[\s-]?up$/i.test(label)) return 'makeup';
+    // Provider Absence / Student Not Available / School Closed / etc.
+    return 'missed';
+  }
   if (
     /provider absence|student absence|student not available|student not in school|student absent/i.test(
       n,
@@ -151,6 +167,151 @@ function cleanStudentName(raw: string): string {
     .replace(/,\s*$/, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/** Credential / degree tokens that Therapist Activity appends after the provider name. */
+const CREDENTIAL_NAME_TOKEN =
+  /^(?:m\.?s\.?|m\.?a\.?|ph\.?d\.?|ed\.?d\.?|dpt|otd|otr(?:\/l)?|ccc(?:-?slp)?|slp|tssld|pt|ot|r?pt|msed|maed)$/i;
+
+/**
+ * Common note / header words that the loose `LAST, FIRST` fallback can steal when
+ * CBRS / (ST-I) is missing from a PDF slice (e.g. "However, with prompting…").
+ */
+const NOTE_FRAGMENT_NAME_TOKEN =
+  /^(?:however|with|without|the|and|but|when|then|during|after|before|while|although|because|therefore|student|students|therapist|provider|session|notes|signed|cosigned|preschool|school|clinic|home|telehealth|therapy|room|setting|children|make|made|makeup|absent|absence|cancelled|canceled|participated|required|presented|transitioned|prompting|support|target|sound|sounds|peer|peers|group|individual)$/i;
+
+function activityNameTokenRejected(token: string): boolean {
+  const raw = String(token || '').trim();
+  const bare = raw.replace(/\./g, '');
+  if (!raw) return true;
+  // Single-letter middle initial is allowed inside a multi-word last name ("LIPSCOMB J").
+  if (/^[A-Za-z]$/.test(bare)) return false;
+  if (CREDENTIAL_NAME_TOKEN.test(raw) || CREDENTIAL_NAME_TOKEN.test(bare)) return true;
+  if (NOTE_FRAGMENT_NAME_TOKEN.test(raw) || NOTE_FRAGMENT_NAME_TOKEN.test(bare)) return true;
+  return false;
+}
+
+/**
+ * Reject therapist credentials and clinical-note scraps as student names.
+ * Used after both the CBRS-anchored matcher and the loose fallback.
+ */
+export function isPlausibleStudentName(last: string, first: string): boolean {
+  const l = String(last || '').replace(/\s+/g, ' ').trim();
+  const f = String(first || '').replace(/\s+/g, ' ').trim();
+  if (!l || !f) return false;
+  if (l.length < 2 || f.length < 2) return false;
+  if (CREDENTIAL_NAME_TOKEN.test(l) || CREDENTIAL_NAME_TOKEN.test(f)) return false;
+  if (NOTE_FRAGMENT_NAME_TOKEN.test(l) || NOTE_FRAGMENT_NAME_TOKEN.test(f)) return false;
+  if (l.split(/\s+/).some(activityNameTokenRejected)) return false;
+  if (f.split(/\s+/).some(activityNameTokenRejected)) return false;
+  // Real Frontline / Activity child names are Title/UPPER; lowercase first token is note text.
+  if (/^[a-z]/.test(f)) return false;
+  // Last name must contain a real word, not only an initial.
+  if (!l.split(/\s+/).some((t) => t.replace(/\./g, '').length >= 2)) return false;
+  return true;
+}
+
+/**
+ * "SOTO D. SOTO" is the same surname printed twice around an initial.
+ * Keep the final copy so the child stays "SOTO, DAVID".
+ */
+function collapseRepeatedActivityLast(last: string): string {
+  const tokens = String(last || '').split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) return tokens.join(' ');
+  const key = (t: string) => t.replace(/\./g, '').toLowerCase();
+  const multi = tokens.filter((t) => key(t).length >= 2);
+  const surname = multi[multi.length - 1];
+  if (!surname) return tokens.join(' ');
+  const k = key(surname);
+  const idxs = tokens.map((t, i) => (key(t) === k ? i : -1)).filter((i) => i >= 0);
+  if (idxs.length >= 2) return tokens.slice(idxs[idxs.length - 1]!).join(' ');
+  return tokens.join(' ');
+}
+
+function takeStudentName(last: string, first: string): string {
+  const collapsed = collapseRepeatedActivityLast(last);
+  if (!isPlausibleStudentName(collapsed, first)) return '';
+  return cleanStudentName(`${collapsed}, ${first}`);
+}
+
+/**
+ * One last-name word: a normal name, suffix (III/Jr), or a single-letter initial.
+ * Setting/header words (Therapy, Room, Preschool, …) cannot start the name.
+ */
+const ACTIVITY_LAST_WORD =
+  "(?!Therapy\\b|Room\\b|Preschool\\b|School\\b|Clinic\\b|Home\\b|Telehealth\\b|Office\\b|Classroom\\b|Community\\b|Setting\\b|However\\b|With\\b|Signed\\b|Notes\\b|Make\\b|Children\\b|Group\\b|Date\\b|Time\\b|Child\\b)[A-Z][A-Za-z0-9'.-]*";
+
+/** LAST[, extra words / initial], FIRST — e.g. MORTE III, ROBERTO and CROSSLAND LIPSCOMB J, TYRIQUE. */
+const ACTIVITY_LAST_FIRST = `(${ACTIVITY_LAST_WORD}(?:\\s+${ACTIVITY_LAST_WORD}){0,3}),\\s*([A-Za-z][A-Za-z'.-]+)`;
+
+/**
+ * Pick the best plausible LAST, FIRST from regex matches (prefer later hits —
+ * closer to CBRS/ICD/CPT — and skip credential / note-fragment false names).
+ */
+function firstPlausibleActivityName(
+  matches: Iterable<RegExpMatchArray>,
+  preferLast = true,
+): string {
+  const list = [...matches];
+  const ordered = preferLast ? list.reverse() : list;
+  for (const m of ordered) {
+    const name = takeStudentName(m[1] || '', m[2] || '');
+    if (name) return name;
+  }
+  return '';
+}
+
+/**
+ * Therapist Activity child name from a session slice.
+ * 1) Before CBRS / (ST-I)  2) Before ICD or CPTxN (when program id dropped from Tj)
+ * 3) Loose LAST, FIRST in the pre-notes header window (all candidates)
+ * 4) Optional lookback just before the date/time (name emitted before the clock row)
+ */
+export function extractTherapistActivityStudentName(
+  slice: string,
+  opts?: { afterTimes?: string; lookback?: string },
+): string {
+  const body = String(slice || '');
+  if (!body && !opts?.lookback) return '';
+
+  const cbrsRe = new RegExp(
+    `\\b${ACTIVITY_LAST_FIRST}\\b(?=\\s*(?:CBRS|\\([A-Z]{2,4}))`,
+    'g',
+  );
+  let name = firstPlausibleActivityName(body.matchAll(cbrsRe));
+  if (name) return name;
+
+  // When CBRS/(ST-…) is missing from the extract, Child still usually sits right
+  // before ICD (F80.2) or CPT (92507x1). Do not require CBRS for those rows.
+  const icdCptRe = new RegExp(
+    `\\b${ACTIVITY_LAST_FIRST}\\b(?=\\s*(?:[A-TV-Z]\\d{2}(?:\\.\\d+)?\\b|\\d{4,5}\\s*[xX×]\\s*\\d))`,
+    'g',
+  );
+  name = firstPlausibleActivityName(body.matchAll(icdCptRe));
+  if (name) return name;
+
+  const afterTimes = opts?.afterTimes ?? body;
+  const headerWindow =
+    afterTimes.split(
+      /\b(?:Notes\s+Entered|Signed:|Cosigned:|Meets\s+Medicaid|925\d{2}|97\d{3}|961\d{2}|975\d{2})/i,
+    )[0] || afterTimes;
+  // Loose: first-name must be Title/UPPER so "However, with" never wins.
+  const looseTitleRe = new RegExp(
+    `\\b(${ACTIVITY_LAST_WORD}(?:\\s+${ACTIVITY_LAST_WORD}){0,3}),\\s*([A-Z][A-Za-z'.-]+)\\b`,
+    'g',
+  );
+  name = firstPlausibleActivityName(headerWindow.matchAll(looseTitleRe), false);
+  if (name) return name;
+
+  const lookback = String(opts?.lookback || '');
+  if (lookback) {
+    name = firstPlausibleActivityName(lookback.matchAll(cbrsRe));
+    if (name) return name;
+    name = firstPlausibleActivityName(lookback.matchAll(icdCptRe));
+    if (name) return name;
+  }
+
+  return '';
 }
 
 function isServiceTypeSchoolLabel(name: string): boolean {
@@ -203,6 +364,18 @@ export function isNonSchoolLikeSetting(name: string): boolean {
   if (/\([^)]{3,}\)/.test(n) && !/\b(school|ms\/hs|m\.?s\.?|h\.?s\.?|elem)\b/i.test(n)) {
     return true;
   }
+  // Frontline Setting dropdown, not a building: "Student is Parentally Placed in a Nonpublic School".
+  if (isPlacementStatusSetting(n)) return true;
+  return false;
+}
+
+/** IEP / Frontline placement status copied into the Setting column. */
+function isPlacementStatusSetting(name: string): boolean {
+  const n = normEntityName(name);
+  if (!n) return false;
+  if (/\bparentally placed\b/.test(n)) return true;
+  if (/\bnonpublic school\b/.test(n)) return true;
+  if (/\bparentally\b/.test(n) && /\b(?:nonpublic|private|parochial)\b/.test(n)) return true;
   return false;
 }
 
@@ -229,6 +402,26 @@ export function looksLikeDistrictLabel(name: string): boolean {
 function isDistrictAgencyHeaderContext(before: string): boolean {
   return /District\s*\/\s*Agency\s*\/\s*BOCES\s*:\s*$/i.test(before) ||
     /\b(?:District|Agency|BOCES)\s*:\s*$/i.test(before);
+}
+
+/**
+ * Frontline header value, e.g. "District/Agency/BOCES: Hicksville UFSD".
+ * Used for district matching when the Setting column is not a building name.
+ */
+export function extractDistrictAgencyHeader(blob: string): string {
+  const m = String(blob || '').match(
+    /District\s*\/\s*Agency(?:\s*\/\s*BOCES)?\s*:\s*([^\n\r]+)/i,
+  );
+  if (!m?.[1]) return '';
+  let value = m[1].replace(/\s+/g, ' ').trim();
+  value = value.replace(/^(?:BOCES|Agency|District)\s*:\s*/i, '').trim();
+  value = (value.split(/\b(?:Summary of|Service Provider|Service\s*:|Student Name|From\s*:)\b/i)[0] || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[:\s,]+$/, '');
+  if (!value || !looksLikeDistrictLabel(value)) return '';
+  if (isNonSchoolLikeSetting(value) || isGenericSettingLabel(value)) return '';
+  return value;
 }
 
 function extractSchoolName(blob: string): string {
@@ -405,22 +598,14 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
     const groupMatch = slice.match(/#\s*Children\s*in\s*Group:\s*(\d+)/i);
     const groupSize = groupMatch ? Number(groupMatch[1]) : 0;
 
-    // Prefer "LAST, FIRST" (optional III/Jr) immediately before program id / (ST-I).
-    const nameRe =
-      /\b([A-Z][A-Za-z0-9'.-]+(?:\s+(?:III|II|IV|Jr\.?|Sr\.?))?),\s*([A-Za-z][A-Za-z'.-]+)\b(?=\s*(?:CBRS|\([A-Z]{2,4}))/g;
-    const nameHits = [...slice.matchAll(nameRe)];
-    let studentName = '';
-    if (nameHits.length) {
-      const last = nameHits[nameHits.length - 1]!;
-      studentName = cleanStudentName(`${last[1]}, ${last[2]}`);
-    }
-    if (!studentName) {
-      const afterTimes = slice.slice(hit.endIdx - hit.idx);
-      const nameHit = afterTimes.match(
-        /\b([A-Z][A-Za-z0-9'.-]+(?:\s+(?:III|II|IV|Jr\.?|Sr\.?))?),\s*([A-Za-z][A-Za-z'.-]+)\b/,
-      );
-      if (nameHit) studentName = cleanStudentName(`${nameHit[1]}, ${nameHit[2]}`);
-    }
+    // Look back only immediately before this clock row (not the whole prior session)
+    // so Child+CBRS emitted before In:/Out: still binds, without stealing the prior child.
+    const lookback = flat.slice(Math.max(0, hit.idx - 180), hit.idx);
+    const afterTimes = slice.slice(hit.endIdx - hit.idx);
+    const studentName = extractTherapistActivityStudentName(slice, {
+      afterTimes,
+      lookback,
+    });
 
     // Allow split tokens like (ST 1 - G) from Tj extraction.
     const svcCode = (slice.match(/\(([A-Z]{2,4}\s*\d?\s*-?\s*[IG])\)/i) || [])[1] || '';
@@ -498,6 +683,25 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
   return rows;
 }
 
+/** Log Type label that opens a Frontline clinical / absence note block. */
+const FRONTLINE_LOG_TYPE_IN_BLOB_RE =
+  /(?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|Make[\s-]?up)\s*:/gi;
+
+/** Ends a note block so the next slash-date can be a real service-date row again. */
+const FRONTLINE_NOTE_BOUNDARY_RE =
+  /Provider\s+Signature\s*\/?\s*Credentials|Telehealth\s*:|Student\s+Name\s*:/gi;
+
+/** End index of the last regex match in `s`, or -1. */
+function lastMatchEnd(re: RegExp, s: string): number {
+  let last = -1;
+  re.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s))) {
+    last = (m.index ?? 0) + m[0].length;
+  }
+  return last;
+}
+
 /** True when this slash-date is a Frontline service-date row (not From/To/DOB/makeup). */
 function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   const before = blob.slice(Math.max(0, idx - 64), idx);
@@ -509,6 +713,17 @@ function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   if (new RegExp(`${MAKEUP_COVERED_DATE_PREFIX}\\s*:?\\s*$`, 'i').test(before)) {
     return false;
   }
+  // Service dates sit on their own line (Frontline column). Mid-sentence dates like
+  // "first attend date 9/15/26" must not truncate the parent session or invent misses.
+  const linePrefix = blob.slice(Math.max(0, idx - 12), idx);
+  if (!/(?:^|[\r\n])[ \t]*$/.test(linePrefix)) return false;
+  // Dates inside a filled Log Type / Notes body (after Service Provided: …) before
+  // Signature/Telehealth are not service-date rows. Empty absence labels
+  // ("Provider Absence:\n09/03/…") still allow the next DOS on the following line.
+  const lookback = blob.slice(Math.max(0, idx - 2500), idx);
+  const logTypeEnd = lastMatchEnd(FRONTLINE_LOG_TYPE_IN_BLOB_RE, lookback);
+  const boundaryEnd = lastMatchEnd(FRONTLINE_NOTE_BOUNDARY_RE, lookback);
+  if (logTypeEnd > boundaryEnd && /\S/.test(lookback.slice(logTypeEnd))) return false;
   return true;
 }
 
@@ -622,6 +837,8 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
     .trim();
   const serviceType = (blob.match(/Service:\s*([^\n]+)/i) || [])[1]?.trim() ?? '';
   const reportSchool = extractSchoolName(blob);
+  // Setting column often says "Student is Parentally Placed…" — match the header district instead.
+  const districtHeader = extractDistrictAgencyHeader(blob);
   const rows: ParsedSessionNote[] = [];
   const dateRe = /(\d{1,2}\/\d{1,2}\/\d{2,4})/g;
   const dateHits: Array<{ dateOfService: string; idx: number }> = [];
@@ -668,7 +885,8 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       ? ''
       : (slice.match(/\b([1-9]\s*:\s*[1-9]\d?)\b/) || [])[1] || '';
     const location = schoolFromSlice(slice);
-    const schoolName = location || reportSchool;
+    // Real building / Setting wins. District header is the match key only when Setting is not a school.
+    const schoolName = location || reportSchool || districtHeader;
     const cpt = attendance === 'missed' ? { codes: [] as string[], totalUnits: 0, procedures: [] as string[] } : parseCptCoverage(slice);
     const noteText = notes || (absenceOnly ? slice.replace(/\s+/g, ' ').trim().slice(0, 200) : '');
     rows.push({
@@ -723,6 +941,67 @@ export function mappingName(raw: string): { first: string; last: string } {
   const parts = String(raw || '').trim().split(/\s+/).filter(Boolean);
   if (parts.length <= 1) return { first: parts[0] ?? '', last: '' };
   return { first: parts[parts.length - 1] ?? '', last: parts.slice(0, -1).join(' ') };
+}
+
+/**
+ * Compare key for Activity names vs caseload.
+ * Hyphens match spaces (Crossland-Lipscomb vs CROSSLAND LIPSCOMB).
+ * A trailing single-letter initial is ignored (LIPSCOMB J vs Lipscomb).
+ * Different surnames stay different — JR, MICHAEL does not match Davis, Michael.
+ */
+export function activityStudentNameKey(first: string, last: string): string {
+  const norm = (s: string) =>
+    String(s || '')
+      .toLowerCase()
+      .replace(/[-']/g, ' ')
+      .replace(/[^a-z0-9\s]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const f = norm(first);
+  const l = norm(last).replace(/\s+[a-z]$/, '').trim();
+  return `${l}|${f}`;
+}
+
+type NamedStudent = { firstName: string; lastName: string };
+
+function exactStudentName<T extends NamedStudent>(
+  students: readonly T[],
+  first: string,
+  last: string,
+): T | undefined {
+  const f = first.trim().toLowerCase();
+  const l = last.trim().toLowerCase();
+  if (!f || !l) return undefined;
+  return students.find(
+    (s) => s.firstName.trim().toLowerCase() === f && s.lastName.trim().toLowerCase() === l,
+  );
+}
+
+/**
+ * Resolve a parsed Activity/Frontline name to one caseload student.
+ * Exact match first. Then one unique hyphen/initial-insensitive hit.
+ * Ambiguous loose hits are not returned.
+ */
+export function findStudentForActivityName<T extends NamedStudent>(
+  students: readonly T[],
+  rawName: string,
+): T | undefined {
+  const person = splitPersonName(rawName);
+  const mapped = mappingName(rawName);
+  const exact =
+    exactStudentName(students, person.first, person.last) ||
+    exactStudentName(students, mapped.first, mapped.last) ||
+    (person.first && person.last
+      ? exactStudentName(students, person.last, person.first)
+      : undefined);
+  if (exact) return exact;
+  const key = activityStudentNameKey(person.first, person.last);
+  const [lastKey, firstKey] = key.split('|');
+  if (!lastKey || !firstKey) return undefined;
+  const loose = students.filter(
+    (s) => activityStudentNameKey(s.firstName, s.lastName) === key,
+  );
+  return loose.length === 1 ? loose[0] : undefined;
 }
 
 export function nameKey(first: string, last: string): string {

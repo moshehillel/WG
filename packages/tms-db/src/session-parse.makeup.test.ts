@@ -86,3 +86,85 @@ Telehealth: No
     });
   });
 });
+
+describe('Frontline Log Type / note-embedded dates', () => {
+  it('does not invent a miss from "first attend date MM/DD/YY" inside Service Provided', () => {
+    const text = `
+District/Agency/BOCES: Elmont Union Free School District
+Summary of Related Service Session Notes
+Service: Physical Therapy
+Service Provider: Patel PT*, Neelamben
+Student Name: Juliette Ingargiola, D.O.B. 10/26/2021
+09/15/2026
+1:1
+97110
+ 1
+11:00 am
+11:30 am
+Clara H. Carlson School
+Service Provided: Student was seen for first attend date 9/15/26. therapist is establishing good rapport with this child and assessing her gross motor skills.
+Provider Signature/Credentials
+Date
+Neelamben Patel PT* PT (NPI# 1699139774) (License# 039203)
+Sep 15 2026 2:50PM
+Telehealth:
+No
+09/15/2026
+1:1
+97116
+ 1
+11:00 am
+11:30 am
+Clara H. Carlson School
+Service Provided: Student was seen for first attend date 9/15/26. therapist is establishing good rapport with this child and assessing her gross motor skills.
+Provider Signature/Credentials
+Date
+Neelamben Patel PT* PT (NPI# 1699139774) (License# 039203)
+Sep 15 2026 2:50PM
+Telehealth:
+No
+`;
+    const rows = parseWeeklySessionText(text);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.attendance).toBe('attended');
+    expect(rows[0]?.dateOfService).toBe('09/15/2026');
+    expect(rows[0]?.beginTime).toMatch(/11:00/i);
+    expect(rows[0]?.signed).toBe(true);
+    expect(rows[0]?.cptUnits).toBe(2);
+    expect(rows.filter((r) => /9\/15\/26/.test(r.dateOfService))).toEqual([]);
+  });
+
+  it('keeps Provider Not Available Log Type as missed with Frontline reason', () => {
+    const text = `
+Student Name: Michelle Benny, D.O.B. 08/04/2018
+Service Provider: Patel PT*, Neelamben
+Service: Physical Therapy
+09/16/2026
+ 0
+Clara H. Carlson School
+Provider Not Available:
+09/17/2026
+1:1
+97110
+ 1
+11:30 am
+12:00 pm
+Clara H. Carlson School
+Service Provided: Student was seen for first treatment session 9/17/26. student engaged in gross motor activity.
+Provider Signature/Credentials
+Date
+Neelamben Patel PT* PT (NPI# 1699139774) (License# 039203)
+Sep 20 2026 3:55PM
+Telehealth:
+No
+`;
+    const rows = parseWeeklySessionText(text);
+    const miss = rows.find((r) => r.dateOfService === '09/16/2026');
+    const attend = rows.find((r) => r.dateOfService === '09/17/2026');
+    expect(miss?.attendance).toBe('missed');
+    expect(miss?.cancelReason).toMatch(/Provider Not Available/i);
+    expect(attend?.attendance).toBe('attended');
+    expect(attend?.signed).toBe(true);
+    expect(rows.filter((r) => /9\/17\/26/.test(r.dateOfService))).toEqual([]);
+  });
+});

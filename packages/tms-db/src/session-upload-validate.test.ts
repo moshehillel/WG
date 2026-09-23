@@ -67,9 +67,32 @@ describe('CPT duration units', () => {
     expect(cptDurationError('bad', 'time', '', 'makeup')).toMatch(/CPT units missing/i);
   });
 
-  it('allows untimed speech CPT 92507x1 for a 30-minute session', () => {
+  it('allows untimed speech CPT 92507x1 for typical session lengths', () => {
+    // 92507 is untimed — 1 unit covers the visit regardless of clock minutes.
+    expect(cptDurationError('10:00 AM', '10:15 AM', '92507x1', 'attended')).toBeNull();
     expect(cptDurationError('10:00 AM', '10:30 AM', '92507x1', 'attended')).toBeNull();
+    expect(cptDurationError('10:00 AM', '10:45 AM', '92507x1', 'attended')).toBeNull();
+    expect(cptDurationError('10:00 AM', '11:00 AM', '92507x1', 'attended')).toBeNull();
+    expect(cptDurationError('9:30 am', '10:00 am', 'CPT: 92507 Units: 1', 'attended')).toBeNull();
     expect(cptDurationError('10:00 AM', '10:30 AM', '92508x1', 'attended')).toBeNull();
+    // Junk room/case ids like 2101x1 must not eclipse 92507 or force timed units.
+    expect(
+      cptDurationError(
+        '10:00 AM',
+        '10:30 AM',
+        'Room 2101x1 Preschool CHILD, NAME CBRS2627S0093066(ST-I) F80.2 92507x1',
+        'attended',
+      ),
+    ).toBeNull();
+    expect(parseCptCoverage('Room 2101x1 F80.2 92507\n 1').codes).toEqual(['92507']);
+    // Timed individual codes still need 15-min coverage.
+    expect(cptDurationError('9:00 am', '9:30 am', '97110x1', 'attended')).toMatch(/need 2 unit/i);
+  });
+
+  it('allows group CPT 97150x1 for a 30-minute session', () => {
+    expect(cptDurationError('9:00 am', '9:30 am', '97150x1', 'attended')).toBeNull();
+    expect(cptDurationError('9:30 am', '10:00 am', 'CPT: 97150 Units: 1', 'attended')).toBeNull();
+    // Timed individual codes still need 15-min coverage.
     expect(cptDurationError('9:00 am', '9:30 am', '97110x1', 'attended')).toMatch(/need 2 unit/i);
   });
 
@@ -279,6 +302,16 @@ No
 Notes Entered: 8/12/2026 7:15:26 PM
 Signed: 8/14/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
 Cosigned: 8/14/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+`;
+    expect(sessionIsSigned(signed)).toBe(true);
+    expect(sessionSignatureError(signed, 'attended')).toBeNull();
+  });
+
+  it('detects Patel-style credential footer even without Signature header', () => {
+    const signed = `
+Service Provided: Student engaged in gross motor activity
+Neelamben Patel PT* PT (NPI# 1699139774) (License# 039203)
+Sep 15 2026 2:50PM
 `;
     expect(sessionIsSigned(signed)).toBe(true);
     expect(sessionSignatureError(signed, 'attended')).toBeNull();

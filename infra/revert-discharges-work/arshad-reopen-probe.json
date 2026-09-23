@@ -1,0 +1,44 @@
+{
+  "nil": {
+    "status": "Failure",
+    "eid": "-315",
+    "msg": "Requires \"Contract Discharge Reason Description\""
+  },
+  "add": {
+    "status": "Failure",
+    "eid": "-74",
+    "msg": "New placement overlaps with an existing placement."
+  },
+  "before": [
+    {
+      "placementId": "6812439",
+      "contractId": "61591",
+      "svc": "785140",
+      "start": "2024-12-07",
+      "disc": "2026-09-15"
+    },
+    {
+      "placementId": "8596053",
+      "contractId": "61591",
+      "svc": "785140",
+      "start": "2026-09-16",
+      "disc": ""
+    }
+  ],
+  "after": [
+    {
+      "placementId": "6812439",
+      "contractId": "61591",
+      "svc": "785140",
+      "start": "2024-12-07",
+      "disc": "2026-09-15"
+    },
+    {
+      "placementId": "8596053",
+      "contractId": "61591",
+      "svc": "785140",
+      "start": "2026-09-16",
+      "disc": ""
+    }
+  ]
+}

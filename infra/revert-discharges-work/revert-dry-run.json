@@ -1,0 +1,231 @@
+{
+  "runAt": "2026-09-16T19:51:24.261Z",
+  "apply": false,
+  "results": [
+    {
+      "name": "Hooria Arshad",
+      "caseId": "02891799",
+      "firstName": "HOORIA",
+      "lastName": "ARSHAD",
+      "source": "discharge_service success 886d6a26",
+      "expectedPlacementId": "6812439",
+      "patientId": "22854608",
+      "status": "would_clear_discharge",
+      "placementsToClear": [
+        {
+          "placementId": "6812439",
+          "contractId": "61591",
+          "serviceCodeId": "785140",
+          "startDate": "2024-12-07",
+          "dischargeDate": "2026-09-15"
+        }
+      ],
+      "placements": [
+        {
+          "placementId": "6812439",
+          "contractId": "61591",
+          "serviceCodeId": "785140",
+          "startDate": "2024-12-07",
+          "dischargeDate": "2026-09-15"
+        }
+      ]
+    },
+    {
+      "name": "Helena Galeanocarvajal",
+      "caseId": "04725821",
+      "firstName": "HELENA",
+      "lastName": "GALEANOCARVAJAL",
+      "source": "discharge_service success 886d6a26",
+      "expectedPlacementId": "6897698",
+      "patientId": "23012434",
+      "status": "would_clear_discharge",
+      "placementsToClear": [
+        {
+          "placementId": "6897698",
+          "contractId": "61591",
+          "serviceCodeId": "785140",
+          "startDate": "2025-01-01",
+          "dischargeDate": "2026-09-15"
+        }
+      ],
+      "placements": [
+        {
+          "placementId": "6897698",
+          "contractId": "61591",
+          "serviceCodeId": "785140",
+          "startDate": "2025-01-01",
+          "dischargeDate": "2026-09-15"
+        }
+      ]
+    },
+    {
+      "name": "Madison Oliver",
+      "caseId": "258271503",
+      "firstName": "MADISON",
+      "lastName": "OLIVER",
+      "source": "discharge_service success 886d6a26",
+      "expectedPlacementId": "8300861",
+      "patientId": "25788276",
+      "status": "would_clear_discharge",
+      "placementsToClear": [
+        {
+          "placementId": "8300861",
+          "contractId": "37925",
+          "serviceCodeId": "313581",
+          "startDate": "2026-03-14",
+          "dischargeDate": "2026-09-15"
+        }
+      ],
+      "placements": [
+        {
+          "placementId": "8300861",
+          "contractId": "37925",
+          "serviceCodeId": "313581",
+          "startDate": "2026-03-14",
+          "dischargeDate": "2026-09-15"
+        }
+      ]
+    },
+    {
+      "name": "Edmund Picciuto",
+      "caseId": "258272446",
+      "firstName": "EDMUND",
+      "lastName": "PICCIUTO",
+      "source": "discharge_service success 886d6a26",
+      "expectedPlacementId": "8522217",
+      "patientId": "26372249",
+      "status": "would_clear_discharge",
+      "placementsToClear": [
+        {
+          "placementId": "8522217",
+          "contractId": "37925",
+          "serviceCodeId": "313582",
+          "startDate": "2026-07-04",
+          "dischargeDate": "2026-09-15"
+        }
+      ],
+      "placements": [
+        {
+          "placementId": "8522217",
+          "contractId": "37925",
+          "serviceCodeId": "313582",
+          "startDate": "2026-07-04",
+          "dischargeDate": "2026-09-15"
+        }
+      ]
+    },
+    {
+      "name": "Roy-Al Porter",
+      "caseId": "258270052",
+      "firstName": "ROY-AL",
+      "lastName": "PORTER",
+      "source": "discharge_service success 886d6a26",
+      "expectedPlacementId": "7909108",
+      "patientId": "24555059",
+      "status": "would_clear_discharge",
+      "placementsToClear": [
+        {
+          "placementId": "7909108",
+          "contractId": "37925",
+          "serviceCodeId": "313582",
+          "startDate": "2025-09-18",
+          "dischargeDate": "2026-09-15"
+        }
+      ],
+      "placements": [
+        {
+          "placementId": "7909108",
+          "contractId": "37925",
+          "serviceCodeId": "313582",
+          "startDate": "2025-09-18",
+          "dischargeDate": "2026-09-15"
+        }
+      ]
+    },
+    {
+      "name": "Caleb Rolon",
+      "caseId": "P0800016094701",
+      "firstName": "Caleb",
+      "lastName": "Rolon",
+      "source": "discharge_service success 886d6a26",
+      "expectedPlacementId": "7802393",
+      "patientId": "24301609",
+      "status": "would_clear_discharge",
+      "placementsToClear": [
+        {
+          "placementId": "7802393",
+          "contractId": "37925",
+          "serviceCodeId": "313582",
+          "startDate": "2025-07-15",
+          "dischargeDate": "2026-09-15"
+        }
+      ],
+      "placements": [
+        {
+          "placementId": "7802393",
+          "contractId": "37925",
+          "serviceCodeId": "313582",
+          "startDate": "2025-07-15",
+          "dischargeDate": "2026-09-15"
+        }
+      ]
+    },
+    {
+      "name": "Martin Solomon",
+      "caseId": "06771684",
+      "firstName": "MARTIN",
+      "lastName": "SOLOMON",
+      "source": "discharge_service success 886d6a26",
+      "expectedPlacementId": "8519959",
+      "patientId": "24238104",
+      "status": "already_active",
+      "placements": [
+        {
+          "placementId": "7889998",
+          "contractId": "45571",
+          "startDate": "2025-11-06",
+          "dischargeDate": ""
+        },
+        {
+          "placementId": "7771102",
+          "contractId": "29431",
+          "startDate": "2025-09-01",
+          "dischargeDate": ""
+        }
+      ]
+    },
+    {
+      "name": "Michael Asunto",
+      "caseId": "258270277",
+      "firstName": "Michael",
+      "lastName": "Asunto",
+      "source": "meeting overlap sole-placement disc ~2026-09-09",
+      "expectedPlacementId": "7935330",
+      "patientId": "24617583",
+      "status": "no_discharged_placement",
+      "placements": []
+    },
+    {
+      "name": "Fiona Downs",
+      "caseId": "258270803",
+      "firstName": "Fiona",
+      "lastName": "Downs",
+      "source": "meeting overlap sole-placement disc ~2026-09-10",
+      "expectedPlacementId": "8045831",
+      "patientId": "24865860",
+      "status": "no_discharged_placement",
+      "placements": []
+    },
+    {
+      "name": "Karlandrew Navelgas",
+      "caseId": "258267421",
+      "firstName": "Karlandrew",
+      "lastName": "Navelgas",
+      "source": "meeting overlap sole-placement disc ~2026-09-10",
+      "expectedPlacementId": "6711683",
+      "patientId": "22680255",
+      "status": "no_discharged_placement",
+      "placements": []
+    }
+  ]
+}

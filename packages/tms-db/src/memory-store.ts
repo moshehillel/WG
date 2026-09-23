@@ -10,6 +10,7 @@ import type {
   AppUser,
   ArchiveRecord,
   AuditEvent,
+  District,
   DueDate,
   HhaTransfer,
   Mandate,
@@ -49,7 +50,7 @@ export function migrateMandateGroupSizes(mandates: Mandate[]): Mandate[] {
  */
 export function migrateMandateBillingServiceNames(mandates: Mandate[]): Mandate[] {
   return (mandates || []).map((m) => {
-    if (m.mandateKind === 'makeup_auth') return m;
+    if (m.mandateKind === 'makeup_auth' || m.mandateKind === 'makeup_weekly') return m;
     const isGroup =
       Boolean(m.ratioGroup) || (m.groupSize != null && Number(m.groupSize) > 1);
     if (!isGroup) return m;
@@ -70,6 +71,7 @@ function mergeSnapshot(snapshot: Partial<TmsSnapshot> | null | undefined): TmsSn
     const value = src[key];
     if (Array.isArray(value)) (base as TmsSnapshot)[key] = structuredClone(value) as never;
   }
+  if (!Array.isArray(base.districts)) base.districts = [];
   base.dueDates = migrateDueDatesToSchools(base.dueDates as never, base.students);
   base.providers = migrateProviders(base.providers);
   base.mandates = migrateMandateBillingServiceNames(migrateMandateGroupSizes(base.mandates));
@@ -148,6 +150,22 @@ export class MemoryStore {
     if (i >= 0) this.data.schools[i] = row;
     else this.data.schools.push(row);
     return row;
+  }
+
+  upsertDistrict(row: District): District {
+    if (!this.data.districts) this.data.districts = [];
+    const i = this.data.districts.findIndex((d) => d.id === row.id);
+    if (i >= 0) this.data.districts[i] = row;
+    else this.data.districts.push(row);
+    return row;
+  }
+
+  removeDistrict(id: string): District | undefined {
+    if (!this.data.districts) this.data.districts = [];
+    const i = this.data.districts.findIndex((d) => d.id === id);
+    if (i < 0) return undefined;
+    const [removed] = this.data.districts.splice(i, 1);
+    return removed;
   }
 
   /** Remove a school, its due dates, and clear schoolId on linked students. */
@@ -443,13 +461,19 @@ export class MemoryStore {
   }
 
   upsertTransfer(row: HhaTransfer): HhaTransfer {
-    const i = this.data.hhaTransfers.findIndex((s) => s.sessionId === row.sessionId);
-    if (i >= 0) this.data.hhaTransfers[i] = row;
-    else this.data.hhaTransfers.push(row);
+    // One transfer per session — replace all prior rows for that session (Dynamo may
+    // have historically stored duplicate entity ids for the same sessionId).
+    const kept = this.data.hhaTransfers.filter((s) => s.sessionId !== row.sessionId);
+    kept.push(row);
+    this.data.hhaTransfers = kept;
     return row;
   }
 
   transferForSession(sessionId: string): HhaTransfer | undefined {
-    return this.data.hhaTransfers.find((t) => t.sessionId === sessionId);
+    const rows = this.data.hhaTransfers.filter((t) => t.sessionId === sessionId);
+    if (!rows.length) return undefined;
+    const rank = (s: string | undefined) =>
+      s === 'confirmed' ? 0 : s === 'pending' || s === 'sent' ? 1 : s === 'failed' ? 2 : 3;
+    return [...rows].sort((a, b) => rank(a.status) - rank(b.status))[0];
   }
 }

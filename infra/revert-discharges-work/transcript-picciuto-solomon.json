@@ -1,0 +1,86 @@
+[
+  {
+    "line": 32,
+    "snippets": [
+      "nocarvajal, Karlandrew Navelgas, Edmund Picciuto, Roy-Al Porter, Caleb Rolon (twice — PT and OT), Martin Solomon.\\n- **6 × patient not found in HHA** — no write attempted at all: Mallard Victor Barth, Victor Carrion, Stori Johnson, Atif Siddik, Mat",
+      "Caleb Rolon (twice — PT and OT), Martin Solomon.\\n- **6 × patient not found in HHA** — no write attempted at all: Mallard Victor Barth, Victor Carrion, Stori Johnson, Atif Siddik, Matthew Thoma, Wolf Elizander Windwer.\\n- **4 × service code not on"
+    ]
+  },
+  {
+    "line": 43,
+    "snippets": [
+      "nocarvajal, Karlandrew Navelgas, Edmund Picciuto, Roy-Al Porter, Caleb Rolon (both his OT and PT lines), Martin Solomon.\\n- **Patient not found in HHA (6)** — match demographics (name/DOB/Medicaid ID) or fix the PS identifiers: Mallard Victor Barth",
+      "olon (both his OT and PT lines), Martin Solomon.\\n- **Patient not found in HHA (6)** — match demographics (name/DOB/Medicaid ID) or fix the PS identifiers: Mallard Victor Barth, Victor Carrion, Stori Johnson, Atif Siddik, Matthew Thoma, Wolf Eliza"
+    ]
+  },
+  {
+    "line": 125,
+    "snippets": [
+      "caseId: '258272446',\\n    name: 'EDMUND PICCIUTO',\\n    first: 'EDMUND',\\n    last: 'PICCIUTO',\\n    program: 'Americare Certified',\\n    attempted: 'PT CHHA → HHA PT (313582)',\\n  },\\n  {\\n    kind: 'overlap',\\n    caseId: '258270052',\\n    name: ",
+      " caseId: '06771684',\\n    name: 'MARTIN SOLOMON',\\n    first: 'MARTIN',\\n    last: 'SOLOMON',\\n    program: 'Extended Home Care Therapy',\\n    attempted: 'OT CHHA EXTENDED → Occupational Therapy (785137)',\\n  },\\n  // Ambiguous discharge\\n  {\\n   "
+    ]
+  },
+  {
+    "line": 127,
+    "snippets": [
+      ",'NAVELGAS'],\\n  ['258272446','EDMUND','PICCIUTO'],\\n  ['258270052','ROY-AL','PORTER'],\\n  ['P0800016094701','Caleb','Rolon'],\\n  ['258267734','ADAM','MARTINEZ'],\\n  ['258272396','MALLARD VICTOR','BARTH'],\\n  ['06758329','Victor','Carrion'],\\n  ['0"
+    ]
+  },
+  {
+    "line": 128,
+    "snippets": [
+      "','DOWNS'],['Fiona','Downs'],['EDMUND','PICCIUTO'],['Edmund','Picciuto'],\\n  ['HOORIA','ARSHAD'],['Hooria','Arshad'],['HELENA','GALEANOCARVAJAL'],['Helena','Galeanocarvajal'],\\n  ['KARLANDREW','NAVELGAS'],['Karlandrew','Navelgas'],['ROY-AL','PORTER"
+    ]
+  },
+  {
+    "line": 130,
+    "snippets": [
+      "seId:'258272446', first:'EDMUND', last:'PICCIUTO'},\\n  {caseId:'258270052', first:'ROY-AL', last:'PORTER'},\\n  {caseId:'02891799', first:'HOORIA', last:'ARSHAD'},\\n  {caseId:'04725821', first:'HELENA', last:'GALEANOCARVAJAL'},\\n  {caseId:'06771684'",
+      "aseId:'06771684', first:'MARTIN', last:'SOLOMON'},\\n  {caseId:'P0800016094701', first:'Caleb', last:'Rolon'},\\n  {caseId:'P0700012487601', first:'ZARIF A', last:'HOQUE'},\\n];\\n\\nfor (const t of targets) {\\n  const tries = [\\n    {mrNumber:t.caseId"
+    ]
+  },
+  {
+    "line": 131,
+    "snippets": [
+      "seId:'258272446', first:'EDMUND', last:'PICCIUTO', program:'Americare Certified', attemptedService:'PT CHHA → PT'},\\n  {kind:'OVERLAP', caseId:'258270052', first:'ROY-AL', last:'PORTER', program:'Americare Certified', attemptedService:'PT CHHA → PT",
+      "aseId:'06771684', first:'MARTIN', last:'SOLOMON', program:'Extended Home Care Therapy', attemptedService:'OT CHHA EXTENDED → Occupational Therapy'},\\n  {kind:'DISCHARGE MISMATCH', caseId:'282389', first:'Jaxxon', last:'Godbee', program:'Americare "
+    ]
+  },
+  {
+    "line": 134,
+    "snippets": [
+      "PT vs existing Americare PT |\\n| Edmund Picciuto | `258272446` | Americare Certified | `PT CHHA` → HHA **PT** | Placement **#8522217**, contract **37925 Americare**, service **313582 PT**, start **2026-07-04**, discharged **2026-09-15** | New PT vs",
+      "ting Americare PT placement |\\n| Martin Solomon | `06771684` | Extended Home Care | `OT CHHA EXTENDED` → **Occupational Therapy** | Placement **#8519959**, contract **61591 Extended**, start **2026-09-08**, discharged **2026-09-15** (svc shown as ",
+      "` → HHA **PT** | Placement **#8522217**, contract **37925 Americare**, service **313582 PT**, start **2026-07-04**, d",
+      "onal Therapy** | Placement **#8519959**, contract **61591 Extended**, start **2026-09-08**, discharged **2026-09-15**"
+    ]
+  },
+  {
+    "line": 136,
+    "snippets": [
+      " **2024-11-07** (disc 9/10) |\\n| Edmund Picciuto | Americare `PT CHHA` | Americare **PT** since **2026-07-04** (disc 9/15) |\\n| Roy-Al Porter | Americare `PT CHHA` | Americare **PT** since **2025-09-18** (disc 9/15) |\\n| Caleb Rolon ×2 | Americare ",
+      " **2025-07-15** (disc 9/15) |\\n| Martin Solomon | Extended `OT CHHA EXTENDED` | Extended placement since **2026-09-08** (disc 9/15) |\\n\\n---\\n\\n### Discharge mismatches — PS said X, HHA has Y\\n\\n| Patient | PS discharge | Real HHA active |\\n|---|-"
+    ]
+  },
+  {
+    "line": 140,
+    "snippets": [
+      "PT since 2024-11-07 (disc 9/10)\\nEdmund Picciuto\\nAmericare PT CHHA\\nAmericare PT since 2026-07-04 (disc 9/15)\\nRoy-Al Porter\\nAmericare PT CHHA\\nAmericare PT since 2025-09-18 (disc 9/15)\\nCaleb Rolon ×2\\nAmericare OT and PT eval\\nAmericare PT sinc",
+      "PT since 2025-07-15 (disc 9/15)\\nMartin Solomon\\nExtended OT CHHA EXTENDED\\nExtended placement since 2026-09-08 (disc 9/15)\\nware discharged from my automation\\n</user_query>\"}]}}"
+    ]
+  },
+  {
+    "line": 150,
+    "snippets": [
+      "seId:'258272446', first:'EDMUND', last:'PICCIUTO', note:'overlap'},\\n  {caseId:'258270052', first:'ROY-AL', last:'PORTER', note:'overlap+discharge skip'},\\n  {caseId:'P0800016094701', first:'Caleb', last:'Rolon', note:'overlap+discharge skip'},\\n  ",
+      "aseId:'06771684', first:'MARTIN', last:'SOLOMON', note:'overlap'},\\n  {caseId:'258271503', first:'MADISON', last:'OLIVER', note:'discharge already'},\\n  {caseId:'282389', first:'Jaxxon', last:'Godbee', note:'discharge fail mismatch'},\\n  {caseId:'"
+    ]
+  },
+  {
+    "line": 153,
+    "snippets": [
+      "unto, Downs, Galeanocarvajal, Navelgas, Picciuto, Porter, Rolon, Solomon, Oliver | **1 each** | that one line closed | Looks like whole child — because it was their only service |\\n| Godbee, Hsu | 1 each | **still ACTIVE** | Bot refused (mismatch) ",
+      "jal, Navelgas, Picciuto, Porter, Rolon, Solomon, Oliver | **1 each** | that one line closed | Looks like whole child — because it was their only service |\\n| Godbee, Hsu | 1 each | **still ACTIVE** | Bot refused (mismatch) — not discharged |\\n| **"
+    ]
+  }
+]

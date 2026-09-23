@@ -1,0 +1,108 @@
+{
+  "stateCount": 0,
+  "idemCount": 4,
+  "stateByNameCount": 0,
+  "stateItems": [],
+  "idemItems": [
+    {
+      "sk": {
+        "S": "discharge:258272446#PT HC Eval#09/02/2026"
+      },
+      "processedAt": {
+        "S": "2026-09-15T21:01:53.473Z"
+      },
+      "pk": {
+        "S": "row#closed_cases"
+      },
+      "caseId": {
+        "S": "258272446"
+      },
+      "runId": {
+        "S": "886d6a26-a989-a9d4-9e89-74f7a9bfeaef"
+      }
+    },
+    {
+      "patientId": {
+        "S": "26372249"
+      },
+      "authorizationId": {
+        "S": "approved"
+      },
+      "updatedAt": {
+        "S": "2026-09-10T21:07:14.713Z"
+      },
+      "contractId": {
+        "S": "37925"
+      },
+      "serviceCode": {
+        "S": "PT HC Eval"
+      },
+      "startDate": {
+        "S": "09/02/2026"
+      },
+      "placementId": {
+        "S": "8522217"
+      },
+      "sk": {
+        "S": "PT HC EVAL#09/02/2026"
+      },
+      "pk": {
+        "S": "map#258272446"
+      },
+      "caseId": {
+        "S": "258272446"
+      }
+    },
+    {
+      "sk": {
+        "S": "9234191a-8dd6-f83a-54a9-b6d9b16771bc#258272446#PT HC Eval#09/02/2026"
+      },
+      "processedAt": {
+        "S": "2026-09-10T21:07:15.129Z"
+      },
+      "pk": {
+        "S": "row#new_services"
+      },
+      "caseId": {
+        "S": "258272446"
+      },
+      "runId": {
+        "S": "9234191a-8dd6-f83a-54a9-b6d9b16771bc"
+      }
+    },
+    {
+      "sk": {
+        "S": "fe78faaf-4ce0-add0-6f67-4f9051f5bee5#258272446#PT HC Eval#09/02/2026"
+      },
+      "processedAt": {
+        "S": "2026-09-09T21:07:21.761Z"
+      },
+      "pk": {
+        "S": "row#new_services"
+      },
+      "caseId": {
+        "S": "258272446"
+      },
+      "runId": {
+        "S": "fe78faaf-4ce0-add0-6f67-4f9051f5bee5"
+      }
+    }
+  ],
+  "spa": {
+    "hasToken": true,
+    "hasCookies": true,
+    "tokenLen": 2878,
+    "patientSearch": {
+      "http": 401,
+      "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+    },
+    "patientById": {
+      "http": 401,
+      "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+    },
+    "contracts": {
+      "http": 401,
+      "preview": "{\"error\":\"Token is expired.Please Create New Token and Request Again..\"}"
+    }
+  }
+}

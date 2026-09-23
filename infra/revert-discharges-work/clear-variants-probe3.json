@@ -1,0 +1,79 @@
+{
+  "home": {
+    "id": "341",
+    "name": "Admin Discharge"
+  },
+  "reasonSample": [
+    {
+      "id": "2333505",
+      "reason": "Case returned to vendor, unable to staff",
+      "desc": "Whenever WG returns back a case"
+    },
+    {
+      "id": "350270",
+      "reason": "covid-19",
+      "desc": "covid-19"
+    }
+  ],
+  "results": [
+    {
+      "label": "Update clear with note+to no date",
+      "method": "UpdatePatientContract",
+      "ok": false,
+      "eid": "-74",
+      "msg": "Invalid \"DischargeToID\"",
+      "status": "Failure",
+      "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><UpdatePatientContractResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integration\"><UpdatePatientContractResult><Result Statu"
+    },
+    {
+      "label": "Update with DischargeReason Description element",
+      "method": "UpdatePatientContract",
+      "ok": false,
+      "fault": "Server was unable to read request. ---&gt; There is an error in XML document (14, 34). ---&gt; The string '' is not a valid AllXsd value.",
+      "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><soap:Fault><faultcode>soap:Client</faultcode><faultstring>Server was unable to read request. ---&gt; There is an error in XML docum"
+    },
+    {
+      "label": "AddPatientContract reopen same service from 2026-09-16",
+      "method": "AddPatientContract",
+      "ok": true,
+      "eid": "0",
+      "status": "Success",
+      "preview": "<?xml version=\"1.0\" encoding=\"utf-8\"?><soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\"><soap:Body><AddPatientContractResponse xmlns=\"https://www.hhaexchange.com/apis/hhaws.integration\"><AddPatientContractResult><Result Status=\"Suc"
+    }
+  ],
+  "snaps": {
+    "2026-09-14": {
+      "ok": true,
+      "placements": [
+        {
+          "placementId": "6812439",
+          "disc": "2026-09-15",
+          "start": "2024-12-07",
+          "svc": "785140"
+        }
+      ]
+    },
+    "2026-09-16": {
+      "ok": true,
+      "placements": [
+        {
+          "placementId": "8596053",
+          "disc": "(empty)",
+          "start": "2026-09-16",
+          "svc": "785140"
+        }
+      ]
+    },
+    "2026-09-20": {
+      "ok": true,
+      "placements": [
+        {
+          "placementId": "8596053",
+          "disc": "(empty)",
+          "start": "2026-09-16",
+          "svc": "785140"
+        }
+      ]
+    }
+  }
+}

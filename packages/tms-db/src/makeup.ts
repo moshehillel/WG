@@ -1,5 +1,9 @@
-import { parseDos } from './ids.js';
-import { isMakeupAuthMandate } from './mandate.js';
+import { parseDos, weekStartFromDos } from './ids.js';
+import {
+  isMakeupAuthMandate,
+  isMakeupWeeklyMandate,
+  weeklyAllowedSessions,
+} from './mandate.js';
 import { extractMakeupForDate } from './makeup-date.js';
 import type { Mandate, SessionRow } from './types.js';
 
@@ -73,6 +77,13 @@ export function makeupAuthMandatesForStudent(
   return mandates.filter((m) => m.studentId === studentId && isMakeupAuthMandate(m));
 }
 
+export function makeupWeeklyMandatesForStudent(
+  mandates: Mandate[],
+  studentId: string,
+): Mandate[] {
+  return mandates.filter((m) => m.studentId === studentId && isMakeupWeeklyMandate(m));
+}
+
 /** Remaining makeup-auth slots for a student (pool makeups only; miss-linked excluded). */
 export function makeupAuthRemaining(
   studentId: string,
@@ -104,6 +115,38 @@ export function makeupAuthRemaining(
   };
 }
 
+/** Remaining Makeup-Weekly slots for a student in the calendar week of `dos`. */
+export function makeupWeeklyRemaining(
+  studentId: string,
+  mandates: Mandate[],
+  allSessions: SessionRow[],
+  dos: string,
+  opts?: { excludeSessionId?: string },
+): { mandate: Mandate | null; allowed: number; used: number; remaining: number } {
+  const auth =
+    makeupWeeklyMandatesForStudent(mandates, studentId).sort(
+      (a, b) => (weeklyAllowedSessions(b) || 0) - (weeklyAllowedSessions(a) || 0),
+    )[0] || null;
+  if (!auth) {
+    return { mandate: null, allowed: 0, used: 0, remaining: 0 };
+  }
+  const allowed = weeklyAllowedSessions(auth) || 0;
+  const weekStart = weekStartFromDos(dos);
+  const used = allSessions.filter(
+    (s) =>
+      s.studentId === studentId &&
+      isMakeupAuthPoolSession(s) &&
+      s.id !== opts?.excludeSessionId &&
+      (!weekStart || weekStartFromDos(s.dateOfService) === weekStart),
+  ).length;
+  return {
+    mandate: auth,
+    allowed,
+    used,
+    remaining: Math.max(0, allowed - used),
+  };
+}
+
 function findUnusedMissOnDate(
   allSessions: SessionRow[],
   studentId: string,
@@ -122,13 +165,17 @@ function findUnusedMissOnDate(
  * Product rule:
  * 1) Link to unused miss on the makeup-for date (same child) when possible.
  * 2) Else use leftover makeup-auth capacity.
- * 3) Else error.
+ * 3) Else use Makeup-Weekly remaining for this calendar week.
+ * 4) Else error.
  */
 export function resolveMakeupOfSessionId(
-  session: Pick<SessionRow, 'id' | 'attendance' | 'studentId' | 'notes' | 'makeupOfSessionId'>,
+  session: Pick<
+    SessionRow,
+    'id' | 'attendance' | 'studentId' | 'notes' | 'makeupOfSessionId' | 'dateOfService'
+  >,
   allSessions: SessionRow[],
   mandates: Mandate[] = [],
-): { makeupOfSessionId: string; via: 'miss' | 'makeup_auth' | 'none' } | { error: string } {
+): { makeupOfSessionId: string; via: 'miss' | 'makeup_auth' | 'makeup_weekly' | 'none' } | { error: string } {
   if (session.attendance !== 'makeup') {
     return { makeupOfSessionId: '', via: 'none' };
   }
@@ -168,10 +215,30 @@ export function resolveMakeupOfSessionId(
     return { makeupOfSessionId: '', via: 'makeup_auth' };
   }
 
+  // Makeup-Weekly only when there is no active Makeup-auth pool (avoid dual-count).
+  const weekly =
+    auth.mandate && auth.allowed > 0
+      ? { mandate: null as Mandate | null, allowed: 0, used: 0, remaining: 0 }
+      : makeupWeeklyRemaining(
+          session.studentId,
+          mandates,
+          allSessions,
+          session.dateOfService || forDate || '',
+          { excludeSessionId: session.id },
+        );
+  if (weekly.mandate && weekly.allowed > 0 && weekly.remaining > 0) {
+    return { makeupOfSessionId: '', via: 'makeup_weekly' };
+  }
+
   if (forDate) {
     if (auth.mandate && auth.allowed > 0) {
       return {
         error: `No unused missed session on ${forDate}, and makeup authorization is full (${auth.used} of ${auth.allowed}).`,
+      };
+    }
+    if (weekly.mandate && weekly.allowed > 0) {
+      return {
+        error: `No unused missed session on ${forDate}, and Makeup-Weekly is full for this week (${weekly.used} of ${weekly.allowed}).`,
       };
     }
     return {
@@ -184,9 +251,14 @@ export function resolveMakeupOfSessionId(
       error: `Makeup authorization is full (${auth.used} of ${auth.allowed}). Link a missed session or ask the office to add capacity.`,
     };
   }
+  if (weekly.mandate && weekly.allowed > 0) {
+    return {
+      error: `Makeup-Weekly is full for this week (${weekly.used} of ${weekly.allowed}). Link a missed session or ask the office to add capacity.`,
+    };
+  }
   return {
     error:
-      'Makeup requires a missed session on that date, or a makeup authorization mandate with remaining capacity.',
+      'Makeup requires a missed session on that date, or a Makeup auth / Makeup-Weekly mandate with remaining capacity.',
   };
 }
 
@@ -218,15 +290,29 @@ export function validateMakeup(
     return null;
   }
 
-  // Unlinked makeup → must fit leftover makeup-auth pool (room for this row).
-  const others = makeupAuthRemaining(row.studentId, mandates, allSessions, {
+  // Unlinked makeup → leftover Makeup auth pool, else Makeup-Weekly for this week.
+  // When a Makeup-auth pool exists (allowed > 0), do not also spend Makeup-Weekly.
+  const auth = makeupAuthRemaining(row.studentId, mandates, allSessions, {
     excludeSessionId: row.id,
   });
-  if (!others.mandate || others.allowed <= 0) {
-    return 'Makeup is only allowed when tied to a documented missed session, or a makeup authorization mandate.';
+  if (auth.mandate && auth.allowed > 0 && auth.remaining > 0) {
+    return null;
   }
-  if (others.remaining <= 0) {
-    return `Over makeup authorization: ${others.used} of ${others.allowed} leftover makeup session(s).`;
+  if (auth.mandate && auth.allowed > 0) {
+    return `Over makeup authorization: ${auth.used} of ${auth.allowed} leftover makeup session(s).`;
   }
-  return null;
+  const weekly = makeupWeeklyRemaining(
+    row.studentId,
+    mandates,
+    allSessions,
+    row.dateOfService || '',
+    { excludeSessionId: row.id },
+  );
+  if (weekly.mandate && weekly.allowed > 0 && weekly.remaining > 0) {
+    return null;
+  }
+  if (weekly.mandate && weekly.allowed > 0) {
+    return `Over Makeup-Weekly: ${weekly.used} of ${weekly.allowed} makeup session(s) this week.`;
+  }
+  return 'Makeup is only allowed when tied to a documented missed session, or a Makeup auth / Makeup-Weekly mandate.';
 }

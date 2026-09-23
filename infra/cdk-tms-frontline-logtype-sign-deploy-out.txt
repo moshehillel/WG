@@ -1,0 +1,18 @@
+TMS Frontline Log Type attendance + note-embedded DOS + signature footer
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+SHA: 921d2f3-frontline-logtype-sign
+{
+    "CodeSha256": "BEMvGpQm4LC2kikyueQRZ/MCkMu5kR2/DKVb6XYFqQY=",
+    "LastModified": "2026-09-22T16:53:28.000+0000",
+    "CodeSize": 543059
+}
+HHA before: {"HHA_USE_MOCK":"false","HHA_USE_PRODUCTION":"true","HHA_ALLOW_PRODUCTION":"true","TMS_GIT_SHA":"921d2f3-cpt-92507-untimed"}
+HHA after: {"HHA_USE_MOCK":"false","HHA_USE_PRODUCTION":"true","HHA_ALLOW_PRODUCTION":"true","TMS_GIT_SHA":"921d2f3-frontline-logtype-sign","TMS_BUILT_AT":"2026-09-22T16:53:28.608Z"}
+HHA_USE_PRODUCTION left unchanged
+
+Fixed false positives (Patel Sep 3rd week report):
+1. "first attend/treatment … MM/DD/YY" inside Service Provided no longer invents missed rows
+2. Same bug no longer truncates slice before Provider Signature → unsigned false positives
+3. Log Type before colon drives attendance (Service Provided / Provider Not Available / …)
+4. Credential footer (NPI# + License# + stamp) counts as signed
+5. Copy-paste gate unchanged (Figueroa ≡ Duroseau remains a real flag)

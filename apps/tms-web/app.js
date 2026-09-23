@@ -1086,11 +1086,12 @@ const ADDITIONAL_SERVICE_LABELS = {
   progress_report: 'Progress report',
   consultation: 'Consultation',
   meetings: 'Meetings',
+  documentation: 'Documentation',
   paid_absence: 'Paid absence',
 };
 
 function additionalServiceOptions(selected) {
-  return ['eval', 'progress_report', 'consultation', 'meetings', 'paid_absence']
+  return ['eval', 'progress_report', 'consultation', 'meetings', 'documentation', 'paid_absence']
     .map((v) => `<option value="${v}"${selected === v ? ' selected' : ''}>${esc(ADDITIONAL_SERVICE_LABELS[v])}</option>`)
     .join('');
 }
@@ -1098,6 +1099,16 @@ function additionalServiceOptions(selected) {
 function additionalServiceLabel(value) {
   if (!value) return '';
   return ADDITIONAL_SERVICE_LABELS[value] || String(value);
+}
+
+/** Admin/therapist table cell: badge for additional services, else serviceType. */
+function sessionServiceCellHtml(s) {
+  const addl = additionalServiceLabel(s?.additionalServiceType);
+  if (addl) {
+    return `<span class="pill-warn" title="Additional service">Additional: ${esc(addl)}</span>`;
+  }
+  const svc = String(s?.serviceType || '').trim();
+  return esc(svc || '—');
 }
 
 function studentOptions(students, selected) {
@@ -1293,7 +1304,7 @@ function mandateFreqLabel(m) {
   return `${n} / week`;
 }
 
-/** Type dropdown: Weekly / 6-Day / Monthly / Makeup auth (old Madison UX). */
+/** Type dropdown: Weekly / 6-Day / Monthly / Makeup auth / Makeup- Weekly. */
 function mandateTypeOptions(selected) {
   const cur = String(selected || 'weekly');
   return [
@@ -1301,20 +1312,57 @@ function mandateTypeOptions(selected) {
     ['school_day_cycle', '6-Day Cycle'],
     ['monthly', 'Monthly'],
     ['makeup_auth', 'Makeup auth'],
+    ['makeup_weekly', 'Makeup- Weekly'],
   ]
     .map(([v, label]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${label}</option>`)
     .join('');
+}
+
+const MANDATE_DISCIPLINES = ['OT', 'PT', 'SLP'];
+
+/** Infer OT/PT/SLP from Related Service / billing-style text (matches API/caseload). */
+function disciplineFromServiceTypeUi(serviceType) {
+  const s = String(serviceType || '').toUpperCase();
+  if (/\bSLP\b|\bSPEECH\b|\bLANGUAGE\b/.test(s)) return 'SLP';
+  if (/\bOT\b|\bOCCUPATIONAL\b/.test(s)) return 'OT';
+  if (/\bPT\b|\bPHYSICAL\b/.test(s)) return 'PT';
+  return '';
+}
+
+function disciplineDefaultServiceType(discipline) {
+  if (discipline === 'PT') return 'Physical Therapy';
+  if (discipline === 'OT') return 'Occupational Therapy';
+  if (discipline === 'SLP') return 'Speech';
+  return '';
+}
+
+function mandateDisciplineOptions(selected) {
+  const cur = String(selected || '');
+  return [
+    '<option value="">Select…</option>',
+    ...MANDATE_DISCIPLINES.map(
+      (d) => `<option value="${d}"${cur === d ? ' selected' : ''}>${d}</option>`,
+    ),
+  ].join('');
+}
+
+function resolveMandateDiscipline(explicit, serviceType) {
+  const raw = String(explicit || '').trim().toUpperCase();
+  if (MANDATE_DISCIPLINES.includes(raw)) return raw;
+  return disciplineFromServiceTypeUi(serviceType);
 }
 
 /** Map Type select → mandateKind + frequencyKind. */
 function parseMandateTypeValue(typeVal) {
   const v = String(typeVal || 'weekly');
   if (v === 'makeup_auth') return { mandateKind: 'makeup_auth', frequencyKind: 'weekly' };
+  if (v === 'makeup_weekly') return { mandateKind: 'makeup_weekly', frequencyKind: 'weekly' };
   if (v === 'school_day_cycle' || v === 'monthly') return { mandateKind: 'regular', frequencyKind: v };
   return { mandateKind: 'regular', frequencyKind: 'weekly' };
 }
 
 function mandateTypeValueFromMandate(m) {
+  if (m?.mandateKind === 'makeup_weekly') return 'makeup_weekly';
   if (m?.mandateKind === 'makeup_auth') return 'makeup_auth';
   if (m?.frequencyKind === 'school_day_cycle') return 'school_day_cycle';
   if (m?.frequencyKind === 'monthly') return 'monthly';
@@ -1330,6 +1378,7 @@ function bindMandateEditor(opts) {
       const panel = document.getElementById(panelId);
       if (!m || !panel) return;
       const typeVal = mandateTypeValueFromMandate(m);
+      const discVal = resolveMandateDiscipline(m.discipline, m.serviceType);
       panel.hidden = false;
       panel.innerHTML = `
         <h3>Edit mandate</h3>
@@ -1342,7 +1391,12 @@ function bindMandateEditor(opts) {
           </label>
         </div>
         <div class="row">
-          <label>Service type <input id="emService" value="${esc(m.serviceType || '')}" /></label>
+          <label>Discipline
+            <select id="emDisc">${mandateDisciplineOptions(discVal)}</select>
+          </label>
+          <label>Service type <input id="emService" value="${esc(m.serviceType || '')}" placeholder="Physical Therapy" /></label>
+        </div>
+        <div class="row">
           <label>Type
             <select id="emKind">${mandateTypeOptions(typeVal)}</select>
           </label>
@@ -1385,10 +1439,23 @@ function bindMandateEditor(opts) {
           const { mandateKind, frequencyKind } = parseMandateTypeValue(document.getElementById('emKind').value);
           const ratioGroup = document.getElementById('emRatio').value === 'group';
           const groupSize = groupSizeRaw === '' ? (ratioGroup ? 2 : 1) : Number(groupSizeRaw);
+          const serviceTypeRaw = document.getElementById('emService').value;
+          const discipline = resolveMandateDiscipline(
+            document.getElementById('emDisc').value,
+            serviceTypeRaw,
+          );
+          if (!discipline) throw new Error('Select a discipline (OT, PT, or SLP).');
+          const serviceType =
+            String(serviceTypeRaw || '').trim() ||
+            (mandateKind === 'makeup_auth' || mandateKind === 'makeup_weekly'
+              ? disciplineDefaultServiceType(discipline)
+              : '') ||
+            serviceTypeRaw;
           await api('PATCH', `/admin/mandates/${id}`, {
             studentId: document.getElementById('emStudent').value,
             providerId: document.getElementById('emProvider').value,
-            serviceType: document.getElementById('emService').value,
+            discipline,
+            serviceType,
             mandateKind,
             ratioGroup,
             durationMinutes: durationRaw === '' ? null : Number(durationRaw),
@@ -1962,6 +2029,80 @@ function bindLetterTabs(getRows, getName) {
   apply();
 }
 
+/** In-page name field. window.prompt is not focusable in this portal. */
+function askSignatureName(nameGuess) {
+  return new Promise((resolve) => {
+    document.getElementById('providerSignModal')?.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'providerSignModal';
+    backdrop.className = 'modal-backdrop';
+    backdrop.setAttribute('role', 'dialog');
+    backdrop.setAttribute('aria-modal', 'true');
+    backdrop.setAttribute('aria-labelledby', 'providerSignTitle');
+    backdrop.innerHTML = `
+      <div class="modal-panel sign-name-panel">
+        <div class="modal-head">
+          <h2 id="providerSignTitle">Sign timesheet</h2>
+        </div>
+        <p>Type your full name to sign this timesheet.</p>
+        <label for="providerSignName">Provider name
+          <input id="providerSignName" type="text" autocomplete="name" enterkeyhint="done" value="${esc(nameGuess || '')}" />
+        </label>
+        <p id="providerSignError" class="err-inline" hidden></p>
+        <div class="modal-actions">
+          <button type="button" class="btn" id="providerSignCancel">Cancel</button>
+          <button type="button" class="btn-primary" id="providerSignOk">Sign</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(backdrop);
+    const input = backdrop.querySelector('#providerSignName');
+    const err = backdrop.querySelector('#providerSignError');
+    const cancelBtn = backdrop.querySelector('#providerSignCancel');
+    const okBtn = backdrop.querySelector('#providerSignOk');
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      backdrop.remove();
+      resolve(value);
+    };
+    const submitName = () => {
+      const name = String(input?.value || '').trim();
+      if (!name) {
+        if (err) {
+          err.hidden = false;
+          err.textContent = 'Enter your name to sign the timesheet.';
+        }
+        input?.focus();
+        return;
+      }
+      finish(name);
+    };
+    if (cancelBtn) cancelBtn.onclick = () => finish(null);
+    if (okBtn) okBtn.onclick = () => submitName();
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) finish(null);
+    });
+    input?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitName();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        finish(null);
+      }
+    });
+    const focusName = () => {
+      if (!input || settled) return;
+      input.focus();
+      input.select();
+    };
+    requestAnimationFrame(focusName);
+    setTimeout(focusName, 0);
+  });
+}
+
 async function therapistHome(statusFlash) {
   clearActionToast();
   clearUploadIssues();
@@ -1974,6 +2115,7 @@ async function therapistHome(statusFlash) {
   let signerName = '';
   let signerEmail = '';
   let providerId = '';
+  let providerDisplayName = '';
   let schoolDistrict = '';
   let loadFailed = null;
   let schools = [];
@@ -1982,6 +2124,7 @@ async function therapistHome(statusFlash) {
   try {
     let me = await api('GET', '/me');
     providerId = me.provider?.id || '';
+    providerDisplayName = `${me.provider?.firstName || ''} ${me.provider?.lastName || ''}`.trim();
     schools = me.schools || [];
     programTypes = Array.isArray(me.programTypes) ? me.programTypes.filter(Boolean) : [];
     programTypes = [...new Set(programTypes.map((p) => String(p).trim()).filter(Boolean))].sort((a, b) =>
@@ -2041,6 +2184,7 @@ async function therapistHome(statusFlash) {
         `/me?programType=${encodeURIComponent(state.selectedProgramType)}`,
       );
       state.meSettings = me.settings || state.meSettings;
+      providerDisplayName = `${me.provider?.firstName || ''} ${me.provider?.lastName || ''}`.trim() || providerDisplayName;
     }
     const dues = (me.dueDates || []).filter((d) => d.status !== 'done');
     const alerts = me.alerts || [];
@@ -2296,11 +2440,7 @@ async function therapistHome(statusFlash) {
         <label>Service type
           <select id="additionalServiceType">
             <option value="">Select…</option>
-            <option value="eval">Eval</option>
-            <option value="progress_report">Progress report</option>
-            <option value="consultation">Consultation</option>
-            <option value="meetings">Meetings</option>
-            <option value="paid_absence">Paid absence</option>
+            ${additionalServiceOptions()}
           </select>
         </label>
         <label>Student
@@ -2485,7 +2625,6 @@ async function therapistHome(statusFlash) {
               String(w).toLowerCase().includes(String(name).toLowerCase()),
           );
           const rowClass = hard ? 'hard' : flags.length || underChild ? 'warn' : '';
-          const serviceLabel = additionalServiceLabel(s.additionalServiceType) || s.serviceType || '—';
           const cpt = s.cptLabel || (s.cptCodes || []).join(', ') || '—';
           const canEditAddl = Boolean(s.additionalServiceType) && canMutateExisting;
           const canRemove = canMutateExisting;
@@ -2506,7 +2645,7 @@ async function therapistHome(statusFlash) {
                 ${canEditRow ? `<button type="button" class="icon-btn" data-edit-session="${esc(s.id)}" title="Edit" aria-label="Edit">${pencilIcon()}</button>` : ''}
                 ${canRemove ? `<button type="button" class="btn" data-remove-session="${esc(s.id)}">Remove</button>` : ''}
               </td>`;
-          return `<tr class="${rowClass}" data-session-json="${esc(JSON.stringify(payload))}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${esc(serviceLabel)}</td><td>${esc(cpt)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${esc(s.notes || '')}</td>${actions}</tr>`;
+          return `<tr class="${rowClass}" data-session-json="${esc(JSON.stringify(payload))}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${sessionServiceCellHtml(s)}</td><td>${esc(cpt)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${esc(s.notes || '')}</td>${actions}</tr>`;
         }).join('') || `<tr><td colspan="8">No sessions recorded yet.</td></tr>`}
       </table>
     </div>` : ''}
@@ -2620,12 +2759,8 @@ async function therapistHome(statusFlash) {
       id = detail.week?.id || '';
     }
     if (!id) throw new Error('Week not found.');
-    const nameGuess = String(
-      state.last?.me?.provider?.firstName
-        ? `${state.last.me.provider.firstName} ${state.last.me.provider.lastName || ''}`.trim()
-        : state.email || 'Therapist',
-    ).trim();
-    const signatureName = prompt('Type your full name to sign this timesheet:', nameGuess);
+    const nameGuess = providerDisplayName || String(state.email || '').trim();
+    const signatureName = await askSignatureName(nameGuess);
     if (signatureName == null) return null;
     if (!String(signatureName || '').trim()) throw new Error('Enter your name to sign the timesheet.');
     return api('POST', `/weeks/${id}/provider-sign`, {
@@ -2856,13 +2991,15 @@ async function therapistHome(statusFlash) {
     };
   });
 
-  if (isPriorPane || isArchivePane) return;
+  // Draft list has Sign/Send row actions only — no #upload/#add session chrome.
+  if (isPriorPane || isArchivePane || isDraftList) return;
 
   const viewEl = document.getElementById('view');
   if (!canImport) {
-    viewEl.onclick = null;
+    if (viewEl) viewEl.onclick = null;
     return;
   }
+  if (!viewEl) return;
 
   bindMakeupPickers();
 
@@ -2911,8 +3048,9 @@ async function therapistHome(statusFlash) {
     }
   };
 
-  document.getElementById('upload').onclick = async () => {
-    const btn = document.getElementById('upload');
+  const uploadBtn = document.getElementById('upload');
+  if (uploadBtn) uploadBtn.onclick = async () => {
+    const btn = uploadBtn;
     try {
       const file = document.getElementById('pdfFile').files[0];
       if (!file) throw apiError('Select a notes PDF first.', { errors: ['Select a notes PDF first.'] });
@@ -2986,8 +3124,9 @@ async function therapistHome(statusFlash) {
     }
   };
 
-  document.getElementById('add').onclick = async () => {
-    const btn = document.getElementById('add');
+  const addBtn = document.getElementById('add');
+  if (addBtn) addBtn.onclick = async () => {
+    const btn = addBtn;
     try {
       if (!state.weekId) {
         if (!providerId) throw new Error('This week is not open yet. Contact the office to complete your provider profile.');
@@ -3182,12 +3321,167 @@ function hhaStatusCell(w) {
   if (status === 'failed') {
     const reason = String(w.hhaError || '').trim() || 'HHA transfer failed (no detail stored). Use Send to HHA after fixing data.';
     const tip = ratio ? `HHA failed (${ratio}) — click for details` : 'HHA failed — click for details';
-    return `<button type="button" class="triage-badge" data-triage-week="${esc(w.id)}" data-triage-error="${esc(reason)}" title="${tip}" aria-label="${tip}"><svg class="triage-warn-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg> <span class="muted">${esc(ratio || 'failed')}</span></button>`;
+    return `<button type="button" class="triage-badge" data-triage-week="${esc(w.id)}" data-triage-error="${esc(reason).replace(/\n/g, '&#10;')}" title="${tip}" aria-label="${tip}"><svg class="triage-warn-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg> <span class="muted">${esc(ratio || 'failed')}</span></button>`;
   }
   if (ratio && (status === 'confirmed' || status === 'pending' || status === 'sent')) {
     return `<span title="HHA transfers attended/makeup only; Sessions column includes misses">${esc(status)} ${esc(ratio)}</span>`;
   }
   return esc(status);
+}
+
+/** Drop SOAP envelopes so triage shows a sentence, not the XML body. */
+function stripSoapDump(message) {
+  let s = String(message || '');
+  const fault = s.match(/<faultstring>([\s\S]*?)<\/faultstring>/i)?.[1] || '';
+  const errMsg = s.match(/<ErrorMessage>([\s\S]*?)<\/ErrorMessage>/i)?.[1] || '';
+  s = s.replace(/\s*<\?xml[\s\S]*$/i, '').replace(/\s*<soap:[\s\S]*$/i, '');
+  s = s.replace(/<[^>]+>/g, ' ');
+  const extra = `${fault} ${errMsg}`
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<')
+    .replace(/&amp;/g, '&')
+    .replace(/<[^>]+>/g, ' ');
+  return `${s} ${extra}`.replace(/\s+/g, ' ').trim();
+}
+
+function isoFromLooseDate(token) {
+  const m = String(token || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+  if (!m) return '';
+  const mm = m[1].padStart(2, '0');
+  const dd = m[2].padStart(2, '0');
+  let year = m[3];
+  if (year.length === 2) year = `${Number(year) >= 70 ? '19' : '20'}${year}`;
+  return `${year}-${mm}-${dd}`;
+}
+
+/** Plain English for a known HHA failure. Raw reason stays available separately. */
+function explainHhaTriage(detail) {
+  const t = String(detail || '');
+  const id = t.match(/ErrorID\s*=\s*(-?\d+)/i)?.[1] || '';
+  if (/No HHA ContractID/i.test(t)) {
+    return 'This program/school has no HHA contract id mapped.';
+  }
+  if (/No HHA pay code rate/i.test(t)) {
+    return 'No dollar rate for this session.';
+  }
+  const shiftOverlap =
+    /Overlapping shifts are not allowed/i.test(t) ||
+    /shift is overlapping/i.test(t) ||
+    /shift overlaps/i.test(t) ||
+    /caregiver shift overlaps/i.test(t) ||
+    (id === '-310' && /overlap/i.test(t));
+  if (shiftOverlap) {
+    return 'This child already has a visit at this time in HHA. Cancel that HHA visit or change the TMS time, then retry.';
+  }
+  if (id === '-74' && /PayCodeID/i.test(t)) {
+    return 'The pay code sent is not on this caregiver in HHA.';
+  }
+  if (id === '-411' || (/Accepted Services/i.test(t) && /\bSP\b/.test(t))) {
+    return 'HHA rejected speech code SP. Speech must be sent as ST.';
+  }
+  if (id === '-500' || /AllXsd/i.test(t)) {
+    const bad =
+      t.match(/The string '([^']+)'/i)?.[1] ||
+      t.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/)?.[1] ||
+      '';
+    const iso = isoFromLooseDate(bad);
+    if (bad && iso) return `A date was sent as ${bad}. HHA needs ${iso}.`;
+    if (bad) return `A date was sent as ${bad}. HHA needs YYYY-MM-DD.`;
+    return 'A date was sent in the wrong format. HHA needs YYYY-MM-DD.';
+  }
+  const cleaned = stripSoapDump(t).replace(/\s*\(ErrorID\s*=\s*-?\d+\)/gi, '').trim();
+  if (!cleaned) return 'HHA rejected this session. Fix the data, then retry.';
+  const sentence = cleaned.split(/(?<=\.)\s/)[0] || cleaned;
+  if (sentence.length <= 180) return sentence;
+  return `${sentence.slice(0, 177).replace(/\s+\S*$/, '')}…`;
+}
+
+function hhaTechnicalLine(detail) {
+  const raw = String(detail || '');
+  const cleaned = stripSoapDump(raw);
+  if (!cleaned && !/ErrorID\s*=/i.test(raw)) return '';
+  const id = raw.match(/ErrorID\s*=\s*(-?\d+)/i)?.[1] || '';
+  let reason = '';
+  const invalid = cleaned.match(/Invalid\s+"([^"]+)"/i);
+  if (invalid) reason = `Invalid "${invalid[1]}"`;
+  if (!reason) {
+    const failed = cleaned.match(/\bfailed:\s*(.+?)(?:\s*\(ErrorID=|$)/i);
+    if (failed) reason = failed[1].replace(/\s*\(ErrorID\s*=\s*-?\d+\)\s*$/i, '').trim();
+  }
+  if (!reason) {
+    reason = cleaned.replace(/\s*\(ErrorID\s*=\s*-?\d+\)/gi, '').trim();
+  }
+  reason = reason.replace(/\s+/g, ' ').trim();
+  if (reason.length > 140) reason = `${reason.slice(0, 137).replace(/\s+\S*$/, '')}…`;
+  if (!reason) return id ? `HHA: ErrorID=${id}` : '';
+  return id ? `HHA: ErrorID=${id} — ${reason}` : `HHA: ${reason}`;
+}
+
+/** Index of the child name that sits immediately before ` · YYYY-MM-DD`. */
+function triageSessionStart(raw, dotIdx) {
+  let i = dotIdx;
+  while (i > 0 && /[ \t]/.test(raw[i - 1])) i -= 1;
+  let start = i;
+  for (let n = 0; n < 6; n += 1) {
+    if (i <= 0 || raw[i - 1] === '\n') break;
+    let j = i;
+    while (j > 0 && raw[j - 1] !== ' ' && raw[j - 1] !== '\n') j -= 1;
+    const word = raw.slice(j, i);
+    if (!/^[A-Z][A-Za-z'’.\-]{0,40}$/.test(word)) break;
+    start = j;
+    if (j === 0 || raw[j - 1] === '\n') break;
+    let k = j;
+    while (k > 0 && raw[k - 1] === ' ') k -= 1;
+    if (raw[k - 1] === '\n') break;
+    i = k;
+  }
+  return start;
+}
+
+function splitTriageChunks(text) {
+  const raw = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!raw) return [];
+  const marks = [];
+  const marker = / · (?=\d{4}-\d{2}-\d{2}\b)/g;
+  let m;
+  while ((m = marker.exec(raw))) marks.push(m.index);
+  if (!marks.length) {
+    return raw.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  }
+  const starts = marks.map((idx) => triageSessionStart(raw, idx));
+  if (starts[0] > 0) starts[0] = 0;
+  const uniq = [...new Set(starts)].sort((a, b) => a - b);
+  const chunks = [];
+  for (let i = 0; i < uniq.length; i += 1) {
+    const piece = raw.slice(uniq[i], uniq[i + 1] ?? raw.length).trim();
+    if (piece) chunks.push(piece);
+  }
+  return chunks;
+}
+
+function parseTriageChunk(chunk) {
+  const m = chunk.match(
+    /^(.+?) · (\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2}(?:\s*[ap]m)?(?:\s*[–-]\s*\d{1,2}:\d{2}(?:\s*[ap]m)?)?)?)\s*:\s*([\s\S]*)$/i,
+  );
+  if (m) return { who: `${m[1].trim()} · ${m[2].trim()}`, detail: m[3].trim() };
+  return { who: '', detail: chunk.trim() };
+}
+
+function renderTriageList(errorText) {
+  const chunks = splitTriageChunks(errorText);
+  if (!chunks.length) return '<p class="muted">No error detail available.</p>';
+  return `<div class="triage-list">${chunks
+    .map((chunk) => {
+      const { who, detail } = parseTriageChunk(chunk);
+      const plain = explainHhaTriage(detail || chunk);
+      const tech = hhaTechnicalLine(detail || chunk);
+      return `<article class="triage-item">
+        ${who ? `<h3 class="triage-item-who">${esc(who)}</h3>` : ''}
+        <p class="triage-item-plain">${esc(plain)}</p>
+        ${tech ? `<p class="triage-item-hha">${esc(tech)}</p>` : ''}
+      </article>`;
+    })
+    .join('')}</div>`;
 }
 
 function showTriageDetail(errorText, weekId) {
@@ -3200,15 +3494,11 @@ function showTriageDetail(errorText, weekId) {
   backdrop.setAttribute('role', 'dialog');
   backdrop.setAttribute('aria-modal', 'true');
   backdrop.setAttribute('aria-label', 'HHA triage');
-  const lines = String(errorText || '')
-    .split(/\n+/)
-    .map((l) => l.trim())
-    .filter(Boolean);
   const retryBtn = weekId
     ? `<button type="button" class="btn-primary" data-triage-hha="${esc(weekId)}">Send to HHA (retry)</button>`
     : '';
   backdrop.innerHTML = `
-    <div class="modal-panel">
+    <div class="modal-panel triage-panel">
       <div class="modal-head">
         <h2>HHA Triage</h2>
         <div class="modal-actions">
@@ -3216,8 +3506,8 @@ function showTriageDetail(errorText, weekId) {
           <button type="button" class="btn" data-close-triage>Close</button>
         </div>
       </div>
-      <p class="muted">Exact failure reason from the last HHA transfer. Fix the data, then use <strong>Send to HHA</strong> to retry.</p>
-      <div class="err-box triage-detail">${lines.map((l) => esc(l)).join('<br>') || 'No error detail available.'}</div>
+      <p class="muted">Each failed session is listed on its own. Fix the issue, then use <strong>Send to HHA</strong> to retry.</p>
+      ${renderTriageList(errorText)}
     </div>
   `;
   backdrop.addEventListener('click', async (e) => {
@@ -3262,6 +3552,10 @@ async function adminDash() {
     const qs = q.toString();
     const listed = await api('GET', `/admin/weeks${qs ? `?${qs}` : ''}`);
     weeks = Array.isArray(listed?.weeks) ? listed.weeks : [];
+    // Client-side guard: API must honor weekStart; keep UI truthful if an old deploy leaks rows.
+    if (!weeksAll && weeksWeekStart) {
+      weeks = weeks.filter((w) => String(w.weekStart || '').trim() === weeksWeekStart);
+    }
   } catch (err) {
     console.warn('admin weeks load failed', err);
     weeks = [];
@@ -3358,12 +3652,12 @@ async function adminDash() {
       ${bulkBar('weeks')}
       <div class="table-wrap">
       <table>
-        <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>School</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
+        <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>District</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
         ${weeks.map((w) => `<tr data-week-row="${esc(w.id)}" class="${String(w.hhaStatus) === 'failed' ? 'hha-failed-row' : ''}">
           ${bulkTd('weeks', w.id)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.providerName || '—')}</td>
-          <td>${esc(w.schoolName || w.district || '—')}</td>
+          <td>${esc(w.programType || w.district || w.schoolName || '—')}</td>
           <td>${esc(w.sessionCount)}</td>
           <td>${esc(w.status)}</td>
           <td>${esc(w.signerName || w.signerEmail || '—')}</td>
@@ -3773,16 +4067,21 @@ async function adminChildDetail(studentId, opts = {}) {
         </div>
         ${bulkBar('child-sessions')}
         <table>
-          <tr>${bulkTh('child-sessions')}<th>Date</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
-          ${filteredSessions.map((x) => `<tr>
+          <tr>${bulkTh('child-sessions')}<th>Date</th><th>Time</th><th>Week</th><th>Status</th><th>Service</th><th>Attendance</th><th>Notes</th><th></th></tr>
+          ${filteredSessions.map((x) => {
+            const time = [x.beginTime, x.endTime].filter(Boolean).join('–') || '—';
+            return `<tr>
             ${bulkTd('child-sessions', x.id)}
             <td>${esc(x.dateOfService)}</td>
+            <td>${esc(time)}</td>
             <td>${esc(x.weekStart || '—')}</td>
             <td>${esc(x.weekStatus || '—')}</td>
+            <td>${sessionServiceCellHtml(x)}</td>
             <td>${esc(x.attendance)}</td>
             <td>${esc(x.notes || '')}</td>
             <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
-          </tr>`).join('') || '<tr><td colspan="7">No sessions in this date range.</td></tr>'}
+          </tr>`;
+          }).join('') || '<tr><td colspan="9">No sessions in this date range.</td></tr>'}
         </table>
       </div>
 
@@ -4202,33 +4501,47 @@ async function adminProviderDetail(providerId) {
         </div>
         ${bulkBar('prov-sessions')}
         <table>
-          <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Child</th><th>School</th><th>District</th><th>Week</th><th>Status</th><th>Attendance</th><th>Notes</th><th></th></tr>
+          <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Time</th><th>Child</th><th>School</th><th>District</th><th>Week</th><th>Status</th><th>Service</th><th>Attendance</th><th>Notes</th><th></th></tr>
           ${filteredSessions.map((x) => {
             const hard = Boolean(x.aiBlock);
             const flags = x.aiFlags || [];
             const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
+            const time = [x.beginTime, x.endTime].filter(Boolean).join(' – ') || '—';
             return `<tr class="${rowClass}">
             ${bulkTd('prov-sessions', x.id)}
             <td>${esc(x.dateOfService)}</td>
+            <td>${esc(time)}</td>
             <td>${childNameLink(x.studentId, x.studentName || '—')}</td>
             <td>${esc(x.schoolName || '—')}</td>
             <td>${esc(x.district || '—')}</td>
             <td>${esc(x.weekStart || '—')}</td>
             <td>${esc(x.weekStatus || '—')}</td>
+            <td>${sessionServiceCellHtml(x)}</td>
             <td>${esc(x.attendance)}</td>
             <td>${esc(x.notes || '')}${flags.length ? `<div class="muted">${esc(flags.join('; '))}</div>` : ''}</td>
             <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
           </tr>`;
-          }).join('') || '<tr><td colspan="9">No sessions in this date range.</td></tr>'}
+          }).join('') || '<tr><td colspan="11">No sessions in this date range.</td></tr>'}
         </table>
 
         <h3 style="margin-top:1.25rem">Manual session + custom note</h3>
-        <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note (linked to this provider / week).</p>
+        <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note (linked to this provider / week). Optional additional-service type (Eval, Documentation, etc.) shows in the Service column above.</p>
         <div class="row">
           <label>Child
             <select id="pManStudent">${(mandates || []).map((m) => `<option value="${esc(m.studentId)}">${esc(m.studentName || m.studentId)}</option>`).join('') || '<option value="">No caseload children</option>'}</select>
           </label>
           <label>Date of service <input id="pManDos" placeholder="MM/DD/YYYY" /></label>
+        </div>
+        <div class="row">
+          <label>Service type
+            <input id="pManService" placeholder="PT School, ST Individual, OT School" />
+          </label>
+          <label>Additional service (optional)
+            <select id="pManAddlType">
+              <option value="">Regular session</option>
+              ${additionalServiceOptions()}
+            </select>
+          </label>
         </div>
         <div class="row">
           <label>Attendance
@@ -4238,6 +4551,8 @@ async function adminProviderDetail(providerId) {
               <option value="makeup">makeup</option>
             </select>
           </label>
+        </div>
+        <div class="row">
           <label>Program type (optional)
             <select id="pManProgram">
               <option value="">Auto (from child)</option>
@@ -4287,7 +4602,7 @@ async function adminProviderDetail(providerId) {
         <p class="muted" id="pSendTimesheetHint" hidden></p>
 
         <h3 style="margin-top:1.25rem">Additional services</h3>
-        <p class="muted">Same service types as the therapist workspace, including paid absence.</p>
+        <p class="muted">Same service types as the therapist workspace, including paid absence. Saved rows show as <strong>Additional: …</strong> in the Service column above (or use the optional type on Manual session when attaching a custom note).</p>
         <div class="row">
           <label>Service type
             <select id="pAddlType">
@@ -4521,8 +4836,13 @@ async function adminProviderDetail(providerId) {
       const notesEl = document.getElementById('pManNotes');
       const cancelReason = document.getElementById('pManCancel')?.value?.trim() || '';
       const programType = document.getElementById('pManProgram')?.value?.trim() || '';
+      const additionalServiceTypeEarly = document.getElementById('pManAddlType')?.value || '';
+      const serviceTypeEarly = document.getElementById('pManService')?.value?.trim() || '';
       if (!studentId) throw new Error('Select a child.');
       if (!dateOfService) throw new Error('Enter the date of service.');
+      if (!additionalServiceTypeEarly && !serviceTypeEarly) {
+        throw new Error('Service type is required.');
+      }
       if (attendance === 'makeup') {
         const makeupOfSessionId = makeupOfEl?.value || '';
         if (!makeupOfSessionId) {
@@ -4556,6 +4876,8 @@ async function adminProviderDetail(providerId) {
         schoolId: childSchoolId || undefined,
         programType: programType || undefined,
       });
+      const additionalServiceType = additionalServiceTypeEarly;
+      const serviceType = serviceTypeEarly;
       const payload = {
         weekId: ensured.week?.id,
         studentId,
@@ -4568,6 +4890,8 @@ async function adminProviderDetail(providerId) {
         cptLabel: document.getElementById('pManCpt')?.value?.trim() || '',
         notes,
       };
+      if (serviceType) payload.serviceType = serviceType;
+      if (additionalServiceType) payload.additionalServiceType = additionalServiceType;
       if (file) {
         payload.fileName = file.name;
         payload.fileBase64 = await fileToBase64(file);
@@ -5401,7 +5725,11 @@ async function adminDistricts(opts = {}) {
     } catch (e) { setStatus(e.message, 'err'); }
   };
   document.querySelectorAll('[data-open-district]').forEach((btn) => {
-    btn.addEventListener('click', () => adminDistrictDetail(btn.getAttribute('data-open-district')));
+    btn.addEventListener('click', () => {
+      adminDistrictDetail(btn.getAttribute('data-open-district')).catch((e) =>
+        setStatus(e.message || 'Could not open this district.', 'err'),
+      );
+    });
   });
 
   if (opts.focusDistrictId) {
@@ -5410,7 +5738,21 @@ async function adminDistricts(opts = {}) {
 }
 
 async function adminDistrictDetail(districtId) {
-  const out = await api('GET', `/admin/districts/${encodeURIComponent(districtId)}`);
+  const id = String(districtId || '').trim();
+  if (!id) {
+    setStatus('District not found.', 'err');
+    return adminDistricts();
+  }
+  let out;
+  try {
+    // Query id avoids a path segment with ":" and spaces (`derived:carle place`),
+    // which API Gateway leaves percent-encoded on rawPath and the old lookup 404'd.
+    const byQuery = await api('GET', `/admin/districts?${new URLSearchParams({ id }).toString()}`);
+    out = byQuery?.district ? byQuery : await api('GET', `/admin/districts/${encodeURIComponent(id)}`);
+  } catch (e) {
+    setStatus(e.message || 'Could not open this district.', 'err');
+    return;
+  }
   const d = out.district;
   if (!d) {
     setStatus('District not found.', 'err');
@@ -5803,7 +6145,7 @@ async function adminMandates() {
       </div>
       <div id="addMandateForm" hidden>
         <h2>Add mandate manually</h2>
-        <p class="muted"><strong>Type</strong> is <strong>Weekly</strong>, <strong>6-Day Cycle</strong>, <strong>Monthly</strong>, or <strong>Makeup auth</strong>. Makeup auth uses a remaining session pool; unlinked makeups use Makeup auth, miss-linked makeups do not.</p>
+        <p class="muted"><strong>Type</strong> is <strong>Weekly</strong>, <strong>6-Day Cycle</strong>, <strong>Monthly</strong>, <strong>Makeup auth</strong>, or <strong>Makeup- Weekly</strong>. Makeup auth uses a remaining session pool; Makeup- Weekly uses a weekly makeup frequency (same Freq / count as Weekly). Unlinked makeups use Makeup auth or Makeup- Weekly; miss-linked makeups do not. Choose a <strong>Discipline</strong> (OT / PT / SLP) for every mandate, including makeup types.</p>
         <div class="row">
           <label>Student
             <select id="manStudent">${studentOptions(students)}</select>
@@ -5813,7 +6155,12 @@ async function adminMandates() {
           </label>
         </div>
         <div class="row">
-          <label>Service type <input id="manService" placeholder="PT School" /></label>
+          <label>Discipline
+            <select id="manDisc">${mandateDisciplineOptions('')}</select>
+          </label>
+          <label>Service type <input id="manService" placeholder="Physical Therapy" /></label>
+        </div>
+        <div class="row">
           <label>Type
             <select id="manKind">${mandateTypeOptions('weekly')}</select>
           </label>
@@ -5932,7 +6279,13 @@ async function adminMandates() {
       const durationMinutes = durationRaw === '' ? null : Number(durationRaw);
       const ratioGroup = document.getElementById('manRatio').value === 'group';
       const groupSize = groupSizeRaw === '' ? (ratioGroup ? 2 : 1) : Number(groupSizeRaw);
+      const serviceTypeRaw = document.getElementById('manService').value;
+      const discipline = resolveMandateDiscipline(
+        document.getElementById('manDisc').value,
+        serviceTypeRaw,
+      );
       if (!studentId) throw new Error('Select a student.');
+      if (!discipline) throw new Error('Select a discipline (OT, PT, or SLP).');
       if (!Number.isFinite(freq) || freq < 0) throw new Error('Enter frequency or makeup count.');
       if (durationMinutes != null && (!Number.isFinite(durationMinutes) || durationMinutes <= 0)) {
         throw new Error('Duration must be a positive number of minutes.');
@@ -5940,10 +6293,16 @@ async function adminMandates() {
       if (!Number.isFinite(groupSize) || groupSize <= 0) {
         throw new Error('Group size must be a positive number.');
       }
+      const serviceType =
+        String(serviceTypeRaw || '').trim() ||
+        (mandateKind === 'makeup_auth' || mandateKind === 'makeup_weekly'
+          ? disciplineDefaultServiceType(discipline) || 'Makeup authorization'
+          : '');
       const out = await api('POST', '/admin/mandates', {
         studentId,
         providerId: document.getElementById('manProvider').value,
-        serviceType: document.getElementById('manService').value || (mandateKind === 'makeup_auth' ? 'Makeup authorization' : ''),
+        discipline,
+        serviceType,
         mandateKind,
         ratioGroup,
         durationMinutes,

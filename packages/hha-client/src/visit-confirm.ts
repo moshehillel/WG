@@ -149,3 +149,34 @@ export function timesheetConfirmAttempts(
     return true;
   });
 }
+
+/** HHA ErrorID=-401 / "Visit is already Billed" — visit is done for payroll; treat as confirm success. */
+export function isAlreadyBilledConfirmFault(
+  errorId: string | number | undefined | null,
+  message?: string | null,
+): boolean {
+  if (String(errorId ?? '') === '-401') return true;
+  return /already\s+billed/i.test(String(message ?? ''));
+}
+
+/** True when GetVisitInfoV2 (or similar) shows the visit is already billed / pay-locked. */
+export function isVisitAlreadyBilledXml(xml: string): boolean {
+  const status = xml.match(/<VisitStatus>([^<]+)/i)?.[1]?.trim() ?? '';
+  if (/billed/i.test(status)) return true;
+  if (/<(?:Is)?Billed>\s*Yes/i.test(xml)) return true;
+  return false;
+}
+
+/**
+ * Visit already has timesheet approved (and is not an open draft) — ConfirmVisits would be a no-op
+ * or may return -401 once billed. Safe to skip re-confirm on Retry.
+ */
+export function isVisitAlreadyPayConfirmedXml(xml: string): boolean {
+  if (isVisitAlreadyBilledXml(xml)) return true;
+  const flags = parseTimesheetFlags(xml);
+  if (flags.timesheetApproved !== 'Yes') return false;
+  const status = xml.match(/<VisitStatus>([^<]+)/i)?.[1]?.trim() ?? '';
+  // Approved timesheet with a settled status — do not re-ConfirmVisits.
+  if (!status || /confirm|approv|complete|bill|paid|lock/i.test(status)) return true;
+  return false;
+}

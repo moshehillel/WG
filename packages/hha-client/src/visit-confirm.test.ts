@@ -5,6 +5,9 @@ import {
   parseVisitEditReasonPairs,
   toConfirmIso,
   timesheetConfirmAttempts,
+  isAlreadyBilledConfirmFault,
+  isVisitAlreadyBilledXml,
+  isVisitAlreadyPayConfirmedXml,
 } from './visit-confirm.js';
 
 describe('visit-confirm', () => {
@@ -44,5 +47,25 @@ describe('visit-confirm', () => {
     expect(
       parseTimesheetFlags('<Timesheet><Required>Yes</Required><Approved>Yes</Approved></Timesheet>'),
     ).toEqual({ timesheetRequired: 'Yes', timesheetApproved: 'Yes' });
+  });
+
+  it('detects Already Billed (-401) as confirm success', () => {
+    expect(isAlreadyBilledConfirmFault('-401', 'Visit is already Billed')).toBe(true);
+    expect(isAlreadyBilledConfirmFault(undefined, 'Visit is already Billed (-401)')).toBe(true);
+    expect(isAlreadyBilledConfirmFault('-74', 'TimesheetRequired')).toBe(false);
+  });
+
+  it('detects billed / pay-confirmed visit XML', () => {
+    expect(isVisitAlreadyBilledXml('<VisitStatus>Billed</VisitStatus>')).toBe(true);
+    expect(
+      isVisitAlreadyPayConfirmedXml(
+        '<VisitStatus>Confirmed</VisitStatus><TimesheetApproved>Yes</TimesheetApproved>',
+      ),
+    ).toBe(true);
+    expect(
+      isVisitAlreadyPayConfirmedXml(
+        '<VisitStatus>Scheduled</VisitStatus><TimesheetApproved>No</TimesheetApproved>',
+      ),
+    ).toBe(false);
   });
 });

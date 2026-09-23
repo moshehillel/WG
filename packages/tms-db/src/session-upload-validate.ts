@@ -13,15 +13,21 @@ export function requiredCptUnitsForDuration(durationMinutes: number): number {
   return Math.max(1, Math.ceil(durationMinutes / 15));
 }
 
+/** OT/PT/SLP-ish CPT ranges used on Frontline notes (excludes room #s / case ids). */
+const THERAPY_CPT_RE = /97\d{3}|925\d{2}|926\d{2}|961\d{2}|975\d{2}/;
+const THERAPY_CPT_TOKEN = String.raw`(?:${THERAPY_CPT_RE.source})`;
+
 /**
  * Pull CPT codes + units from a Frontline session text slice.
  * Supports `97110x2`, `97112x1, 97110x1`, and labeled CPT Code / CPT Units lines.
+ * Only therapy-range codes are kept — loose `\d{4,5}xN` junk must not eclipse 92507.
  */
 export function parseCptCoverage(slice: string): CptCoverage {
   const text = String(slice || '');
   const found: Array<{ code: string; units: number }> = [];
 
-  for (const m of text.matchAll(/\b(\d{4,5})\s*[xX×]\s*(\d{1,2})\b/g)) {
+  const compactRe = new RegExp(String.raw`\b(${THERAPY_CPT_TOKEN})\s*[xX×]\s*(\d{1,2})\b`, 'g');
+  for (const m of text.matchAll(compactRe)) {
     found.push({ code: m[1]!, units: Math.max(1, Number(m[2]) || 1) });
   }
   if (found.length) {
@@ -30,7 +36,10 @@ export function parseCptCoverage(slice: string): CptCoverage {
 
   const labeledBlocks = [
     ...text.matchAll(
-      /CPT\s*Codes?\s*:?\s*(\d{4,5})(?:[^\d]{0,40}?CPT\s*Units?\s*:?\s*(\d{1,2}))?/gi,
+      new RegExp(
+        String.raw`CPT\s*Codes?\s*:?\s*(${THERAPY_CPT_TOKEN})(?:[^\d]{0,40}?CPT\s*Units?\s*:?\s*(\d{1,2}))?`,
+        'gi',
+      ),
     ),
   ];
   for (const m of labeledBlocks) {
@@ -44,8 +53,8 @@ export function parseCptCoverage(slice: string): CptCoverage {
     return summarizeCpt(found);
   }
 
-  // Bare therapy CPT codes (OT/PT/SLP ranges) with optional nearby unit.
-  const bareRe = /\b(97\d{3}|925\d{2}|926\d{2}|961\d{2}|975\d{2})\b/g;
+  // Bare therapy CPT codes with optional nearby unit.
+  const bareRe = new RegExp(String.raw`\b(${THERAPY_CPT_TOKEN})\b`, 'g');
   for (const m of text.matchAll(bareRe)) {
     const code = m[1]!;
     const at = m.index ?? 0;
@@ -53,7 +62,7 @@ export function parseCptCoverage(slice: string): CptCoverage {
     const unitNear = after.match(/^\s*[xX×]\s*(\d{1,2})\b/) || after.match(/^\s+(\d{1,2})\b/);
     const unitTok = unitNear?.[1];
     // Don't treat another CPT code as this code's unit count.
-    if (unitTok && /^(97\d{3}|925\d{2}|926\d{2}|961\d{2}|975\d{2})$/.test(unitTok)) {
+    if (unitTok && new RegExp(String.raw`^${THERAPY_CPT_TOKEN}$`).test(unitTok)) {
       found.push({ code, units: 1 });
     } else {
       found.push({ code, units: unitTok ? Math.max(1, Number(unitTok) || 1) : 1 });
@@ -73,15 +82,20 @@ function summarizeCpt(found: Array<{ code: string; units: number }>): CptCoverag
   return { codes, totalUnits, procedures };
 }
 
-/** Untimed speech/language CPT codes — 1 unit covers the whole session (not 15-min). */
+/**
+ * Untimed / session-based CPT codes — 1 unit covers the whole session (not 15-min).
+ * 92507 (individual speech treatment) and 92508 (group) are untimed: bill 1 unit per session.
+ */
 const UNTIMED_SESSION_CPT = new Set([
-  '92507',
-  '92508',
+  '92507', // individual speech/language treatment — untimed, 1 unit / session
+  '92508', // group speech/language treatment — untimed, 1 unit / session
   '92521',
   '92522',
   '92523',
   '92524',
   '92610',
+  // Therapeutic procedure(s), group (2+) — Frontline bills one 97150 per visit.
+  '97150',
 ]);
 
 export function cptCodesAreUntimedSession(codes: string[]): boolean {
@@ -108,7 +122,7 @@ export function cptDurationError(
     return null;
   }
   const required = requiredCptUnitsForDuration(minutes);
-  // 92507/92508 etc. are session-based (1 unit), not timed 15-min codes.
+  // 92507/92508/97150 etc. are session-based (1 unit), not timed 15-min codes.
   if (cptCodesAreUntimedSession(coverage.codes) && coverage.totalUnits >= 1) return null;
   if (coverage.totalUnits >= required) return null;
   if (!coverage.codes.length) {
@@ -233,6 +247,9 @@ export function noteCopyPasteError(
  *   Wiglishai Astacio, M.S.,
  *   CCC-SLP, TSSLD
  */
+const FRONTLINE_SIGN_STAMP_RE =
+  /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}\s+\d{4}\b/i;
+
 export function sessionIsSigned(slice: string): boolean {
   const text = String(slice || '');
   if (/Provider\s+Signature\s*\/?\s*Credentials/i.test(text)) {
@@ -241,9 +258,18 @@ export function sessionIsSigned(slice: string): boolean {
     const hasSigner =
       /License#\s*\d+/i.test(block) ||
       /\b(?:PT|OT|SLP|DPT|MS|MA|CCC(?:-SLP)?)\b/.test(block);
-    const hasStamp =
-      /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}\s+\d{4}\b/i.test(block);
+    const hasStamp = FRONTLINE_SIGN_STAMP_RE.test(block);
     if (hasSigner && hasStamp) return true;
+  }
+  // Credential footer without a surviving "Provider Signature/Credentials" header
+  // (page-break / Tj extract) — e.g. "Patel PT* PT (NPI# …) (License# …) Sep 15 2026".
+  if (
+    /\b(?:PT|OT|SLP|DPT|MS|MA|CCC(?:-SLP)?)\b[\s\S]{0,120}\(NPI#\s*\d*\)\s*\(License#\s*\d+\)/i.test(
+      text,
+    ) &&
+    FRONTLINE_SIGN_STAMP_RE.test(text)
+  ) {
+    return true;
   }
   // Therapist Activity: Signed: <date> <name + credentials>
   const signed = text.match(
