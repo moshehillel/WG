@@ -70,13 +70,21 @@ export const PROGRAM_CONTRACT_MAP: Readonly<Record<string, number>> = {
   "Woodstown-Pilesgrove Regional School District": 71697,
 };
 
+/**
+ * Contract name compare: same case/space rules as program types, and a period is optional.
+ * `Fred S keller school` matches `Fred S. Keller School`. Not a fuzzy/substring match.
+ */
+export function normalizeContractName(value: string | undefined): string {
+  return normalizeProgramType(value).replace(/\./g, '').replace(/\s+/g, ' ').trim();
+}
+
 const byNormalized = new Map<string, number>(
-  Object.entries(PROGRAM_CONTRACT_MAP).map(([name, id]) => [normalizeProgramType(name), id]),
+  Object.entries(PROGRAM_CONTRACT_MAP).map(([name, id]) => [normalizeContractName(name), id]),
 );
 
 /** Resolve HHA ContractID from ProviderSoft Program Type (exact name match in HHA). */
 export function lookupContractId(programType: string | undefined): number | undefined {
-  const key = normalizeProgramType(programType);
+  const key = normalizeContractName(programType);
   if (!key) return undefined;
   return byNormalized.get(key);
 }

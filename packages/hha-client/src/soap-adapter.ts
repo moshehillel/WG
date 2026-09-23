@@ -12,6 +12,7 @@ import {
 } from '@white-glove/shared';
 import {
   lookupContractId,
+  normalizeContractName,
   lookupServiceCode,
   lookupServiceCodeAlias,
   hasServiceCodeAlias,
@@ -921,7 +922,11 @@ export class SoapHhaClientAdapter implements HhaClient {
     if (cached) return cached;
 
     await this.loadContractCache();
-    const match = matchByName(programType, this.contractCache ?? []);
+    const contractKey = normalizeContractName(programType);
+    const exact = contractKey
+      ? (this.contractCache ?? []).find((row) => normalizeContractName(row.name) === contractKey)
+      : undefined;
+    const match = exact ?? matchByName(programType, this.contractCache ?? []);
     if (match) {
       const id = Number(match.id);
       await this.referenceCache?.putContractId(programType, id);

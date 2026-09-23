@@ -354,11 +354,18 @@ export async function transferLockedWeek(options: {
   week: WeeklyPeriod;
   hha: HhaClient;
   actorId: string;
+  /**
+   * When set, only these sessions are sent. Already-confirmed visits in the
+   * list are skipped so a targeted retry cannot double-send them.
+   */
+  sessionIds?: string[];
 }): Promise<{ ok: boolean; transferred: number; errors: string[] }> {
   const { store, week, hha } = options;
   if (week.status !== 'locked' && week.status !== 'signed') {
     return { ok: false, transferred: 0, errors: ['Week must be signed or locked before HHA.'] };
   }
+  const allow = new Set((options.sessionIds ?? []).map((id) => id.trim()).filter(Boolean));
+  const limitToSessions = allow.size > 0;
   const provider = store.data.providers.find((p) => p.id === week.providerId);
   const sessions = store
     .sessionsForWeek(week.id)
@@ -366,9 +373,21 @@ export async function transferLockedWeek(options: {
   const errors: string[] = [];
   let transferred = 0;
   for (const session of sessions) {
+    if (limitToSessions && !allow.has(session.id)) continue;
     const existing = store.transferForSession(session.id);
-    // Do not skip prior confirmed transfers — older pushes could be TMS-confirmed while HHA
-    // still lacked Auth / Confirmed / TimesheetApproved. Re-send re-runs auth + ConfirmVisits.
+    if (limitToSessions) {
+      const priorVisitId = existing?.hhaVisitId?.trim() || '';
+      const priorVisitIdOk = /^\d+$/.test(priorVisitId);
+      if (
+        (existing?.status === 'confirmed' || existing?.status === 'sent') &&
+        (existing.status === 'confirmed' || priorVisitIdOk)
+      ) {
+        transferred += 1;
+        continue;
+      }
+    }
+    // Full-week admin Send does not skip prior confirmed transfers — older pushes could be
+    // TMS-confirmed while HHA still lacked Auth / Confirmed / TimesheetApproved.
     const student = store.data.students.find((s) => s.id === session.studentId);
     let scheduledVisitId = existing?.hhaVisitId?.trim() || '';
     try {
