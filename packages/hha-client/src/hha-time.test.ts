@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { caregiverSearchNameOrders } from './hha-time.js';
+import { caregiverSearchNameOrders, psDateToIso } from './hha-time.js';
+
+describe('psDateToIso', () => {
+  it('expands MM/DD/YY into YYYY-MM-DD (00–69 → 2000s)', () => {
+    expect(psDateToIso('09/16/26')).toBe('2026-09-16');
+    expect(psDateToIso('09/17/26')).toBe('2026-09-17');
+  });
+
+  it('pads M/D/YYYY', () => {
+    expect(psDateToIso('9/16/2026')).toBe('2026-09-16');
+  });
+
+  it('leaves an ISO date unchanged', () => {
+    expect(psDateToIso('2026-09-16')).toBe('2026-09-16');
+  });
+
+  it('maps YY 70–99 onto the 1900s', () => {
+    expect(psDateToIso('03/09/85')).toBe('1985-03-09');
+  });
+});
 
 describe('caregiverSearchNameOrders', () => {
   it('strips commas so Last, First searches clean tokens', () => {

@@ -5,6 +5,7 @@ import {
   isInvalidHhaVisitError,
   isTrustedHhaPatientId,
   mapServiceToDiscipline,
+  psDateToIso,
   type HhaClient,
 } from '@white-glove/hha-client';
 import {
@@ -194,15 +195,11 @@ export function mandateToAuthPeriodMaximum(
 }
 
 function authDateIso(raw: string | undefined, fallback: string): string {
-  const t = (raw || '').trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
-  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(t)) {
-    const [mm, dd, yyyy] = t.split('/');
-    return `${yyyy}-${mm!.padStart(2, '0')}-${dd!.padStart(2, '0')}`;
-  }
-  const fb = fallback.trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(fb)) return fb;
-  return fb.slice(0, 10);
+  const primary = psDateToIso(raw);
+  if (primary && /^\d{4}-\d{2}-\d{2}$/.test(primary)) return primary;
+  const fb = psDateToIso(fallback);
+  if (fb && /^\d{4}-\d{2}-\d{2}$/.test(fb)) return fb;
+  return (fallback || '').trim().slice(0, 10);
 }
 
 /**

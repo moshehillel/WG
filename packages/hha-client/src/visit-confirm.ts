@@ -1,3 +1,5 @@
+import { psDateToIso } from './hha-time.js';
+
 /** Reason + action pair for ConfirmVisits. */
 export interface VisitConfirmReasonPair {
   reasonCode: string;
@@ -28,7 +30,7 @@ export function parseVisitEditReasonPairs(xml: string): VisitConfirmReasonPair[]
 
 /** Convert HHA date + time ("2026-07-10", "09:00" or "2026-07-10 09:00") to ISO for ConfirmVisits. */
 export function toConfirmIso(dateStr: string, timeStr: string): string {
-  const date = dateStr.trim().slice(0, 10);
+  const date = psDateToIso(dateStr) ?? dateStr.trim().slice(0, 10);
   let time = timeStr.trim();
   const spaceParts = time.split(' ');
   if (spaceParts.length > 1) time = spaceParts[spaceParts.length - 1]!;
