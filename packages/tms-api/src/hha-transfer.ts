@@ -39,6 +39,7 @@ import {
   type SessionRow,
   type WeeklyPeriod,
 } from '@white-glove/tms-db';
+import { acquireHhaWeekLock } from './hha-week-lock.js';
 
 /** School address fields mapped onto HHA CreatePatient demographics. */
 export type SchoolAddressForPatient = {
@@ -374,6 +375,11 @@ export async function transferLockedWeek(options: {
   if (week.status !== 'locked' && week.status !== 'signed') {
     return { ok: false, transferred: 0, errors: ['Week must be signed or locked before HHA.'] };
   }
+  const lock = await acquireHhaWeekLock(week.id);
+  if (!lock.ok) {
+    return { ok: false, transferred: 0, errors: [lock.error] };
+  }
+  try {
   const provider = store.data.providers.find((p) => p.id === week.providerId);
   const sessions = store
     .sessionsForWeek(week.id)
@@ -716,6 +722,9 @@ export async function transferLockedWeek(options: {
       });
     }
   }
+  // Double-send can leave a blank failed row beside a confirmed sibling. Drop it
+  // so triage cannot show a -310 (or other) error for a visit already in HHA.
+  const droppedStaleFailed = store.dropSupersededFailedTransfers({ weekId: week.id });
   const rollup = weekHhaRollup(store, week.id);
   store.upsertWeek({
     ...week,
@@ -727,8 +736,15 @@ export async function transferLockedWeek(options: {
   store.audit(options.actorId, 'hha_transfer', `week:${week.id}`, null, {
     transferred,
     errors,
+    droppedStaleFailed: droppedStaleFailed.length,
+    staleFailedTransferDrop: droppedStaleFailed.length
+      ? 'drop superseded failed HHA transfer'
+      : '',
   });
   return { ok: errors.length === 0, transferred, errors };
+  } finally {
+    await lock.release();
+  }
 }
 
 function hashSession(session: SessionRow): string {

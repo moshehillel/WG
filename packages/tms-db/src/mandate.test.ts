@@ -770,8 +770,10 @@ describe('makeup', () => {
     ];
     const r = checkMandate(auth, [linked, ...pool], [linked, ...pool]);
     expect(r.over).toBe(false);
+    expect(r.under).toBe(false);
     expect(r.used).toBe(2);
     expect(r.allowed).toBe(12);
+    expect(r.message).toBe('');
     const over = checkMandate(auth, pool, [
       ...pool,
       ...Array.from({ length: 11 }, (_, i) =>
@@ -779,6 +781,17 @@ describe('makeup', () => {
       ),
     ]);
     expect(over.over).toBe(true);
+
+    const weekly = mandate({ id: 'm-week', frequencyPerWeek: 2, sessionsPerPeriod: 2 });
+    const weekCheck = checkMandatesForWeek(
+      [weekly, auth],
+      [],
+      [],
+      { st1: 'Test Child' },
+      { includeStudentIds: ['st1'] },
+    );
+    expect(weekCheck.warnings.some((w) => /Makeup authorization/i.test(w))).toBe(false);
+    expect(weekCheck.warnings.some((w) => /Under mandate.*Test Child.*0 of 2/i.test(w))).toBe(true);
   });
 });
 
@@ -1044,10 +1057,49 @@ describe('due dates and dashboard', () => {
       payloadHash: '',
       updatedAt: '',
     });
+    // Orphan confirmed on a draft week must not inflate the banner past eligible.
+    store.upsertWeek({
+      id: 'w-draft',
+      providerId: 'p',
+      weekStart: '2026-08-24',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: 's-draft',
+      weekId: 'w-draft',
+      studentId: 'st',
+      dateOfService: '2026-08-25',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: '',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.upsertTransfer({
+      id: 't-orphan',
+      sessionId: 's-draft',
+      weekId: 'w-draft',
+      status: 'confirmed',
+      hhaVisitId: '99',
+      lastError: '',
+      payloadHash: '',
+      updatedAt: '',
+    });
     const d = dashboard(store);
     expect(d.hha.confirmed).toBe(1);
     expect(d.hha.eligible).toBe(1);
     expect(d.hha.failed).toBe(0);
+    expect(d.hha.confirmed).toBeLessThanOrEqual(d.hha.eligible);
     const weeks = adminWeeksList(store);
     expect(weeks[0]?.sessionCount).toBe(2);
     expect(weeks[0]?.hhaEligible).toBe(1);
@@ -1127,6 +1179,7 @@ describe('due dates and dashboard', () => {
     expect(row?.hhaFailed).toBe(1);
     expect(row?.hhaEligible).toBe(2);
     expect(row?.hhaError).toContain('ErrorID=-415');
+    expect(row?.hhaError).toMatch(/Unknown child · 2026-09-02 9:00 am–9:30 am:/);
   });
 
   it('last service filters by provider and returns school', () => {
@@ -1260,6 +1313,82 @@ describe('due dates and dashboard', () => {
     expect(rows[0]?.signerName).toBe('Principal');
   });
 
+  it('admin weeks list filters by weekStart and exposes programType as district', () => {
+    const store = new MemoryStore();
+    store.upsertSchool({
+      id: 'sch',
+      name: 'Powells Lane',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: '',
+    });
+    store.upsertProvider({
+      id: 'p',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 72,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    });
+    store.upsertStudent({
+      id: 'st',
+      schoolId: 'sch',
+      firstName: 'Ada',
+      lastName: 'Lee',
+      dob: '',
+      programId: '',
+      programType: 'Westbury UFSD',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertWeek({
+      id: 'w1',
+      providerId: 'p',
+      weekStart: '2026-09-07',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+      programType: 'Westbury UFSD',
+    });
+    store.upsertWeek({
+      id: 'w2',
+      providerId: 'p',
+      weekStart: '2026-08-31',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession(sess({ id: 's1', weekId: 'w1', studentId: 'st' }));
+    const filtered = adminWeeksList(store, { weekStart: '2026-09-07' });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]?.id).toBe('w1');
+    expect(filtered[0]?.programType).toBe('Westbury UFSD');
+    expect(filtered[0]?.district).toBe('Westbury UFSD');
+    expect(adminWeeksList(store, { weekStart: '2026-09-07', name: 'Ada' })).toHaveLength(1);
+    expect(adminWeeksList(store, { weekStart: '2026-09-07', name: 'Nobody' })).toHaveLength(0);
+    expect(adminWeeksList(store)).toHaveLength(2);
+  });
+
   it('admin weeks list survives missing hhaTransfers and merges transfer errors', () => {
     const store = new MemoryStore();
     store.upsertProvider({
@@ -1313,6 +1442,228 @@ describe('due dates and dashboard', () => {
       },
     ];
     expect(adminWeeksList(store)[0]?.hhaError).toContain('HHA reject');
+  });
+
+  it('admin weeks triage ignores stale week.hhaError after -401 heal (only live failed lastError)', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p',
+      userId: '',
+      firstName: 'Jazel',
+      lastName: 'Baniqued',
+      discipline: 'PT',
+      payRatePerHour: 72,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    });
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p',
+      weekStart: '2026-09-07',
+      status: 'locked',
+      signerName: 'Principal',
+      signerEmail: 'p@school.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'failed',
+      hhaError:
+        'ConfirmVisits failed for visit 1: Visit is already Billed (-401)\n' +
+        'ConfirmVisits failed for visit 2: Visit is already Billed (-401)\n' +
+        'ConfirmVisits failed for visit 1334595502: rate limit (-301)',
+    });
+    store.upsertSession({
+      id: 's-ok',
+      weekId: 'w',
+      studentId: 'st',
+      dateOfService: '2026-09-08',
+      beginTime: '10:00 am',
+      endTime: '10:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: 'School',
+      notes: 'n',
+      aiFlags: [],
+    });
+    store.upsertSession({
+      id: 's-fail',
+      weekId: 'w',
+      studentId: 'st',
+      dateOfService: '2026-09-09',
+      beginTime: '11:00 am',
+      endTime: '11:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: 'School',
+      notes: 'n',
+      aiFlags: [],
+    });
+    store.data.hhaTransfers = [
+      {
+        id: 't-ok',
+        sessionId: 's-ok',
+        weekId: 'w',
+        status: 'confirmed',
+        hhaVisitId: '1',
+        lastError: '',
+        payloadHash: '',
+      },
+      {
+        id: 't-fail',
+        sessionId: 's-fail',
+        weekId: 'w',
+        status: 'failed',
+        hhaVisitId: '1334595502',
+        lastError: 'ConfirmVisits failed for visit 1334595502: rate limit (-301)',
+        payloadHash: '',
+      },
+    ];
+    const row = adminWeeksList(store)[0];
+    expect(row?.hhaFailed).toBe(1);
+    expect(row?.hhaConfirmed).toBe(1);
+    expect(row?.hhaError).toMatch(/-301|rate limit/i);
+    expect(row?.hhaError).not.toMatch(/already Billed|-401/i);
+  });
+
+  it('hides a failed transfer when the same session already has a confirmed row', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p',
+      userId: '',
+      firstName: 'James',
+      lastName: 'Vasaturo',
+      discipline: 'PT',
+      payRatePerHour: 72,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    });
+    store.upsertStudent({
+      id: 'st-maeve',
+      schoolId: '',
+      firstName: 'Maeve',
+      lastName: 'Leahy',
+      dob: '',
+      programId: 'WGC-924938',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertStudent({
+      id: 'st-noah',
+      schoolId: '',
+      firstName: 'Noah',
+      lastName: 'Siegman',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p',
+      weekStart: '2026-09-14',
+      status: 'locked',
+      signerName: 'Principal',
+      signerEmail: 'p@school.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'failed',
+      hhaError: 'Maeve Leahy · 2026-09-17 1:15 pm–1:45 pm: overlap (ErrorID=-310)',
+    });
+    store.upsertSession({
+      id: 's-maeve',
+      weekId: 'w',
+      studentId: 'st-maeve',
+      dateOfService: '2026-09-17',
+      beginTime: '1:15 pm',
+      endTime: '1:45 pm',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: 'School',
+      notes: 'n',
+      aiFlags: [],
+    });
+    store.upsertSession({
+      id: 's-noah',
+      weekId: 'w',
+      studentId: 'st-noah',
+      dateOfService: '2026-09-14',
+      beginTime: '9:30 am',
+      endTime: '10:00 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: 'School',
+      notes: 'n',
+      aiFlags: [],
+    });
+    store.data.hhaTransfers = [
+      {
+        id: 't-maeve-ok',
+        sessionId: 's-maeve',
+        weekId: 'w',
+        status: 'confirmed',
+        hhaVisitId: '1337400620',
+        lastError: '',
+        payloadHash: '',
+      },
+      {
+        id: 't-maeve-bad',
+        sessionId: 's-maeve',
+        weekId: 'w',
+        status: 'failed',
+        hhaVisitId: '',
+        lastError:
+          'Maeve Leahy · 2026-09-17 1:15 pm–1:45 pm: Overlapping shifts are not allowed (ErrorID=-310)',
+        payloadHash: '',
+      },
+      {
+        id: 't-noah',
+        sessionId: 's-noah',
+        weekId: 'w',
+        status: 'failed',
+        hhaVisitId: '',
+        lastError: 'Noah Siegman · 2026-09-14 9:30 am: Pay code missing (ErrorID=-74)',
+        payloadHash: '',
+      },
+    ];
+    const row = adminWeeksList(store)[0];
+    expect(row?.hhaError).toMatch(/Noah Siegman/);
+    expect(row?.hhaError).toMatch(/-74/);
+    expect(row?.hhaError).not.toMatch(/Maeve|-310/);
+    expect(row?.hhaFailed).toBe(1);
+    expect(row?.hhaConfirmed).toBe(1);
+    const removed = store.dropSupersededFailedTransfers({ weekId: 'w' });
+    expect(removed.map((t) => t.id)).toEqual(['t-maeve-bad']);
+    expect(store.data.hhaTransfers.map((t) => t.id).sort()).toEqual(['t-maeve-ok', 't-noah']);
+    expect(adminWeeksList(store)[0]?.hhaError).toMatch(/Noah Siegman/);
   });
 
   it('week progress: provided = 50%, notes = 100%', () => {

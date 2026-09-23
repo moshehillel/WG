@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MockHhaClient } from '@white-glove/hha-client';
 import { MemoryStore, newId, nowIso } from '@white-glove/tms-db';
 import {
@@ -1759,6 +1759,105 @@ describe('transferLockedWeek GetVisitInfoV2 -415 after schedule', () => {
     expect(store.transferForSession(session.id)?.status).toBe('confirmed');
   });
 
+  it('drops a blank failed sibling when the session is already confirmed', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'James',
+      lastName: 'Vasaturo',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Maeve',
+      lastName: 'Leahy',
+      dob: '2018-01-01',
+      programId: 'WGC-924938',
+      programType: 'Island Park',
+      hhaPatientId: '24745304',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-09-14',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'failed',
+      hhaError: 'Maeve Leahy · 2026-09-17: overlap (ErrorID=-310)',
+    });
+    const session = store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-17',
+      beginTime: '1:15 pm',
+      endTime: '1:45 pm',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.data.hhaTransfers = [
+      {
+        id: 'ok-row',
+        sessionId: session.id,
+        weekId: week.id,
+        status: 'confirmed',
+        hhaVisitId: '1337400620',
+        lastError: '',
+        payloadHash: 'old',
+        updatedAt: nowIso(),
+      },
+      {
+        id: 'bad-row',
+        sessionId: session.id,
+        weekId: week.id,
+        status: 'failed',
+        hhaVisitId: '',
+        lastError: 'Overlapping shifts are not allowed (ErrorID=-310)',
+        payloadHash: 'old',
+        updatedAt: nowIso(),
+      },
+    ];
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+      serviceType: 'PT School',
+    });
+
+    const hha = new MockHhaClient();
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+    expect(result.transferred).toBe(1);
+    expect(hha.calls).not.toContain('approveVisit');
+    expect(store.data.hhaTransfers.map((t) => t.id)).toEqual(['ok-row']);
+    const saved = store.data.weeks.find((w) => w.id === week.id);
+    expect(saved?.hhaError || '').not.toMatch(/-310/);
+    expect(saved?.hhaStatus).toBe('confirmed');
+  });
+
   it('heals failed transfers whose lastError is Already Billed (-401)', async () => {
     const store = new MemoryStore();
     const provider = store.upsertProvider({
@@ -2030,6 +2129,114 @@ describe('transferLockedWeek GetVisitInfoV2 -415 after schedule', () => {
     });
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('transferLockedWeek overlapping sends', () => {
+  it('does not CreateSchedule when a second transfer of the same week is already running', async () => {
+    const prevTable = process.env.TMS_STATE_TABLE;
+    delete process.env.TMS_STATE_TABLE;
+    const { resetTmsDocStoreCache } = await import('./dynamo-state.js');
+    resetTmsDocStoreCache();
+
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'James',
+      lastName: 'Vasaturo',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Maeve',
+      lastName: 'Sample',
+      dob: '2018-01-01',
+      programId: '909062926',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '24745304',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-09-14',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-17',
+      beginTime: '10:05 am',
+      endTime: '10:35 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+      serviceType: 'PT School',
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+    hha.payCodes.set('PT $70', 'pay-pt-70');
+    let calls = 0;
+    let releaseGate = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGate = resolve;
+    });
+    const orig = hha.locateOrScheduleVisit.bind(hha);
+    hha.locateOrScheduleVisit = async (visit) => {
+      calls += 1;
+      if (calls === 1) await gate;
+      return orig(visit);
+    };
+
+    try {
+      const first = transferLockedWeek({ store, week, hha, actorId: 'admin' });
+      await vi.waitFor(() => expect(calls).toBe(1));
+      const second = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+      expect(second.ok).toBe(false);
+      expect(second.transferred).toBe(0);
+      expect(second.errors[0]).toMatch(/already running/i);
+      expect(calls).toBe(1);
+      releaseGate();
+      const done = await first;
+      expect(done.transferred).toBe(1);
+      expect(hha.calls.filter((c) => c === 'locateOrScheduleVisit').length).toBe(1);
+    } finally {
+      releaseGate();
+      if (prevTable === undefined) delete process.env.TMS_STATE_TABLE;
+      else process.env.TMS_STATE_TABLE = prevTable;
+      resetTmsDocStoreCache();
+    }
   });
 });
 

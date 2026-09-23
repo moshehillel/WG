@@ -476,4 +476,36 @@ export class MemoryStore {
       s === 'confirmed' ? 0 : s === 'pending' || s === 'sent' ? 1 : s === 'failed' ? 2 : 3;
     return [...rows].sort((a, b) => rank(a.status) - rank(b.status))[0];
   }
+
+  /**
+   * Remove failed transfer rows when the same session already has a confirmed
+   * or sent+VisitID row. Sessions whose only row is still failed are left alone.
+   * Does not delete confirmed rows and does not cancel HHA visits.
+   */
+  dropSupersededFailedTransfers(opts?: { weekId?: string }): HhaTransfer[] {
+    const rows = this.data.hhaTransfers || [];
+    const settled = new Set<string>();
+    for (const t of rows) {
+      if (isSettledHhaTransfer(t)) settled.add(t.sessionId);
+    }
+    if (!settled.size) return [];
+    const removed: HhaTransfer[] = [];
+    this.data.hhaTransfers = rows.filter((t) => {
+      if (t.status !== 'failed') return true;
+      if (!settled.has(t.sessionId)) return true;
+      if (opts?.weekId && t.weekId !== opts.weekId) return true;
+      removed.push(t);
+      return false;
+    });
+    return removed;
+  }
+}
+
+/** Confirmed, or sent with a numeric HHA VisitID — the visit is already in HHA. */
+export function isSettledHhaTransfer(
+  t: Pick<HhaTransfer, 'status' | 'hhaVisitId'> | undefined | null,
+): boolean {
+  if (!t) return false;
+  if (t.status === 'confirmed') return true;
+  return t.status === 'sent' && /^\d+$/.test(String(t.hhaVisitId || '').trim());
 }

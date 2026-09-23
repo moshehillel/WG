@@ -9,14 +9,41 @@ import {
   cycleAllowedSessions,
   mandateFrequencyKind,
   monthlyAllowedSessions,
+  sessionSlotLabel,
   weeklyAllowedSessions,
 } from './mandate.js';
 import { isoDate, parseDos } from './ids.js';
 import { schoolCalendarSummary, hasConfiguredSchoolCalendar, schoolCalendarMonFriFallbackWarning, schoolSetupIncomplete } from './school-calendar.js';
 import type { HhaTransferStatus, Mandate, SessionRow, Student } from './types.js';
 import { DEFAULT_ADMIN_NOTE_TAGS } from './types.js';
-import type { MemoryStore } from './memory-store.js';
-import { normalizeProgramTypeKey, normalizeSignerEmail } from './week-school.js';
+import { isSettledHhaTransfer, type MemoryStore } from './memory-store.js';
+import {
+  normalizeProgramTypeKey,
+  normalizeSignerEmail,
+  resolveWeekProgramType,
+} from './week-school.js';
+
+/**
+ * Prefix HHA transfer / triage lines: `Child · YYYY-MM-DD HH:MM–HH:MM: <error>`.
+ * Idempotent when the message is already labeled.
+ */
+export function labelHhaTransferError(
+  message: string,
+  opts: {
+    childName?: string | null;
+    session?: Pick<SessionRow, 'dateOfService' | 'beginTime' | 'endTime'> | null;
+  },
+): string {
+  const msg = String(message || '').trim();
+  if (!msg) return msg;
+  // Already labeled (re-roll or catch after prior label).
+  if (/^.+ · .+: /.test(msg)) return msg;
+  const child = String(opts.childName || '').trim() || 'Unknown child';
+  const slot = opts.session ? sessionSlotLabel(opts.session as SessionRow) : '';
+  const prefix = slot ? `${child} · ${slot}` : child;
+  if (msg.startsWith(`${prefix}:`)) return msg;
+  return `${prefix}: ${msg}`;
+}
 
 /**
  * Admin "district" label for filters / columns.
@@ -435,21 +462,70 @@ export function weekProgressReport(
   return rows;
 }
 
+/** Live triage text: only currently-failed transfers (ignore stale week.hhaError after -401 heal). */
+export function weekHhaErrorFromTransfers(store: MemoryStore, weekId: string): string {
+  const rows = store.data.hhaTransfers || [];
+  const settledSessions = new Set(
+    rows.filter((t) => isSettledHhaTransfer(t)).map((t) => t.sessionId),
+  );
+  const transferErrors = rows
+    .filter(
+      (t) =>
+        t.weekId === weekId &&
+        t.status === 'failed' &&
+        String(t.lastError || '').trim() &&
+        !settledSessions.has(t.sessionId),
+    )
+    .map((t) => {
+      const raw = String(t.lastError).trim();
+      const session = (store.data.sessions || []).find((s) => s.id === t.sessionId);
+      const student = session
+        ? (store.data.students || []).find((s) => s.id === session.studentId)
+        : undefined;
+      const childName = student
+        ? `${student.firstName} ${student.lastName}`.trim()
+        : '';
+      return labelHhaTransferError(raw, { childName, session });
+    });
+  return transferErrors.length ? [...new Set(transferErrors)].join('\n') : '';
+}
+
 export function enrichWeekHhaError<T extends { id: string; hhaStatus: string; hhaError?: string }>(
   store: MemoryStore,
   w: T,
 ): T & { hhaError: string } {
-  const transferErrors = (store.data.hhaTransfers || [])
-    .filter((t) => t.weekId === w.id && t.status === 'failed' && t.lastError)
-    .map((t) => t.lastError);
-  const hhaError =
-    (w.hhaError || '').trim() ||
-    (transferErrors.length ? [...new Set(transferErrors)].join('\n') : '');
-  return { ...w, hhaError };
+  const allTransfers = store.data.hhaTransfers || [];
+  const settledSessions = new Set(
+    allTransfers.filter((t) => isSettledHhaTransfer(t)).map((t) => t.sessionId),
+  );
+  const weekTransfers = allTransfers.filter((t) => t.weekId === w.id);
+  const activeFailed = weekTransfers.filter(
+    (t) => t.status === 'failed' && !settledSessions.has(t.sessionId),
+  );
+  const fromTransfers = weekHhaErrorFromTransfers(store, w.id);
+  if (fromTransfers) return { ...w, hhaError: fromTransfers };
+  // Transfers exist and none are still-failed → suppress stale week.hhaError (healed -401 or superseded -310).
+  if (weekTransfers.length > 0 && activeFailed.length === 0) {
+    return { ...w, hhaError: '' };
+  }
+  // Failed rows without lastError, or legacy week-level fail before transfer rows existed.
+  if (activeFailed.length > 0 || w.hhaStatus === 'failed') {
+    return { ...w, hhaError: (w.hhaError || '').trim() };
+  }
+  return { ...w, hhaError: '' };
 }
 
-export function adminWeeksList(store: MemoryStore) {
-  return (store.data.weeks || []).map((w) => {
+export function adminWeeksList(
+  store: MemoryStore,
+  opts: { weekStart?: string; name?: string } = {},
+) {
+  const wantStart = String(opts.weekStart || '').trim();
+  const nameQ = String(opts.name || '').trim().toLowerCase();
+  let weeks = store.data.weeks || [];
+  if (wantStart) {
+    weeks = weeks.filter((w) => String(w.weekStart || '').trim() === wantStart);
+  }
+  const rows = weeks.map((w) => {
     const provider = (store.data.providers || []).find((p) => p.id === w.providerId);
     const enriched = enrichWeekHhaError(store, w);
     const rollup = weekHhaRollup(store, w.id);
@@ -484,13 +560,17 @@ export function adminWeeksList(store: MemoryStore) {
     const school = schoolId
       ? store.data.schools.find((s) => s.id === schoolId)
       : undefined;
+    // District/payer = caseload programType (stamped or inferred); school.district is often blank.
+    const programType =
+      resolveWeekProgramType(store, w) || String(school?.district || '').trim();
     return {
       id: w.id,
       weekStart: w.weekStart,
       status: w.status,
       schoolId: schoolId || '',
       schoolName: school?.name || '',
-      district: school?.district || '',
+      programType,
+      district: programType || school?.district || '',
       signerName: w.signerName,
       signerEmail: w.signerEmail,
       hhaStatus,
@@ -508,6 +588,18 @@ export function adminWeeksList(store: MemoryStore) {
       /** All sessions (attended + missed + makeup). HHA uses hhaEligible only. */
       sessionCount: rollup.sessionCount,
     };
+  });
+  if (!nameQ) return rows;
+  return rows.filter((row) => {
+    if (String(row.providerName || '').toLowerCase().includes(nameQ)) return true;
+    const sessions = store.sessionsForWeek(row.id);
+    for (const s of sessions) {
+      const student = store.data.students.find((st) => st.id === s.studentId);
+      if (!student) continue;
+      const full = `${student.firstName || ''} ${student.lastName || ''}`.trim().toLowerCase();
+      if (full.includes(nameQ)) return true;
+    }
+    return false;
   });
 }
 
@@ -787,14 +879,22 @@ export function dueDateReport(store: MemoryStore, today = new Date(), opts: { fr
 
 export function dashboard(store: MemoryStore) {
   const weeks = store.data.weeks || [];
-  const transfers = store.data.hhaTransfers || [];
   const count = (status: string) => weeks.filter((w) => w.status === status).length;
-  const hhaFail = transfers.filter((t) => t.status === 'failed').length;
-  const hhaPending = transfers.filter((t) => t.status === 'pending' || t.status === 'sent').length;
-  // Eligible = attended/makeup on signed/locked weeks (same set HHA can transfer).
-  const hhaEligible = weeks
-    .filter((w) => w.status === 'signed' || w.status === 'locked')
-    .reduce((n, w) => n + weekHhaRollup(store, w.id).eligible, 0);
+  // HHA counts only signed/locked weeks — same universe as weekHhaRollup eligible
+  // (attended/makeup). Never count orphan confirmed transfers on draft weeks, or
+  // confirmed can exceed eligible on the admin banner.
+  let hhaEligible = 0;
+  let hhaConfirmed = 0;
+  let hhaFailed = 0;
+  let hhaPending = 0;
+  for (const w of weeks) {
+    if (w.status !== 'signed' && w.status !== 'locked') continue;
+    const rollup = weekHhaRollup(store, w.id);
+    hhaEligible += rollup.eligible;
+    hhaConfirmed += rollup.confirmed;
+    hhaFailed += rollup.failed;
+    hhaPending += rollup.pending;
+  }
   return {
     timesheet: {
       draft: count('draft') + count('reopened'),
@@ -804,8 +904,8 @@ export function dashboard(store: MemoryStore) {
     },
     hha: {
       pending: hhaPending,
-      failed: hhaFail,
-      confirmed: transfers.filter((t) => t.status === 'confirmed').length,
+      failed: hhaFailed,
+      confirmed: hhaConfirmed,
       eligible: hhaEligible,
     },
     missingNotes: missingNotes(store).length,

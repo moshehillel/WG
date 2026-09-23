@@ -1,4 +1,4 @@
-import type { MemoryStore } from '@white-glove/tms-db';
+import { isSettledHhaTransfer, type MemoryStore } from '@white-glove/tms-db';
 import type { Mailer } from './mail.js';
 
 export interface HhaDigestFailure {
@@ -84,8 +84,14 @@ export function collectHhaFailuresForDay(
   const base = spaBase();
   const out: HhaDigestFailure[] = [];
 
+  const settledSessions = new Set(
+    (store.data.hhaTransfers || [])
+      .filter((t) => isSettledHhaTransfer(t))
+      .map((t) => t.sessionId),
+  );
   for (const t of store.data.hhaTransfers || []) {
     if (t.status !== 'failed') continue;
+    if (settledSessions.has(t.sessionId)) continue;
     const onDay = isoDayInEastern(t.updatedAt) === day || weekIds.has(t.weekId);
     if (!onDay) continue;
 
