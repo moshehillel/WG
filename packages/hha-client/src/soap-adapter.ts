@@ -120,6 +120,18 @@ function assertOk(result: SoapCallResult, context: string): void {
   }
 }
 
+/** CreateSchedule -310 is overloaded. Only shift-overlap means a visit was just created. */
+function isCreateScheduleShiftOverlap(result: SoapCallResult): boolean {
+  const message = `${result.errorMessage ?? ''} (ErrorID=${result.errorId ?? '-'})`;
+  if (
+    /Overlapping shifts are not allowed/i.test(message) ||
+    /Your shift is overlapping with (Patient|Caregiver)/i.test(message)
+  ) {
+    return true;
+  }
+  return String(result.errorId) === '-310' && /overlap/i.test(message);
+}
+
 function pickId(raw: unknown, keys: string[]): string | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const obj = raw as Record<string, unknown>;
@@ -755,6 +767,15 @@ export class SoapHhaClientAdapter implements HhaClient {
     if (visit.contractId && visit.serviceCodeId && visit.caregiverId && visit.visitDate) {
       const body = buildCreateScheduleBody(visit);
       const result = await this.soap.createSchedule(body);
+      // Parallel sends both miss SearchVisits, then the loser gets -310 with a blank VisitID.
+      // The winner already created this patient's visit — link that VisitID instead of failing blank.
+      if (!result.ok && isCreateScheduleShiftOverlap(result)) {
+        const raced = await this.findExistingVisit(visit);
+        if (raced?.id && /^\d+$/.test(String(raced.id))) {
+          console.info(`[hha] CreateSchedule overlap linked VisitID ${raced.id}`);
+          return { id: raced.id, created: false };
+        }
+      }
       assertOk(result, 'CreateSchedule');
       const newId =
         xmlIds(result.bodyXml, 'VisitID')[0]?.toString() ??

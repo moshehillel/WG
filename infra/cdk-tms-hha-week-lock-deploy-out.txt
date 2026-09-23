@@ -1,0 +1,24 @@
+LIVE_OK: one HHA transfer per week; overlap -310 links VisitID
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+TMS_GIT_SHA (build define): ba48da3-hha-week-lock
+{
+    "CodeSha256": "us09WIL+P1rjAuqXCgiewKD56la/4FbSDlMjf29rPZk=",
+    "LastModified": "2026-09-23T20:52:21.000+0000",
+    "CodeSize": 2123338
+}
+{
+    "HHA_USE_MOCK": "false",
+    "HHA_USE_PRODUCTION": "true",
+    "HHA_ALLOW_PRODUCTION": "true",
+    "TMS_GIT_SHA": "223ddfb-allxsd-date",
+    "Handler": "index.handler",
+    "Runtime": "nodejs22.x"
+}
+HHA_USE_PRODUCTION=true preserved (unchanged)
+
+Changes:
+1. Overlapping transfers of the same week cannot both CreateSchedule
+2. Confirmed / sent+VisitID / -401 still skip CreateSchedule
+3. Overlap -310 after a sibling CreateSchedule saves that VisitID
+4. FE Send/Retry stays disabled until the transfer request finishes (app.js?v=133)
+

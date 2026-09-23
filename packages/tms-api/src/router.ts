@@ -5390,8 +5390,6 @@ export async function handleTmsRequest(
       week: store.data.weeks.find((w) => w.id === week.id)!,
       hha: deps.hha,
       actorId: ctx.user.id,
-      // Manual admin Send: re-assert Auth + ConfirmVisits on already-confirmed visits (payroll).
-      reprocessConfirmed: true,
     });
     return json(result.ok ? 200 : 207, result);
   }

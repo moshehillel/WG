@@ -3484,6 +3484,47 @@ function renderTriageList(errorText) {
     .join('')}</div>`;
 }
 
+const hhaWeekInflight = new Set();
+
+function hhaWeekButtons(weekId) {
+  const id = String(weekId || '').trim();
+  if (!id) return [];
+  return [...document.querySelectorAll(`[data-hha="${CSS.escape(id)}"], [data-triage-hha="${CSS.escape(id)}"]`)];
+}
+
+function disableHhaWeekButtons(weekId) {
+  for (const btn of hhaWeekButtons(weekId)) {
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    if (!btn.dataset.hhaLabel) btn.dataset.hhaLabel = btn.textContent || '';
+    btn.textContent = 'Sending to HHA…';
+  }
+}
+
+function enableHhaWeekButtons(weekId) {
+  for (const btn of hhaWeekButtons(weekId)) {
+    btn.disabled = false;
+    btn.removeAttribute('aria-busy');
+    if (btn.dataset.hhaLabel) btn.textContent = btn.dataset.hhaLabel;
+  }
+}
+
+/** One in-flight transfer per week. Button stays disabled until that request finishes. */
+async function sendWeekToHha(weekId) {
+  const id = String(weekId || '').trim();
+  if (!id || hhaWeekInflight.has(id)) return null;
+  hhaWeekInflight.add(id);
+  disableHhaWeekButtons(id);
+  try {
+    return await api('POST', `/weeks/${id}/hha`, {});
+  } catch (err) {
+    enableHhaWeekButtons(id);
+    throw err;
+  } finally {
+    hhaWeekInflight.delete(id);
+  }
+}
+
 function showTriageDetail(errorText, weekId) {
   closeTimesheetModal();
   const existing = document.getElementById('triageModal');
@@ -3517,14 +3558,17 @@ function showTriageDetail(errorText, weekId) {
     }
     const retry = e.target.closest('[data-triage-hha]');
     if (retry) {
-      const id = retry.getAttribute('data-triage-hha');
-      backdrop.remove();
-      if (!id) return;
+      const id = retry.getAttribute('data-triage-hha') || '';
+      if (!id || retry.disabled || hhaWeekInflight.has(id)) return;
+      retry.disabled = true;
       try {
-        await api('POST', `/weeks/${id}/hha`);
+        const out = await sendWeekToHha(id);
+        if (!out) return;
+        backdrop.remove();
         setStatus('Sent to HHA.', 'ok');
         await adminDash();
       } catch (err) {
+        enableHhaWeekButtons(id);
         setStatus(err.message || 'HHA transfer failed.', 'err');
       }
     }
@@ -3816,13 +3860,22 @@ async function adminDash() {
         return;
       }
       if (hha) {
-        const out = await api('POST', `/weeks/${hha.getAttribute('data-hha')}/hha`, {});
-        setStatus({
-          success: [`HHA transfer completed: ${out.transferred}.`],
-          error: out.ok ? [] : out.errors?.length ? out.errors : ['HHA transfer completed with errors.'],
-          warn: out.ok && out.errors?.length ? out.errors : [],
-        });
-        await adminDash();
+        const id = hha.getAttribute('data-hha') || '';
+        if (!id || hha.disabled || hhaWeekInflight.has(id)) return;
+        hha.disabled = true;
+        try {
+          const out = await sendWeekToHha(id);
+          if (!out) return;
+          setStatus({
+            success: [`HHA transfer completed: ${out.transferred}.`],
+            error: out.ok ? [] : out.errors?.length ? out.errors : ['HHA transfer completed with errors.'],
+            warn: out.ok && out.errors?.length ? out.errors : [],
+          });
+          await adminDash();
+        } catch (err) {
+          enableHhaWeekButtons(id);
+          setStatus(err.message, 'err');
+        }
         return;
       }
       if (removeWeek) {
