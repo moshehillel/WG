@@ -2913,6 +2913,140 @@ describe('TMS upload-sessions errors', () => {
     expect(store.data.sessions.length).toBeGreaterThan(0);
   });
 
+  it('accepts Hicksville district header when Setting is parental placement and child school is Trinity Lutheran', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.upsertSchool({
+      id: newId(),
+      name: 'Trinity Lutheran',
+      district: 'Hicksville UFSD',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Camron',
+      lastName: 'King',
+      dob: '10/21/2012',
+      active: true,
+      programType: 'Hicksville UFSD',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      frequencyPerWeek: 5,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    const pdfText = [
+      'District/Agency/BOCES: Hicksville UFSD',
+      'Summary of Related Service Session Notes',
+      'Service: Physical Therapy',
+      'Service Provider: Pat Lee',
+      'Student Name: Camron King, D.O.B. 10/21/2012',
+      '09/10/2026 1:1 10:00 am 10:30 am',
+      'Student is Parentally Placed in a Nonpublic School',
+      'Service Provided: Introduction with Camron, informal assessment',
+      '97110x2',
+      signedBlock('Sep 10 2026 10:40AM'),
+    ].join('\n');
+    const res = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-09-07', pdfText },
+    });
+    expect(res.status).toBe(200);
+    const body = res.body as {
+      ok: boolean;
+      saved: unknown[];
+      failed: Array<{ error: string }>;
+      errors: string[];
+    };
+    const msgs = [...(body.errors || []), ...(body.failed || []).map((f) => f.error)];
+    expect(msgs.some((e) => /does not match child's school/i.test(e))).toBe(false);
+    expect(msgs.some((e) => /Parentally Placed|Nonpublic/i.test(e))).toBe(false);
+    expect(body.failed || []).toEqual([]);
+    expect(body.ok).toBe(true);
+    expect(body.saved.length).toBeGreaterThan(0);
+  });
+
+  it('rejects a Frontline district header that does not match the child district', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.upsertSchool({
+      id: newId(),
+      name: 'Trinity Lutheran',
+      district: 'Hicksville UFSD',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Camron',
+      lastName: 'King',
+      dob: '10/21/2012',
+      active: true,
+      programType: 'Hicksville UFSD',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      frequencyPerWeek: 5,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    const pdfText = [
+      'District/Agency/BOCES: Westbury Union Free School District',
+      'Summary of Related Service Session Notes',
+      'Service: Physical Therapy',
+      'Service Provider: Pat Lee',
+      'Student Name: Camron King, D.O.B. 10/21/2012',
+      '09/10/2026 1:1 10:00 am 10:30 am',
+      'Student is Parentally Placed in a Nonpublic School',
+      'Service Provided: Introduction with Camron, informal assessment',
+      '97110x2',
+      signedBlock('Sep 10 2026 10:40AM'),
+    ].join('\n');
+    const res = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-09-07', pdfText },
+    });
+    expect(res.status).toBe(200);
+    const body = res.body as { ok: boolean; saved: unknown[]; failed: Array<{ error: string }> };
+    expect(body.ok).toBe(false);
+    expect(body.saved).toHaveLength(0);
+    expect(
+      body.failed.some((f) =>
+        /School 'Westbury Union Free School District' does not match child's school 'Trinity Lutheran'/i.test(
+          f.error,
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it('rejects PDF when Service Provider does not match logged-in therapist', async () => {
     const { store, provider } = storeWithTherapist();
     await handleTmsRequest(store, {
@@ -3393,6 +3527,10 @@ describe('TMS solo-group / group-mandate note locker', () => {
       payRate30Min: 62.5,
       payRateGroup30Min: 34,
     });
+    // Keep #38 tests independent of the rolling 14-day import age locker.
+    if (store.data.settings[0]) {
+      store.data.settings = [{ ...store.data.settings[0], sessionImportAgeLockEnabled: false }];
+    }
     const parsed = await handleTmsRequest(store, {
       method: 'POST',
       path: '/admin/mandates/parse',
@@ -3601,6 +3739,106 @@ describe('TMS solo-group / group-mandate note locker', () => {
     const body = blocked.body as { ok: boolean; failed: Array<{ error: string }> };
     expect(body.ok).toBe(false);
     expect(body.failed.some((f) => /no (?:other )?peer was available|no partner available|seen individually/i.test(f.error))).toBe(true);
+  });
+
+  it('exact-duplicate re-import still hard-blocks when existing row fails #38', async () => {
+    const { store, provider, studentId, weekId } = await seedGroupMandateChild();
+    // Bypass import locker via direct store write (simulates pre-locker / legacy row).
+    store.upsertSession({
+      id: newId(),
+      weekId,
+      studentId,
+      dateOfService: '2026-09-03',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      additionalServiceType: '',
+      location: 'School',
+      notes: 'Service Provided: fine motor only',
+      cptCodes: ['97110'],
+      cptUnits: 2,
+      cptLabel: '97110x2',
+      aiFlags: [],
+      aiBlock: false,
+    });
+    const reimport = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-08-31',
+        pdfText: [
+          'Student Name: Odne, Aiden',
+          'Service Provider: Pat Lee',
+          'Service: PT School',
+          '09/03/2026 9:00 am 9:30 am',
+          'Service Provided: fine motor only',
+          '97110x2',
+          signedBlock('Sep 3 2026 9:35AM'),
+        ].join('\n'),
+      },
+    });
+    expect(reimport.status).toBe(200);
+    const body = reimport.body as {
+      ok: boolean;
+      failed: Array<{ error: string }>;
+      saved: unknown[];
+    };
+    expect(body.ok).toBe(false);
+    expect(body.saved).toHaveLength(0);
+    expect(
+      body.failed.some((f) =>
+        /no (?:other )?peer was available|no partner available|seen individually/i.test(f.error),
+      ),
+    ).toBe(true);
+  });
+
+  it('accepts Elizabeth-style note on import; provider-sign hard-blocks without note', async () => {
+    const { store, provider, studentId, weekId } = await seedGroupMandateChild();
+    const ok = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-08-31',
+        pdfText: [
+          'Student Name: Odne, Aiden',
+          'Service Provider: Pat Lee',
+          'Service: PT School',
+          '09/04/2026 10:00 am 10:30 am',
+          'Service Provided: Student can not be seen in a group as there is no one appropriate to group her with',
+          '97110x2',
+          signedBlock('Sep 4 2026 10:35AM'),
+        ].join('\n'),
+      },
+    });
+    expect(ok.status).toBe(200);
+    expect((ok.body as { ok: boolean; saved: unknown[] }).ok).toBe(true);
+    expect((ok.body as { saved: unknown[] }).saved).toHaveLength(1);
+
+    // Strip note and prove provider-sign refuses (same locker as submit).
+    const row = store.sessionsForWeek(weekId)[0]!;
+    store.upsertSession({ ...row, notes: 'Service Provided: gait only' });
+    const sign = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/weeks/${weekId}/provider-sign`,
+      headers: thH,
+      query: {},
+      body: { signatureName: 'Pat Lee' },
+    });
+    expect(sign.status).toBe(400);
+    expect((sign.body as { error: string }).error).toMatch(
+      /no (?:other )?peer was available|no partner available|seen individually/i,
+    );
+    expect(store.data.weeks.find((w) => w.id === weekId)?.providerSignedAt).toBeFalsy();
+    void studentId;
   });
 
   it('/me schools are unique caseload schoolIds for that provider only', async () => {

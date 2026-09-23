@@ -325,6 +325,18 @@ export function isNonSchoolLikeSetting(name: string): boolean {
   if (/\([^)]{3,}\)/.test(n) && !/\b(school|ms\/hs|m\.?s\.?|h\.?s\.?|elem)\b/i.test(n)) {
     return true;
   }
+  // Frontline Setting dropdown, not a building: "Student is Parentally Placed in a Nonpublic School".
+  if (isPlacementStatusSetting(n)) return true;
+  return false;
+}
+
+/** IEP / Frontline placement status copied into the Setting column. */
+function isPlacementStatusSetting(name: string): boolean {
+  const n = normEntityName(name);
+  if (!n) return false;
+  if (/\bparentally placed\b/.test(n)) return true;
+  if (/\bnonpublic school\b/.test(n)) return true;
+  if (/\bparentally\b/.test(n) && /\b(?:nonpublic|private|parochial)\b/.test(n)) return true;
   return false;
 }
 
@@ -351,6 +363,26 @@ export function looksLikeDistrictLabel(name: string): boolean {
 function isDistrictAgencyHeaderContext(before: string): boolean {
   return /District\s*\/\s*Agency\s*\/\s*BOCES\s*:\s*$/i.test(before) ||
     /\b(?:District|Agency|BOCES)\s*:\s*$/i.test(before);
+}
+
+/**
+ * Frontline header value, e.g. "District/Agency/BOCES: Hicksville UFSD".
+ * Used for district matching when the Setting column is not a building name.
+ */
+export function extractDistrictAgencyHeader(blob: string): string {
+  const m = String(blob || '').match(
+    /District\s*\/\s*Agency(?:\s*\/\s*BOCES)?\s*:\s*([^\n\r]+)/i,
+  );
+  if (!m?.[1]) return '';
+  let value = m[1].replace(/\s+/g, ' ').trim();
+  value = value.replace(/^(?:BOCES|Agency|District)\s*:\s*/i, '').trim();
+  value = (value.split(/\b(?:Summary of|Service Provider|Service\s*:|Student Name|From\s*:)\b/i)[0] || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[:\s,]+$/, '');
+  if (!value || !looksLikeDistrictLabel(value)) return '';
+  if (isNonSchoolLikeSetting(value) || isGenericSettingLabel(value)) return '';
+  return value;
 }
 
 function extractSchoolName(blob: string): string {
@@ -766,6 +798,8 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
     .trim();
   const serviceType = (blob.match(/Service:\s*([^\n]+)/i) || [])[1]?.trim() ?? '';
   const reportSchool = extractSchoolName(blob);
+  // Setting column often says "Student is Parentally Placed…" — match the header district instead.
+  const districtHeader = extractDistrictAgencyHeader(blob);
   const rows: ParsedSessionNote[] = [];
   const dateRe = /(\d{1,2}\/\d{1,2}\/\d{2,4})/g;
   const dateHits: Array<{ dateOfService: string; idx: number }> = [];
@@ -812,7 +846,8 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       ? ''
       : (slice.match(/\b([1-9]\s*:\s*[1-9]\d?)\b/) || [])[1] || '';
     const location = schoolFromSlice(slice);
-    const schoolName = location || reportSchool;
+    // Real building / Setting wins. District header is the match key only when Setting is not a school.
+    const schoolName = location || reportSchool || districtHeader;
     const cpt = attendance === 'missed' ? { codes: [] as string[], totalUnits: 0, procedures: [] as string[] } : parseCptCoverage(slice);
     const noteText = notes || (absenceOnly ? slice.replace(/\s+/g, ' ').trim().slice(0, 200) : '');
     rows.push({

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  extractDistrictAgencyHeader,
   isNonSchoolLikeSetting,
   looksLikeDistrictLabel,
   parseWeeklySessionText,
@@ -131,6 +132,55 @@ Provider Signature/Credentials
     expect(isNonSchoolLikeSetting('poor body safety awareness.')).toBe(true);
     expect(isNonSchoolLikeSetting('Powells Lane')).toBe(false);
     expect(isNonSchoolLikeSetting('Clara H. Carlson School')).toBe(false);
+    expect(isNonSchoolLikeSetting('Student is Parentally Placed in a Nonpublic School')).toBe(true);
+    expect(isNonSchoolLikeSetting('Nonpublic School')).toBe(true);
+    expect(isNonSchoolLikeSetting('Trinity Lutheran')).toBe(false);
+    expect(isNonSchoolLikeSetting('Hicksville UFSD')).toBe(false);
+  });
+
+  it('uses District/Agency/BOCES when Setting is a parental-placement phrase', () => {
+    const text = `
+District/Agency/BOCES: Hicksville UFSD
+Summary of Related Service Session Notes
+Service: Occupational Therapy
+Service Provider: White Glove - Balwani, Sonia
+From: 09/07/2026 To: 09/18/2026
+Student Name: Camron King, D.O.B. 10/21/2012
+09/10/2026 1:1 10:00 am 10:30 am
+Student is Parentally Placed in a Nonpublic School
+Service Provided: Introduction with Camron, informal assessment
+97530 2
+Provider Signature/Credentials
+Date
+Sonia White Glove - Balwani OT/L
+Sep 23 2026 10:40AM
+`;
+    expect(extractDistrictAgencyHeader(text)).toBe('Hicksville UFSD');
+    const rows = parseWeeklySessionText(text);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.schoolName).toBe('Hicksville UFSD');
+    expect(rows[0]?.schoolName).not.toMatch(/Parentally|Nonpublic/i);
+    expect(
+      pdfSchoolConflictsWithChild(
+        rows[0]?.schoolName || '',
+        { name: 'Trinity Lutheran', district: '' },
+        'Hicksville UFSD',
+      ),
+    ).toBe(false);
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Hicksville UFSD',
+        { name: 'Trinity Lutheran', district: 'Hicksville UFSD' },
+        '',
+      ),
+    ).toBe(false);
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Hicksville UFSD',
+        { name: 'Trinity Lutheran', district: '' },
+        'Westbury UFSD',
+      ),
+    ).toBe(true);
   });
 
   it('ignores note scraps / F82 and prefers Clara H. Carlson School', () => {
