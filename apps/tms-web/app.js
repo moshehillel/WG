@@ -3321,12 +3321,167 @@ function hhaStatusCell(w) {
   if (status === 'failed') {
     const reason = String(w.hhaError || '').trim() || 'HHA transfer failed (no detail stored). Use Send to HHA after fixing data.';
     const tip = ratio ? `HHA failed (${ratio}) — click for details` : 'HHA failed — click for details';
-    return `<button type="button" class="triage-badge" data-triage-week="${esc(w.id)}" data-triage-error="${esc(reason)}" title="${tip}" aria-label="${tip}"><svg class="triage-warn-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg> <span class="muted">${esc(ratio || 'failed')}</span></button>`;
+    return `<button type="button" class="triage-badge" data-triage-week="${esc(w.id)}" data-triage-error="${esc(reason).replace(/\n/g, '&#10;')}" title="${tip}" aria-label="${tip}"><svg class="triage-warn-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg> <span class="muted">${esc(ratio || 'failed')}</span></button>`;
   }
   if (ratio && (status === 'confirmed' || status === 'pending' || status === 'sent')) {
     return `<span title="HHA transfers attended/makeup only; Sessions column includes misses">${esc(status)} ${esc(ratio)}</span>`;
   }
   return esc(status);
+}
+
+/** Drop SOAP envelopes so triage shows a sentence, not the XML body. */
+function stripSoapDump(message) {
+  let s = String(message || '');
+  const fault = s.match(/<faultstring>([\s\S]*?)<\/faultstring>/i)?.[1] || '';
+  const errMsg = s.match(/<ErrorMessage>([\s\S]*?)<\/ErrorMessage>/i)?.[1] || '';
+  s = s.replace(/\s*<\?xml[\s\S]*$/i, '').replace(/\s*<soap:[\s\S]*$/i, '');
+  s = s.replace(/<[^>]+>/g, ' ');
+  const extra = `${fault} ${errMsg}`
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<')
+    .replace(/&amp;/g, '&')
+    .replace(/<[^>]+>/g, ' ');
+  return `${s} ${extra}`.replace(/\s+/g, ' ').trim();
+}
+
+function isoFromLooseDate(token) {
+  const m = String(token || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+  if (!m) return '';
+  const mm = m[1].padStart(2, '0');
+  const dd = m[2].padStart(2, '0');
+  let year = m[3];
+  if (year.length === 2) year = `${Number(year) >= 70 ? '19' : '20'}${year}`;
+  return `${year}-${mm}-${dd}`;
+}
+
+/** Plain English for a known HHA failure. Raw reason stays available separately. */
+function explainHhaTriage(detail) {
+  const t = String(detail || '');
+  const id = t.match(/ErrorID\s*=\s*(-?\d+)/i)?.[1] || '';
+  if (/No HHA ContractID/i.test(t)) {
+    return 'This program/school has no HHA contract id mapped.';
+  }
+  if (/No HHA pay code rate/i.test(t)) {
+    return 'No dollar rate for this session.';
+  }
+  const shiftOverlap =
+    /Overlapping shifts are not allowed/i.test(t) ||
+    /shift is overlapping/i.test(t) ||
+    /shift overlaps/i.test(t) ||
+    /caregiver shift overlaps/i.test(t) ||
+    (id === '-310' && /overlap/i.test(t));
+  if (shiftOverlap) {
+    return 'This child already has a visit at this time in HHA. Cancel that HHA visit or change the TMS time, then retry.';
+  }
+  if (id === '-74' && /PayCodeID/i.test(t)) {
+    return 'The pay code sent is not on this caregiver in HHA.';
+  }
+  if (id === '-411' || (/Accepted Services/i.test(t) && /\bSP\b/.test(t))) {
+    return 'HHA rejected speech code SP. Speech must be sent as ST.';
+  }
+  if (id === '-500' || /AllXsd/i.test(t)) {
+    const bad =
+      t.match(/The string '([^']+)'/i)?.[1] ||
+      t.match(/\b(\d{1,2}\/\d{1,2}\/\d{2,4})\b/)?.[1] ||
+      '';
+    const iso = isoFromLooseDate(bad);
+    if (bad && iso) return `A date was sent as ${bad}. HHA needs ${iso}.`;
+    if (bad) return `A date was sent as ${bad}. HHA needs YYYY-MM-DD.`;
+    return 'A date was sent in the wrong format. HHA needs YYYY-MM-DD.';
+  }
+  const cleaned = stripSoapDump(t).replace(/\s*\(ErrorID\s*=\s*-?\d+\)/gi, '').trim();
+  if (!cleaned) return 'HHA rejected this session. Fix the data, then retry.';
+  const sentence = cleaned.split(/(?<=\.)\s/)[0] || cleaned;
+  if (sentence.length <= 180) return sentence;
+  return `${sentence.slice(0, 177).replace(/\s+\S*$/, '')}…`;
+}
+
+function hhaTechnicalLine(detail) {
+  const raw = String(detail || '');
+  const cleaned = stripSoapDump(raw);
+  if (!cleaned && !/ErrorID\s*=/i.test(raw)) return '';
+  const id = raw.match(/ErrorID\s*=\s*(-?\d+)/i)?.[1] || '';
+  let reason = '';
+  const invalid = cleaned.match(/Invalid\s+"([^"]+)"/i);
+  if (invalid) reason = `Invalid "${invalid[1]}"`;
+  if (!reason) {
+    const failed = cleaned.match(/\bfailed:\s*(.+?)(?:\s*\(ErrorID=|$)/i);
+    if (failed) reason = failed[1].replace(/\s*\(ErrorID\s*=\s*-?\d+\)\s*$/i, '').trim();
+  }
+  if (!reason) {
+    reason = cleaned.replace(/\s*\(ErrorID\s*=\s*-?\d+\)/gi, '').trim();
+  }
+  reason = reason.replace(/\s+/g, ' ').trim();
+  if (reason.length > 140) reason = `${reason.slice(0, 137).replace(/\s+\S*$/, '')}…`;
+  if (!reason) return id ? `HHA: ErrorID=${id}` : '';
+  return id ? `HHA: ErrorID=${id} — ${reason}` : `HHA: ${reason}`;
+}
+
+/** Index of the child name that sits immediately before ` · YYYY-MM-DD`. */
+function triageSessionStart(raw, dotIdx) {
+  let i = dotIdx;
+  while (i > 0 && /[ \t]/.test(raw[i - 1])) i -= 1;
+  let start = i;
+  for (let n = 0; n < 6; n += 1) {
+    if (i <= 0 || raw[i - 1] === '\n') break;
+    let j = i;
+    while (j > 0 && raw[j - 1] !== ' ' && raw[j - 1] !== '\n') j -= 1;
+    const word = raw.slice(j, i);
+    if (!/^[A-Z][A-Za-z'’.\-]{0,40}$/.test(word)) break;
+    start = j;
+    if (j === 0 || raw[j - 1] === '\n') break;
+    let k = j;
+    while (k > 0 && raw[k - 1] === ' ') k -= 1;
+    if (raw[k - 1] === '\n') break;
+    i = k;
+  }
+  return start;
+}
+
+function splitTriageChunks(text) {
+  const raw = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!raw) return [];
+  const marks = [];
+  const marker = / · (?=\d{4}-\d{2}-\d{2}\b)/g;
+  let m;
+  while ((m = marker.exec(raw))) marks.push(m.index);
+  if (!marks.length) {
+    return raw.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  }
+  const starts = marks.map((idx) => triageSessionStart(raw, idx));
+  if (starts[0] > 0) starts[0] = 0;
+  const uniq = [...new Set(starts)].sort((a, b) => a - b);
+  const chunks = [];
+  for (let i = 0; i < uniq.length; i += 1) {
+    const piece = raw.slice(uniq[i], uniq[i + 1] ?? raw.length).trim();
+    if (piece) chunks.push(piece);
+  }
+  return chunks;
+}
+
+function parseTriageChunk(chunk) {
+  const m = chunk.match(
+    /^(.+?) · (\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2}(?:\s*[ap]m)?(?:\s*[–-]\s*\d{1,2}:\d{2}(?:\s*[ap]m)?)?)?)\s*:\s*([\s\S]*)$/i,
+  );
+  if (m) return { who: `${m[1].trim()} · ${m[2].trim()}`, detail: m[3].trim() };
+  return { who: '', detail: chunk.trim() };
+}
+
+function renderTriageList(errorText) {
+  const chunks = splitTriageChunks(errorText);
+  if (!chunks.length) return '<p class="muted">No error detail available.</p>';
+  return `<div class="triage-list">${chunks
+    .map((chunk) => {
+      const { who, detail } = parseTriageChunk(chunk);
+      const plain = explainHhaTriage(detail || chunk);
+      const tech = hhaTechnicalLine(detail || chunk);
+      return `<article class="triage-item">
+        ${who ? `<h3 class="triage-item-who">${esc(who)}</h3>` : ''}
+        <p class="triage-item-plain">${esc(plain)}</p>
+        ${tech ? `<p class="triage-item-hha">${esc(tech)}</p>` : ''}
+      </article>`;
+    })
+    .join('')}</div>`;
 }
 
 function showTriageDetail(errorText, weekId) {
@@ -3339,15 +3494,11 @@ function showTriageDetail(errorText, weekId) {
   backdrop.setAttribute('role', 'dialog');
   backdrop.setAttribute('aria-modal', 'true');
   backdrop.setAttribute('aria-label', 'HHA triage');
-  const lines = String(errorText || '')
-    .split(/\n+/)
-    .map((l) => l.trim())
-    .filter(Boolean);
   const retryBtn = weekId
     ? `<button type="button" class="btn-primary" data-triage-hha="${esc(weekId)}">Send to HHA (retry)</button>`
     : '';
   backdrop.innerHTML = `
-    <div class="modal-panel">
+    <div class="modal-panel triage-panel">
       <div class="modal-head">
         <h2>HHA Triage</h2>
         <div class="modal-actions">
@@ -3355,8 +3506,8 @@ function showTriageDetail(errorText, weekId) {
           <button type="button" class="btn" data-close-triage>Close</button>
         </div>
       </div>
-      <p class="muted">Exact failure reason from the last HHA transfer. Fix the data, then use <strong>Send to HHA</strong> to retry.</p>
-      <div class="err-box triage-detail">${lines.map((l) => esc(l)).join('<br>') || 'No error detail available.'}</div>
+      <p class="muted">Each failed session is listed on its own. Fix the issue, then use <strong>Send to HHA</strong> to retry.</p>
+      ${renderTriageList(errorText)}
     </div>
   `;
   backdrop.addEventListener('click', async (e) => {
@@ -4382,12 +4533,17 @@ async function adminProviderDetail(providerId) {
           <label>Date of service <input id="pManDos" placeholder="MM/DD/YYYY" /></label>
         </div>
         <div class="row">
+          <label>Service type
+            <input id="pManService" placeholder="PT School, ST Individual, OT School" />
+          </label>
           <label>Additional service (optional)
             <select id="pManAddlType">
               <option value="">Regular session</option>
               ${additionalServiceOptions()}
             </select>
           </label>
+        </div>
+        <div class="row">
           <label>Attendance
             <select id="pManAtt">
               <option value="attended">attended</option>
@@ -4680,8 +4836,13 @@ async function adminProviderDetail(providerId) {
       const notesEl = document.getElementById('pManNotes');
       const cancelReason = document.getElementById('pManCancel')?.value?.trim() || '';
       const programType = document.getElementById('pManProgram')?.value?.trim() || '';
+      const additionalServiceTypeEarly = document.getElementById('pManAddlType')?.value || '';
+      const serviceTypeEarly = document.getElementById('pManService')?.value?.trim() || '';
       if (!studentId) throw new Error('Select a child.');
       if (!dateOfService) throw new Error('Enter the date of service.');
+      if (!additionalServiceTypeEarly && !serviceTypeEarly) {
+        throw new Error('Service type is required.');
+      }
       if (attendance === 'makeup') {
         const makeupOfSessionId = makeupOfEl?.value || '';
         if (!makeupOfSessionId) {
@@ -4715,7 +4876,8 @@ async function adminProviderDetail(providerId) {
         schoolId: childSchoolId || undefined,
         programType: programType || undefined,
       });
-      const additionalServiceType = document.getElementById('pManAddlType')?.value || '';
+      const additionalServiceType = additionalServiceTypeEarly;
+      const serviceType = serviceTypeEarly;
       const payload = {
         weekId: ensured.week?.id,
         studentId,
@@ -4728,6 +4890,7 @@ async function adminProviderDetail(providerId) {
         cptLabel: document.getElementById('pManCpt')?.value?.trim() || '',
         notes,
       };
+      if (serviceType) payload.serviceType = serviceType;
       if (additionalServiceType) payload.additionalServiceType = additionalServiceType;
       if (file) {
         payload.fileName = file.name;
