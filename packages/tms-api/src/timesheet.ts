@@ -1,4 +1,4 @@
-import type { SessionRow, Student, WeeklyPeriod } from '@white-glove/tms-db';
+import { sessionListedChildName, type SessionRow, type Student, type WeeklyPeriod } from '@white-glove/tms-db';
 
 /** Letter landscape (pt). */
 export const TIMESHEET_PAGE = { width: 792, height: 612 } as const;
@@ -558,9 +558,10 @@ export function buildTimesheetPdf(input: {
   const dataRows: RowCells[] = input.rows
     .filter((row) => isTimesheetPdfAttendance(row.session.attendance || ''))
     .map((row) => {
-    const name = row.student
-      ? `${row.student.firstName} ${row.student.lastName}`
-      : row.session.studentId;
+    const name = sessionListedChildName(
+      row.session,
+      row.student ? `${row.student.firstName} ${row.student.lastName}`.trim() : '',
+    );
     const notes = String(row.session.notes || row.session.location || '').trim();
     const cpt = String(row.session.cptLabel || (row.session.cptCodes || []).join(', ') || '').trim();
     return {

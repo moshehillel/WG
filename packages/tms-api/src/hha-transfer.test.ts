@@ -1287,6 +1287,73 @@ describe('transferLockedWeek Program Id', () => {
     expect(hha.calls).toContain('resolvePayCodeId');
   });
 
+  it('does not create an HHA patient visit for an additional service with no child', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'OT',
+      payRatePerHour: null,
+      payRate30Min: 62.5,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: 95,
+      payRateAdditionalHourly: 55,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-09-21',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: '',
+      dateOfService: '2026-09-21',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'Documentation',
+      additionalServiceType: 'documentation',
+      location: '',
+      notes: 'Chart documentation for the week.',
+      aiFlags: [],
+    });
+
+    const hha = new MockHhaClient();
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.ok).toBe(true);
+    expect(result.transferred).toBe(0);
+    expect(result.errors).toEqual([]);
+    expect(hha.calls).not.toContain('upsertPatient');
+    expect(hha.calls).not.toContain('findPatient');
+    expect(hha.calls).not.toContain('locateOrScheduleVisit');
+    expect(store.data.hhaTransfers || []).toHaveLength(0);
+    expect(store.data.weeks.find((w) => w.id === week.id)?.hhaStatus).toBe('none');
+  });
+
   it('fails a session with no service type and does not emit the provider PT pay code', async () => {
     const store = new MemoryStore();
     const provider = store.upsertProvider({

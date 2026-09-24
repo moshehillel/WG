@@ -51,7 +51,9 @@ import {
   validateMakeup,
   weekStartFromDos,
   additionalServiceLabel,
+  additionalServiceWithoutChild,
   isAdditionalServiceType,
+  sessionListedChildName,
   emptySchoolCalendar,
   isIsoDate,
   mergeSchoolCalendarParse,
@@ -650,6 +652,8 @@ function sessionMatchesProgramType(
 ): boolean {
   const pt = String(programType || '').trim();
   if (!pt) return true;
+  // No-child additional services stay on the week they were saved to.
+  if (!String(session.studentId || '').trim()) return true;
   const student = store.data.students.find((s) => s.id === session.studentId);
   return programTypeKey(student?.programType) === programTypeKey(pt);
 }
@@ -3037,7 +3041,9 @@ export async function handleTmsRequest(
         // Paid rollup for Processed uses confirmed transfers; when program-scoped, only count scoped.
         const scopedConfirmed = scoped.filter((s) => confirmedSessionIds.has(s.id)).length;
         const scopedEligible = scoped.filter(
-          (s) => s.attendance === 'attended' || s.attendance === 'makeup',
+          (s) =>
+            (s.attendance === 'attended' || s.attendance === 'makeup') &&
+            !additionalServiceWithoutChild(s),
         ).length;
         const fullyPaid =
           wantPt
@@ -3158,9 +3164,10 @@ export async function handleTmsRequest(
             endTime: s.endTime || '',
             payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
             studentId: s.studentId,
-            studentName: student
-              ? `${student.firstName} ${student.lastName}`.trim() || s.studentId
-              : s.studentId,
+            studentName: sessionListedChildName(
+              s,
+              student ? `${student.firstName} ${student.lastName}`.trim() : '',
+            ),
             programType: String(student?.programType || w.programType || '').trim(),
             schoolId: String(student?.schoolId || '').trim(),
             hhaStatus: transfer?.status || 'none',
@@ -3352,7 +3359,7 @@ export async function handleTmsRequest(
       }
       return {
         ...s,
-        studentName: nameMap.get(s.studentId) || '',
+        studentName: sessionListedChildName(s, nameMap.get(s.studentId) || ''),
         aiFlags: flags,
         aiBlock: Boolean(s.aiBlock) || local.block,
         payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
@@ -4446,6 +4453,11 @@ export async function handleTmsRequest(
     };
     if (additionalServiceType && !b.serviceType) {
       session.serviceType = serviceTypeFromAdditional;
+    }
+    session.studentId = String(session.studentId || '').trim();
+    if (!session.studentId && !isAdditionalServiceType(session.additionalServiceType || '')) {
+      const childRequired = 'Select a child.';
+      return json(400, { error: childRequired, errors: [childRequired] });
     }
     const serviceTypeErr = sessionServiceTypeRequiredError(session.serviceType);
     if (serviceTypeErr) return json(400, { error: serviceTypeErr, errors: [serviceTypeErr] });

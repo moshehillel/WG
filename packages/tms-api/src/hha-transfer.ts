@@ -31,6 +31,7 @@ import {
   sessionUsesGroupPayRate,
   soloGroupMandateNoteError,
   sessionServiceTypeRequiredError,
+  additionalServiceWithoutChild,
   isAdditionalServiceType,
   weekHhaErrorFromTransfers,
   weekHhaRollup,
@@ -387,6 +388,8 @@ export async function transferLockedWeek(options: {
   const errors: string[] = [];
   let transferred = 0;
   for (const session of sessions) {
+    // Documentation / meetings / etc. with no student are not patient visits.
+    if (additionalServiceWithoutChild(session)) continue;
     const existing = store.transferForSession(session.id);
     const priorVisitId = existing?.hhaVisitId?.trim() || '';
     const priorVisitIdOk = /^\d+$/.test(priorVisitId);

@@ -366,6 +366,76 @@ describe('TMS API weekly loop', () => {
     expect(saved.serviceType).toBe('Eval');
   });
 
+  it('saves an additional service with no child and still requires a child on a therapy session', async () => {
+    const { store, provider } = storeWithTherapist();
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { weekStart: '2026-09-21', providerId: provider.id },
+    });
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+
+    const therapy = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId: '',
+        dateOfService: '09/21/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: balance work',
+        serviceType: 'PT School',
+      },
+    });
+    expect(therapy.status).toBe(400);
+    expect((therapy.body as { error: string }).error).toMatch(/Select a child/i);
+
+    const doc = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId: '',
+        dateOfService: '09/21/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Chart documentation for the week.',
+        additionalServiceType: 'documentation',
+        cptLabel: '97110x2',
+      },
+    });
+    expect(doc.status).toBe(200);
+    const saved = (doc.body as { session: { studentId: string; additionalServiceType: string; serviceType: string } })
+      .session;
+    expect(saved.studentId).toBe('');
+    expect(saved.additionalServiceType).toBe('documentation');
+    expect(saved.serviceType).toBe('Documentation');
+
+    const week = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/week',
+      headers: thH,
+      query: { weekStart: '2026-09-21', providerId: provider.id },
+      body: undefined,
+    });
+    expect(week.status).toBe(200);
+    const rows = (week.body as { sessions: Array<{ studentId: string; studentName: string; additionalServiceType: string }> })
+      .sessions;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.studentId).toBe('');
+    expect(rows[0]?.studentName).toBe('No child');
+    expect(rows[0]?.additionalServiceType).toBe('documentation');
+  });
+
   it('lets admin create a therapist login', async () => {
     const { store } = storeWithTherapist();
     const res = await handleTmsRequest(store, {

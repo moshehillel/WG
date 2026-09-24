@@ -394,6 +394,26 @@ export function isAdditionalServiceSession(session: SessionRow): boolean {
   return Boolean(session.additionalServiceType);
 }
 
+/** Additional service saved with no student. Not an HHA patient visit. */
+export function additionalServiceWithoutChild(
+  session: Pick<SessionRow, 'studentId' | 'additionalServiceType'>,
+): boolean {
+  return Boolean(session.additionalServiceType) && !String(session.studentId || '').trim();
+}
+
+/** Child column for lists and the timesheet. Additional services with no student show "No child". */
+export function sessionListedChildName(
+  session: Pick<SessionRow, 'studentId' | 'additionalServiceType'>,
+  resolvedName?: string,
+): string {
+  const named = String(resolvedName || '').trim();
+  if (named) return named;
+  const id = String(session.studentId || '').trim();
+  if (id) return id;
+  if (session.additionalServiceType) return 'No child';
+  return '';
+}
+
 /** Date + begin–end for error copy (uses DOS / times as stored on the row). */
 export function sessionSlotLabel(session: SessionRow): string {
   const dos = String(session.dateOfService || '').trim() || 'unknown date';
