@@ -1344,6 +1344,18 @@ describe('due dates and dashboard', () => {
       'seen',
     ]);
     expect(lastServiceByStudent(store, { providerId: 'other' })).toEqual([]);
+    store.upsertSession(
+      sess({
+        id: 's-no-child',
+        weekId: 'w',
+        studentId: '',
+        dateOfService: '09/04/2026',
+        attendance: 'attended',
+        additionalServiceType: 'documentation',
+      }),
+    );
+    expect(lastServiceByStudent(store).some((r) => !String(r.studentId || '').trim())).toBe(false);
+    expect(lastServiceByStudent(store)).toHaveLength(3);
   });
 
   it('enriches missing notes with name, date, weekId', () => {

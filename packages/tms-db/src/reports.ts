@@ -633,6 +633,7 @@ export function lastServiceByStudent(
 
   for (const s of store.data.sessions) {
     if (s.attendance === 'missed') continue;
+    if (!String(s.studentId || '').trim()) continue;
     if (!dosInRange(s.dateOfService, from, to)) continue;
     const week = store.data.weeks.find((w) => w.id === s.weekId);
     let resolvedProviderId = String(week?.providerId || '').trim();
