@@ -138,9 +138,9 @@ describe('schedule-evv-new-service-visit helpers', () => {
     expect(missing?.message).toMatch(/any catalog rate/i);
   });
 
-  it('uses 9:00–9:30 placeholder times', () => {
-    expect(NEW_SERVICE_EVV_VISIT_START).toBe('9:00 AM');
-    expect(NEW_SERVICE_EVV_VISIT_END).toBe('9:30 AM');
+  it('uses a fixed 1:00–1:30 AM night window for placeholder times', () => {
+    expect(NEW_SERVICE_EVV_VISIT_START).toBe('1:00 AM');
+    expect(NEW_SERVICE_EVV_VISIT_END).toBe('1:30 AM');
   });
 
   it('sends PayCodeID from Service Type + Pay Rate to locateOrScheduleVisit', async () => {
@@ -175,6 +175,9 @@ describe('schedule-evv-new-service-visit helpers', () => {
     expect(locateOrScheduleVisit).toHaveBeenCalledWith(
       expect.objectContaining({
         visitDate: '2026-08-20',
+        startTime: '1:00 AM',
+        endTime: '1:30 AM',
+        durationMinutes: 30,
         payCodeId: 'pay-ot72',
         payRate: '72.0000',
         scheduleType: 'Skilled',
@@ -214,6 +217,9 @@ describe('schedule-evv-new-service-visit helpers', () => {
     expect(hha.listPayRateCodes).toHaveBeenCalled();
     expect(locateOrScheduleVisit).toHaveBeenCalledWith(
       expect.objectContaining({
+        startTime: '1:00 AM',
+        endTime: '1:30 AM',
+        durationMinutes: 30,
         payCodeId: 'pay-ot70',
         payRate: '70',
         scheduleType: 'Skilled',
