@@ -248,16 +248,18 @@ export function noteCopyPasteError(
  *   CCC-SLP, TSSLD
  */
 const FRONTLINE_SIGN_STAMP_RE =
-  /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}\s+\d{4}\b/i;
+  /\b(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})\b/i;
+
+/** Credentials that count as a real signer (not a blank Date line). */
+const SIGNER_CRED_RE =
+  /License#\s*\d+|\b(?:CCC-SLP|CF-SLP|TSSLD|OTR(?:\/L)?|COTA(?:\/L)?|LMSW|DPT|SLP|PT|OT|MS|MA)\b|\bM\.S\.?\b|\bM\.A\.?\b/i;
 
 export function sessionIsSigned(slice: string): boolean {
   const text = String(slice || '');
   if (/Provider\s+Signature\s*\/?\s*Credentials/i.test(text)) {
     const after = text.split(/Provider\s+Signature\s*\/?\s*Credentials/i)[1] || '';
     const block = after.slice(0, 320);
-    const hasSigner =
-      /License#\s*\d+/i.test(block) ||
-      /\b(?:PT|OT|SLP|DPT|MS|MA|CCC(?:-SLP)?)\b/.test(block);
+    const hasSigner = SIGNER_CRED_RE.test(block);
     const hasStamp = FRONTLINE_SIGN_STAMP_RE.test(block);
     if (hasSigner && hasStamp) return true;
   }
@@ -272,14 +274,13 @@ export function sessionIsSigned(slice: string): boolean {
     return true;
   }
   // Therapist Activity: Signed: <date> <name + credentials>
+  // Date may be 8/14/2026 or Sep 14 2026, and the name/credentials may wrap.
   const signed = text.match(
-    /Signed:\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s+([A-Za-z][A-Za-z .'-]{1,80})/i,
+    /Signed:\s*(?:(\d{1,2}\/\d{1,2}\/\d{2,4})|((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}))\b/i,
   );
   if (signed) {
     const block = text.slice(signed.index ?? 0, (signed.index ?? 0) + 280);
-    const hasCred =
-      /\b(?:CCC-SLP|TSSLD|License#\s*\d+|\b(?:PT|OT|SLP|DPT|M\.?S\.?|M\.?A\.?)\b)/i.test(block);
-    if (hasCred) return true;
+    if (SIGNER_CRED_RE.test(block)) return true;
   }
   return false;
 }

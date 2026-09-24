@@ -318,6 +318,30 @@ Cosigned: 8/14/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
     expect(sessionSignatureError(signed, 'attended')).toBeNull();
   });
 
+  it('accepts a Frontline signature whose stamp is a slash date and TSSLD credentials', () => {
+    const signed = `
+Service Provided: articulation
+Provider Signature/Credentials
+Date
+Alex Rivera TSSLD
+09/14/2026 2:10PM
+Telehealth:
+No
+`;
+    expect(sessionIsSigned(signed)).toBe(true);
+    expect(sessionSignatureError(signed, 'attended')).toBeNull();
+    expect(sessionSignatureError(signed, 'makeup')).toBeNull();
+  });
+
+  it('does not treat a blank signature block as signed', () => {
+    const unsigned = `
+Provider Signature/Credentials
+Date
+09/14/2026 2:10PM
+`;
+    expect(sessionIsSigned(unsigned)).toBe(false);
+  });
+
   it('detects Patel-style credential footer even without Signature header', () => {
     const signed = `
 Service Provided: Student engaged in gross motor activity

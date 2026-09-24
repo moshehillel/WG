@@ -185,13 +185,20 @@ export function listDistrictDirectory(store: MemoryStore): Array<{
 
 /** Decode a path/id segment that may still be percent-encoded (`derived%3Acarle%20place`). */
 export function decodeDistrictPathId(raw: string | undefined | null): string {
-  const s = String(raw || '').trim();
+  let s = String(raw || '').trim().replace(/\+/g, ' ');
   if (!s) return '';
-  try {
-    return decodeURIComponent(s);
-  } catch {
-    return s;
+  // API Gateway sometimes leaves the segment encoded, or encodes it twice.
+  for (let i = 0; i < 2; i++) {
+    if (!/%[0-9a-f]{2}/i.test(s)) break;
+    try {
+      const next = decodeURIComponent(s);
+      if (next === s) break;
+      s = next;
+    } catch {
+      break;
+    }
   }
+  return s.trim();
 }
 
 /**

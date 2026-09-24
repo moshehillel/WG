@@ -1121,15 +1121,15 @@ export class SoapHhaClientAdapter implements HhaClient {
     await this.loadDisciplineCache();
     const token = extractDisciplineFromServiceType(serviceType);
     if (token) {
-      // ProviderSoft SLP → HHA GetDisciplines SP (not SLP/-411, not legacy ST).
-      const hhaName = token === 'SLP' ? 'SP' : token;
+      // ProviderSoft SLP/SP → HHA discipline ST. AcceptedServices "SP" is -411.
+      const hhaName = token === 'SLP' || token === 'SP' ? 'ST' : token;
       const match = matchByName(hhaName, this.disciplineCache ?? []);
       if (match) return match.id;
     }
     const canonicalDiscipline: Record<string, string> = {
       'occupational therapy': 'OT',
       'physical therapy': 'PT',
-      'speech therapy': 'SP',
+      'speech therapy': 'ST',
     };
     const mapped = canonicalDiscipline[normalizeRefName(serviceType ?? '')];
     if (mapped) {

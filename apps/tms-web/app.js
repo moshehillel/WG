@@ -5770,10 +5770,10 @@ async function adminDistricts(opts = {}) {
       <table>
         <tr><th>District</th><th>Signer</th><th>Schools</th><th></th></tr>
         ${districts.map((d) => `<tr>
-          <td><button type="button" class="linkish" data-open-district="${esc(d.id)}">${esc(d.name)}</button>${d.persisted ? '' : ' <span class="muted">(from caseload)</span>'}</td>
+          <td><button type="button" class="linkish" data-open-district="${esc(d.id)}" data-district-name="${esc(d.name)}">${esc(d.name)}</button>${d.persisted ? '' : ' <span class="muted">(from caseload)</span>'}</td>
           <td>${esc(d.signerName || d.signerEmail || '—')}</td>
           <td>${esc(String(d.schoolCount || 0))}</td>
-          <td><button type="button" class="btn" data-open-district="${esc(d.id)}">Open</button></td>
+          <td><button type="button" class="btn" data-open-district="${esc(d.id)}" data-district-name="${esc(d.name)}">Open</button></td>
         </tr>`).join('') || '<tr><td colspan="4">No districts yet. Add one or set school.district / program type on caseload.</td></tr>'}
       </table>
     </div>
@@ -5802,9 +5802,10 @@ async function adminDistricts(opts = {}) {
   };
   document.querySelectorAll('[data-open-district]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      adminDistrictDetail(btn.getAttribute('data-open-district')).catch((e) =>
-        setStatus(e.message || 'Could not open this district.', 'err'),
-      );
+      adminDistrictDetail(
+        btn.getAttribute('data-open-district'),
+        btn.getAttribute('data-district-name'),
+      ).catch((e) => setStatus(e.message || 'Could not open this district.', 'err'));
     });
   });
 
@@ -5813,27 +5814,96 @@ async function adminDistricts(opts = {}) {
   }
 }
 
-async function adminDistrictDetail(districtId) {
+function districtLookupKey(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\b(union\s+free\s+school\s+district|school\s+district|cufsd|ufsd|district)\b/gi, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function districtFromList(districts, idOrName) {
+  const raw = String(idOrName || '').trim();
+  if (!raw || !Array.isArray(districts) || !districts.length) return null;
+  let decoded = raw.replace(/\+/g, ' ');
+  try { decoded = decodeURIComponent(decoded); } catch { /* keep raw */ }
+  const byId = districts.find((d) => d && (d.id === raw || d.id === decoded));
+  if (byId) return byId;
+  const key = districtLookupKey(decoded.replace(/^derived:/i, ''));
+  if (!key) return null;
+  return (
+    districts.find((d) => d && (districtLookupKey(d.name) === key || d.id === `derived:${key}`)) ||
+    null
+  );
+}
+
+/** Detail row for an id that is already on the districts list, even if a path GET 404s. */
+async function loadDistrictDetail(districtId, districtName) {
   const id = String(districtId || '').trim();
-  if (!id) {
+  const name = String(districtName || '').trim();
+  if (!id && !name) return null;
+  const attempts = [];
+  if (id || name) {
+    const q = new URLSearchParams();
+    if (id) q.set('id', id);
+    if (name) q.set('name', name);
+    attempts.push(`/admin/districts?${q.toString()}`);
+  }
+  if (name && name !== id) {
+    attempts.push(`/admin/districts?${new URLSearchParams({ name }).toString()}`);
+  }
+  if (id) attempts.push(`/admin/districts/${encodeURIComponent(id)}`);
+  for (const path of attempts) {
+    try {
+      const out = await api('GET', path);
+      if (out?.district) return out.district;
+    } catch {
+      /* try the next lookup; a derived id often 404s on the raw path */
+    }
+  }
+  try {
+    const list = await api('GET', '/admin/districts');
+    return districtFromList(list.districts || [], id) || districtFromList(list.districts || [], name);
+  } catch {
+    return null;
+  }
+}
+
+function districtRowFromSave(saved, fallbackName) {
+  const directory = Array.isArray(saved?.directory) ? saved.directory : [];
+  const savedDistrict = saved?.district || null;
+  const id = String(savedDistrict?.id || '').trim();
+  const name = String(savedDistrict?.name || fallbackName || '').trim();
+  const fromDir =
+    (id && directory.find((d) => d && d.id === id)) ||
+    districtFromList(directory, name) ||
+    districtFromList(directory, id);
+  if (fromDir) return fromDir;
+  if (savedDistrict && (savedDistrict.schools || savedDistrict.persisted != null || savedDistrict.schoolCount != null)) {
+    return savedDistrict;
+  }
+  return null;
+}
+
+async function adminDistrictDetail(districtId, districtName) {
+  const id = String(districtId || '').trim();
+  const name = String(districtName || '').trim();
+  if (!id && !name) {
     setStatus('District not found.', 'err');
     return adminDistricts();
   }
-  let out;
-  try {
-    // Query id avoids a path segment with ":" and spaces (`derived:carle place`),
-    // which API Gateway leaves percent-encoded on rawPath and the old lookup 404'd.
-    const byQuery = await api('GET', `/admin/districts?${new URLSearchParams({ id }).toString()}`);
-    out = byQuery?.district ? byQuery : await api('GET', `/admin/districts/${encodeURIComponent(id)}`);
-  } catch (e) {
-    setStatus(e.message || 'Could not open this district.', 'err');
-    return;
-  }
-  const d = out.district;
+  const d = await loadDistrictDetail(id, name);
   if (!d) {
     setStatus('District not found.', 'err');
     return adminDistricts();
   }
+  clearStatus();
+  showDistrictDetail(d);
+}
+
+function showDistrictDetail(d) {
   const schools = Array.isArray(d.schools) ? d.schools : [];
   view(`
     <div class="card">
@@ -5879,8 +5949,11 @@ async function adminDistrictDetail(districtId) {
         signerEmail: document.getElementById('dsignerEmail').value,
       };
       const saved = await api('POST', '/admin/districts', body);
+      const row =
+        districtRowFromSave(saved, body.name) ||
+        (await loadDistrictDetail(saved.district?.id || '', body.name));
       setStatus(saved.message || 'District saved.', 'ok');
-      await adminDistrictDetail(saved.district?.id || d.id);
+      if (row) showDistrictDetail(row);
     } catch (e) { setStatus(e.message, 'err'); }
   };
   const del = document.getElementById('deleteDistrict');

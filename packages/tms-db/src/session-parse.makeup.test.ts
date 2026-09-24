@@ -167,4 +167,27 @@ No
     expect(attend?.signed).toBe(true);
     expect(rows.filter((r) => /9\/17\/26/.test(r.dateOfService))).toEqual([]);
   });
+
+  it('keeps a slash-date signature stamp on the session instead of splitting it off', () => {
+    const text = `
+Student Name: South, Sebastian
+Service Provider: Rivera, Alex
+Service: Speech Therapy
+09/14/2026 12:15 pm 12:45 pm
+Service Provided: articulation drills
+Provider Signature/Credentials
+Date
+Alex Rivera TSSLD
+09/14/2026 2:10PM
+Telehealth:
+No
+`;
+    const rows = parseWeeklySessionText(text);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.dateOfService).toBe('09/14/2026');
+    expect(rows[0]?.beginTime).toMatch(/12:15/i);
+    expect(rows[0]?.signed).toBe(true);
+    expect(rows[0]?.sourceSlice).toMatch(/TSSLD/);
+    expect(rows[0]?.sourceSlice).toMatch(/09\/14\/2026 2:10PM/);
+  });
 });

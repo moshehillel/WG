@@ -723,6 +723,13 @@ function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   const lookback = blob.slice(Math.max(0, idx - 2500), idx);
   const logTypeEnd = lastMatchEnd(FRONTLINE_LOG_TYPE_IN_BLOB_RE, lookback);
   const boundaryEnd = lastMatchEnd(FRONTLINE_NOTE_BOUNDARY_RE, lookback);
+  const sigEnd = lastMatchEnd(/Provider\s+Signature\s*\/?\s*Credentials/gi, lookback);
+  const teleEnd = lastMatchEnd(/Telehealth\s*:/gi, lookback);
+  const studentEnd = lastMatchEnd(/Student\s+Name\s*:/gi, lookback);
+  // A slash date still inside Provider Signature (before Telehealth / the next
+  // student) is the signature stamp, not the next session. Cutting the slice
+  // there dropped the stamp and marked a signed visit unsigned.
+  if (sigEnd > teleEnd && sigEnd > studentEnd && sigEnd >= logTypeEnd) return false;
   if (logTypeEnd > boundaryEnd && /\S/.test(lookback.slice(logTypeEnd))) return false;
   return true;
 }

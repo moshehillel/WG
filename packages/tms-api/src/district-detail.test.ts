@@ -170,4 +170,69 @@ describe('admin district detail', () => {
     });
     expect(missing.status, JSON.stringify(missing.body)).toBe(404);
   });
+
+  it('resolves Hicksville by name when the derived id is truncated, and save returns the directory row', async () => {
+    const store = storeWithAdmin();
+    const trinity = store.upsertSchool({
+      id: newId(),
+      name: 'Trinity Lutheran',
+      district: 'Hicksville UFSD',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+
+    const byName = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/districts',
+      headers: adminH,
+      query: { id: 'derived', name: 'Hicksville UFSD' },
+      body: undefined,
+    });
+    expect(byName.status).toBe(200);
+    const opened = byName.body as {
+      district: { name: string; id: string; schools: Array<{ id: string; name: string }> };
+    };
+    expect(opened.district.name).toBe('Hicksville UFSD');
+    expect(opened.district.id).toBe('derived:hicksville');
+    expect(opened.district.schools.map((s) => s.id)).toEqual([trinity.id]);
+
+    const saved = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/districts',
+      headers: adminH,
+      query: {},
+      body: {
+        name: 'Hicksville UFSD',
+        signerName: 'Billu Markowitz',
+        signerEmail: 'bmarkowitz@whiteglovecare.net',
+      },
+    });
+    expect(saved.status).toBe(201);
+    const savedBody = saved.body as {
+      district: {
+        id: string;
+        persisted: boolean;
+        signerName: string;
+        signerEmail: string;
+        schools: Array<{ name: string }>;
+      };
+    };
+    expect(savedBody.district.persisted).toBe(true);
+    expect(savedBody.district.signerEmail).toBe('bmarkowitz@whiteglovecare.net');
+    expect(savedBody.district.schools.map((s) => s.name)).toEqual(['Trinity Lutheran']);
+    expect(String(savedBody.district.id).startsWith('derived:')).toBe(false);
+
+    const again = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/districts',
+      headers: adminH,
+      query: { name: 'Hicksville UFSD' },
+      body: undefined,
+    });
+    expect(again.status).toBe(200);
+    expect((again.body as { district: { signerName: string } }).district.signerName).toBe(
+      'Billu Markowitz',
+    );
+  });
 });

@@ -1910,8 +1910,14 @@ export async function handleTmsRequest(
       // Detail lookup via query so derived ids (`derived:carle place`) are not
       // stuck in a percent-encoded path segment (API Gateway rawPath).
       const lookup = String(req.query.id || req.query.districtId || '').trim();
-      if (lookup) {
-        const row = findDistrictDirectoryRow(store, lookup);
+      const byName = String(req.query.name || '').trim();
+      if (lookup || byName) {
+        // Name is a second key so a derived id (`derived:hicksville`) that a
+        // proxy truncates on ":" still resolves the district shown in the list.
+        const row =
+          (lookup && findDistrictDirectoryRow(store, lookup)) ||
+          (byName && findDistrictDirectoryRow(store, byName)) ||
+          undefined;
         if (!row) return json(404, { error: 'District not found.' });
         return json(200, { district: row });
       }
@@ -1957,9 +1963,15 @@ export async function handleTmsRequest(
         existing || null,
         district,
       );
+      const directory = listDistrictDirectory(store);
+      const row =
+        directory.find((d) => d.id === district.id) ||
+        findDistrictDirectoryRow(store, district.name);
       return json(existing ? 200 : 201, {
-        district,
-        directory: listDistrictDirectory(store),
+        // Directory row (schools, persisted, signer) so the client can redraw
+        // without a follow-up GET that 404s before the new id is readable.
+        district: row || district,
+        directory,
         message: 'District saved.',
       });
     });
