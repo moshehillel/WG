@@ -5,10 +5,12 @@ import {
 } from './caseload-import.js';
 import { dueDateStatus } from './due-dates.js';
 import {
+  additionalServiceWithoutChild,
   assignSessionsToMandates,
   cycleAllowedSessions,
   mandateFrequencyKind,
   monthlyAllowedSessions,
+  sessionListedChildName,
   sessionSlotLabel,
   weeklyAllowedSessions,
 } from './mandate.js';
@@ -204,7 +206,10 @@ export type WeekHhaRollup = {
  */
 export function weekHhaRollup(store: MemoryStore, weekId: string): WeekHhaRollup {
   const sessions = store.sessionsForWeek(weekId);
-  const eligibleSessions = sessions.filter(isDeliveredSession);
+  // No-child additional services are not patient visits and must not block week confirmation.
+  const eligibleSessions = sessions.filter(
+    (s) => isDeliveredSession(s) && !additionalServiceWithoutChild(s),
+  );
   let confirmed = 0;
   let failed = 0;
   let pending = 0;
@@ -305,7 +310,10 @@ export function missingNotes(
       return {
         sessionId: s.id,
         studentId: s.studentId,
-        studentName: student ? `${student.firstName} ${student.lastName}` : s.studentId,
+        studentName: sessionListedChildName(
+          s,
+          student ? `${student.firstName} ${student.lastName}`.trim() : '',
+        ),
         date: s.dateOfService,
         dateOfService: s.dateOfService,
         weekId: s.weekId,
@@ -603,6 +611,16 @@ export function adminWeeksList(
   });
 }
 
+function mandateProviderIdsForStudent(store: MemoryStore, studentId: string): string[] {
+  const ids = new Set<string>();
+  for (const m of store.data.mandates) {
+    if (m.studentId !== studentId) continue;
+    const pid = String(m.providerId || '').trim();
+    if (pid) ids.add(pid);
+  }
+  return [...ids];
+}
+
 export function lastServiceByStudent(
   store: MemoryStore,
   opts: { from?: string; to?: string; providerId?: string } = {},
@@ -633,6 +651,32 @@ export function lastServiceByStudent(
         providerId: resolvedProviderId,
         lastDos: s.dateOfService,
       });
+    }
+  }
+
+  // Every TMS child appears. Never serviced (no attended/makeup) keeps a blank last DOS.
+  const servedStudentIds = new Set([...map.values()].map((row) => row.studentId));
+  for (const student of store.data.students) {
+    const assigned = mandateProviderIdsForStudent(store, student.id);
+    if (providerId) {
+      const key = `${student.id}|${providerId}`;
+      if (map.has(key) || !assigned.includes(providerId)) continue;
+      map.set(key, { studentId: student.id, providerId, lastDos: '' });
+      continue;
+    }
+    if (assigned.length === 0) {
+      if (servedStudentIds.has(student.id)) continue;
+      map.set(`${student.id}|_`, {
+        studentId: student.id,
+        providerId: '',
+        lastDos: '',
+      });
+      continue;
+    }
+    for (const pid of assigned) {
+      const key = `${student.id}|${pid}`;
+      if (map.has(key)) continue;
+      map.set(key, { studentId: student.id, providerId: pid, lastDos: '' });
     }
   }
 
@@ -1147,9 +1191,10 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
         schoolId: student?.schoolId || w?.schoolId || '',
         schoolName: school?.name || '',
         district: districtLabelForStudent(student, school),
-        studentName: student
-          ? `${student.firstName} ${student.lastName}`.trim()
-          : s.studentId,
+        studentName: sessionListedChildName(
+          s,
+          student ? `${student.firstName} ${student.lastName}`.trim() : '',
+        ),
       };
     })
     .sort((a, b) => {

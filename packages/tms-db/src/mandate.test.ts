@@ -1248,6 +1248,104 @@ describe('due dates and dashboard', () => {
     expect(lastServiceByStudent(store, { providerId: 'other' })).toEqual([]);
   });
 
+  it('includes never-serviced children with a blank last day of service', () => {
+    const store = new MemoryStore();
+    store.upsertSchool({
+      id: 'sch',
+      name: 'Forest',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: '',
+    });
+    store.upsertProvider({
+      id: 'p1',
+      userId: '',
+      firstName: 'Fatimah',
+      lastName: 'Dawan',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    });
+    store.upsertStudent({
+      id: 'seen',
+      schoolId: 'sch',
+      firstName: 'Aiden',
+      lastName: 'Odne',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertStudent({
+      id: 'never',
+      schoolId: 'sch',
+      firstName: 'Blair',
+      lastName: 'Cole',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertStudent({
+      id: 'missed-only',
+      schoolId: 'sch',
+      firstName: 'Casey',
+      lastName: 'Ng',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertMandate(mandate({ id: 'm-never', studentId: 'never', providerId: 'p1' }));
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p1',
+      weekStart: '2026-08-31',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession(sess({ id: 's-seen', weekId: 'w', studentId: 'seen', dateOfService: '09/02/2026' }));
+    store.upsertSession(
+      sess({
+        id: 's-miss',
+        weekId: 'w',
+        studentId: 'missed-only',
+        dateOfService: '09/03/2026',
+        attendance: 'missed',
+      }),
+    );
+    const rows = lastServiceByStudent(store);
+    expect(rows.map((r) => ({ name: r.name, lastDos: r.lastDos, providerName: r.providerName }))).toEqual([
+      { name: 'Aiden Odne', lastDos: '09/02/2026', providerName: 'Fatimah Dawan' },
+      { name: 'Blair Cole', lastDos: '', providerName: 'Fatimah Dawan' },
+      { name: 'Casey Ng', lastDos: '', providerName: '—' },
+    ]);
+    expect(lastServiceByStudent(store, { providerId: 'p1' }).map((r) => r.studentId).sort()).toEqual([
+      'never',
+      'seen',
+    ]);
+    expect(lastServiceByStudent(store, { providerId: 'other' })).toEqual([]);
+  });
+
   it('enriches missing notes with name, date, weekId', () => {
     const store = new MemoryStore();
     store.upsertStudent({

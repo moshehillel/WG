@@ -60,7 +60,7 @@ const REPORT_LIST = [
   {
     id: 'last-service',
     title: 'Last date of service',
-    blurb: 'Most recent attended or makeup date of service by child and provider.',
+    blurb: 'Every child in TMS. Most recent attended or makeup date by child and provider. Blank Last DOS means never serviced.',
   },
   {
     id: 'due-dates',
@@ -1111,17 +1111,38 @@ function sessionServiceCellHtml(s) {
   return esc(svc || '—');
 }
 
-function studentOptions(students, selected) {
+function studentOptions(students, selected, opts = {}) {
   const sorted = [...(students || [])].sort((a, b) => {
     const la = `${a.firstName || ''} ${a.lastName || ''}`.trim() || a.id;
     const lb = `${b.firstName || ''} ${b.lastName || ''}`.trim() || b.id;
     return la.localeCompare(lb);
   });
-  return `<option value="">Select a student</option>${sorted.map((s) => {
+  const blankLabel = opts.blankLabel || 'Select a student';
+  return `<option value="">${esc(blankLabel)}</option>${sorted.map((s) => {
     const id = s.id;
     const label = `${s.firstName || ''} ${s.lastName || ''}`.trim() || id;
     return `<option value="${esc(id)}"${id === selected ? ' selected' : ''}>${esc(label)}</option>`;
   }).join('')}`;
+}
+
+/** Caseload child picker. nonePlacement "first" is the additional-services default (No child). */
+function caseloadChildSelectOptions(mandates, nonePlacement) {
+  const rows = (mandates || [])
+    .map((m) => `<option value="${esc(m.studentId)}">${esc(m.studentName || m.studentId)}</option>`)
+    .join('');
+  const none = '<option value="">No child</option>';
+  if (nonePlacement === 'first') return `${none}${rows}`;
+  if (nonePlacement === 'last') return `${rows}${none}`;
+  return rows || '<option value="">No caseload children</option>';
+}
+
+function sessionChildLabel(s, students) {
+  const id = String(s?.studentId || '').trim();
+  const fromApi = String(s?.studentName || '').trim();
+  if (id) return students ? studentName(students, id, fromApi) : (fromApi || id);
+  if (fromApi && fromApi !== '—') return fromApi;
+  if (s?.additionalServiceType) return 'No child';
+  return '—';
 }
 
 function providerOptions(providers, selected) {
@@ -2444,7 +2465,7 @@ async function therapistHome(statusFlash) {
           </select>
         </label>
         <label>Student
-          <select id="studentId">${studentOptions(students)}</select>
+          <select id="studentId">${studentOptions(students, '', { blankLabel: 'No child' })}</select>
         </label>
       </div>
       <div class="row">
@@ -2539,7 +2560,7 @@ async function therapistHome(statusFlash) {
           const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ') || '—';
           return `<tr>
           <td>${esc(s.dateOfService || '—')}</td>
-          <td>${esc(s.studentName || '—')}</td>
+          <td>${esc(sessionChildLabel(s))}</td>
           <td>${esc(s.attendance || '—')}</td>
           <td>${esc(time)}</td>
           <td>${esc(s.weekStart || '—')}</td>
@@ -2581,7 +2602,7 @@ async function therapistHome(statusFlash) {
           return `<tr>
           <td>${esc(s.weekStart || '—')}</td>
           <td>${esc(s.dateOfService || '—')}</td>
-          <td>${esc(s.studentName || '—')}</td>
+          <td>${esc(sessionChildLabel(s))}</td>
           <td>${esc(s.attendance || '—')}</td>
           <td>${esc(time)}</td>
         </tr>`;
@@ -2614,7 +2635,7 @@ async function therapistHome(statusFlash) {
       <table>
         <tr><th>Date</th><th>Child</th><th>Service</th><th>CPT</th><th>Time</th><th>Attendance</th><th>Notes</th><th></th></tr>
         ${sessions.map((s) => {
-          const name = studentName(students, s.studentId, s.studentName);
+          const name = sessionChildLabel(s, students);
           const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ');
           const hard = Boolean(s.aiBlock);
           const flags = s.aiFlags || [];
@@ -3147,7 +3168,6 @@ async function therapistHome(statusFlash) {
       const notesEl = document.getElementById('notes');
       const editId = document.getElementById('editSessionId').value.trim();
       if (!additionalServiceType) throw new Error('Select a service type.');
-      if (!studentId) throw new Error('Select a student.');
       if (!dateOfService) throw new Error('Enter the date of service.');
       if (attendance === 'makeup') {
         const makeupOfSessionId = makeupOfEl?.value || '';
@@ -4564,7 +4584,7 @@ async function adminProviderDetail(providerId) {
             ${bulkTd('prov-sessions', x.id)}
             <td>${esc(x.dateOfService)}</td>
             <td>${esc(time)}</td>
-            <td>${childNameLink(x.studentId, x.studentName || '—')}</td>
+            <td>${childNameLink(x.studentId, sessionChildLabel(x))}</td>
             <td>${esc(x.schoolName || '—')}</td>
             <td>${esc(x.district || '—')}</td>
             <td>${esc(x.weekStart || '—')}</td>
@@ -4581,7 +4601,7 @@ async function adminProviderDetail(providerId) {
         <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note (linked to this provider / week). Optional additional-service type (Eval, Documentation, etc.) shows in the Service column above.</p>
         <div class="row">
           <label>Child
-            <select id="pManStudent">${(mandates || []).map((m) => `<option value="${esc(m.studentId)}">${esc(m.studentName || m.studentId)}</option>`).join('') || '<option value="">No caseload children</option>'}</select>
+            <select id="pManStudent">${caseloadChildSelectOptions(mandates, 'last')}</select>
           </label>
           <label>Date of service <input id="pManDos" placeholder="MM/DD/YYYY" /></label>
         </div>
@@ -4664,7 +4684,7 @@ async function adminProviderDetail(providerId) {
             </select>
           </label>
           <label>Child
-            <select id="pAddlStudent">${(mandates || []).map((m) => `<option value="${esc(m.studentId)}">${esc(m.studentName || m.studentId)}</option>`).join('') || '<option value="">No caseload children</option>'}</select>
+            <select id="pAddlStudent">${caseloadChildSelectOptions(mandates, 'first')}</select>
           </label>
         </div>
         <div class="row">
@@ -4891,7 +4911,7 @@ async function adminProviderDetail(providerId) {
       const programType = document.getElementById('pManProgram')?.value?.trim() || '';
       const additionalServiceTypeEarly = document.getElementById('pManAddlType')?.value || '';
       const serviceTypeEarly = document.getElementById('pManService')?.value?.trim() || '';
-      if (!studentId) throw new Error('Select a child.');
+      if (!studentId && !additionalServiceTypeEarly) throw new Error('Select a child.');
       if (!dateOfService) throw new Error('Enter the date of service.');
       if (!additionalServiceTypeEarly && !serviceTypeEarly) {
         throw new Error('Service type is required.');
@@ -4918,11 +4938,13 @@ async function adminProviderDetail(providerId) {
       }
       setStatus('Submitting session…', '');
       const weekStart = mondayFromDos(dateOfService) || mondayIso();
-      const childSchoolId = String(
-        sessions.find((x) => x.studentId === studentId)?.schoolId
-          || mandates.find((m) => m.studentId === studentId)?.schoolId
-          || '',
-      ).trim();
+      const childSchoolId = studentId
+        ? String(
+            sessions.find((x) => x.studentId === studentId)?.schoolId
+              || mandates.find((m) => m.studentId === studentId)?.schoolId
+              || '',
+          ).trim()
+        : '';
       const ensured = await api('POST', '/week/ensure', {
         providerId,
         weekStart,
@@ -5158,14 +5180,15 @@ async function adminProviderDetail(providerId) {
       const studentId = document.getElementById('pAddlStudent').value;
       const dateOfService = document.getElementById('pAddlDos').value.trim();
       if (!additionalServiceType) throw new Error('Select a service type.');
-      if (!studentId) throw new Error('Select a child.');
       if (!dateOfService) throw new Error('Enter the date of service.');
       const weekStart = mondayFromDos(dateOfService) || mondayIso();
-      const childSchoolId = String(
-        sessions.find((x) => x.studentId === studentId)?.schoolId
-          || mandates.find((m) => m.studentId === studentId)?.schoolId
-          || '',
-      ).trim();
+      const childSchoolId = studentId
+        ? String(
+            sessions.find((x) => x.studentId === studentId)?.schoolId
+              || mandates.find((m) => m.studentId === studentId)?.schoolId
+              || '',
+          ).trim()
+        : '';
       const ensured = await api('POST', '/week/ensure', {
         providerId,
         weekStart,
@@ -6589,7 +6612,7 @@ async function adminReportLastService() {
     <div class="card">
       <button type="button" class="btn" id="backReports">← Reports</button>
       <h2>Last date of service</h2>
-      <p class="muted">Most recent attended or makeup date of service by child and provider. Filter by provider as needed.</p>
+      <p class="muted">Every child in TMS. Most recent attended or makeup date of service by child and provider. If a child was never serviced, Last DOS is blank. Filter by provider as needed.</p>
       <div class="row">
         <label>Provider
           <select id="lastProvider">
@@ -6639,7 +6662,7 @@ async function adminReportLastService() {
         (last.rows || [])
           .map(
             (r) =>
-              `<tr><td>${childNameLink(r.studentId, r.name)}</td><td>${esc(r.providerName || '—')}</td><td>${esc(r.schoolName || '—')}</td><td>${esc(r.lastDos)}</td></tr>`,
+              `<tr><td>${childNameLink(r.studentId, r.name)}</td><td>${esc(r.providerName || '—')}</td><td>${esc(r.schoolName || '—')}</td><td>${r.lastDos ? esc(r.lastDos) : ''}</td></tr>`,
           )
           .join('') || '<tr><td colspan="4">None</td></tr>';
     }
