@@ -10,9 +10,13 @@ import {
   serviceTypeLooksGroup,
 } from '@white-glove/shared';
 
-/** Placeholder schedule window — clocks do not use these times. */
-export const NEW_SERVICE_EVV_VISIT_START = '9:00 AM';
-export const NEW_SERVICE_EVV_VISIT_END = '9:30 AM';
+/**
+ * Placeholder schedule window. Always 1:00–1:30 AM so the scaffolding visit
+ * cannot be mistaken for a real daytime therapy session on the HHA calendar.
+ * Clocks do not use these times. Same 30-minute duration as before.
+ */
+export const NEW_SERVICE_EVV_VISIT_START = '1:00 AM';
+export const NEW_SERVICE_EVV_VISIT_END = '1:30 AM';
 
 /** Expected ProviderSoft CSV header for the therapist who will clock. */
 export const NEW_SERVICE_PROVIDER_COLUMN = 'Provider Name';
