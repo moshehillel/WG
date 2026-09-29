@@ -49,6 +49,23 @@ describe('CPT duration units', () => {
     expect(cptDurationError('9:00 am', '9:30 am', '97112x1, 97110x1', 'attended')).toBeNull();
   });
 
+  it('sums timed CPT codes for the same 30-min session (97110x1 + 97116x1)', () => {
+    // Frontline bills two timed codes on one visit — units must cover duration together.
+    expect(cptDurationError('12:45 pm', '1:15 pm', '97110x1, 97116x1', 'attended')).toBeNull();
+    expect(
+      cptDurationError(
+        '12:45 pm',
+        '1:15 pm',
+        { codes: ['97110', '97116'], totalUnits: 2, procedures: ['97110x1', '97116x1'] },
+        'attended',
+      ),
+    ).toBeNull();
+    // Single timed unit still fails for 30 min.
+    expect(cptDurationError('12:45 pm', '1:15 pm', '97116x1', 'attended')).toMatch(/need 2 unit/i);
+    // Untimed group code still covers any length with 1 unit.
+    expect(cptDurationError('12:45 pm', '1:15 pm', '97150x1', 'attended')).toBeNull();
+  });
+
   it('skips CPT and signature requirements for missed sessions', () => {
     expect(cptDurationError('9:00 am', '9:30 am', '', 'missed')).toBeNull();
     expect(sessionSignatureError('no signature block here', 'missed')).toBeNull();
@@ -274,6 +291,65 @@ describe('mergeFrontlineSplitCptRows', () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]?.cptUnits).toBe(2);
     expect(merged[0]?.cptCodes.sort()).toEqual(['97110', '97116']);
+  });
+
+  it('merges Fuentes-style 97110+97116 even when start/end column order is swapped', () => {
+    const merged = mergeFrontlineSplitCptRows([
+      {
+        studentName: 'Fuentes, Alexander, D.O.B. 01/01/2018',
+        providerName: '',
+        schoolName: 'Powells Lane',
+        dateOfService: '09/24/2026',
+        beginTime: '12:45 pm',
+        endTime: '1:15 pm',
+        attendance: 'attended',
+        cancelReason: '',
+        notes: 'Alex participated in LE PRE',
+        serviceType: 'Physical Therapy',
+        location: 'Powells Lane',
+        ratio: '1:1',
+        cptCodes: ['97110'],
+        cptUnits: 1,
+        cptProcedures: ['97110x1'],
+        signed: true,
+        sourceSlice: 'a',
+      },
+      {
+        studentName: 'Fuentes, Alexander',
+        providerName: '',
+        schoolName: 'Powells Lane',
+        dateOfService: '09/24/2026',
+        // PDF column order sometimes emits Session End before Session Start.
+        beginTime: '1:15 pm',
+        endTime: '12:45 pm',
+        attendance: 'attended',
+        cancelReason: '',
+        notes: 'Alex participated in LE PRE',
+        serviceType: 'Physical Therapy',
+        location: 'Powells Lane',
+        ratio: '1:1',
+        cptCodes: ['97116'],
+        cptUnits: 1,
+        cptProcedures: ['97116x1'],
+        signed: true,
+        sourceSlice: 'b',
+      },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.cptUnits).toBe(2);
+    expect(merged[0]?.cptCodes.sort()).toEqual(['97110', '97116']);
+    expect(
+      cptDurationError(
+        merged[0]!.beginTime,
+        merged[0]!.endTime,
+        {
+          codes: merged[0]!.cptCodes,
+          totalUnits: merged[0]!.cptUnits,
+          procedures: merged[0]!.cptProcedures,
+        },
+        'attended',
+      ),
+    ).toBeNull();
   });
 });
 

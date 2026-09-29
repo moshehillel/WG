@@ -103,6 +103,68 @@ export function cptCodesAreUntimedSession(codes: string[]): boolean {
   return list.length > 0 && list.every((c) => UNTIMED_SESSION_CPT.has(c));
 }
 
+export function isUntimedSessionCpt(code: string): boolean {
+  return UNTIMED_SESSION_CPT.has(String(code || '').trim());
+}
+
+/** Merge CPT coverages (e.g. Frontline split rows for the same clock window). */
+export function combineCptCoverages(...parts: Array<CptCoverage | null | undefined>): CptCoverage {
+  const byCode = new Map<string, number>();
+  for (const part of parts) {
+    if (!part) continue;
+    const codes = part.codes || [];
+    const procedures = part.procedures || [];
+    for (let i = 0; i < codes.length; i++) {
+      const code = String(codes[i] || '').trim();
+      if (!code) continue;
+      const fromProc = (procedures[i] || '').match(/x(\d+)/i)?.[1];
+      const units = Math.max(1, Number(fromProc) || 1);
+      byCode.set(code, Math.max(byCode.get(code) || 0, units));
+    }
+    for (const label of procedures) {
+      const m = String(label || '').match(/^(\d{4,5})x(\d+)$/i);
+      if (!m) continue;
+      byCode.set(m[1]!, Math.max(byCode.get(m[1]!) || 0, Math.max(1, Number(m[2]) || 1)));
+    }
+  }
+  const codes = [...byCode.keys()];
+  const procedures = codes.map((c) => `${c}x${byCode.get(c)}`);
+  const totalUnits = [...byCode.values()].reduce((a, n) => a + n, 0);
+  return { codes, totalUnits, procedures };
+}
+
+/**
+ * Timed (15-min) unit pool for duration checks. Untimed codes (97150/92507/…)
+ * do not add minutes and do not alone satisfy a timed-unit shortfall when mixed.
+ */
+export function timedCptUnits(coverage: CptCoverage): {
+  timedUnits: number;
+  timedProcedures: string[];
+  untimedCodes: string[];
+  timedCodes: string[];
+} {
+  const timedProcedures: string[] = [];
+  const untimedCodes: string[] = [];
+  const timedCodes: string[] = [];
+  let timedUnits = 0;
+  const codes = coverage.codes || [];
+  const procedures = coverage.procedures || [];
+  for (let i = 0; i < codes.length; i++) {
+    const code = String(codes[i] || '').trim();
+    if (!code) continue;
+    const fromProc = (procedures[i] || '').match(/x(\d+)/i)?.[1];
+    const units = Math.max(1, Number(fromProc) || 1);
+    if (isUntimedSessionCpt(code)) {
+      untimedCodes.push(code);
+    } else {
+      timedCodes.push(code);
+      timedUnits += units;
+      timedProcedures.push(`${code}x${units}`);
+    }
+  }
+  return { timedUnits, timedProcedures, untimedCodes, timedCodes };
+}
+
 export function cptDurationError(
   beginTime: string,
   endTime: string,
@@ -122,18 +184,26 @@ export function cptDurationError(
     return null;
   }
   const required = requiredCptUnitsForDuration(minutes);
-  // 92507/92508/97150 etc. are session-based (1 unit), not timed 15-min codes.
-  if (cptCodesAreUntimedSession(coverage.codes) && coverage.totalUnits >= 1) return null;
-  if (coverage.totalUnits >= required) return null;
+  const { timedUnits, timedProcedures, timedCodes, untimedCodes } = timedCptUnits(coverage);
+  // Pure untimed session (92507/92508/97150 etc.): 1 unit covers the whole visit.
+  if (timedCodes.length === 0 && untimedCodes.length > 0 && coverage.totalUnits >= 1) {
+    return null;
+  }
+  // Timed codes (possibly mixed with untimed): only timed units cover 15-min slots.
+  // Multiple timed CPT rows for the same visit (97110x1 + 97116x1) must be summed first.
+  if (timedUnits >= required) return null;
   if (!coverage.codes.length) {
     return (
       `CPT units missing for a ${minutes}-minute session ` +
       `(need ${required} unit(s) — 1 per 15 minutes).`
     );
   }
+  const shown = timedProcedures.length
+    ? timedProcedures.join(', ')
+    : coverage.procedures.join(', ') || coverage.totalUnits;
   return (
-    `CPT units (${coverage.procedures.join(', ') || coverage.totalUnits}) cover ` +
-    `${coverage.totalUnits}×15 min but session is ${minutes} min (need ${required} unit(s)).`
+    `CPT units (${shown}) cover ` +
+    `${timedUnits}×15 min but session is ${minutes} min (need ${required} unit(s)).`
   );
 }
 

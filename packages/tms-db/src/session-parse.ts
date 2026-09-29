@@ -1,7 +1,9 @@
 import { notesMentionNoPeerAvailable } from './mandate.js';
 import { extractMakeupForDate, MAKEUP_COVERED_DATE_PREFIX } from './makeup-date.js';
+import { clockToMinutes } from './provider-pay.js';
 import {
   FRONTLINE_MISSED_REASON_RE,
+  combineCptCoverages,
   matchFrontlineMissedReason,
   parseCptCoverage,
   sessionIsSigned,
@@ -705,7 +707,7 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
       sourceSlice: slice,
     });
   }
-  return rows;
+  return mergeFrontlineSplitCptRows(rows);
 }
 
 /** Log Type label that opens a Frontline clinical / absence note block. */
@@ -824,55 +826,48 @@ function frontlineSessionBlockEnd(blob: string, startIdx: number, dateToken: str
   return blob.length;
 }
 
+/** Normalize clock labels so "12:45 p.m." / "12:45pm" / "12:45 PM" share a key. */
 function normClockKey(t: string): string {
+  const mins = clockToMinutes(t);
+  if (mins != null) return String(mins);
   return String(t || '')
     .toLowerCase()
     .replace(/\./g, '')
     .replace(/\s+/g, '');
 }
 
-function mergeCptParts(
-  a: Pick<ParsedSessionNote, 'cptCodes' | 'cptUnits' | 'cptProcedures'>,
-  b: Pick<ParsedSessionNote, 'cptCodes' | 'cptUnits' | 'cptProcedures'>,
-): Pick<ParsedSessionNote, 'cptCodes' | 'cptUnits' | 'cptProcedures'> {
-  const byCode = new Map<string, number>();
-  const ingest = (codes: string[], procedures: string[]) => {
-    for (let i = 0; i < codes.length; i++) {
-      const code = String(codes[i] || '').trim();
-      if (!code) continue;
-      const fromProc = (procedures[i] || '').match(/x(\d+)/i)?.[1];
-      const units = Math.max(1, Number(fromProc) || 1);
-      byCode.set(code, Math.max(byCode.get(code) || 0, units));
-    }
-  };
-  ingest(a.cptCodes || [], a.cptProcedures || []);
-  ingest(b.cptCodes || [], b.cptProcedures || []);
-  // Also parse procedure labels that may not align 1:1 with codes arrays.
-  for (const label of [...(a.cptProcedures || []), ...(b.cptProcedures || [])]) {
-    const m = String(label || '').match(/^(\d{4,5})x(\d+)$/i);
-    if (!m) continue;
-    byCode.set(m[1]!, Math.max(byCode.get(m[1]!) || 0, Math.max(1, Number(m[2]) || 1)));
-  }
-  const codes = [...byCode.keys()];
-  const procedures = codes.map((c) => `${c}x${byCode.get(c)}`);
-  const totalUnits = [...byCode.values()].reduce((sum, n) => sum + n, 0);
-  return { cptCodes: codes, cptUnits: totalUnits, cptProcedures: procedures };
+/**
+ * Unordered begin/end key so swapped Session Start/End PDF column order still merges.
+ * Empty clocks stay distinct (missed rows).
+ */
+function sessionClockWindowKey(beginTime: string, endTime: string): string {
+  const a = normClockKey(beginTime);
+  const b = normClockKey(endTime);
+  if (!a && !b) return '|';
+  return a <= b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+function mergeStudentKey(name: string): string {
+  return normEntityName(
+    String(name || '')
+      .replace(/,?\s*D\.?O\.?B\..*$/i, '')
+      .replace(/,\s*$/, ''),
+  );
 }
 
 /**
  * Frontline often exports one 30-min visit as two rows (different CPT codes, same
- * child + clock window). Merge those into one session so units cover duration and
- * overlap / double-count do not fire.
+ * child + clock window). Merge those into one session so timed units sum for the
+ * duration check and overlap / double-count do not fire.
  */
 export function mergeFrontlineSplitCptRows(rows: ParsedSessionNote[]): ParsedSessionNote[] {
   const out: ParsedSessionNote[] = [];
   const indexByKey = new Map<string, number>();
   for (const row of rows) {
     const key = [
-      normEntityName(row.studentName),
+      mergeStudentKey(row.studentName),
       String(row.dateOfService || '').trim(),
-      normClockKey(row.beginTime),
-      normClockKey(row.endTime),
+      sessionClockWindowKey(row.beginTime, row.endTime),
       row.attendance,
     ].join('|');
     const existingIdx = indexByKey.get(key);
@@ -882,19 +877,52 @@ export function mergeFrontlineSplitCptRows(rows: ParsedSessionNote[]): ParsedSes
       continue;
     }
     const prev = out[existingIdx]!;
-    const cpt = mergeCptParts(prev, row);
+    const combined = combineCptCoverages(
+      {
+        codes: prev.cptCodes || [],
+        totalUnits: prev.cptUnits || 0,
+        procedures: prev.cptProcedures || [],
+      },
+      {
+        codes: row.cptCodes || [],
+        totalUnits: row.cptUnits || 0,
+        procedures: row.cptProcedures || [],
+      },
+    );
     const preferNotes =
       String(row.notes || '').length > String(prev.notes || '').length ? row.notes : prev.notes;
+    // Prefer the chronologically earlier clock as begin when both sides have times.
+    const prevBegin = clockToMinutes(prev.beginTime);
+    const rowBegin = clockToMinutes(row.beginTime);
+    let beginTime = prev.beginTime || row.beginTime;
+    let endTime = prev.endTime || row.endTime;
+    if (prevBegin != null && rowBegin != null && rowBegin < prevBegin) {
+      beginTime = row.beginTime;
+      endTime = row.endTime || prev.endTime;
+    }
+    // If PDF emitted Session End before Session Start, swap so duration is sane.
+    const beginMins = clockToMinutes(beginTime);
+    const endMins = clockToMinutes(endTime);
+    if (beginMins != null && endMins != null && endMins < beginMins) {
+      let wrap = endMins - beginMins + 24 * 60;
+      if (wrap > 6 * 60) {
+        const swap = beginTime;
+        beginTime = endTime;
+        endTime = swap;
+      }
+    }
     out[existingIdx] = {
       ...prev,
-      ...cpt,
+      cptCodes: combined.codes,
+      cptUnits: combined.totalUnits,
+      cptProcedures: combined.procedures,
       notes: preferNotes,
       signed: prev.signed || row.signed,
       sourceSlice: [prev.sourceSlice, row.sourceSlice].filter(Boolean).join('\n'),
       cancelReason: prev.cancelReason || row.cancelReason,
       ratio: prev.ratio || row.ratio,
-      beginTime: prev.beginTime || row.beginTime,
-      endTime: prev.endTime || row.endTime,
+      beginTime,
+      endTime,
     };
   }
   return out;

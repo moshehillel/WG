@@ -1,0 +1,18 @@
+TMS multi-CPT timed units — sum same-session codes for duration
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+SHA: ee517ed-multi-cpt-duration
+{
+    "CodeSha256": "9a/DD7GU7tMozEx7h28qbIjd41mN5hXkt2kEUjRKZ6k=",
+    "LastModified": "2026-09-29T22:51:40.000+0000",
+    "CodeSize": 546196
+}
+HHA before: {"HHA_USE_MOCK":"false","HHA_USE_PRODUCTION":"true","HHA_ALLOW_PRODUCTION":"true","TMS_GIT_SHA":"ee517ed-group-progress-copypaste"}
+HHA after: {"HHA_USE_MOCK":"false","HHA_USE_PRODUCTION":"true","HHA_ALLOW_PRODUCTION":"true","TMS_GIT_SHA":"ee517ed-multi-cpt-duration","TMS_BUILT_AT":"2026-09-29T22:51:40.370Z"}
+HHA_USE_PRODUCTION left unchanged
+
+Rules:
+1. Timed CPT rows on the same child+date+clock window are merged; units sum
+2. 97110x1 + 97116x1 covers a 30-min session
+3. Single 97116x1 on 30 min still fails (need 2)
+4. Untimed 97150/92507/92508 still 1 unit per session
+5. Frontline page-break signature keep (Netra) preserved
