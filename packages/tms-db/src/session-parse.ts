@@ -734,24 +734,69 @@ function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   return true;
 }
 
+/**
+ * Frontline page breaks often reprint "Student Name: …" then the cut-off
+ * Provider Signature for the prior session (no Ratio/CPT row, no Log Type).
+ * That reprint is not a new student block — cutting there drops the stamp and
+ * marks a signed visit unsigned (Netra Patel / Zarrar Quazi style).
+ */
+function isFrontlinePageBreakStudentHeader(blob: string, studentNameIdx: number): boolean {
+  const after = blob.slice(studentNameIdx, studentNameIdx + 900);
+  const sigIdx = after.search(/Provider\s+Signature\s*\/?\s*Credentials/i);
+  if (sigIdx < 0) return false;
+  const beforeSig = after.slice(0, sigIdx);
+  if (
+    /(?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|Make[\s-]?up)\s*:/i.test(
+      beforeSig,
+    )
+  ) {
+    return false;
+  }
+  if (/\bRatio\s+CPT\b/i.test(beforeSig)) return false;
+  // A real new student block has a service-date row before its signature.
+  if (/(?:^|[\r\n])[ \t]*\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(beforeSig)) return false;
+  return true;
+}
+
 /** End of this Frontline session block: next service date, next student, or EOF. */
 function frontlineSessionBlockEnd(blob: string, startIdx: number, dateToken: string): number {
   // Must start after the full current DOS token — otherwise `09/01/2026` yields a
   // false "next" hit on `9/01/2026` and the slice collapses to the leading `0`.
-  const searchFrom = startIdx + Math.max(String(dateToken || '').length, 1);
-  let nextDate = blob.length;
-  const dateRe = /(\d{1,2}\/\d{1,2}\/\d{2,4})/g;
-  dateRe.lastIndex = searchFrom;
-  let m: RegExpExecArray | null;
-  while ((m = dateRe.exec(blob))) {
-    const idx = m.index ?? -1;
-    if (idx < searchFrom || !isFrontlineServiceDateHit(blob, idx)) continue;
-    nextDate = idx;
-    break;
+  let cursor = startIdx + Math.max(String(dateToken || '').length, 1);
+  // Skip page-break Student Name + orphaned signature reprints so the stamp stays
+  // inside this slice; then resolve the real next session / student boundary.
+  for (let hop = 0; hop < 8; hop++) {
+    let nextDate = blob.length;
+    const dateRe = /(\d{1,2}\/\d{1,2}\/\d{2,4})/g;
+    dateRe.lastIndex = cursor;
+    let m: RegExpExecArray | null;
+    while ((m = dateRe.exec(blob))) {
+      const idx = m.index ?? -1;
+      if (idx < cursor || !isFrontlineServiceDateHit(blob, idx)) continue;
+      nextDate = idx;
+      break;
+    }
+    const nextStudent = blob.indexOf('Student Name:', cursor);
+    if (nextStudent < cursor || nextStudent >= nextDate) return nextDate;
+    if (!isFrontlinePageBreakStudentHeader(blob, nextStudent)) return nextStudent;
+    const afterName = blob.slice(nextStudent);
+    const sigHeader = afterName.match(/Provider\s+Signature\s*\/?\s*Credentials/i);
+    if (!sigHeader || sigHeader.index == null) {
+      cursor = nextStudent + 'Student Name:'.length;
+      continue;
+    }
+    // Advance only through the stamp (name + date + Telehealth) — do not swallow
+    // the next student's Student Name / DOS rows that follow on the same page.
+    const sigAt = nextStudent + sigHeader.index;
+    const stamp = blob.slice(sigAt, sigAt + 320);
+    const teleM = stamp.match(/Telehealth\s*:[^\n\r]*/i);
+    cursor =
+      teleM && teleM.index != null
+        ? sigAt + teleM.index + teleM[0].length
+        : sigAt + Math.min(stamp.length, 220);
+    continue;
   }
-  const nextStudent = blob.indexOf('Student Name:', searchFrom);
-  if (nextStudent >= searchFrom && nextStudent < nextDate) return nextStudent;
-  return nextDate;
+  return blob.length;
 }
 
 function normClockKey(t: string): string {

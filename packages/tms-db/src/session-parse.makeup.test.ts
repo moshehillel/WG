@@ -190,4 +190,70 @@ No
     expect(rows[0]?.sourceSlice).toMatch(/TSSLD/);
     expect(rows[0]?.sourceSlice).toMatch(/09\/14\/2026 2:10PM/);
   });
+
+  it('keeps Provider Signature when Frontline reprints Student Name after a page break', () => {
+    // Netra Patel RSLog shape: note ends on page N; page N+1 reprints Student Name
+    // then the cut-off Provider Signature (no Ratio/CPT / Log Type before the stamp).
+    const text = `
+District/Agency/BOCES: Hicksville UFSD
+Service: Physical Therapy
+From: 09/22/2026 To: 09/25/2026
+Service Provider:White Glove -Baniqued, Jazel
+Student Name: Netra Patel, D.O.B. 07/30/2020
+09/24/2026 1:1 97530  212:05 pm 12:35 pm
+Woodland School
+Service Provided: Netra transitioned well to/from the therapy room.
+He can maintain static standing on the incline to decreased toe-walking.
+Page 6 of 13
+Summary of Related Service Session Notes (continued)
+District/Agency/BOCES: Hicksville UFSD
+Service: Physical Therapy
+From: 09/22/2026 To: 09/25/2026
+Service Provider:White Glove -Baniqued, Jazel
+Student Name: Netra Patel, D.O.B. 07/30/2020
+Provider Signature/Credentials  DateJazel White Glove -Baniqued PT     (NPI# ) Sep 24 2026  1:01PMTelehealth: No
+Page 7 of 13
+Summary of Related Service Session Notes (continued)
+Student Name: Zain Quazi, D.O.B. 03/14/2016
+09/22/2026 1:1 97112  1 9:35 am 10:05 am
+Woodland School
+Service Provided: Zain transitioned well.
+Provider Signature/Credentials  DateJazel White Glove -Baniqued PT     (NPI# ) Sep 22 2026 11:32AMTelehealth: No
+`;
+    const rows = parseWeeklySessionText(text);
+    const netra = rows.find(
+      (r) => /netra/i.test(r.studentName) && r.dateOfService === '09/24/2026',
+    );
+    expect(netra?.attendance).toBe('attended');
+    expect(netra?.beginTime).toMatch(/12:05/i);
+    expect(netra?.endTime).toMatch(/12:35/i);
+    expect(netra?.signed).toBe(true);
+    expect(netra?.sourceSlice).toMatch(/Provider Signature\/Credentials/i);
+    expect(netra?.sourceSlice).toMatch(/Baniqued PT/i);
+    expect(netra?.sourceSlice).toMatch(/Sep 24 2026/i);
+  });
+
+  it('keeps page-break signature then continues same-student split CPT row', () => {
+    const text = `
+Student Name: Zarrar Quazi, D.O.B. 03/14/2016
+Service: Physical Therapy
+Service Provider:White Glove -Baniqued, Jazel
+09/24/2026 1:1 97530  110:05 am 10:35 am
+Woodland School
+Service Provided: Zarrar navigated a 2-step obstacle course.
+Page 9 of 13
+Student Name: Zarrar Quazi, D.O.B. 03/14/2016
+Provider Signature/Credentials  DateJazel White Glove -Baniqued PT     (NPI# ) Sep 24 2026  1:31PMTelehealth: No
+09/24/2026 1:1 97110  110:05 am 10:35 am
+Woodland School
+Service Provided: Zarrar navigated a 2-step obstacle course.
+Provider Signature/Credentials  DateJazel White Glove -Baniqued PT     (NPI# ) Sep 24 2026  1:31PMTelehealth: No
+`;
+    const rows = parseWeeklySessionText(text);
+    const zarrar = rows.filter((r) => /zarrar/i.test(r.studentName));
+    expect(zarrar).toHaveLength(1);
+    expect(zarrar[0]?.signed).toBe(true);
+    expect(zarrar[0]?.cptCodes?.sort()).toEqual(['97110', '97530']);
+    expect(zarrar[0]?.sourceSlice).toMatch(/Sep 24 2026/i);
+  });
 });
