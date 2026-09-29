@@ -43,30 +43,55 @@ const FRONTLINE_ABSENCE_LABEL_RE =
   /(?:Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage)\s*:/i;
 const SERVICE_PROVIDED_RE = /Service\s+Provided\s*:/i;
 
+/** Labeled individual progress/response — often the only difference across group peers. */
+const NOTE_PROGRESS_LABEL_RE =
+  /\b(?:Progress|Student\s+Response|Individual\s+Response|Patient\s+Response)\s*:/i;
+
 /**
  * Clip long Frontline notes for storage without dropping mandate-routing phrases
- * that often appear at the end (e.g. "no partner available", "makeup session").
+ * that often appear at the end (e.g. "no partner available", "makeup session"),
+ * and without dropping Progress/Response (group peers share activity text).
  */
-export function clipSessionNotes(raw: string, max = 800): string {
+export function clipSessionNotes(raw: string, max = 1600): string {
   const full = String(raw || '')
     .replace(/\s+/g, ' ')
     .trim();
   if (full.length <= max) return full;
-  const head = full.slice(0, max);
+
+  const progressIdx = full.search(NOTE_PROGRESS_LABEL_RE);
+  let head: string;
+  let tail = '';
+  if (progressIdx >= 0) {
+    const rawTail = full.slice(progressIdx);
+    const maxTail = Math.min(rawTail.length, Math.max(200, Math.floor(max * 0.4)));
+    tail = rawTail.slice(0, maxTail).trim();
+    const headBudget = Math.max(0, max - tail.length - 1);
+    head = full.slice(0, headBudget).trim();
+  } else {
+    // Unlabeled individual response usually sits after shared group activity text.
+    const tailKeep = Math.min(280, Math.floor(max * 0.35));
+    const headBudget = Math.max(0, max - tailKeep - 1);
+    head = full.slice(0, headBudget).trim();
+    tail = full.slice(full.length - tailKeep).trim();
+  }
+
+  let kept = tail ? `${head} ${tail}`.replace(/\s+/g, ' ').trim() : head;
+  if (kept.length > max) kept = kept.slice(0, max).trim();
+
   const bits: string[] = [];
-  if (notesMentionNoPeerAvailable(full) && !notesMentionNoPeerAvailable(head)) {
+  if (notesMentionNoPeerAvailable(full) && !notesMentionNoPeerAvailable(kept)) {
     bits.push('no partner available');
   }
   if (
     /\b(?:makeup|make[\s-]?up)\s+session\b|\bmake[\s-]?up\s+for\b/i.test(full) &&
-    !/\b(?:makeup|make[\s-]?up)\s+session\b|\bmake[\s-]?up\s+for\b/i.test(head)
+    !/\b(?:makeup|make[\s-]?up)\s+session\b|\bmake[\s-]?up\s+for\b/i.test(kept)
   ) {
     bits.push('makeup session');
   }
-  if (!bits.length) return head;
+  if (!bits.length) return kept;
   const suffix = ` ${bits.join('; ')}`;
   const budget = Math.max(0, max - suffix.length);
-  return `${full.slice(0, budget).trim()}${suffix}`;
+  return `${kept.slice(0, budget).trim()}${suffix}`;
 }
 
 /** Combine Frontline Service header + per-session ratio (1:1 / 2:1) for mandate matching. */

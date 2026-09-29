@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   cptDurationError,
+  extractNoteProgressForCompare,
   missedSessionReasonError,
   normalizeNoteForCompare,
   noteIsCopyPasteSource,
@@ -11,7 +12,11 @@ import {
   sessionServiceTypeRequiredError,
   sessionSignatureError,
 } from './session-upload-validate.js';
-import { mergeFrontlineSplitCptRows, parseWeeklySessionText } from './session-parse.js';
+import {
+  clipSessionNotes,
+  mergeFrontlineSplitCptRows,
+  parseWeeklySessionText,
+} from './session-parse.js';
 
 describe('service type required', () => {
   it('flags a blank service type and allows a real one', () => {
@@ -281,6 +286,65 @@ describe('note copy-paste', () => {
       notesLookCopyPasted('Service Provided: balance in gym', 'Service Provided: balance in gym.'),
     ).toBe(true);
     expect(notesLookCopyPasted('gait work', 'balance work')).toBe(false);
+  });
+
+  const groupActivity = `Service Provided: Activity Performed:
+Student participated in a structured group therapeutic exercise session focused on improving strength, endurance, balance, coordination, and overall functional mobility. Activities included:
+High marching 10 repetitions
+Toe reaches
+Jumping jacks 10 repetitions
+Squats 20 repetitions
+Core strengthening therapeutic exercises
+Lower extremity stretching exercises
+Breathing exercises to promote relaxation and activity tolerance
+Balance training including:
+Single-leg stance (SLS)
+Modified Romberg stance with eyes open and eyes closed
+Romberg stance with eyes open and eyes closed
+Tactile support and verbal cueing were provided throughout balance activities to facilitate proper postural alignment, weight shifting, safety awareness, and balance reactions. Additional cueing was provided during group activities to promote participation and proper technique.`;
+
+  it('allows group peers with shared activity but different Progress', () => {
+    const delilah = `${groupActivity}
+Progress:
+Student demonstrated improved endurance and activity tolerance throughout the session, maintaining participation with fewer rest breaks.`;
+    const lucas = `${groupActivity}
+Progress:
+Student engaged well and didnt require vc to stay on task. Improved cooperation skills with peers noted`;
+    expect(extractNoteProgressForCompare(delilah)).not.toBe(extractNoteProgressForCompare(lucas));
+    expect(notesLookCopyPasted(delilah, lucas)).toBe(false);
+  });
+
+  it('still flags 100% identical group notes as copy-paste', () => {
+    const note = `${groupActivity}
+Progress:
+Gabby shown improvement with dynamic balance and endurance`;
+    expect(notesLookCopyPasted(note, note)).toBe(true);
+    expect(notesLookCopyPasted(note, `${note}.`)).toBe(true);
+  });
+
+  it('allows unlabeled shared activity when trailing individual response differs', () => {
+    const activity =
+      "Service Provided: Student participated in LE PRE's ( marching, heel raises, stretching, sit ups, squats), balance and coordination activity that included jumping to designated targets. Jumping mechanics explained and demonstrated.";
+    const momin = `${activity} Momin required ceuing to stay on task and for proper technique. He like to wonder.`;
+    const alvin = `${activity} Alvin required minA to Sup during session for safety and proper technique. Improvements noted with endurance and participation`;
+    expect(notesLookCopyPasted(momin, alvin)).toBe(false);
+    expect(notesLookCopyPasted(momin, momin)).toBe(true);
+  });
+
+  it('keeps Progress when clipping long group notes so peers stay distinguishable', () => {
+    const shared = `${groupActivity} ${'balance cueing detail '.repeat(30)}`;
+    const delilah = `${shared}
+Progress:
+Student demonstrated improved endurance and activity tolerance throughout the session.`;
+    const lucas = `${shared}
+Progress:
+Student engaged well and didnt require vc to stay on task.`;
+    expect(delilah.replace(/\s+/g, ' ').trim().length).toBeGreaterThan(800);
+    const cDelilah = clipSessionNotes(delilah, 800);
+    const cLucas = clipSessionNotes(lucas, 800);
+    expect(cDelilah).toMatch(/Progress:/i);
+    expect(cLucas).toMatch(/Progress:/i);
+    expect(notesLookCopyPasted(cDelilah, cLucas)).toBe(false);
   });
 });
 

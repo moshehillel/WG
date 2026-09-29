@@ -142,11 +142,24 @@ export function normalizeNoteForCompare(notes: string): string {
   return String(notes || '')
     .toLowerCase()
     .replace(
-      /\b(service provided|student absence|student not available|provider absence|provider not available|school closed|staff shortage|make[\s-]?up)\b:?/gi,
+      /\b(service provided|activity performed|student absence|student not available|provider absence|provider not available|school closed|staff shortage|make[\s-]?up|progress|student response|individual response|patient response)\b:?/gi,
       '',
     )
     .replace(/[^a-z0-9]+/g, '')
     .trim();
+}
+
+/**
+ * Individual Progress / Response body (normalized). Empty when the note has no
+ * labeled progress section — group peers often only differ here.
+ */
+export function extractNoteProgressForCompare(notes: string): string {
+  const text = String(notes || '');
+  const m = text.match(
+    /\b(?:Progress|Student\s+Response|Individual\s+Response|Patient\s+Response)\s*:\s*([\s\S]+)/i,
+  );
+  if (!m?.[1]) return '';
+  return normalizeNoteForCompare(m[1]);
 }
 
 /** Missed / empty absence templates must not be copy-paste sources for attended notes. */
@@ -165,7 +178,16 @@ export function noteIsCopyPasteSource(attendance: string, notes: string): boolea
   return true;
 }
 
+/**
+ * True only for near-exact full-note duplicates (after normalize).
+ * Shared group activity with different Progress/Response is NOT copy-paste.
+ */
 export function notesLookCopyPasted(a: string, b: string): boolean {
+  const pa = extractNoteProgressForCompare(a);
+  const pb = extractNoteProgressForCompare(b);
+  // Different individualized progress → allow even when activity wording overlaps.
+  if (pa && pb && pa !== pb) return false;
+
   const na = normalizeNoteForCompare(a);
   const nb = normalizeNoteForCompare(b);
   if (!na || !nb) return false;

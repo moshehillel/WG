@@ -356,7 +356,8 @@ describe('mandate math', () => {
     const pad = 'Service Provided: ' + 'gait training assessment details '.repeat(40);
     const full = `${pad} no partner available`;
     expect(full.length).toBeGreaterThan(800);
-    const clipped = clipSessionNotes(full);
+    // Tight budget still must keep mandate-routing phrases.
+    const clipped = clipSessionNotes(full, 800);
     expect(clipped.length).toBeLessThanOrEqual(800);
     expect(clipped).toMatch(/no partner available/i);
 
