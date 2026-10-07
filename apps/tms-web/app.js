@@ -1103,6 +1103,37 @@ function additionalServiceLabel(value) {
   return ADDITIONAL_SERVICE_LABELS[value] || String(value);
 }
 
+/** Frontline / HHA ratios used app-wide (sessionLooksGroup / group pay). */
+const SESSION_RATIO_OPTIONS = ['1:1', '2:1', '3:1', '4:1'];
+
+function sessionRatioOptions(selected) {
+  const sel = SESSION_RATIO_OPTIONS.includes(selected) ? selected : '1:1';
+  return SESSION_RATIO_OPTIONS.map(
+    (v) => `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(v)}</option>`,
+  ).join('');
+}
+
+function extractSessionRatio(serviceType) {
+  const m = String(serviceType || '').match(/\b([1-4]\s*:\s*1)\b/i);
+  return m ? String(m[1]).replace(/\s+/g, '') : '';
+}
+
+function stripSessionRatio(serviceType) {
+  return String(serviceType || '')
+    .replace(/\b[1-4]\s*:\s*1\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** Match tms-db serviceTypeWithRatio — append N:1 for group vs individual pay/HHA. */
+function serviceTypeWithRatioUi(serviceType, ratio) {
+  const base = stripSessionRatio(serviceType);
+  const r = String(ratio || '').replace(/\s+/g, '').trim();
+  if (!r) return base;
+  if (new RegExp(`\\b${r.replace(':', '\\s*:\\s*')}\\b`, 'i').test(base)) return base;
+  return [base, r].filter(Boolean).join(' ').trim();
+}
+
 /** Admin/therapist table cell: badge for additional services, else serviceType. */
 function sessionServiceCellHtml(s) {
   const addl = additionalServiceLabel(s?.additionalServiceType);
@@ -4848,6 +4879,11 @@ async function adminProviderDetail(providerId) {
               ${additionalServiceOptions()}
             </select>
           </label>
+          <label id="pManRatioWrap">Ratio
+            <select id="pManRatio">
+              ${sessionRatioOptions('1:1')}
+            </select>
+          </label>
         </div>
         <div class="row">
           <label>Attendance
@@ -5149,12 +5185,28 @@ async function adminProviderDetail(providerId) {
     const fileInput = document.getElementById('pManFile');
     if (fileInput) fileInput.value = '';
   };
+  const syncManualRatioVisibility = () => {
+    const addl = document.getElementById('pManAddlType')?.value || '';
+    const isAddl = Boolean(addl);
+    const wrap = document.getElementById('pManRatioWrap');
+    const sel = document.getElementById('pManRatio');
+    if (wrap) wrap.hidden = isAddl;
+    if (sel) {
+      sel.disabled = isAddl;
+      if (isAddl) sel.value = '1:1';
+    }
+  };
+  document.getElementById('pManAddlType')?.addEventListener('change', syncManualRatioVisibility);
+  syncManualRatioVisibility();
   document.getElementById('pManCancelEdit')?.addEventListener('click', () => {
     clearManualSessionEdit();
     document.getElementById('pManStudent').value = '';
     document.getElementById('pManDos').value = '';
     document.getElementById('pManService').value = '';
     document.getElementById('pManAddlType').value = '';
+    const ratioEl = document.getElementById('pManRatio');
+    if (ratioEl) ratioEl.value = '1:1';
+    syncManualRatioVisibility();
     document.getElementById('pManAtt').value = 'attended';
     document.getElementById('pManProgram').value = '';
     document.getElementById('pManBegin').value = '';
@@ -5190,8 +5242,15 @@ async function adminProviderDetail(providerId) {
       document.getElementById('pManEditId').value = raw.id || '';
       document.getElementById('pManEditWeekId').value = raw.weekId || '';
       document.getElementById('pManDos').value = raw.dateOfService || '';
-      document.getElementById('pManService').value = raw.serviceType || '';
+      const rawSvc = String(raw.serviceType || '');
+      const extractedRatio = extractSessionRatio(rawSvc);
+      document.getElementById('pManService').value = stripSessionRatio(rawSvc) || rawSvc;
       document.getElementById('pManAddlType').value = raw.additionalServiceType || '';
+      const ratioEl = document.getElementById('pManRatio');
+      if (ratioEl) {
+        ratioEl.value = SESSION_RATIO_OPTIONS.includes(extractedRatio) ? extractedRatio : '1:1';
+      }
+      syncManualRatioVisibility();
       document.getElementById('pManAtt').value = raw.attendance || 'attended';
       const programEl = document.getElementById('pManProgram');
       if (programEl) {
@@ -5237,10 +5296,14 @@ async function adminProviderDetail(providerId) {
       const cancelReason = document.getElementById('pManCancel')?.value?.trim() || '';
       const programType = document.getElementById('pManProgram')?.value?.trim() || '';
       const additionalServiceTypeEarly = document.getElementById('pManAddlType')?.value || '';
-      const serviceTypeEarly = document.getElementById('pManService')?.value?.trim() || '';
+      const serviceTypeBase = document.getElementById('pManService')?.value?.trim() || '';
+      const ratioSel = document.getElementById('pManRatio')?.value || '1:1';
+      const serviceTypeEarly = additionalServiceTypeEarly
+        ? serviceTypeBase
+        : serviceTypeWithRatioUi(serviceTypeBase, ratioSel || '1:1');
       if (!studentId && !additionalServiceTypeEarly) throw new Error('Select a child.');
       if (!dateOfService) throw new Error('Enter the date of service.');
-      if (!additionalServiceTypeEarly && !serviceTypeEarly) {
+      if (!additionalServiceTypeEarly && !serviceTypeBase) {
         throw new Error('Service type is required.');
       }
       if (attendance === 'makeup') {
