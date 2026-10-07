@@ -29,6 +29,11 @@ a proxy would not help and cannot hide ClientId.
 ---- Luna support chatbot ----
 UI: floating ball in apps/tms-web (index.html #lunaRoot + styles.css + app.js).
 Visible on the login screen and after sign-in.
+Knowledge (error catalog, how-to, conversation policy):
+  packages/tms-api/src/luna-knowledge.ts (live prompt)
+  docs/luna/ (human-readable twin + README)
+  Deploy knowledge: node infra/deploy-tms-luna-knowledge.mjs
+Ticket path: POST /support/luna/handoff → SES email to LUNA_SUPPORT_EMAIL (no separate ticket DB).
 API (Cognito optional — same paths work as guest with rate limits):
   POST /support/luna/chat
   POST /support/luna/handoff

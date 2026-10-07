@@ -2,14 +2,46 @@ import { describe, expect, it } from 'vitest';
 import {
   buildHandoffConfirmationReply,
   buildHandoffEmail,
+  buildLunaSystemPrompt,
   checkLunaGuestRateLimit,
   LUNA_GUEST_USER,
   normalizeHandoffContact,
   parseLunaModelJson,
   resetLunaGuestRateLimits,
 } from './luna.js';
+import { lunaKnowledgePrompt } from './luna-knowledge.js';
 
 describe('luna', () => {
+  it('ships error catalog, how-to, and conversation policy in the system prompt', () => {
+    const prompt = buildLunaSystemPrompt();
+    expect(prompt).toContain(lunaKnowledgePrompt().slice(0, 80));
+    expect(prompt).toMatch(/paste the exact error/i);
+    expect(prompt).toMatch(/No HHA pay code rate/i);
+    expect(prompt).toMatch(/Invalid PayCodeID/i);
+    expect(prompt).toMatch(/ErrorID=-310/);
+    expect(prompt).toMatch(/ErrorID=-415/);
+    expect(prompt).toMatch(/Accepted Services SP/i);
+    expect(prompt).toMatch(/speech must be ST/i);
+    expect(prompt).toMatch(/No HHA ContractID/i);
+    expect(prompt).toMatch(/billing codes/i);
+    expect(prompt).toMatch(/parentally placed/i);
+    expect(prompt).toMatch(/Session is not signed/i);
+    expect(prompt).toMatch(/page-break/i);
+    expect(prompt).toMatch(/Frontline reason/i);
+    expect(prompt).toMatch(/CPT units/i);
+    expect(prompt).toMatch(/copy-pasted/i);
+    expect(prompt).toMatch(/import caseload/i);
+    expect(prompt).toMatch(/no peer/i);
+    expect(prompt).toMatch(/Service type is required/i);
+    expect(prompt).toMatch(/PDF upload/i);
+    expect(prompt).toMatch(/Send to HHA/i);
+    expect(prompt).toMatch(/Makeup-Weekly/i);
+    expect(prompt).toMatch(/Documentation/i);
+    expect(prompt).toMatch(/Last service/i);
+    expect(prompt).toMatch(/handoff/i);
+    expect(prompt).not.toMatch(/HHA_USE_PRODUCTION\s*=\s*false/i);
+  });
+
   it('parses ask and handoff JSON', () => {
     expect(parseLunaModelJson('{"reply":"Which page?","action":"ask","summary":""}')).toEqual({
       reply: 'Which page?',

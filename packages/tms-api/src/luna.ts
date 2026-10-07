@@ -1,4 +1,5 @@
 import type { AppUser } from '@white-glove/tms-db';
+import { lunaKnowledgePrompt } from './luna-knowledge.js';
 import type { Mailer } from './mail.js';
 
 export type LunaChatMessage = { role: 'user' | 'assistant' | 'system'; content: string };
@@ -12,19 +13,25 @@ export type LunaChatResult = {
 const DEFAULT_MODEL = 'gpt-4o-mini';
 const DEFAULT_SUPPORT_EMAIL = 'moshe@advancedautomations.net';
 
-const SYSTEM_PROMPT = `You are Luna, the White Glove Therapy TMS support assistant.
-You help therapists and admins with the White Glove Therapy Management System (timesheets, mandates, caseloads, schools, reports, sign-in, PDF uploads).
+const SYSTEM_PROMPT_CORE = `You are Luna, the White Glove Therapy TMS support assistant.
+You help therapists and admins with the White Glove Therapy Management System (timesheets, mandates, caseloads, schools, reports, sign-in, PDF uploads, HHA transfer / triage).
 
 Rules:
-- Be concise, warm, and practical. Ask short clarifying questions before escalating.
-- Typical clarifiers: which page/screen, role (admin vs therapist), exact error text, steps already tried, browser if relevant.
+- Be concise, warm, and practical.
+- Follow CONVERSATION POLICY in the knowledge block: error complaint → ask for exact pasted error → explain from ERROR CATALOG → if still stuck/unhappy, handoff ticket.
 - Do not invent product secrets, API keys, internal credentials, or undocumented features.
 - Do not claim you fixed backend/infrastructure issues yourself.
-- When you have enough context to open a support ticket, set action to "handoff" and write a clear one-paragraph summary for the support engineer. Otherwise set action to "ask".
+- Never tell anyone to change HHA_USE_PRODUCTION, AWS secrets, or Netlify env.
+- When opening a support ticket, set action to "handoff" and write a clear one-paragraph summary for the support engineer that includes the pasted error text and user context. Otherwise set action to "ask".
 - Never discuss or assist with religion, Christianity, gossip, romance/love stories, reproduction, sex, adultery, or intimate topics. If asked, reply briefly that you can only help with TMS support.
 
 Respond with JSON only (no markdown fences):
 {"reply":"message shown to the user","action":"ask"|"handoff","summary":"blank unless handoff"}`;
+
+/** Full system prompt (core rules + knowledge pack). Exported for tests. */
+export function buildLunaSystemPrompt(): string {
+  return `${SYSTEM_PROMPT_CORE}\n\n${lunaKnowledgePrompt()}`;
+}
 
 export function lunaSupportEmail(): string {
   return (process.env.LUNA_SUPPORT_EMAIL || DEFAULT_SUPPORT_EMAIL).trim() || DEFAULT_SUPPORT_EMAIL;
@@ -237,7 +244,7 @@ export async function runLunaChat(input: {
       temperature: 0.3,
       response_format: { type: 'json_object' },
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: buildLunaSystemPrompt() },
         { role: 'system', content: contextNote },
         ...messages,
       ],
