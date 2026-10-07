@@ -49,6 +49,8 @@ const state = {
   adminWeeksWeekStart: sessionStorage.getItem('tmsAdminWeeksWeek') || '',
   adminWeeksName: sessionStorage.getItem('tmsAdminWeeksName') || '',
   adminWeeksAll: sessionStorage.getItem('tmsAdminWeeksAll') === '1',
+  adminWeeksDistrict: sessionStorage.getItem('tmsAdminWeeksDistrict') || '',
+  adminWeeksHhaErrors: sessionStorage.getItem('tmsAdminWeeksHhaErrors') === '1',
 };
 
 const REPORT_LIST = [
@@ -3465,6 +3467,14 @@ async function showSchoolPicker(schools, opts = {}) {
 }
 
 
+function weekDistrictLabel(w) {
+  return String(w?.programType || w?.district || w?.schoolName || '').trim();
+}
+
+function weekHasHhaErrors(w) {
+  return Number(w?.hhaFailed ?? 0) > 0 || String(w?.hhaStatus || '') === 'failed';
+}
+
 function hhaStatusCell(w) {
   const status = String(w.hhaStatus || 'none');
   const confirmed = Number(w.hhaConfirmed ?? 0);
@@ -3745,6 +3755,8 @@ async function adminDash() {
   const weeksWeekStart = mondayFromDos(state.adminWeeksWeekStart) || mondayIso();
   state.adminWeeksWeekStart = weeksWeekStart;
   const weeksName = String(state.adminWeeksName || '').trim();
+  const weeksDistrict = String(state.adminWeeksDistrict || '').trim();
+  const weeksHhaErrors = state.adminWeeksHhaErrors === true;
   try {
     d = await api('GET', '/dashboard');
   } catch (err) {
@@ -3764,6 +3776,20 @@ async function adminDash() {
   } catch (err) {
     console.warn('admin weeks load failed', err);
     weeks = [];
+  }
+  // District options from the week/name result set (before district / HHA filters).
+  const districtOptions = [
+    ...new Set(weeks.map((w) => weekDistrictLabel(w)).filter(Boolean)),
+  ].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  if (weeksDistrict && !districtOptions.includes(weeksDistrict)) {
+    districtOptions.push(weeksDistrict);
+    districtOptions.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }
+  if (weeksDistrict) {
+    weeks = weeks.filter((w) => weekDistrictLabel(w) === weeksDistrict);
+  }
+  if (weeksHhaErrors) {
+    weeks = weeks.filter((w) => weekHasHhaErrors(w));
   }
   const weekActions = (w) => {
     const status = w.status || 'draft';
@@ -3797,6 +3823,21 @@ async function adminDash() {
   const weeksFilterBlurb = weeksAll
     ? 'Showing all weeks'
     : `Showing week of ${weeksWeekStart} (Monday)`;
+  const weeksExtraBlurb = [
+    weeksName ? `name “${weeksName}”` : '',
+    weeksDistrict ? `district “${weeksDistrict}”` : '',
+    weeksHhaErrors ? 'HHA errors only' : '',
+  ]
+    .filter(Boolean)
+    .map((s) => ` · ${s}`)
+    .join('');
+  const districtSelectOpts = [
+    `<option value="">All districts</option>`,
+    ...districtOptions.map(
+      (name) =>
+        `<option value="${esc(name)}"${name === weeksDistrict ? ' selected' : ''}>${esc(name)}</option>`,
+    ),
+  ].join('');
   view(`
     <div class="hero-strip" aria-hidden="true"></div>
     <div class="card">
@@ -3841,7 +3882,7 @@ async function adminDash() {
     </div>
     <div class="card">
       <h2>Weeks</h2>
-      <p class="muted">${esc(weeksFilterBlurb)}${weeksName ? ` · name “${esc(weeksName)}”` : ''}. Date snaps to Monday. Name matches provider or a child on that week.</p>
+      <p class="muted">${esc(weeksFilterBlurb)}${esc(weeksExtraBlurb)}. Date snaps to Monday. Name matches provider or a child on that week. District and HHA filters apply to the loaded list.</p>
       <div class="row">
         <label>Week start (Monday)
           <span class="week-start-controls">
@@ -3852,17 +3893,23 @@ async function adminDash() {
         </label>
         <label class="inline-check"><input type="checkbox" id="adminWeeksAll" ${weeksAll ? 'checked' : ''} /> All weeks</label>
         <label>Provider / child name <input id="adminWeeksName" type="search" value="${esc(weeksName)}" placeholder="Search name…" /></label>
+        <label>District
+          <select id="adminWeeksDistrict">${districtSelectOpts}</select>
+        </label>
+        <label class="inline-check" title="Show only weeks with HHA failures (Retry HHA / failed count)">
+          <input type="checkbox" id="adminWeeksHhaErrors" ${weeksHhaErrors ? 'checked' : ''} /> HHA errors only
+        </label>
         <button type="button" class="btn-primary" id="adminWeeksApply">Apply</button>
       </div>
       ${bulkBar('weeks')}
       <div class="table-wrap">
       <table>
         <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>District</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
-        ${weeks.map((w) => `<tr data-week-row="${esc(w.id)}" class="${String(w.hhaStatus) === 'failed' ? 'hha-failed-row' : ''}">
+        ${weeks.map((w) => `<tr data-week-row="${esc(w.id)}" class="${weekHasHhaErrors(w) ? 'hha-failed-row' : ''}">
           ${bulkTd('weeks', w.id)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.providerName || '—')}</td>
-          <td>${esc(w.programType || w.district || w.schoolName || '—')}</td>
+          <td>${esc(weekDistrictLabel(w) || '—')}</td>
           <td>${esc(w.sessionCount)}</td>
           <td>${esc(w.status)}</td>
           <td>${esc(w.signerName || w.signerEmail || '—')}</td>
@@ -3877,16 +3924,22 @@ async function adminDash() {
     sessionStorage.setItem('tmsAdminWeeksWeek', state.adminWeeksWeekStart || '');
     sessionStorage.setItem('tmsAdminWeeksName', state.adminWeeksName || '');
     sessionStorage.setItem('tmsAdminWeeksAll', state.adminWeeksAll ? '1' : '0');
+    sessionStorage.setItem('tmsAdminWeeksDistrict', state.adminWeeksDistrict || '');
+    sessionStorage.setItem('tmsAdminWeeksHhaErrors', state.adminWeeksHhaErrors ? '1' : '0');
   };
   const readAdminWeeksFiltersFromForm = () => {
     const allEl = document.getElementById('adminWeeksAll');
     const weekEl = document.getElementById('adminWeeksWeek');
     const nameEl = document.getElementById('adminWeeksName');
+    const districtEl = document.getElementById('adminWeeksDistrict');
+    const hhaEl = document.getElementById('adminWeeksHhaErrors');
     state.adminWeeksAll = Boolean(allEl?.checked);
     const rawWeek = weekEl?.value || state.adminWeeksWeekStart || mondayIso();
     state.adminWeeksWeekStart = mondayFromDos(rawWeek) || mondayIso();
     if (weekEl && !state.adminWeeksAll) weekEl.value = state.adminWeeksWeekStart;
     state.adminWeeksName = String(nameEl?.value || '').trim();
+    state.adminWeeksDistrict = String(districtEl?.value || '').trim();
+    state.adminWeeksHhaErrors = Boolean(hhaEl?.checked);
     persistAdminWeeksFilters();
   };
   document.getElementById('adminWeeksAll')?.addEventListener('change', () => {
@@ -3907,6 +3960,14 @@ async function adminDash() {
     if (state.adminWeeksAll) return;
     state.adminWeeksWeekStart = addDaysIso(state.adminWeeksWeekStart || mondayIso(), 7);
     persistAdminWeeksFilters();
+    adminDash();
+  });
+  document.getElementById('adminWeeksDistrict')?.addEventListener('change', () => {
+    readAdminWeeksFiltersFromForm();
+    adminDash();
+  });
+  document.getElementById('adminWeeksHhaErrors')?.addEventListener('change', () => {
+    readAdminWeeksFiltersFromForm();
     adminDash();
   });
   document.getElementById('adminWeeksApply')?.addEventListener('click', () => {
