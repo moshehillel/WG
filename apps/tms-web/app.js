@@ -1390,108 +1390,243 @@ function mandateTypeValueFromMandate(m) {
   return 'weekly';
 }
 
+/** Local calendar YYYY-MM-DD (for mandate end / discharge comparisons). */
+function todayIsoLocal() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** True when mandate end date is set and on/before as-of (no longer active). */
+function mandateIsEndedUi(m, asOf = todayIsoLocal()) {
+  const end = String(m?.endOn || '').trim();
+  return Boolean(end && end <= asOf);
+}
+
+function clearMandateEditorPanel(panelId = 'editMandatePanel') {
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  panel.hidden = true;
+  panel.innerHTML = '';
+}
+
+function collectMandateEditorPayload() {
+  const freq = Number(document.getElementById('emFreq').value);
+  const durationRaw = document.getElementById('emDuration').value;
+  const groupSizeRaw = document.getElementById('emGroupSize').value;
+  const { mandateKind, frequencyKind } = parseMandateTypeValue(document.getElementById('emKind').value);
+  const ratioGroup = document.getElementById('emRatio').value === 'group';
+  const groupSize = groupSizeRaw === '' ? (ratioGroup ? 2 : 1) : Number(groupSizeRaw);
+  const serviceTypeRaw = document.getElementById('emService').value;
+  const discipline = resolveMandateDiscipline(
+    document.getElementById('emDisc').value,
+    serviceTypeRaw,
+  );
+  if (!discipline) throw new Error('Select a discipline (OT, PT, or SLP).');
+  if (!Number.isFinite(freq) || freq < 0) throw new Error('Enter frequency or makeup count.');
+  const durationMinutes = durationRaw === '' ? null : Number(durationRaw);
+  if (durationMinutes != null && (!Number.isFinite(durationMinutes) || durationMinutes <= 0)) {
+    throw new Error('Duration must be a positive number of minutes.');
+  }
+  if (!Number.isFinite(groupSize) || groupSize <= 0) {
+    throw new Error('Group size must be a positive number.');
+  }
+  const serviceType =
+    String(serviceTypeRaw || '').trim() ||
+    (mandateKind === 'makeup_auth' || mandateKind === 'makeup_weekly'
+      ? disciplineDefaultServiceType(discipline)
+      : '') ||
+    serviceTypeRaw;
+  const studentId = document.getElementById('emStudent')?.value || '';
+  if (!studentId) throw new Error('Select a student.');
+  return {
+    studentId,
+    providerId: document.getElementById('emProvider').value,
+    discipline,
+    serviceType,
+    mandateKind,
+    ratioGroup,
+    durationMinutes,
+    groupSize,
+    frequencyKind,
+    frequencyPerWeek: freq,
+    sessionsPerPeriod: freq,
+    periodSchoolDays: frequencyKind === 'school_day_cycle' ? 6 : undefined,
+    startOn: document.getElementById('emStart').value,
+    endOn: document.getElementById('emEnd').value,
+  };
+}
+
+function openMandateEditorForm(opts) {
+  const {
+    mode = 'edit',
+    mandate: m = null,
+    providers = [],
+    students = [],
+    lockStudentId = '',
+    onSaved,
+    panelId = 'editMandatePanel',
+  } = opts;
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  const isCreate = mode === 'create';
+  if (!isCreate && !m) return;
+  const studentId = isCreate
+    ? String(lockStudentId || students[0]?.id || '')
+    : String(m.studentId || '');
+  const typeVal = isCreate ? 'weekly' : mandateTypeValueFromMandate(m);
+  const discVal = isCreate ? '' : resolveMandateDiscipline(m.discipline, m.serviceType);
+  const ratioGroup = isCreate ? false : Boolean(m.ratioGroup);
+  const groupSizeDefault = isCreate
+    ? 1
+    : (m.groupSize != null && m.groupSize !== '' ? m.groupSize : (mandateLooksGroupUi(m) ? 2 : 1));
+  const hideStudent = Boolean(lockStudentId);
+  panel.hidden = false;
+  panel.innerHTML = `
+    <h3>${isCreate ? 'Add mandate' : 'Edit mandate'}</h3>
+    <div class="row">
+      ${hideStudent
+        ? `<input type="hidden" id="emStudent" value="${esc(studentId)}" />`
+        : `<label>Student
+            <select id="emStudent">${studentOptions(students || [], studentId)}</select>
+          </label>`}
+      <label>Provider
+        <select id="emProvider">${providerOptions(providers || [], isCreate ? '' : m.providerId)}</select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Discipline
+        <select id="emDisc">${mandateDisciplineOptions(discVal)}</select>
+      </label>
+      <label>Service type <input id="emService" value="${esc(isCreate ? '' : (m.serviceType || ''))}" placeholder="Physical Therapy" /></label>
+    </div>
+    <div class="row">
+      <label>Type
+        <select id="emKind">${mandateTypeOptions(typeVal)}</select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Ratio
+        <select id="emRatio">
+          <option value="individual"${!ratioGroup ? ' selected' : ''}>Individual</option>
+          <option value="group"${ratioGroup ? ' selected' : ''}>Group</option>
+        </select>
+      </label>
+      <label>Group size <input id="emGroupSize" type="number" min="1" step="1" value="${esc(groupSizeDefault)}" /></label>
+    </div>
+    <div class="row">
+      <label>Duration (minutes) <input id="emDuration" type="number" min="1" step="1" value="${esc(isCreate ? '' : (m.durationMinutes ?? ''))}" /></label>
+      <label>Freq / count <input id="emFreq" type="number" min="0" step="1" value="${esc(isCreate ? '' : (m.sessionsPerPeriod ?? m.frequencyPerWeek ?? ''))}" /></label>
+    </div>
+    <div class="row">
+      <label>Start / end
+        <div class="row">
+          <input id="emStart" type="date" value="${esc(isCreate ? '' : (m.startOn || ''))}" />
+          <input id="emEnd" type="date" value="${esc(isCreate ? '' : (m.endOn || ''))}" />
+        </div>
+      </label>
+    </div>
+    <div class="entry-form-actions">
+      <button type="button" class="btn-primary" id="emSave">${isCreate ? 'Save mandate' : 'Save changes'}</button>
+      <button type="button" class="btn" id="emCancel">Cancel</button>
+    </div>
+  `;
+  document.getElementById('emCancel').onclick = () => clearMandateEditorPanel(panelId);
+  document.getElementById('emSave').onclick = async () => {
+    try {
+      const payload = collectMandateEditorPayload();
+      if (isCreate) {
+        const out = await api('POST', '/admin/mandates', payload);
+        setStatus(out.message || 'Mandate saved.', 'ok');
+      } else {
+        await api('PATCH', `/admin/mandates/${m.id}`, payload);
+        setStatus('Mandate updated.', 'ok');
+      }
+      await onSaved();
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+}
+
+function openMandateDischargeForm(opts) {
+  const { mandate: m, onSaved, panelId = 'editMandatePanel' } = opts;
+  const panel = document.getElementById(panelId);
+  if (!panel || !m) return;
+  const defaultEnd = String(m.endOn || '').trim() || todayIsoLocal();
+  const service = [m.discipline, m.serviceType].filter(Boolean).join(' · ') || 'this mandate';
+  panel.hidden = false;
+  panel.innerHTML = `
+    <h3>Discharge mandate</h3>
+    <p class="muted">Ends <strong>${esc(service)}</strong> by setting the mandate end date. The row stays on file (not deleted).</p>
+    <div class="row">
+      <label>Discharge date
+        <input id="emDischargeOn" type="date" value="${esc(defaultEnd)}" />
+      </label>
+    </div>
+    <div class="entry-form-actions">
+      <button type="button" class="btn-primary" id="emDischargeSave">Discharge</button>
+      <button type="button" class="btn" id="emDischargeCancel">Cancel</button>
+    </div>
+  `;
+  document.getElementById('emDischargeCancel').onclick = () => clearMandateEditorPanel(panelId);
+  document.getElementById('emDischargeSave').onclick = async () => {
+    try {
+      const endOn = String(document.getElementById('emDischargeOn').value || '').trim();
+      if (!endOn) throw new Error('Choose a discharge date.');
+      if (m.startOn && endOn < m.startOn) {
+        throw new Error('Discharge date cannot be before the mandate start date.');
+      }
+      await api('PATCH', `/admin/mandates/${m.id}`, { endOn });
+      setStatus('Mandate discharged.', 'ok');
+      await onSaved();
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
+}
+
 function bindMandateEditor(opts) {
-  const { mandates, providers, students, onSaved, panelId = 'editMandatePanel' } = opts;
+  const {
+    mandates,
+    providers,
+    students,
+    onSaved,
+    panelId = 'editMandatePanel',
+    lockStudentId = '',
+  } = opts;
+  document.querySelectorAll('[data-add-mandate]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      openMandateEditorForm({
+        mode: 'create',
+        providers,
+        students,
+        lockStudentId,
+        onSaved,
+        panelId,
+      });
+    });
+  });
   document.querySelectorAll('[data-edit-mandate]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-edit-mandate');
       const m = (mandates || []).find((x) => x.id === id);
-      const panel = document.getElementById(panelId);
-      if (!m || !panel) return;
-      const typeVal = mandateTypeValueFromMandate(m);
-      const discVal = resolveMandateDiscipline(m.discipline, m.serviceType);
-      panel.hidden = false;
-      panel.innerHTML = `
-        <h3>Edit mandate</h3>
-        <div class="row">
-          <label>Student
-            <select id="emStudent">${studentOptions(students || [], m.studentId)}</select>
-          </label>
-          <label>Provider
-            <select id="emProvider">${providerOptions(providers || [], m.providerId)}</select>
-          </label>
-        </div>
-        <div class="row">
-          <label>Discipline
-            <select id="emDisc">${mandateDisciplineOptions(discVal)}</select>
-          </label>
-          <label>Service type <input id="emService" value="${esc(m.serviceType || '')}" placeholder="Physical Therapy" /></label>
-        </div>
-        <div class="row">
-          <label>Type
-            <select id="emKind">${mandateTypeOptions(typeVal)}</select>
-          </label>
-        </div>
-        <div class="row">
-          <label>Ratio
-            <select id="emRatio">
-              <option value="individual"${!m.ratioGroup ? ' selected' : ''}>Individual</option>
-              <option value="group"${m.ratioGroup ? ' selected' : ''}>Group</option>
-            </select>
-          </label>
-          <label>Group size <input id="emGroupSize" type="number" min="1" step="1" value="${esc(m.groupSize != null && m.groupSize !== '' ? m.groupSize : (mandateLooksGroupUi(m) ? 2 : 1))}" /></label>
-        </div>
-        <div class="row">
-          <label>Duration (minutes) <input id="emDuration" type="number" min="1" step="1" value="${esc(m.durationMinutes ?? '')}" /></label>
-          <label>Freq / count <input id="emFreq" type="number" min="0" step="1" value="${esc(m.sessionsPerPeriod ?? m.frequencyPerWeek ?? '')}" /></label>
-        </div>
-        <div class="row">
-          <label>Start / end
-            <div class="row">
-              <input id="emStart" type="date" value="${esc(m.startOn || '')}" />
-              <input id="emEnd" type="date" value="${esc(m.endOn || '')}" />
-            </div>
-          </label>
-        </div>
-        <div class="entry-form-actions">
-          <button type="button" class="btn-primary" id="emSave">Save changes</button>
-          <button type="button" class="btn" id="emCancel">Cancel</button>
-        </div>
-      `;
-      document.getElementById('emCancel').onclick = () => {
-        panel.hidden = true;
-        panel.innerHTML = '';
-      };
-      document.getElementById('emSave').onclick = async () => {
-        try {
-          const freq = Number(document.getElementById('emFreq').value);
-          const durationRaw = document.getElementById('emDuration').value;
-          const groupSizeRaw = document.getElementById('emGroupSize').value;
-          const { mandateKind, frequencyKind } = parseMandateTypeValue(document.getElementById('emKind').value);
-          const ratioGroup = document.getElementById('emRatio').value === 'group';
-          const groupSize = groupSizeRaw === '' ? (ratioGroup ? 2 : 1) : Number(groupSizeRaw);
-          const serviceTypeRaw = document.getElementById('emService').value;
-          const discipline = resolveMandateDiscipline(
-            document.getElementById('emDisc').value,
-            serviceTypeRaw,
-          );
-          if (!discipline) throw new Error('Select a discipline (OT, PT, or SLP).');
-          const serviceType =
-            String(serviceTypeRaw || '').trim() ||
-            (mandateKind === 'makeup_auth' || mandateKind === 'makeup_weekly'
-              ? disciplineDefaultServiceType(discipline)
-              : '') ||
-            serviceTypeRaw;
-          await api('PATCH', `/admin/mandates/${id}`, {
-            studentId: document.getElementById('emStudent').value,
-            providerId: document.getElementById('emProvider').value,
-            discipline,
-            serviceType,
-            mandateKind,
-            ratioGroup,
-            durationMinutes: durationRaw === '' ? null : Number(durationRaw),
-            groupSize,
-            frequencyKind,
-            frequencyPerWeek: freq,
-            sessionsPerPeriod: freq,
-            periodSchoolDays: frequencyKind === 'school_day_cycle' ? 6 : undefined,
-            startOn: document.getElementById('emStart').value,
-            endOn: document.getElementById('emEnd').value,
-          });
-          setStatus('Mandate updated.', 'ok');
-          await onSaved();
-        } catch (e) { setStatus(e.message, 'err'); }
-      };
+      if (!m) return;
+      openMandateEditorForm({
+        mode: 'edit',
+        mandate: m,
+        providers,
+        students,
+        lockStudentId,
+        onSaved,
+        panelId,
+      });
+    });
+  });
+  document.querySelectorAll('[data-discharge-mandate]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-discharge-mandate');
+      const m = (mandates || []).find((x) => x.id === id);
+      if (!m) return;
+      openMandateDischargeForm({ mandate: m, onSaved, panelId });
     });
   });
 }
@@ -1937,8 +2072,10 @@ function bindAdminMakeupNotes() {
       return;
     }
     if (!makeupOf) return;
+    const editId = document.getElementById('pManEditId')?.value?.trim() || '';
     const missed = await loadMissedOptions(makeupOf, makeupOf.value, {
       studentId: student?.value || '',
+      excludeSessionId: editId,
     });
     if (emptyMsg) {
       emptyMsg.hidden = missed.length > 0;
@@ -3191,6 +3328,7 @@ async function therapistHome(statusFlash) {
         attendance,
         makeupOfSessionId: attendance === 'makeup' ? (makeupOfEl?.value || '') : '',
         additionalServiceType,
+        programType: state.selectedProgramType || undefined,
         cptLabel: document.getElementById('cptLabel').value.trim(),
         notes,
       });
@@ -3395,6 +3533,9 @@ function explainHhaTriage(detail) {
   }
   if (id === '-74' && /PayCodeID/i.test(t)) {
     return 'The pay code sent is not on this caregiver in HHA.';
+  }
+  if (id === '-415' || /Invalid VisitID/i.test(t)) {
+    return 'HHA does not recognize this VisitID for the current agency. Confirm the visit in HHA, then retry Send to HHA.';
   }
   if (id === '-411' || (/Accepted Services/i.test(t) && /\bSP\b/.test(t))) {
     return 'HHA rejected speech code SP. Speech must be sent as ST.';
@@ -4087,7 +4228,10 @@ async function adminChildDetail(studentId, opts = {}) {
       </div>
 
       <div class="detail-pane"${childTab === 'mandates' ? '' : ' hidden'}>
-        <h3>Mandates</h3>
+        <div class="row" style="align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.35rem">
+          <h3 style="margin:0">Mandates</h3>
+          <button type="button" class="btn-primary" data-add-mandate>Add mandate</button>
+        </div>
         ${bulkBar('child-mandates')}
         <table>
           <tr>${bulkTh('child-mandates')}<th>Discipline / service</th><th>Ratio</th><th>Group size</th><th>Duration</th><th>Frequency</th><th>Dates</th><th>Provider</th><th></th></tr>
@@ -4096,18 +4240,23 @@ async function adminChildDetail(studentId, opts = {}) {
             const billing = m.billingServiceName
               ? `<div class="muted" style="font-size:0.85rem">${esc(m.billingServiceName)}</div>`
               : '';
+            const ended = mandateIsEndedUi(m);
             const dates = [m.startOn, m.endOn].filter(Boolean).join(' → ') || '—';
-            return `<tr>
+            const dateCell = ended
+              ? `${esc(dates)}<div class="muted" style="font-size:0.85rem">Discharged</div>`
+              : esc(dates);
+            return `<tr class="${ended ? 'row-ended' : ''}">
             ${bulkTd('child-mandates', m.id)}
             <td>${esc(service)}${billing}</td>
             <td>${esc(m.ratioLabel || (m.ratioGroup ? 'Group' : 'Individual'))}</td>
             <td>${esc(mandateGroupSizeLabel(m))}</td>
             <td>${esc(mandateDurationLabel(m))}</td>
             <td>${esc(mandateFreqLabel(m))}</td>
-            <td>${esc(dates)}</td>
+            <td>${dateCell}</td>
             <td>${providerNameLink(m.providerId, m.providerName || '—')}</td>
             <td>
               <button type="button" class="btn" data-edit-mandate="${esc(m.id)}">Edit</button>
+              <button type="button" class="btn" data-discharge-mandate="${esc(m.id)}"${ended ? ' disabled title="Already discharged"' : ''}>Discharge</button>
               <button type="button" class="btn" data-del-mandate="${esc(m.id)}">Delete</button>
             </td>
           </tr>`;
@@ -4580,7 +4729,25 @@ async function adminProviderDetail(providerId) {
             const flags = x.aiFlags || [];
             const rowClass = hard ? 'hard' : flags.length ? 'warn' : '';
             const time = [x.beginTime, x.endTime].filter(Boolean).join(' – ') || '—';
-            return `<tr class="${rowClass}">
+            const editPayload = {
+              id: x.id,
+              weekId: x.weekId || '',
+              studentId: x.studentId || '',
+              studentName: sessionChildLabel(x),
+              dateOfService: x.dateOfService || '',
+              beginTime: x.beginTime || '',
+              endTime: x.endTime || '',
+              attendance: x.attendance || 'attended',
+              cancelReason: x.cancelReason || '',
+              serviceType: x.serviceType || '',
+              additionalServiceType: x.additionalServiceType || '',
+              programType: x.programType || x.district || '',
+              cptLabel: x.cptLabel || '',
+              notes: x.notes || '',
+              makeupOfSessionId: x.makeupOfSessionId || '',
+              weekStatus: x.weekStatus || '',
+            };
+            return `<tr class="${rowClass}" data-session-json="${esc(JSON.stringify(editPayload))}">
             ${bulkTd('prov-sessions', x.id)}
             <td>${esc(x.dateOfService)}</td>
             <td>${esc(time)}</td>
@@ -4592,13 +4759,18 @@ async function adminProviderDetail(providerId) {
             <td>${sessionServiceCellHtml(x)}</td>
             <td>${esc(x.attendance)}</td>
             <td>${esc(x.notes || '')}${flags.length ? `<div class="muted">${esc(flags.join('; '))}</div>` : ''}</td>
-            <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
+            <td class="row-actions">
+              <button type="button" class="btn" data-edit-session="${esc(x.id)}">Edit</button>
+              <button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button>
+            </td>
           </tr>`;
           }).join('') || '<tr><td colspan="11">No sessions in this date range.</td></tr>'}
         </table>
 
-        <h3 style="margin-top:1.25rem">Manual session + custom note</h3>
+        <h3 style="margin-top:1.25rem" id="pManHeading">Manual session + custom note</h3>
         <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note (linked to this provider / week). Optional additional-service type (Eval, Documentation, etc.) shows in the Service column above.</p>
+        <input type="hidden" id="pManEditId" value="" />
+        <input type="hidden" id="pManEditWeekId" value="" />
         <div class="row">
           <label>Child
             <select id="pManStudent">${caseloadChildSelectOptions(mandates, 'last')}</select>
@@ -4651,7 +4823,10 @@ async function adminProviderDetail(providerId) {
         <p class="muted" id="pManMakeupNotesHint" hidden>${esc(MAKEUP_NOTES_HINT)}</p>
         <label>Custom note file (optional Word/PDF — not parsed) <input id="pManFile" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" /></label>
         <p class="muted">Missed sessions need a Frontline-style reason in the reason field or notes (e.g. Student Absence, Provider Absence, School Closed). Session attaches to the week of the date of service, split by the child’s program type / school signer when those differ.</p>
-        <button type="button" class="btn-primary" id="pManSave">Submit session</button>
+        <div class="row">
+          <button type="button" class="btn-primary" id="pManSave">Submit session</button>
+          <button type="button" class="btn" id="pManCancelEdit" hidden>Cancel edit</button>
+        </div>
 
         <h3 style="margin-top:1.25rem">Import Frontline / Therapist Activity sessions</h3>
         <p class="muted">Parsed import only (Frontline Related Service Session Notes or Therapist Activity Output PDF, text-based). Not for custom Word/PDF notes — use Manual session above for those. No week selection needed — each session attaches to the week of its date of service (within the 14-day locker), split by program type and school signer when those differ. Children and schools must already exist. Import is all-or-nothing for hard errors; yellow warnings follow the admin screening setting.</p>
@@ -4675,7 +4850,7 @@ async function adminProviderDetail(providerId) {
         <p class="muted" id="pSendTimesheetHint" hidden></p>
 
         <h3 style="margin-top:1.25rem">Additional services</h3>
-        <p class="muted">Same service types as the therapist workspace, including paid absence. Saved rows show as <strong>Additional: …</strong> in the Service column above (or use the optional type on Manual session when attaching a custom note).</p>
+        <p class="muted">Same service types as the therapist workspace, including paid absence. Saved onto the same draft week as regular sessions for this therapist (use Program type / school signer above when there is more than one). Rows show as <strong>Additional: …</strong> in the Service column and on the timesheet.</p>
         <div class="row">
           <label>Service type
             <select id="pAddlType">
@@ -4899,9 +5074,100 @@ async function adminProviderDetail(providerId) {
     } catch (e) { setStatus(e.message, 'err'); }
   };
   bindAdminMakeupNotes();
+  const clearManualSessionEdit = () => {
+    const editId = document.getElementById('pManEditId');
+    if (editId) editId.value = '';
+    const editWeekId = document.getElementById('pManEditWeekId');
+    if (editWeekId) editWeekId.value = '';
+    const heading = document.getElementById('pManHeading');
+    if (heading) heading.textContent = 'Manual session + custom note';
+    const saveBtn = document.getElementById('pManSave');
+    if (saveBtn) saveBtn.textContent = 'Submit session';
+    const cancelBtn = document.getElementById('pManCancelEdit');
+    if (cancelBtn) cancelBtn.hidden = true;
+    const fileInput = document.getElementById('pManFile');
+    if (fileInput) fileInput.value = '';
+  };
+  document.getElementById('pManCancelEdit')?.addEventListener('click', () => {
+    clearManualSessionEdit();
+    document.getElementById('pManStudent').value = '';
+    document.getElementById('pManDos').value = '';
+    document.getElementById('pManService').value = '';
+    document.getElementById('pManAddlType').value = '';
+    document.getElementById('pManAtt').value = 'attended';
+    document.getElementById('pManProgram').value = '';
+    document.getElementById('pManBegin').value = '';
+    document.getElementById('pManEnd').value = '';
+    document.getElementById('pManCpt').value = '';
+    document.getElementById('pManCancel').value = '';
+    document.getElementById('pManNotes').value = '';
+    void bindAdminMakeupNotes();
+  });
+  document.querySelectorAll('[data-edit-session]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const row = btn.closest('tr');
+      let raw = {};
+      try {
+        raw = JSON.parse(row?.getAttribute('data-session-json') || '{}');
+      } catch {
+        raw = {};
+      }
+      const studentEl = document.getElementById('pManStudent');
+      const studentId = String(raw.studentId || '').trim();
+      if (studentEl && studentId) {
+        const hasOpt = [...studentEl.options].some((o) => o.value === studentId);
+        if (!hasOpt) {
+          const opt = document.createElement('option');
+          opt.value = studentId;
+          opt.textContent = String(raw.studentName || studentId).trim() || studentId;
+          studentEl.insertBefore(opt, studentEl.lastElementChild);
+        }
+        studentEl.value = studentId;
+      } else if (studentEl) {
+        studentEl.value = '';
+      }
+      document.getElementById('pManEditId').value = raw.id || '';
+      document.getElementById('pManEditWeekId').value = raw.weekId || '';
+      document.getElementById('pManDos').value = raw.dateOfService || '';
+      document.getElementById('pManService').value = raw.serviceType || '';
+      document.getElementById('pManAddlType').value = raw.additionalServiceType || '';
+      document.getElementById('pManAtt').value = raw.attendance || 'attended';
+      const programEl = document.getElementById('pManProgram');
+      if (programEl) {
+        const pt = String(raw.programType || '').trim();
+        const hasProg = pt && [...programEl.options].some((o) => o.value === pt);
+        programEl.value = hasProg ? pt : '';
+      }
+      document.getElementById('pManBegin').value = raw.beginTime || '';
+      document.getElementById('pManEnd').value = raw.endTime || '';
+      document.getElementById('pManCpt').value = raw.cptLabel || '';
+      document.getElementById('pManCancel').value = raw.cancelReason || '';
+      document.getElementById('pManNotes').value = raw.notes || '';
+      const heading = document.getElementById('pManHeading');
+      if (heading) heading.textContent = 'Edit session';
+      const saveBtn = document.getElementById('pManSave');
+      if (saveBtn) saveBtn.textContent = 'Update session';
+      const cancelBtn = document.getElementById('pManCancelEdit');
+      if (cancelBtn) cancelBtn.hidden = false;
+      await bindAdminMakeupNotes();
+      if (raw.attendance === 'makeup') {
+        const makeupOfEl = document.getElementById('pManMakeupOf');
+        const notesEl = document.getElementById('pManNotes');
+        await loadMissedOptions(makeupOfEl, raw.makeupOfSessionId || '', {
+          studentId,
+          excludeSessionId: raw.id || '',
+        });
+        if (raw.notes) notesEl.value = raw.notes;
+        else applyMakeupNoteFromSelection(notesEl, makeupOfEl);
+      }
+      document.getElementById('pManHeading')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
   document.getElementById('pManSave').onclick = async () => {
     const btn = document.getElementById('pManSave');
     try {
+      const editId = document.getElementById('pManEditId')?.value?.trim() || '';
+      const editWeekId = document.getElementById('pManEditWeekId')?.value?.trim() || '';
       const studentId = document.getElementById('pManStudent')?.value || '';
       const dateOfService = document.getElementById('pManDos')?.value?.trim() || '';
       const attendance = document.getElementById('pManAtt')?.value || 'attended';
@@ -4934,9 +5200,9 @@ async function adminProviderDetail(providerId) {
       }
       if (btn) {
         btn.disabled = true;
-        btn.textContent = 'Submitting…';
+        btn.textContent = editId ? 'Updating…' : 'Submitting…';
       }
-      setStatus('Submitting session…', '');
+      setStatus(editId ? 'Updating session…' : 'Submitting session…', '');
       const weekStart = mondayFromDos(dateOfService) || mondayIso();
       const childSchoolId = studentId
         ? String(
@@ -4945,16 +5211,25 @@ async function adminProviderDetail(providerId) {
               || '',
           ).trim()
         : '';
-      const ensured = await api('POST', '/week/ensure', {
-        providerId,
-        weekStart,
-        schoolId: childSchoolId || undefined,
-        programType: programType || undefined,
-      });
+      const existingRow = editId ? sessions.find((x) => x.id === editId) : null;
+      const sameWeek =
+        Boolean(editId && editWeekId) &&
+        String(existingRow?.weekStart || '') === weekStart;
+      let weekId = sameWeek ? editWeekId : '';
+      if (!weekId) {
+        const ensured = await api('POST', '/week/ensure', {
+          providerId,
+          weekStart,
+          schoolId: childSchoolId || undefined,
+          programType: programType || undefined,
+        });
+        weekId = ensured.week?.id || '';
+      }
       const additionalServiceType = additionalServiceTypeEarly;
       const serviceType = serviceTypeEarly;
       const payload = {
-        weekId: ensured.week?.id,
+        id: editId || undefined,
+        weekId,
         studentId,
         dateOfService,
         beginTime: document.getElementById('pManBegin')?.value || '',
@@ -4974,9 +5249,13 @@ async function adminProviderDetail(providerId) {
       }
       const out = await api('POST', '/week/sessions', payload);
       const warns = Array.isArray(out.warnings) ? out.warnings : [];
-      const okMsg = out.archive || out.file
-        ? 'Session saved; custom note archived (not parsed).'
-        : 'Session saved.';
+      const okMsg = editId
+        ? (out.archive || out.file
+          ? 'Session updated; custom note archived (not parsed).'
+          : 'Session updated.')
+        : (out.archive || out.file
+          ? 'Session saved; custom note archived (not parsed).'
+          : 'Session saved.');
       setStatus({ success: [okMsg], warn: warns });
       await adminProviderDetail(providerId);
     } catch (e) {
@@ -4985,7 +5264,9 @@ async function adminProviderDetail(providerId) {
       setStatus({ error: errs, warn: warns });
       if (btn) {
         btn.disabled = false;
-        btn.textContent = 'Submit session';
+        btn.textContent = document.getElementById('pManEditId')?.value?.trim()
+          ? 'Update session'
+          : 'Submit session';
       }
     }
   };
@@ -5182,6 +5463,10 @@ async function adminProviderDetail(providerId) {
       if (!additionalServiceType) throw new Error('Select a service type.');
       if (!dateOfService) throw new Error('Enter the date of service.');
       const weekStart = mondayFromDos(dateOfService) || mondayIso();
+      const schoolSel = document.getElementById('pTimesheetSchool');
+      const pickerSchoolId = schoolSel?.value || '';
+      const pickerProgramType =
+        schoolSel?.selectedOptions?.[0]?.getAttribute('data-program-type') || '';
       const childSchoolId = studentId
         ? String(
             sessions.find((x) => x.studentId === studentId)?.schoolId
@@ -5189,10 +5474,21 @@ async function adminProviderDetail(providerId) {
               || '',
           ).trim()
         : '';
+      const childProgramType = studentId
+        ? String(
+            sessions.find((x) => x.studentId === studentId)?.programType
+              || sessions.find((x) => x.studentId === studentId)?.district
+              || mandates.find((m) => m.studentId === studentId)?.programType
+              || '',
+          ).trim()
+        : '';
+      // No-child rows join the program bin from the timesheet picker (or child's program).
+      const programType = childProgramType || pickerProgramType || '';
       const ensured = await api('POST', '/week/ensure', {
         providerId,
         weekStart,
-        schoolId: childSchoolId || undefined,
+        schoolId: childSchoolId || pickerSchoolId || undefined,
+        programType: programType || undefined,
       });
       await api('POST', '/week/sessions', {
         weekId: ensured.week?.id,
@@ -5202,6 +5498,7 @@ async function adminProviderDetail(providerId) {
         endTime: document.getElementById('pAddlEnd').value,
         attendance: additionalServiceType === 'paid_absence' ? 'attended' : 'attended',
         additionalServiceType,
+        programType: programType || undefined,
         cptLabel: document.getElementById('pAddlCpt')?.value?.trim() || '',
         notes: document.getElementById('pAddlNotes').value,
       });

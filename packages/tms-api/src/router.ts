@@ -75,6 +75,7 @@ import {
   timesheetBinKeyForWeek,
   weeksMatchingSchoolBin,
   weekMatchesSchoolBin,
+  foldOrphanNoChildAdditionalWeeks,
   resolveWeekSchoolId,
   resolveWeekProgramType,
   dominantSchoolIdForSessions,
@@ -452,6 +453,8 @@ function foldWeeksOnto(
   let keep = target;
   for (const extra of extras) {
     if (!extra || extra.id === keep.id) continue;
+    // Never fold across providers — send lock is per providerId + program + week.
+    if (extra.providerId !== keep.providerId) continue;
     if (timesheetBinKeyForWeek(store, extra) !== targetBin) continue;
     const moved = store.sessionsForWeek(extra.id).length;
     for (const s of store.sessionsForWeek(extra.id)) {
@@ -503,6 +506,7 @@ function foldWeeksOnto(
 function foldEditableSameBinWeeks(
   store: MemoryStore,
   weeks: Array<(typeof store.data.weeks)[number]>,
+  opts?: { preferProgramType?: string },
 ): void {
   const groups = new Map<string, Array<(typeof store.data.weeks)[number]>>();
   for (const w of weeks) {
@@ -518,9 +522,18 @@ function foldEditableSameBinWeeks(
     const keep = group[0]!;
     foldWeeksOnto(store, keep, group.slice(1));
   }
+  // After same-bin folds, absorb orphan no-child additional-service drafts.
+  foldOrphanNoChildAdditionalWeeks(store, weeks, {
+    preferProgramType: opts?.preferProgramType,
+  });
 }
 
-/** Prefer school/program-scoped week; never fold different program-type bins together. */
+/**
+ * Prefer school/program-scoped week; never fold different program-type bins together.
+ * Timesheet send lock is per providerId + program + weekStart — never adopt or
+ * reassign another provider's submitted/signed/locked week (name-alias twins used
+ * to steal a submitted bin and block a second therapist on the same program).
+ */
 function pickWeekForScope(
   store: MemoryStore,
   matchedWeeks: WeeklyPeriod[],
@@ -530,11 +543,25 @@ function pickWeekForScope(
   const providerId = String(opts?.providerId || '').trim();
   const schoolId = String(opts?.schoolId || '').trim();
   const programType = String(opts?.programType || '').trim();
-  let candidates = matchedWeeks;
+  let pool = matchedWeeks;
+  if (providerId) {
+    const exact = matchedWeeks.filter((w) => w.providerId === providerId);
+    // Prefer this provider's own bins. Fall back to alias weeks only when they are
+    // still editable (draft/reopened) so a name twin can share an open draft —
+    // never fall back onto a submitted/signed/locked alias week.
+    if (exact.length) {
+      pool = exact;
+    } else {
+      const editableAlias = matchedWeeks.filter((w) => therapistCanEdit(w.status));
+      if (!editableAlias.length) return undefined;
+      pool = editableAlias;
+    }
+  }
+  let candidates = pool;
   if (schoolId || programType) {
     const scoped = weeksMatchingSchoolBin(
       store,
-      matchedWeeks,
+      pool,
       schoolId || undefined,
       programType || undefined,
     );
@@ -546,7 +573,10 @@ function pickWeekForScope(
     (providerId ? candidates.find((w) => w.providerId === providerId) : undefined) ||
     candidates[0];
   if (!week) return undefined;
+  // Only retarget editable alias drafts onto the requested providerId. Never move
+  // ownership of a submitted/signed/locked timesheet across provider rows.
   if (providerId && week.providerId !== providerId) {
+    if (!therapistCanEdit(week.status)) return undefined;
     week = store.upsertWeek({ ...week, providerId });
   }
   // Program-type-only scope: merge every editable matching bin (multi-building programs).
@@ -556,13 +586,16 @@ function pickWeekForScope(
       (w) =>
         w.id !== week!.id &&
         therapistCanEdit(w.status) &&
+        (w.providerId === week!.providerId || w.providerId === providerId) &&
         normalizeProgramTypeKey(resolveWeekProgramType(store, w)) === want,
     );
     if (extras.length) foldWeeksOnto(store, week, extras);
-  } else {
-    const sameBin = matchedWeeks.filter(
+  } else if (therapistCanEdit(week.status)) {
+    const sameBin = pool.filter(
       (w) =>
         w.id !== week!.id &&
+        therapistCanEdit(w.status) &&
+        (w.providerId === week!.providerId || w.providerId === providerId) &&
         timesheetBinKeyForWeek(store, w) === timesheetBinKeyForWeek(store, week!),
     );
     if (sameBin.length) foldWeeksOnto(store, week, sameBin);
@@ -2388,6 +2421,11 @@ export async function handleTmsRequest(
     return adminUser(() => {
       const weekStart = String(req.query.weekStart || '').trim();
       const name = String(req.query.name || req.query.q || '').trim();
+      // Heal orphan no-child additional drafts before listing (Astacio-style dupes).
+      const healPool = weekStart
+        ? store.data.weeks.filter((w) => w.weekStart === weekStart)
+        : store.data.weeks;
+      foldOrphanNoChildAdditionalWeeks(store, healPool);
       return json(200, {
         weeks: adminWeeksList(store, {
           ...(weekStart ? { weekStart } : {}),
@@ -3019,7 +3057,9 @@ export async function handleTmsRequest(
       providerLookupIds(store, providerId).includes(w.providerId),
     );
     // Repair fragmented unsigned multi-building bins before counting (Carle Place etc.).
-    foldEditableSameBinWeeks(store, providerWeeks);
+    foldEditableSameBinWeeks(store, providerWeeks, {
+      preferProgramType: programType || undefined,
+    });
     const weeks = store.data.weeks
       .filter((w) => providerLookupIds(store, providerId).includes(w.providerId))
       .map((w) => {
@@ -3433,7 +3473,11 @@ export async function handleTmsRequest(
     const programType = String(b.programType || '').trim();
     if (!providerId || !weekStart) return json(400, { error: 'providerId and weekStart are required.' });
     const aliasWeeks = weeksForProviderStart(store, providerId, weekStart);
-    let week = pickWeekForScope(store, aliasWeeks, {
+    foldEditableSameBinWeeks(store, aliasWeeks, {
+      preferProgramType: programType || undefined,
+    });
+    const healedWeeks = weeksForProviderStart(store, providerId, weekStart);
+    let week = pickWeekForScope(store, healedWeeks, {
       providerId,
       schoolId: schoolId || undefined,
       programType: programType || undefined,
@@ -4374,9 +4418,9 @@ export async function handleTmsRequest(
     if (ageErr) return json(400, { error: ageErr, errors: [ageErr] });
     // Route new sessions onto the child's program-type timesheet bin.
     let targetWeek = week;
-    const childStudent = store.data.students.find(
-      (st) => st.id === pickStr(b.studentId, existing?.studentId || ''),
-    );
+    const requestedStudentId = pickStr(b.studentId, existing?.studentId || '');
+    const bodyProgramType = String(b.programType || '').trim();
+    const childStudent = store.data.students.find((st) => st.id === requestedStudentId);
     const childSchoolId = String(childStudent?.schoolId || '').trim();
     const childProgramType = String(childStudent?.programType || '').trim();
     if (
@@ -4429,6 +4473,66 @@ export async function handleTmsRequest(
         });
       }
       targetWeek = scoped;
+      if (!therapistCanImportOrAddServices(targetWeek.status) && ctx.user.role !== 'admin') {
+        return json(409, {
+          error:
+            targetWeek.status === 'submitted'
+              ? 'This program week is awaiting signature. Cancel the approval request before adding sessions.'
+              : weekIsProcessed(targetWeek.status)
+                ? 'This program week is signed/locked. Ask an admin to reopen it before adding sessions.'
+                : 'This program week cannot accept new sessions.',
+        });
+      }
+    } else if (
+      !existing &&
+      additionalServiceType &&
+      !requestedStudentId
+    ) {
+      // No-child additional: attach to the same therapist+week draft as regular sessions.
+      const matched = weeksForProviderStart(store, week.providerId, week.weekStart);
+      foldEditableSameBinWeeks(store, matched, {
+        preferProgramType: bodyProgramType || week.programType || undefined,
+      });
+      const siblings = weeksForProviderStart(store, week.providerId, week.weekStart);
+      const preferPt = programTypeKey(bodyProgramType || week.programType || '');
+      const host =
+        (preferPt
+          ? siblings.find(
+              (w) =>
+                therapistCanEdit(w.status) &&
+                programTypeKey(resolveWeekProgramType(store, w)) === preferPt &&
+                store.sessionsForWeek(w.id).some((s) => String(s.studentId || '').trim()),
+            )
+          : undefined) ||
+        siblings
+          .filter(
+            (w) =>
+              therapistCanEdit(w.status) &&
+              store.sessionsForWeek(w.id).some((s) => String(s.studentId || '').trim()),
+          )
+          .sort(
+            (a, b) =>
+              store.sessionsForWeek(b.id).length - store.sessionsForWeek(a.id).length,
+          )[0] ||
+        (preferPt
+          ? siblings.find(
+              (w) =>
+                therapistCanEdit(w.status) &&
+                programTypeKey(resolveWeekProgramType(store, w)) === preferPt,
+            )
+          : undefined) ||
+        (therapistCanEdit(week.status) ? week : undefined) ||
+        siblings.find((w) => therapistCanEdit(w.status));
+      if (host) {
+        targetWeek = host;
+        if (
+          bodyProgramType &&
+          therapistCanEdit(targetWeek.status) &&
+          !String(targetWeek.programType || '').trim()
+        ) {
+          targetWeek = store.upsertWeek({ ...targetWeek, programType: bodyProgramType });
+        }
+      }
       if (!therapistCanImportOrAddServices(targetWeek.status) && ctx.user.role !== 'admin') {
         return json(409, {
           error:
@@ -4541,6 +4645,20 @@ export async function handleTmsRequest(
     session.aiFlags = screenedLocal.flags;
     session.aiBlock = screenedLocal.block;
     store.upsertSession(session);
+    // Drop empty draft shells left behind when a no-child additional was re-homed.
+    if (week.id !== targetWeek.id && therapistCanEdit(week.status)) {
+      if (store.sessionsForWeek(week.id).length === 0) {
+        store.removeWeek(week.id);
+      }
+    }
+    foldOrphanNoChildAdditionalWeeks(
+      store,
+      weeksForProviderStart(store, targetWeek.providerId, targetWeek.weekStart),
+      {
+        preferProgramType:
+          bodyProgramType || targetWeek.programType || childProgramType || undefined,
+      },
+    );
     if (therapistCanEdit(targetWeek.status)) {
       const signerSchool = resolveWeekSchool(store, targetWeek.providerId, {
         weekId: targetWeek.id,

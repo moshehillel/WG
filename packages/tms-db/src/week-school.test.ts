@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MemoryStore } from './memory-store.js';
 import { nowIso, newId } from './ids.js';
 import {
+  foldOrphanNoChildAdditionalWeeks,
   splitWeekBySchoolBins,
   timesheetBinKeyForParts,
   timesheetBinKeyForSchool,
@@ -411,5 +412,180 @@ describe('week-school bins', () => {
     expect(bins).toHaveLength(1);
     expect(store.data.weeks).toHaveLength(1);
     expect(store.sessionsForWeek(week.id)).toHaveLength(2);
+  });
+
+  it('splitWeekBySchoolBins keeps no-child additional services on the host program week', () => {
+    const store = emptyStore();
+    const school = store.upsertSchool({
+      id: 'hk',
+      name: 'Hicksville ES',
+      district: 'Hicksville',
+      signerName: 'Signer',
+      signerEmail: 'signer@hicksville.test',
+      createdAt: nowIso(),
+    });
+    const child = store.upsertStudent({
+      id: 'c1',
+      schoolId: school.id,
+      firstName: 'Kid',
+      lastName: 'One',
+      dob: '',
+      programId: '',
+      programType: 'Hicksville UFSD Therapy',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: 'w1',
+      providerId: 'p1',
+      weekStart: '2026-09-21',
+      programType: 'Hicksville UFSD Therapy',
+      schoolId: school.id,
+      status: 'draft',
+      signerName: school.signerName,
+      signerEmail: school.signerEmail,
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: 's-child',
+      weekId: week.id,
+      studentId: child.id,
+      dateOfService: '09/21/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'ST',
+      additionalServiceType: '',
+      location: 'school',
+      notes: 'therapy',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+    store.upsertSession({
+      id: 's-addl',
+      weekId: week.id,
+      studentId: '',
+      dateOfService: '09/21/2026',
+      beginTime: '10:00 am',
+      endTime: '10:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'Documentation',
+      additionalServiceType: 'documentation',
+      location: '',
+      notes: 'docs',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+
+    const bins = splitWeekBySchoolBins(store, week, () => newId());
+    expect(bins).toHaveLength(1);
+    expect(store.data.weeks).toHaveLength(1);
+    expect(store.sessionsForWeek(week.id)).toHaveLength(2);
+    expect(store.sessionsForWeek(week.id).some((s) => s.id === 's-addl')).toBe(true);
+  });
+
+  it('foldOrphanNoChildAdditionalWeeks merges empty-program draft into host', () => {
+    const store = emptyStore();
+    const school = store.upsertSchool({
+      id: 'hk',
+      name: 'Hicksville ES',
+      district: 'Hicksville',
+      signerName: 'Signer',
+      signerEmail: 'signer@hicksville.test',
+      createdAt: nowIso(),
+    });
+    const child = store.upsertStudent({
+      id: 'c1',
+      schoolId: school.id,
+      firstName: 'Kid',
+      lastName: 'One',
+      dob: '',
+      programId: '',
+      programType: 'Hicksville UFSD Therapy',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const host = store.upsertWeek({
+      id: 'w-host',
+      providerId: 'p1',
+      weekStart: '2026-09-21',
+      programType: 'Hicksville UFSD Therapy',
+      schoolId: school.id,
+      status: 'draft',
+      signerName: school.signerName,
+      signerEmail: school.signerEmail,
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    const orphan = store.upsertWeek({
+      id: 'w-orphan',
+      providerId: 'p1',
+      weekStart: '2026-09-21',
+      programType: '',
+      schoolId: '',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: 's-child',
+      weekId: host.id,
+      studentId: child.id,
+      dateOfService: '09/21/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'ST',
+      additionalServiceType: '',
+      location: 'school',
+      notes: 'therapy',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+    store.upsertSession({
+      id: 's-addl',
+      weekId: orphan.id,
+      studentId: '',
+      dateOfService: '09/21/2026',
+      beginTime: '10:00 am',
+      endTime: '10:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'Documentation',
+      additionalServiceType: 'documentation',
+      location: '',
+      notes: 'docs',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+
+    foldOrphanNoChildAdditionalWeeks(store, store.data.weeks);
+    expect(store.data.weeks).toHaveLength(1);
+    expect(store.data.weeks[0]?.id).toBe(host.id);
+    expect(store.sessionsForWeek(host.id).map((s) => s.id).sort()).toEqual(['s-addl', 's-child']);
   });
 });

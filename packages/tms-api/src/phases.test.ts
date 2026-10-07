@@ -386,4 +386,91 @@ describe('phase 2–3', () => {
     expect(extracted).not.toMatch(/\$38/);
     expect(extracted).toMatch(/Powered by advancedautomations\.net/);
   });
+
+  it('includes all additional service types on the timesheet PDF with regular sessions', () => {
+    const therapy = {
+      id: 'therapy',
+      weekId: 'w',
+      studentId: 'st-ava',
+      dateOfService: '10/06/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended' as const,
+      serviceType: 'ST School',
+      additionalServiceType: '' as const,
+      location: 'School',
+      notes: 'Articulation',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      aiFlags: [] as string[],
+    };
+    const addlTypes = [
+      'eval',
+      'progress_report',
+      'consultation',
+      'meetings',
+      'documentation',
+      'paid_absence',
+    ] as const;
+    const addlRows = addlTypes.map((t, i) => ({
+      session: {
+        ...therapy,
+        id: `addl-${t}`,
+        studentId: '',
+        beginTime: `${10 + i}:00 am`,
+        endTime: `${10 + i}:30 am`,
+        serviceType: t === 'progress_report' ? 'Progress report' : t === 'paid_absence' ? 'Paid absence' : t[0]!.toUpperCase() + t.slice(1),
+        additionalServiceType: t,
+        notes: `Additional ${t}`,
+        cptCodes: [] as string[],
+        cptLabel: '',
+      },
+      student: undefined,
+      payAmount: 55,
+    }));
+    const pdf = buildTimesheetPdf({
+      week: {
+        id: 'w',
+        providerId: 'p',
+        weekStart: '2026-10-05',
+        status: 'draft',
+        signerName: 'A',
+        signerEmail: 'a@b.c',
+        timesheetKey: '',
+        signedKey: '',
+        envelopeId: '',
+        hhaStatus: 'none',
+      },
+      providerLabel: 'Wiglishai Astacio',
+      signerName: 'A',
+      signerEmail: 'a@b.c',
+      rows: [
+        {
+          session: therapy,
+          student: {
+            id: 'st-ava',
+            firstName: 'Ava',
+            lastName: 'Nguyen',
+            schoolId: '',
+            dob: '',
+            programId: '',
+            programType: '',
+            hhaPatientId: '',
+            createdAt: nowIso(),
+          },
+          payAmount: 42.5,
+        },
+        ...addlRows,
+      ],
+    });
+    const extracted = extractPdfLatinText(Buffer.from(pdf));
+    expect(extracted).toMatch(/Ava Nguyen/);
+    expect(extracted).toMatch(/No child/);
+    expect(extracted).toMatch(/Additional: Eval/);
+    expect(extracted).toMatch(/Additional: Progress report/);
+    expect(extracted).toMatch(/Additional: Consultation/);
+    expect(extracted).toMatch(/Additional: Meetings/);
+    expect(extracted).toMatch(/Additional: Documentation/);
+    expect(extracted).toMatch(/Additional: Paid absence/);
+  });
 });

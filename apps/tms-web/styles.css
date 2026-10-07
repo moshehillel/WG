@@ -1311,6 +1311,11 @@ tbody tr:hover { background: #eaf3fb; }
 tbody tr:last-child td { border-bottom: 0; }
 tr.row-warn { background: #fff7ed; }
 tr.row-err { background: #fef2f2; }
+tr.row-ended {
+  opacity: 0.62;
+  color: var(--muted, #64748b);
+}
+tr.row-ended:hover { opacity: 0.78; }
 .err-inline { color: #991b1b; font-weight: 600; }
 
 .site-footer,

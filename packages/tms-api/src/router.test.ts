@@ -368,12 +368,15 @@ describe('TMS API weekly loop', () => {
 
   it('saves an additional service with no child and still requires a child on a therapy session', async () => {
     const { store, provider } = storeWithTherapist();
+    // Keep DOS inside the default 14-day locker relative to "today".
+    const weekStart = '2026-10-05';
+    const dos = '10/06/2026';
     const ensured = await handleTmsRequest(store, {
       method: 'POST',
       path: '/week/ensure',
       headers: thH,
       query: {},
-      body: { weekStart: '2026-09-21', providerId: provider.id },
+      body: { weekStart, providerId: provider.id },
     });
     const weekId = (ensured.body as { week: { id: string } }).week.id;
 
@@ -385,7 +388,7 @@ describe('TMS API weekly loop', () => {
       body: {
         weekId,
         studentId: '',
-        dateOfService: '09/21/2026',
+        dateOfService: dos,
         attendance: 'attended',
         beginTime: '9:00 am',
         endTime: '9:30 am',
@@ -404,7 +407,7 @@ describe('TMS API weekly loop', () => {
       body: {
         weekId,
         studentId: '',
-        dateOfService: '09/21/2026',
+        dateOfService: dos,
         attendance: 'attended',
         beginTime: '9:00 am',
         endTime: '9:30 am',
@@ -424,7 +427,7 @@ describe('TMS API weekly loop', () => {
       method: 'GET',
       path: '/week',
       headers: thH,
-      query: { weekStart: '2026-09-21', providerId: provider.id },
+      query: { weekStart, providerId: provider.id },
       body: undefined,
     });
     expect(week.status).toBe(200);
@@ -434,6 +437,113 @@ describe('TMS API weekly loop', () => {
     expect(rows[0]?.studentId).toBe('');
     expect(rows[0]?.studentName).toBe('No child');
     expect(rows[0]?.additionalServiceType).toBe('documentation');
+  });
+
+  it('merges no-child additional service onto the same draft as regular sessions', async () => {
+    const { store, provider } = storeWithTherapist();
+    // Keep DOS inside the default 14-day locker relative to "today".
+    const weekStart = '2026-10-05';
+    const dos = '10/06/2026';
+    const parsed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Astacio Kid\nService Type: ST School\nMandate frequency: 1x/week\nDOB: 07/12/2019`,
+      },
+    });
+    const studentId = (parsed.body as { student: { id: string } }).student.id;
+    const student = store.data.students.find((s) => s.id === studentId)!;
+    store.upsertStudent({
+      ...student,
+      programType: 'Hicksville UFSD Therapy',
+    });
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: {
+        weekStart,
+        providerId: provider.id,
+        programType: 'Hicksville UFSD Therapy',
+      },
+    });
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+    const therapy = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: dos,
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: articulation',
+        serviceType: 'ST School',
+      },
+    });
+    expect(therapy.status).toBe(200);
+
+    // Simulate the old bug: a separate empty-program week for the additional service.
+    const orphan = store.upsertWeek({
+      id: 'orphan-addl',
+      providerId: provider.id,
+      weekStart,
+      programType: '',
+      schoolId: '',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+      hhaError: '',
+    });
+    const addl = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId: orphan.id,
+        studentId: '',
+        dateOfService: dos,
+        attendance: 'attended',
+        beginTime: '10:00 am',
+        endTime: '10:30 am',
+        notes: 'Weekly documentation',
+        additionalServiceType: 'documentation',
+        programType: 'Hicksville UFSD Therapy',
+      },
+    });
+    expect(addl.status).toBe(200);
+    const saved = (addl.body as { session: { weekId: string; additionalServiceType: string } })
+      .session;
+    expect(saved.additionalServiceType).toBe('documentation');
+    expect(saved.weekId).toBe(weekId);
+    expect(store.data.weeks.filter((w) => w.weekStart === weekStart)).toHaveLength(1);
+
+    const week = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/week',
+      headers: thH,
+      query: {
+        weekStart,
+        providerId: provider.id,
+        programType: 'Hicksville UFSD Therapy',
+      },
+      body: undefined,
+    });
+    expect(week.status).toBe(200);
+    const rows = (week.body as { sessions: Array<{ additionalServiceType?: string }> }).sessions;
+    expect(rows).toHaveLength(2);
+    expect(rows.some((r) => r.additionalServiceType === 'documentation')).toBe(true);
   });
 
   it('lets admin create a therapist login', async () => {
@@ -4524,6 +4634,168 @@ describe('TMS MFA org policy', () => {
     expect(bodyB.week.status).toBe('draft');
     expect(bodyB.week.signerEmail).toBe(schoolB.signerEmail);
     expect(bodyB.sessions).toHaveLength(1);
+  });
+
+  it('second provider can ensure/send same program+week after first provider submitted', async () => {
+    const { store } = storeWithTherapist();
+    const school = store.upsertSchool({
+      id: newId(),
+      name: 'Hicksville MS',
+      district: 'Hicksville',
+      signerName: 'Hick Signer',
+      signerEmail: 'signer@hicksville.test',
+      createdAt: nowIso(),
+    });
+    // Same display name used to alias rows and steal the submitted week.
+    const providerA = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Same',
+      lastName: 'Therapist',
+      discipline: 'PT',
+      ...{
+        payRatePerHour: 70,
+        payRate30Min: null,
+        payRate42Min: null,
+        payRate45Min: null,
+        payRateGroup30Min: null,
+        payRateGroup42Min: null,
+        payRateGroup45Min: null,
+        payRateEval: null,
+        payRateAdditionalHourly: null,
+      },
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const providerB = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Same',
+      lastName: 'Therapist',
+      discipline: 'OT',
+      ...{
+        payRatePerHour: 70,
+        payRate30Min: null,
+        payRate42Min: null,
+        payRate45Min: null,
+        payRateGroup30Min: null,
+        payRateGroup42Min: null,
+        payRateGroup45Min: null,
+        payRateEval: null,
+        payRateAdditionalHourly: null,
+      },
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const childA = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Kid',
+      lastName: 'A',
+      dob: '',
+      programId: '',
+      programType: 'Hicksville UFSD Therapy',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const childB = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Kid',
+      lastName: 'B',
+      dob: '',
+      programId: '',
+      programType: 'Hicksville UFSD Therapy',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    for (const [providerId, studentId] of [
+      [providerA.id, childA.id],
+      [providerB.id, childB.id],
+    ] as const) {
+      store.upsertMandate({
+        id: newId(),
+        studentId,
+        providerId,
+        serviceType: 'PT School',
+        discipline: 'PT',
+        frequencyPerWeek: 1,
+        frequencyKind: 'weekly',
+        sessionsPerPeriod: 1,
+        ratioGroup: false,
+        sourcePdfKey: '',
+        parsedAt: nowIso(),
+        startOn: '',
+        endOn: '',
+        createdAt: nowIso(),
+      });
+    }
+    const weekStart = '2026-09-21';
+    const programType = 'Hicksville UFSD Therapy';
+    const ensA = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: adminH,
+      query: {},
+      body: { providerId: providerA.id, weekStart, schoolId: school.id, programType },
+    });
+    expect(ensA.status).toBe(200);
+    const weekA = (ensA.body as { week: { id: string } }).week.id;
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: adminH,
+      query: {},
+      body: {
+        weekId: weekA,
+        studentId: childA.id,
+        dateOfService: '09/22/2026',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        attendance: 'attended',
+        notes: 'Hicksville session with enough clinical detail for screening.',
+        serviceType: 'PT School',
+      },
+    });
+    store.upsertWeek({
+      ...store.data.weeks.find((w) => w.id === weekA)!,
+      status: 'submitted',
+      programType,
+      signerEmail: school.signerEmail,
+      signerName: school.signerName,
+      providerSignedKey: 'tms/provider-signed/a.pdf',
+    });
+
+    const ensB = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: adminH,
+      query: {},
+      body: { providerId: providerB.id, weekStart, schoolId: school.id, programType },
+    });
+    expect(ensB.status).toBe(200);
+    const bodyEnsB = ensB.body as { week: { id: string; status: string; providerId: string } };
+    expect(bodyEnsB.week.id).not.toBe(weekA);
+    expect(bodyEnsB.week.providerId).toBe(providerB.id);
+    expect(bodyEnsB.week.status).toBe('draft');
+    // Provider A's submitted week must stay owned by A.
+    expect(store.data.weeks.find((w) => w.id === weekA)?.providerId).toBe(providerA.id);
+    expect(store.data.weeks.find((w) => w.id === weekA)?.status).toBe('submitted');
+
+    const gotB = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/week',
+      headers: adminH,
+      query: { weekStart, providerId: providerB.id, schoolId: school.id, programType },
+      body: undefined,
+    });
+    expect(gotB.status).toBe(200);
+    const bodyB = gotB.body as { week: { id: string; status: string; providerId: string } };
+    expect(bodyB.week.id).toBe(bodyEnsB.week.id);
+    expect(bodyB.week.status).toBe('draft');
+    expect(bodyB.week.providerId).toBe(providerB.id);
   });
 
   it('GET /me returns programTypes and archive delete works for therapist', async () => {

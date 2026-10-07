@@ -1,2 +1,1 @@
-// Local dev only. CDK deploy overwrites this on S3 with the live Function URL.
-window.TMS_CONFIG = window.TMS_CONFIG || { apiUrl: '', userPoolId: '' };
+window.TMS_CONFIG={apiUrl:"https://wgfront.netlify.app/api",userPoolId:"us-east-1_nDJo2pcjL",clientId:"26mqlo51v8au2mhcg0nbmh4bu2"};

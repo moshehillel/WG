@@ -1,4 +1,11 @@
-import { sessionListedChildName, type SessionRow, type Student, type WeeklyPeriod } from '@white-glove/tms-db';
+import {
+  additionalServiceLabel,
+  isAdditionalServiceType,
+  sessionListedChildName,
+  type SessionRow,
+  type Student,
+  type WeeklyPeriod,
+} from '@white-glove/tms-db';
 
 /** Letter landscape (pt). */
 export const TIMESHEET_PAGE = { width: 792, height: 612 } as const;
@@ -564,13 +571,22 @@ export function buildTimesheetPdf(input: {
     );
     const notes = String(row.session.notes || row.session.location || '').trim();
     const cpt = String(row.session.cptLabel || (row.session.cptCodes || []).join(', ') || '').trim();
+    const addlType = String(row.session.additionalServiceType || '').trim();
+    const addlLabel = isAdditionalServiceType(addlType)
+      ? additionalServiceLabel(addlType) || row.session.serviceType || addlType
+      : '';
+    const code =
+      cpt ||
+      (addlLabel ? `Additional: ${addlLabel}` : '') ||
+      row.session.serviceType ||
+      '';
     return {
       child: name,
       dos: row.session.dateOfService || '',
       in: row.session.beginTime || '',
       out: row.session.endTime || '',
       att: row.session.attendance || '',
-      code: cpt || row.session.serviceType || '',
+      code,
       notes,
     };
   });

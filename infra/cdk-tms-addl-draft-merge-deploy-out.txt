@@ -1,0 +1,22 @@
+LIVE_OK: additional services merge into same therapist+week draft
+Function: WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ
+TMS_GIT_SHA (build define): cbed1bd
+CodeSha256: 8XpOokxjg+mutjwnY/4L7QIOrVYbh5PSLOqDfJeoG+s=
+LastModified: 2026-10-07T18:02:37.000+0000
+CodeSize: 552035
+HHA_USE_PRODUCTION=true preserved (unchanged)
+HHA_USE_MOCK=false
+HHA_ALLOW_PRODUCTION=true
+
+Changes:
+1. splitWeekBySchoolBins keeps no-child additional services on the host program bin
+2. foldOrphanNoChildAdditionalWeeks heals duplicate empty-program drafts (Astacio)
+3. POST /week/sessions routes no-child additional onto sibling draft with child sessions
+4. Timesheet PDF shows Additional: <label> for those rows (Eval, Progress report, Consultation, Meetings, Documentation, Paid absence)
+5. FE: admin Additional services passes programType (app.js?v=138)
+
+FE Netlify (wgfront):
+- Deploy id 6ac6896d12b12a32ea05cff7 ready/production
+- Production URL: https://wgfront.netlify.app
+- Title: addl services draft merge app.js v138
+- CLI: NODE_TLS_REJECT_UNAUTHORIZED=0 + netlify deploy --prod --dir=. --no-build

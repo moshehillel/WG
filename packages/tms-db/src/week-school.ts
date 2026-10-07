@@ -1,6 +1,7 @@
 import { resolveSchoolOrDistrictSigner } from './districts.js';
 import type { MemoryStore } from './memory-store.js';
 import type { School, SessionRow, WeeklyPeriod } from './types.js';
+import { therapistCanEdit } from './week-state.js';
 
 /** Normalize signer email for timesheet bin matching. */
 export function normalizeSignerEmail(email: string | undefined | null): string {
@@ -253,7 +254,13 @@ export function splitWeekBySchoolBins(
     string,
     { schoolId: string; programType: string; sessions: SessionRow[] }
   >();
+  /** No-child additional services have no programType — never form their own empty bin. */
+  const orphanNoChild: SessionRow[] = [];
   for (const s of sessions) {
+    if (!String(s.studentId || '').trim()) {
+      orphanNoChild.push(s);
+      continue;
+    }
     const student = store.data.students.find((st) => st.id === s.studentId);
     const schoolId = String(student?.schoolId || '').trim();
     const programType = programTypeForStudent(student);
@@ -265,6 +272,30 @@ export function splitWeekBySchoolBins(
     const g = groups.get(key);
     if (g) g.sessions.push(s);
     else groups.set(key, { schoolId, programType, sessions: [s] });
+  }
+  if (!groups.size) {
+    // Week is only no-child additional services — keep as one row; do not invent a split.
+    return [week];
+  }
+  if (orphanNoChild.length) {
+    const stampedSchoolId = String(week.schoolId || '').trim();
+    const stampedProgram = String(week.programType || '').trim();
+    const stampedSchool = stampedSchoolId
+      ? store.data.schools.find((s) => s.id === stampedSchoolId)
+      : undefined;
+    const stampedKey =
+      stampedSchool || stampedSchoolId || stampedProgram
+        ? timesheetBinKeyForParts(
+            stampedProgram,
+            stampedSchool || (stampedSchoolId ? { id: stampedSchoolId, signerEmail: '' } : null),
+          )
+        : '';
+    let attachKey =
+      stampedKey && groups.has(stampedKey)
+        ? stampedKey
+        : [...groups.entries()].sort((a, b) => b[1].sessions.length - a[1].sessions.length)[0]![0];
+    const host = groups.get(attachKey)!;
+    host.sessions.push(...orphanNoChild);
   }
   if (groups.size <= 1) {
     const only = [...groups.values()][0];
@@ -358,4 +389,101 @@ export function splitWeekBySchoolBins(
     out.push(created);
   }
   return out;
+}
+
+function weekHasChildSessions(store: MemoryStore, week: WeeklyPeriod): boolean {
+  return store.sessionsForWeek(week.id).some((s) => String(s.studentId || '').trim());
+}
+
+/** Editable week whose sessions are all no-child (typically additional services). */
+function weekIsOrphanNoChildAdditional(store: MemoryStore, week: WeeklyPeriod): boolean {
+  if (!therapistCanEdit(week.status)) return false;
+  const sessions = store.sessionsForWeek(week.id);
+  if (!sessions.length) return false;
+  return sessions.every((s) => !String(s.studentId || '').trim());
+}
+
+/**
+ * Fold draft/reopened weeks that only hold no-child additional services onto a
+ * sibling editable week for the same therapist + Monday that already has child
+ * sessions (or a stamped program type). Heals the duplicate Astacio-style draft
+ * rows created before no-child rows stayed in the host program bin.
+ */
+export function foldOrphanNoChildAdditionalWeeks(
+  store: MemoryStore,
+  weeks: WeeklyPeriod[],
+  opts?: { preferProgramType?: string },
+): void {
+  const preferPt = normalizeProgramTypeKey(opts?.preferProgramType || '');
+  const groups = new Map<string, WeeklyPeriod[]>();
+  for (const w of weeks) {
+    const key = `${w.providerId}::${w.weekStart}`;
+    const list = groups.get(key) || [];
+    list.push(w);
+    groups.set(key, list);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const orphans = group.filter((w) => weekIsOrphanNoChildAdditional(store, w));
+    if (!orphans.length) continue;
+
+    const hosts = group
+      .filter((w) => therapistCanEdit(w.status) && weekHasChildSessions(store, w))
+      .sort((a, b) => {
+        if (preferPt) {
+          const aMatch =
+            normalizeProgramTypeKey(resolveWeekProgramType(store, a)) === preferPt;
+          const bMatch =
+            normalizeProgramTypeKey(resolveWeekProgramType(store, b)) === preferPt;
+          if (aMatch !== bMatch) return aMatch ? -1 : 1;
+        }
+        return store.sessionsForWeek(b.id).length - store.sessionsForWeek(a.id).length;
+      });
+
+    let host = hosts[0];
+    if (!host) {
+      // No child-session host: collapse orphan fragments onto the best editable sibling.
+      const editable = group
+        .filter((w) => therapistCanEdit(w.status))
+        .sort((a, b) => {
+          const aPt = String(resolveWeekProgramType(store, a) || '').trim() ? 1 : 0;
+          const bPt = String(resolveWeekProgramType(store, b) || '').trim() ? 1 : 0;
+          if (aPt !== bPt) return bPt - aPt;
+          return store.sessionsForWeek(b.id).length - store.sessionsForWeek(a.id).length;
+        });
+      host = editable[0];
+      if (!host) continue;
+    }
+
+    for (const orphan of orphans) {
+      if (orphan.id === host.id) continue;
+      const moved = store.sessionsForWeek(orphan.id).length;
+      for (const s of store.sessionsForWeek(orphan.id)) {
+        store.upsertSession({ ...s, weekId: host.id });
+      }
+      const patch: Partial<WeeklyPeriod> = {};
+      if (
+        !String(host.programType || '').trim() &&
+        String(orphan.programType || '').trim()
+      ) {
+        patch.programType = orphan.programType;
+      }
+      if (!String(host.schoolId || '').trim() && String(orphan.schoolId || '').trim()) {
+        patch.schoolId = orphan.schoolId;
+      }
+      if (
+        moved > 0 &&
+        String(host.providerSignedKey || '').trim()
+      ) {
+        patch.providerSignedKey = '';
+        patch.providerSignedAt = '';
+        patch.timesheetKey = '';
+        patch.envelopeId = '';
+      }
+      if (Object.keys(patch).length) {
+        host = store.upsertWeek({ ...host, ...patch });
+      }
+      store.removeWeek(orphan.id);
+    }
+  }
 }
