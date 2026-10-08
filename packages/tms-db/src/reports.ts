@@ -16,8 +16,8 @@ import {
 } from './mandate.js';
 import { isoDate, parseDos } from './ids.js';
 import { schoolCalendarSummary, hasConfiguredSchoolCalendar, schoolCalendarMonFriFallbackWarning, schoolSetupIncomplete } from './school-calendar.js';
-import type { HhaTransferStatus, Mandate, SessionRow, Student } from './types.js';
-import { DEFAULT_ADMIN_NOTE_TAGS } from './types.js';
+import type { HhaTransfer, HhaTransferStatus, Mandate, SessionRow, Student } from './types.js';
+import { DEFAULT_ADMIN_NOTE_TAGS, additionalServiceLabel } from './types.js';
 import { isSettledHhaTransfer, type MemoryStore } from './memory-store.js';
 import {
   normalizeProgramTypeKey,
@@ -834,6 +834,196 @@ export function sessionNotesReport(
     rows,
     districtOptions,
   };
+}
+
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Calendar date YYYY-MM-DD in America/New_York. */
+export function easternDateYmd(d: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+function easternYmdFromIso(iso: string | undefined): string {
+  const raw = String(iso || '').trim();
+  if (!raw) return '';
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return '';
+  return easternDateYmd(new Date(t));
+}
+
+/** `YYYY-MM-DD HH:mm` in America/New_York. */
+export function formatEasternDateTime(iso: string | undefined): string {
+  const raw = String(iso || '').trim();
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(t));
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((p) => p.type === type)?.value || '';
+  const hour = get('hour').padStart(2, '0');
+  const minute = get('minute').padStart(2, '0');
+  return `${get('year')}-${get('month')}-${get('day')} ${hour}:${minute}`;
+}
+
+/**
+ * One successful transfer per session: confirmed beats sent+VisitID.
+ * Failed-only sessions are dropped. Leftover failed duplicates are ignored
+ * when a settled row exists.
+ */
+function pickSuccessfulHhaTransfer(list: HhaTransfer[]): HhaTransfer | null {
+  const settled = list.filter((t) => isSettledHhaTransfer(t));
+  if (!settled.length) return null;
+  const confirmed = settled.filter((t) => t.status === 'confirmed');
+  const pool = confirmed.length ? confirmed : settled;
+  return [...pool].sort((a, b) => {
+    const av = /^\d+$/.test(String(a.hhaVisitId || '').trim()) ? 0 : 1;
+    const bv = /^\d+$/.test(String(b.hhaVisitId || '').trim()) ? 0 : 1;
+    if (av !== bv) return av - bv;
+    return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+  })[0];
+}
+
+export type HhaTransferReportRow = {
+  sessionId: string;
+  transferAt: string;
+  transferAtDisplay: string;
+  visitId: string;
+  childName: string;
+  providerName: string;
+  district: string;
+  schoolName: string;
+  dateOfService: string;
+  time: string;
+  attendance: string;
+  service: string;
+  hhaStatus: string;
+};
+
+export type HhaTransfersReportResult =
+  | {
+      ok: true;
+      from: string;
+      to: string;
+      timezone: 'America/New_York';
+      rows: HhaTransferReportRow[];
+    }
+  | { ok: false; error: string };
+
+/**
+ * Admin report: successful HHA transfers whose updatedAt falls on an inclusive
+ * America/New_York calendar day in [from, to]. That is the transfer timestamp,
+ * not date of service.
+ *
+ * Transfers are already on the request snapshot (no date GSI). Filter that
+ * in-memory list — do not start a second unbounded table scan.
+ */
+export function hhaTransfersReport(
+  store: MemoryStore,
+  opts: { from?: string; to?: string } = {},
+): HhaTransfersReportResult {
+  const from = String(opts.from || '').trim();
+  const to = String(opts.to || '').trim();
+  if (!YMD.test(from) || !YMD.test(to)) {
+    return { ok: false, error: 'From and To are required (YYYY-MM-DD).' };
+  }
+  if (from > to) {
+    return { ok: false, error: 'From must be on or before To.' };
+  }
+
+  const bySession = new Map<string, HhaTransfer[]>();
+  for (const t of store.data.hhaTransfers || []) {
+    const sessionId = String(t.sessionId || '').trim();
+    if (!sessionId) continue;
+    const list = bySession.get(sessionId);
+    if (list) list.push(t);
+    else bySession.set(sessionId, [t]);
+  }
+
+  const rows: HhaTransferReportRow[] = [];
+  for (const [sessionId, list] of bySession) {
+    const settled = list.filter((t) => isSettledHhaTransfer(t));
+    if (!settled.length) continue;
+    const confirmed = settled.filter((t) => t.status === 'confirmed');
+    const pool = confirmed.length ? confirmed : settled;
+    const inRange = pool.filter((t) => {
+      const day = easternYmdFromIso(t.updatedAt);
+      return Boolean(day) && day >= from && day <= to;
+    });
+    if (!inRange.length) continue;
+    const chosen = pickSuccessfulHhaTransfer(inRange);
+    if (!chosen) continue;
+
+    const session = store.data.sessions.find((s) => s.id === sessionId);
+    const week = session
+      ? store.data.weeks.find((w) => w.id === session.weekId)
+      : store.data.weeks.find((w) => w.id === chosen.weekId);
+    const student = session
+      ? store.data.students.find((st) => st.id === session.studentId)
+      : undefined;
+    const school = student?.schoolId
+      ? store.data.schools.find((sc) => sc.id === student.schoolId)
+      : week?.schoolId
+        ? store.data.schools.find((sc) => sc.id === week.schoolId)
+        : undefined;
+    const providerId = session
+      ? sessionProviderId(store, session)
+      : String(week?.providerId || '').trim();
+    const provider = providerId
+      ? store.data.providers.find((p) => p.id === providerId)
+      : undefined;
+    const begin = String(session?.beginTime || '').trim();
+    const end = String(session?.endTime || '').trim();
+    const time = begin && end ? `${begin}–${end}` : begin || end;
+    const addl = session ? additionalServiceLabel(session.additionalServiceType) : '';
+    const service = addl || String(session?.serviceType || '').trim();
+    const child = session
+      ? sessionListedChildName(
+          session,
+          student ? `${student.firstName} ${student.lastName}`.trim() : '',
+        )
+      : '';
+    const district =
+      districtLabelForStudent(student, school) || String(week?.programType || '').trim();
+
+    rows.push({
+      sessionId,
+      transferAt: String(chosen.updatedAt || ''),
+      transferAtDisplay: formatEasternDateTime(chosen.updatedAt),
+      visitId: String(chosen.hhaVisitId || '').trim(),
+      childName: child || '—',
+      providerName: provider
+        ? `${provider.firstName} ${provider.lastName}`.trim() || provider.id
+        : '—',
+      district: district || '—',
+      schoolName: school?.name || '—',
+      dateOfService: String(session?.dateOfService || '').trim() || '—',
+      time: time || '—',
+      attendance: String(session?.attendance || '').trim() || '—',
+      service: service || '—',
+      hhaStatus: chosen.status,
+    });
+  }
+
+  rows.sort(
+    (a, b) =>
+      a.transferAt.localeCompare(b.transferAt) ||
+      a.childName.localeCompare(b.childName) ||
+      a.dateOfService.localeCompare(b.dateOfService),
+  );
+
+  return { ok: true, from, to, timezone: 'America/New_York', rows };
 }
 
 /**

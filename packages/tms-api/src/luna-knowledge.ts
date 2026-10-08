@@ -118,7 +118,13 @@ export const LUNA_HOWTO = `HOW-TO (White Glove TMS):
 • Last service report (admin)
   1. Admin → Last service report.
   2. Optional provider filter → view table or download last-service.xlsx.
-  3. Use to see each child’s most recent service date.`;
+  3. Use to see each child’s most recent service date.
+
+• HHA transfers report (admin)
+  1. Admin → Reports → HHA transfers.
+  2. From and To are required. They filter the transfer timestamp (America/New_York), not date of service.
+  3. The table includes date of service so those dates can be compared.
+  4. Only successful transfers (confirmed, or sent with a VisitID). Failed-only rows are omitted.`;
 
 /** Full knowledge block appended to Luna’s system prompt. */
 export function lunaKnowledgePrompt(): string {

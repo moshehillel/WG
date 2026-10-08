@@ -1408,6 +1408,104 @@ describe('TMS API weekly loop', () => {
     expect(body.rows).toHaveLength(3);
   });
 
+  it('admin HHA transfers report is admin-only and filters by transfer date', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.data.schools[0];
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Aiden',
+      lastName: 'Odne',
+      dob: '',
+      programId: '',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-09-28',
+      status: 'locked',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'confirmed',
+    });
+    const session = store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '09/15/2026',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: '',
+      notes: 'gait',
+      aiFlags: [],
+    });
+    store.data.hhaTransfers = [
+      {
+        id: 'fail-dup',
+        sessionId: session.id,
+        weekId: week.id,
+        status: 'failed',
+        hhaVisitId: '',
+        lastError: 'earlier',
+        payloadHash: '',
+        updatedAt: '2026-10-05T15:00:00.000Z',
+      },
+      {
+        id: 'ok-row',
+        sessionId: session.id,
+        weekId: week.id,
+        status: 'confirmed',
+        hhaVisitId: '1337400693',
+        lastError: '',
+        payloadHash: '',
+        updatedAt: '2026-10-02T16:00:00.000Z',
+      },
+    ];
+
+    const denied = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/hha-transfers',
+      headers: thH,
+      query: { from: '2026-10-02', to: '2026-10-08' },
+      body: {},
+    });
+    expect(denied.status).toBe(403);
+
+    const missing = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/hha-transfers',
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(missing.status).toBe(400);
+
+    const res = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/hha-transfers',
+      headers: adminH,
+      query: { from: '2026-10-02', to: '2026-10-08' },
+      body: {},
+    });
+    expect(res.status).toBe(200);
+    const rows = (res.body as { rows: Array<{ visitId: string; dateOfService: string; hhaStatus: string }> })
+      .rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.visitId).toBe('1337400693');
+    expect(rows[0]?.dateOfService).toBe('09/15/2026');
+    expect(rows[0]?.hhaStatus).toBe('confirmed');
+  });
+
   it('caseload CSV/Excel import commits immediately; dryRun stays unused unless set', async () => {
     const { store } = storeWithTherapist();
     const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
@@ -3894,9 +3992,9 @@ describe('TMS solo-group / group-mandate note locker', () => {
     expect((peerAdd.body as { error: string }).error).toMatch(/individual rate|overlaps|mix group/i);
   });
 
-  it('rejects solo group-tagged import without no-peer note', async () => {
-    const { store, provider } = await seedGroupMandateChild();
-    const blocked = await handleTmsRequest(store, {
+  it('accepts an explicit group session when the partner is not in TMS yet', async () => {
+    const { store, provider, studentId, weekId } = await seedGroupMandateChild();
+    const imported = await handleTmsRequest(store, {
       method: 'POST',
       path: '/week/upload-sessions',
       headers: thH,
@@ -3915,10 +4013,34 @@ describe('TMS solo-group / group-mandate note locker', () => {
         ].join('\n'),
       },
     });
-    expect(blocked.status).toBe(200);
-    const body = blocked.body as { ok: boolean; failed: Array<{ error: string }> };
-    expect(body.ok).toBe(false);
-    expect(body.failed.some((f) => /no (?:other )?peer was available|no partner available|seen individually/i.test(f.error))).toBe(true);
+    expect(imported.status).toBe(200);
+    const body = imported.body as { ok: boolean; failed: Array<{ error: string }>; saved: unknown[] };
+    expect(
+      body.failed.filter((f) =>
+        /no (?:other )?peer was available|no partner available|seen individually/i.test(f.error),
+      ),
+    ).toEqual([]);
+    expect(body.ok).toBe(true);
+    expect(body.saved).toHaveLength(1);
+
+    const manual = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId,
+        dateOfService: '09/25/2026',
+        beginTime: '10:00 am',
+        endTime: '10:30 am',
+        attendance: 'attended',
+        notes: 'Service Provided: custom group note',
+        serviceType: 'PT School Group 2:1',
+      },
+    });
+    expect(manual.status).toBe(200);
+    expect((manual.body as { session: { serviceType: string } }).session.serviceType).toMatch(/Group|2\s*:\s*1/i);
   });
 
   it('exact-duplicate re-import still hard-blocks when existing row fails #38', async () => {

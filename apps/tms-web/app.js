@@ -27,6 +27,8 @@ const state = {
   selectedProgramType: sessionStorage.getItem('tmsProgramType') || '',
   programConfirmed: sessionStorage.getItem('tmsProgramConfirmed') === '1',
   lastServiceProviderId: '',
+  hhaTransferFrom: '',
+  hhaTransferTo: '',
   internalNotesProviderId: '',
   sessionNotesProviderId: '',
   childSessionFrom: '',
@@ -83,6 +85,11 @@ const REPORT_LIST = [
     id: 'session-notes',
     title: 'Session notes',
     blurb: 'Totals of attended (incl. makeup) and missed session notes for a date range.',
+  },
+  {
+    id: 'hha-transfers',
+    title: 'HHA transfers',
+    blurb: 'Sessions successfully transferred to HHA between two dates. Filtered by transfer date (Eastern time), not date of service.',
   },
 ];
 
@@ -6982,7 +6989,7 @@ function adminReportsLanding() {
   view(`
     <div class="card">
       <h2>Reports</h2>
-      <p class="muted">Open a report to review caseload progress, last dates of service, progress-report due dates, internal notes, or session note totals.</p>
+      <p class="muted">Open a report to review caseload progress, last dates of service, progress-report due dates, internal notes, session note totals, or HHA transfers.</p>
       <ul class="report-pick">
         ${REPORT_LIST.map(
           (r) => `<li>
@@ -7800,6 +7807,113 @@ async function adminReportSessionNotes() {
   await loadSessionNotes();
 }
 
+function hhaTransferRowsHtml(rows) {
+  return (rows || [])
+    .map(
+      (r) => `<tr>
+        <td>${esc(r.transferAtDisplay || '—')}</td>
+        <td>${esc(r.visitId || '—')}</td>
+        <td>${esc(r.childName || '—')}</td>
+        <td>${esc(r.providerName || '—')}</td>
+        <td>${esc(r.district || '—')}</td>
+        <td>${esc(r.schoolName || '—')}</td>
+        <td>${esc(r.dateOfService || '—')}</td>
+        <td>${esc(r.time || '—')}</td>
+        <td>${esc(r.attendance || '—')}</td>
+        <td>${esc(r.service || '—')}</td>
+        <td>${esc(r.hhaStatus || '—')}</td>
+      </tr>`,
+    )
+    .join('') || '<tr><td colspan="11">No successful HHA transfers in this range.</td></tr>';
+}
+
+async function adminReportHhaTransfers() {
+  const from = state.hhaTransferFrom || '';
+  const to = state.hhaTransferTo || '';
+  view(`
+    <div class="card">
+      <button type="button" class="btn" id="backReports">← Reports</button>
+      <h2>HHA transfers</h2>
+      <p class="muted">Successful transfers only (confirmed, or sent with a VisitID). From and To are the transfer date in Eastern time, inclusive — not the date of service. Date of service is its own column. Failed-only rows are left out. Both dates are required.</p>
+      <div class="row">
+        <label>From <input id="hhaFrom" type="date" value="${esc(from)}" /></label>
+        <label>To <input id="hhaTo" type="date" value="${esc(to)}" /></label>
+        <button type="button" class="btn-primary" id="hhaLoad">Load</button>
+        <button type="button" class="btn" id="hhaXlsx">Export Excel</button>
+      </div>
+      <div style="overflow-x:auto">
+      <table>
+        <tr>
+          <th>Transfer date/time</th>
+          <th>VisitID</th>
+          <th>Child</th>
+          <th>Provider</th>
+          <th>District/program</th>
+          <th>School</th>
+          <th>Date of service</th>
+          <th>Time</th>
+          <th>Attendance</th>
+          <th>Service</th>
+          <th>HHA status</th>
+        </tr>
+        <tbody id="hhaBody"><tr><td colspan="11">${from && to ? 'Loading…' : 'Enter From and To, then Load.'}</td></tr></tbody>
+      </table>
+      </div>
+    </div>
+  `);
+  bindReportDetailChrome();
+  const loadHha = async () => {
+    const nextFrom = document.getElementById('hhaFrom')?.value || '';
+    const nextTo = document.getElementById('hhaTo')?.value || '';
+    state.hhaTransferFrom = nextFrom;
+    state.hhaTransferTo = nextTo;
+    const tbody = document.getElementById('hhaBody');
+    if (!nextFrom || !nextTo) {
+      if (tbody) tbody.innerHTML = '<tr><td colspan="11">Enter From and To, then Load.</td></tr>';
+      setStatus('From and To are required.', 'err');
+      return;
+    }
+    if (nextFrom > nextTo) {
+      if (tbody) tbody.innerHTML = '<tr><td colspan="11">From must be on or before To.</td></tr>';
+      setStatus('From must be on or before To.', 'err');
+      return;
+    }
+    const q = `from=${encodeURIComponent(nextFrom)}&to=${encodeURIComponent(nextTo)}`;
+    if (tbody) tbody.innerHTML = '<tr><td colspan="11">Loading…</td></tr>';
+    try {
+      const out = await api('GET', `/admin/reports/hha-transfers?${q}`);
+      if (tbody) tbody.innerHTML = hhaTransferRowsHtml(out.rows || []);
+      const n = (out.rows || []).length;
+      setStatus(n ? `${n} successful transfer${n === 1 ? '' : 's'}.` : '', n ? 'ok' : '');
+    } catch (e) {
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="11">${esc(e.message || 'Unable to load HHA transfers.')}</td></tr>`;
+      }
+      setStatus(e.message || 'Unable to load HHA transfers.', 'err');
+    }
+  };
+  document.getElementById('hhaLoad')?.addEventListener('click', () => loadHha());
+  const hhaXlsx = document.getElementById('hhaXlsx');
+  if (hhaXlsx) {
+    hhaXlsx.onclick = async () => {
+      try {
+        const f = document.getElementById('hhaFrom')?.value || '';
+        const t = document.getElementById('hhaTo')?.value || '';
+        if (!f || !t) {
+          setStatus('From and To are required.', 'err');
+          return;
+        }
+        const q = `from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
+        await downloadReportXlsx(`/admin/reports/hha-transfers.xlsx?${q}`, 'hha-transfers.xlsx');
+        setStatus('Downloaded hha-transfers.xlsx.', 'ok');
+      } catch (e) {
+        setStatus(e.message || 'Unable to export.', 'err');
+      }
+    };
+  }
+  if (from && to) await loadHha();
+}
+
 async function adminReports() {
   const id = state.reportView || '';
   if (!id) {
@@ -7828,6 +7942,10 @@ async function adminReports() {
   }
   if (id === 'session-notes') {
     await adminReportSessionNotes();
+    return;
+  }
+  if (id === 'hha-transfers') {
+    await adminReportHhaTransfers();
     return;
   }
   adminReportsLanding();

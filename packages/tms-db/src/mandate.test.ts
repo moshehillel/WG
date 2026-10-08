@@ -2,13 +2,22 @@ import { describe, expect, it } from 'vitest';
 import { screenServiceNote } from './ai-screen.js';
 import { dueDateStatus, migrateDueDatesToSchools, shouldNagDue } from './due-dates.js';
 import { weekStartFromDos } from './ids.js';
-import { checkMandate, checkMandatesForWeek, isMakeupAuthMandate, maxSessionsInSchoolDayCycle, parseFrequencyPerWeek, schoolDayWindowStart } from './mandate.js';
+import {
+  checkMandate,
+  checkMandatesForWeek,
+  isMakeupAuthMandate,
+  maxSessionsInSchoolDayCycle,
+  parseFrequencyPerWeek,
+  preferredMandateForSession,
+  schoolDayWindowStart,
+} from './mandate.js';
 import { parseMandatePdfText } from './mandate-parse.js';
 import { unusedMissedForStudent, validateMakeup, resolveMakeupOfSessionId } from './makeup.js';
 import { MemoryStore } from './memory-store.js';
 import {
   adminWeeksList,
   dashboard,
+  hhaTransfersReport,
   lastServiceByStudent,
   missingNotes,
   sessionNotesReport,
@@ -1249,6 +1258,197 @@ describe('due dates and dashboard', () => {
     expect(lastServiceByStudent(store, { providerId: 'other' })).toEqual([]);
   });
 
+  it('hha transfers report uses Eastern transfer date, not date of service', () => {
+    const store = new MemoryStore();
+    store.upsertSchool({
+      id: 'sch',
+      name: 'Forest',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: '',
+    });
+    store.upsertProvider({
+      id: 'p1',
+      userId: '',
+      firstName: 'Fatimah',
+      lastName: 'Dawan',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    });
+    store.upsertStudent({
+      id: 'st',
+      schoolId: 'sch',
+      firstName: 'Aiden',
+      lastName: 'Odne',
+      dob: '',
+      programId: '',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p1',
+      weekStart: '2026-09-28',
+      status: 'locked',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'confirmed',
+    });
+    store.upsertSession(
+      sess({
+        id: 'ok',
+        weekId: 'w',
+        studentId: 'st',
+        dateOfService: '09/15/2026',
+        beginTime: '09:00',
+        endTime: '09:30',
+        serviceType: 'PT School',
+      }),
+    );
+    store.upsertSession(
+      sess({
+        id: 'edge-out',
+        weekId: 'w',
+        studentId: 'st',
+        dateOfService: '10/02/2026',
+      }),
+    );
+    store.upsertSession(
+      sess({
+        id: 'sent-ok',
+        weekId: 'w',
+        studentId: 'st',
+        dateOfService: '10/03/2026',
+        attendance: 'makeup',
+      }),
+    );
+    store.upsertSession(
+      sess({ id: 'fail-only', weekId: 'w', studentId: 'st', dateOfService: '10/04/2026' }),
+    );
+    store.upsertSession(
+      sess({ id: 'sent-blank', weekId: 'w', studentId: 'st', dateOfService: '10/05/2026' }),
+    );
+    // Direct array: upsertTransfer collapses to one row per session.
+    store.data.hhaTransfers = [
+      {
+        id: 'fail-dup',
+        sessionId: 'ok',
+        weekId: 'w',
+        status: 'failed',
+        hhaVisitId: '',
+        lastError: 'earlier fail',
+        payloadHash: '',
+        updatedAt: '2026-10-05T15:00:00.000Z',
+      },
+      {
+        id: 'ok-row',
+        sessionId: 'ok',
+        weekId: 'w',
+        status: 'confirmed',
+        hhaVisitId: '1337400693',
+        lastError: '',
+        payloadHash: '',
+        // 2026-10-02 00:30 EDT
+        updatedAt: '2026-10-02T04:30:00.000Z',
+      },
+      {
+        id: 'before-window',
+        sessionId: 'edge-out',
+        weekId: 'w',
+        status: 'confirmed',
+        hhaVisitId: '200',
+        lastError: '',
+        payloadHash: '',
+        // 2026-10-01 23:30 EDT — DOS is 10/02, transfer is not
+        updatedAt: '2026-10-02T03:30:00.000Z',
+      },
+      {
+        id: 'sent-row',
+        sessionId: 'sent-ok',
+        weekId: 'w',
+        status: 'sent',
+        hhaVisitId: '300',
+        lastError: '',
+        payloadHash: '',
+        // 2026-10-08 23:30 EDT
+        updatedAt: '2026-10-09T03:30:00.000Z',
+      },
+      {
+        id: 'fail-only-row',
+        sessionId: 'fail-only',
+        weekId: 'w',
+        status: 'failed',
+        hhaVisitId: '',
+        lastError: 'nope',
+        payloadHash: '',
+        updatedAt: '2026-10-04T16:00:00.000Z',
+      },
+      {
+        id: 'sent-no-visit',
+        sessionId: 'sent-blank',
+        weekId: 'w',
+        status: 'sent',
+        hhaVisitId: '',
+        lastError: '',
+        payloadHash: '',
+        updatedAt: '2026-10-05T16:00:00.000Z',
+      },
+      {
+        id: 'after-window',
+        sessionId: 'late',
+        weekId: 'w',
+        status: 'confirmed',
+        hhaVisitId: '400',
+        lastError: '',
+        payloadHash: '',
+        // 2026-10-09 00:00 EDT
+        updatedAt: '2026-10-09T04:00:00.000Z',
+      },
+    ];
+
+    expect(hhaTransfersReport(store, {}).ok).toBe(false);
+    expect(hhaTransfersReport(store, { from: '2026-10-08', to: '2026-10-02' }).ok).toBe(false);
+
+    const report = hhaTransfersReport(store, { from: '2026-10-02', to: '2026-10-08' });
+    expect(report.ok).toBe(true);
+    if (!report.ok) return;
+    expect(report.rows.map((r) => r.sessionId)).toEqual(['ok', 'sent-ok']);
+    expect(report.rows[0]).toEqual(
+      expect.objectContaining({
+        visitId: '1337400693',
+        childName: 'Aiden Odne',
+        providerName: 'Fatimah Dawan',
+        district: 'Baldwin UFSD',
+        schoolName: 'Forest',
+        dateOfService: '09/15/2026',
+        time: '09:00–09:30',
+        attendance: 'attended',
+        service: 'PT School',
+        hhaStatus: 'confirmed',
+        transferAtDisplay: '2026-10-02 00:30',
+      }),
+    );
+    expect(report.rows[1]?.hhaStatus).toBe('sent');
+    expect(report.rows[1]?.visitId).toBe('300');
+    expect(report.rows[1]?.dateOfService).toBe('10/03/2026');
+  });
+
   it('includes never-serviced children with a blank last day of service', () => {
     const store = new MemoryStore();
     store.upsertSchool({
@@ -2018,5 +2218,30 @@ describe('AI heuristic', () => {
     });
     expect(r.block).toBe(false);
     expect(r.flags).toEqual([]);
+  });
+});
+
+describe('preferredMandateForSession duration match', () => {
+  it('picks the 60-min mandate for a 60-min individual session when both 30 and 60 exist', () => {
+    const m30 = mandate({
+      id: 'm30',
+      durationMinutes: 30,
+      billingServiceName: 'PT school 30',
+      ratioGroup: false,
+    });
+    const m60 = mandate({
+      id: 'm60',
+      durationMinutes: 60,
+      billingServiceName: 'PT school 60',
+      ratioGroup: false,
+    });
+    const s = sess({
+      id: 'long',
+      beginTime: '1:00 pm',
+      endTime: '2:00 pm',
+      serviceType: 'PT School',
+    });
+    expect(preferredMandateForSession(s, [m30, m60])?.id).toBe('m60');
+    expect(preferredMandateForSession(s, [m60, m30])?.id).toBe('m60');
   });
 });

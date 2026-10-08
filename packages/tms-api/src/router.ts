@@ -17,6 +17,7 @@ import {
   adminInternalNotesReport,
   missingNotes,
   sessionNotesReport,
+  hhaTransfersReport,
   weekProgressReport,
   newId,
   nowIso,
@@ -1231,6 +1232,46 @@ function reportXlsxInternalNotes(
         r.authorName,
         (r.tags || []).join(', '),
         r.body,
+      ]),
+    ),
+  );
+}
+
+function reportXlsxHhaTransfers(
+  store: MemoryStore,
+  query: Record<string, string | undefined>,
+): HttpResponse {
+  const report = hhaTransfersReport(store, reportRange(query));
+  if (!report.ok) return json(400, { error: report.error });
+  return xlsxResponse(
+    'hha-transfers.xlsx',
+    rowsToXlsxBuffer(
+      'HHA transfers',
+      [
+        'Transfer date/time (ET)',
+        'VisitID',
+        'Child',
+        'Provider',
+        'District/program',
+        'School',
+        'Date of service',
+        'Time',
+        'Attendance',
+        'Service',
+        'HHA status',
+      ],
+      report.rows.map((r) => [
+        r.transferAtDisplay,
+        r.visitId,
+        r.childName,
+        r.providerName,
+        r.district,
+        r.schoolName,
+        r.dateOfService,
+        r.time,
+        r.attendance,
+        r.service,
+        r.hhaStatus,
       ]),
     ),
   );
@@ -2939,6 +2980,24 @@ export async function handleTmsRequest(
   if (req.method === 'GET' && path === '/admin/reports/session-notes.xlsx') {
     return adminUser(() => reportXlsxSessionNotes(store, req.query));
   }
+  if (req.method === 'GET' && path === '/admin/reports/hha-transfers') {
+    return adminUser(() => {
+      const report = hhaTransfersReport(store, {
+        from: String(req.query.from || '').trim(),
+        to: String(req.query.to || '').trim(),
+      });
+      if (!report.ok) return json(400, { error: report.error });
+      return json(200, {
+        from: report.from,
+        to: report.to,
+        timezone: report.timezone,
+        rows: report.rows,
+      });
+    });
+  }
+  if (req.method === 'GET' && path === '/admin/reports/hha-transfers.xlsx') {
+    return adminUser(() => reportXlsxHhaTransfers(store, req.query));
+  }
 
   if (req.method === 'GET' && path === '/students') {
     const weekStart = String(req.query.weekStart || weekStartFromDos(nowIso().slice(0, 10)));
@@ -3951,6 +4010,7 @@ export async function handleTmsRequest(
         session.endTime,
         { codes: cptCodes, totalUnits: cptUnits, procedures: cptProcedures },
         session.attendance,
+        { serviceType: session.serviceType, ratio: row.ratio },
       );
       if (cptErr) {
         failed.push({
