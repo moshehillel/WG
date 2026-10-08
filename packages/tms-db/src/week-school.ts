@@ -14,7 +14,17 @@ export function normalizeSignerEmail(email: string | undefined | null): string {
 export function normalizeProgramTypeKey(programType: string | undefined | null): string {
   return String(programType || '')
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Timesheet bin key for a district.
+ * Caseload files often drop the HHA "Therapy" suffix ("Elmont UFSD" vs
+ * "Elmont UFSD Therapy"). Those are one district, one timesheet.
+ */
+export function canonicalTimesheetProgramKey(programType: string | undefined | null): string {
+  return normalizeProgramTypeKey(programType).replace(/\s+therapy$/, '');
 }
 
 /**
@@ -37,7 +47,7 @@ export function timesheetBinKeyForParts(
   programType: string | undefined | null,
   _school?: Pick<School, 'id' | 'signerEmail'> | undefined | null,
 ): string {
-  const pt = normalizeProgramTypeKey(programType);
+  const pt = canonicalTimesheetProgramKey(programType);
   return `program:${pt}`;
 }
 
@@ -114,8 +124,34 @@ export function resolveWeekSchoolId(store: MemoryStore, week: WeeklyPeriod): str
 
 export function resolveWeekProgramType(store: MemoryStore, week: WeeklyPeriod): string {
   const stamped = String(week.programType || '').trim();
-  if (stamped) return stamped;
-  return dominantProgramTypeForSessions(store, store.sessionsForWeek(week.id));
+  const fromSessions = dominantProgramTypeForSessions(store, store.sessionsForWeek(week.id));
+  if (!stamped) return fromSessions;
+  if (!fromSessions) return stamped;
+  // "Elmont UFSD" stamped on a week whose children are "Elmont UFSD Therapy"
+  // is the same district. Prefer the fuller label so admin doesn't show two rows.
+  if (canonicalTimesheetProgramKey(stamped) === canonicalTimesheetProgramKey(fromSessions)) {
+    return fromSessions.length >= stamped.length ? fromSessions : stamped;
+  }
+  return stamped;
+}
+
+/**
+ * Editable weeks only: write the fuller district label ("Elmont UFSD Therapy")
+ * when the stored stamp is the short caseload form of the same program.
+ * Signed/locked sheets keep the stamp they were sent with.
+ */
+export function alignEditableProgramStamp(
+  store: MemoryStore,
+  week: WeeklyPeriod,
+): WeeklyPeriod {
+  if (!therapistCanEdit(week.status)) return week;
+  const resolved = resolveWeekProgramType(store, week);
+  const stamped = String(week.programType || '').trim();
+  if (!resolved || resolved === stamped) return week;
+  if (stamped && canonicalTimesheetProgramKey(stamped) !== canonicalTimesheetProgramKey(resolved)) {
+    return week;
+  }
+  return store.upsertWeek({ ...week, programType: resolved });
 }
 
 export function timesheetBinKeyForSession(
@@ -155,8 +191,8 @@ export function weekMatchesSchoolBin(
 
   if (wantPt && !wantId) {
     return (
-      normalizeProgramTypeKey(resolveWeekProgramType(store, week)) ===
-      normalizeProgramTypeKey(wantPt)
+      canonicalTimesheetProgramKey(resolveWeekProgramType(store, week)) ===
+      canonicalTimesheetProgramKey(wantPt)
     );
   }
 

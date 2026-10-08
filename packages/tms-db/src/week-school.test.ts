@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { MemoryStore } from './memory-store.js';
 import { nowIso, newId } from './ids.js';
 import {
+  canonicalTimesheetProgramKey,
   foldOrphanNoChildAdditionalWeeks,
+  resolveWeekProgramType,
   splitWeekBySchoolBins,
   timesheetBinKeyForParts,
   timesheetBinKeyForSchool,
@@ -587,5 +589,68 @@ describe('week-school bins', () => {
     expect(store.data.weeks).toHaveLength(1);
     expect(store.data.weeks[0]?.id).toBe(host.id);
     expect(store.sessionsForWeek(host.id).map((s) => s.id).sort()).toEqual(['s-addl', 's-child']);
+  });
+
+  it('treats a short UFSD label and the HHA Therapy suffix as one timesheet bin', () => {
+    expect(canonicalTimesheetProgramKey('Elmont UFSD')).toBe(
+      canonicalTimesheetProgramKey('Elmont UFSD Therapy'),
+    );
+    expect(timesheetBinKeyForParts('Elmont UFSD', null)).toBe(
+      timesheetBinKeyForParts('Elmont UFSD Therapy', null),
+    );
+    expect(timesheetBinKeyForParts('Island Park UFSD', null)).not.toBe(
+      timesheetBinKeyForParts('Elmont UFSD Therapy', null),
+    );
+    expect(timesheetBinKeyForParts('Carle Place UFSD', null)).not.toBe(
+      timesheetBinKeyForParts('Island Park UFSD', null),
+    );
+  });
+
+  it('prefers the children program label when the week stamp dropped Therapy', () => {
+    const store = emptyStore();
+    store.upsertStudent({
+      id: 'kid',
+      schoolId: 'sch',
+      firstName: 'A',
+      lastName: 'Kid',
+      dob: '',
+      programId: '',
+      programType: 'Elmont UFSD Therapy',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: 'w',
+      providerId: 'p',
+      weekStart: '2026-09-28',
+      programType: 'Elmont UFSD',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: 's',
+      weekId: week.id,
+      studentId: 'kid',
+      dateOfService: '09/29/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: '',
+      notes: '',
+      cptCodes: [],
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+    expect(resolveWeekProgramType(store, week)).toBe('Elmont UFSD Therapy');
+    expect(weekMatchesSchoolBin(store, week, '', 'Elmont UFSD Therapy')).toBe(true);
   });
 });

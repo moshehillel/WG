@@ -236,6 +236,19 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     const mandateSig = () =>
       store.data.mandates.map((m) => `${m.id}:${m.providerId}`).join('|');
     const beforeMandates = mandateSig();
+    // GET /weeks and GET /admin/weeks fold duplicate drafts in memory. Persist that
+    // heal — a pure read used to drop the merge on the next load.
+    const sheetSig = () =>
+      store.data.weeks
+        .map((w) => `${w.id}:${w.status}:${w.programType || ''}:${w.providerId}:${w.weekStart}`)
+        .sort()
+        .join('|') +
+      '||' +
+      store.data.sessions
+        .map((s) => `${s.id}:${s.weekId}`)
+        .sort()
+        .join('|');
+    const beforeSheets = sheetSig();
     let midPersisted = false;
     const result = await handleTmsRequest(store, req, {
       hha: await resolveHhaClient(),
@@ -254,10 +267,12 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     });
     // Skip write on pure reads — but persist when a GET repairs provider caseload aliases.
     const mutatedOnRead = beforeMandates !== mandateSig();
+    const mutatedSheets = beforeSheets !== sheetSig();
     if (
       midPersisted ||
       (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') ||
-      mutatedOnRead
+      mutatedOnRead ||
+      mutatedSheets
     ) {
       await saveTmsState(before, store);
     }

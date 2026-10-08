@@ -546,6 +546,142 @@ describe('TMS API weekly loop', () => {
     expect(rows.some((r) => r.additionalServiceType === 'documentation')).toBe(true);
   });
 
+  it('merges Elmont UFSD drafts into one and leaves the locked Therapy sheet', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.data.schools[0]!;
+    const student = store.upsertStudent({
+      id: 'kid-elmont',
+      schoolId: school.id,
+      firstName: 'A',
+      lastName: 'Kid',
+      dob: '',
+      programId: '',
+      programType: 'Elmont UFSD Therapy',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: 'man-elmont',
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'PT',
+      discipline: 'PT',
+      frequencyPerWeek: 5,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '2026-09-01',
+      endOn: '2027-06-30',
+      createdAt: nowIso(),
+    });
+    const base = {
+      providerId: provider.id,
+      weekStart: '2026-10-05',
+      schoolId: school.id,
+      signerName: 'Billu',
+      signerEmail: 'billu@school.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaError: '',
+    };
+    store.upsertWeek({
+      ...base,
+      id: 'locked-elmont',
+      status: 'locked',
+      programType: 'Elmont UFSD Therapy',
+      hhaStatus: 'confirmed',
+    });
+    store.upsertWeek({
+      ...base,
+      id: 'short-elmont',
+      status: 'draft',
+      programType: 'Elmont UFSD',
+      hhaStatus: 'none',
+    });
+    store.upsertWeek({
+      ...base,
+      id: 'blank-elmont',
+      status: 'draft',
+      programType: '',
+      hhaStatus: 'none',
+    });
+    const session = (id: string, weekId: string, begin: string) =>
+      store.upsertSession({
+        id,
+        weekId,
+        studentId: student.id,
+        dateOfService: '10/06/2026',
+        beginTime: begin,
+        endTime: '9:30 am',
+        attendance: 'attended',
+        cancelReason: '',
+        makeupOfSessionId: '',
+        serviceType: 'PT',
+        location: 'school',
+        notes: 'Service Provided: gait',
+        cptCodes: [],
+        cptLabel: '',
+        aiFlags: [],
+        aiBlock: false,
+      });
+    session('s-locked', 'locked-elmont', '8:00 am');
+    session('s-short', 'short-elmont', '9:00 am');
+    session('s-blank', 'blank-elmont', '10:00 am');
+
+    const listed = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/weeks',
+      headers: adminH,
+      query: { weekStart: '2026-10-05' },
+      body: undefined,
+    });
+    expect(listed.status).toBe(200);
+    const rows = (
+      listed.body as { weeks: Array<{ id: string; status: string; programType: string; sessionCount: number }> }
+    ).weeks.filter((w) => w.id === 'locked-elmont' || w.status === 'draft');
+    const drafts = store.data.weeks.filter(
+      (w) => w.providerId === provider.id && w.weekStart === '2026-10-05' && w.status === 'draft',
+    );
+    const locked = store.data.weeks.find((w) => w.id === 'locked-elmont');
+    expect(drafts).toHaveLength(1);
+    expect(store.sessionsForWeek(drafts[0]!.id)).toHaveLength(2);
+    expect(drafts[0]!.programType).toBe('Elmont UFSD Therapy');
+    expect(locked?.status).toBe('locked');
+    expect(store.sessionsForWeek('locked-elmont')).toHaveLength(1);
+    expect(rows.filter((w) => w.status === 'locked')).toHaveLength(1);
+    expect(rows.filter((w) => w.status === 'draft')).toHaveLength(1);
+
+    const added = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId: 'locked-elmont',
+        studentId: student.id,
+        dateOfService: '10/07/2026',
+        attendance: 'attended',
+        beginTime: '11:00 am',
+        endTime: '11:30 am',
+        notes: 'Service Provided: gait',
+        serviceType: 'PT',
+        programType: 'Elmont UFSD Therapy',
+      },
+    });
+    expect(added.status).toBe(200);
+    const savedWeekId = (added.body as { session: { weekId: string } }).session.weekId;
+    expect(savedWeekId).toBe(drafts[0]!.id);
+    expect(savedWeekId).not.toBe('locked-elmont');
+    expect(
+      store.data.weeks.filter(
+        (w) => w.providerId === provider.id && w.weekStart === '2026-10-05' && w.status === 'draft',
+      ),
+    ).toHaveLength(1);
+    expect(store.sessionsForWeek('locked-elmont')).toHaveLength(1);
+    expect(store.sessionsForWeek(savedWeekId)).toHaveLength(3);
+  });
+
   it('lets admin create a therapist login', async () => {
     const { store } = storeWithTherapist();
     const res = await handleTmsRequest(store, {

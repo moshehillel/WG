@@ -77,6 +77,8 @@ import {
   weeksMatchingSchoolBin,
   weekMatchesSchoolBin,
   foldOrphanNoChildAdditionalWeeks,
+  alignEditableProgramStamp,
+  canonicalTimesheetProgramKey,
   resolveWeekSchoolId,
   resolveWeekProgramType,
   dominantSchoolIdForSessions,
@@ -527,6 +529,52 @@ function foldEditableSameBinWeeks(
   foldOrphanNoChildAdditionalWeeks(store, weeks, {
     preferProgramType: opts?.preferProgramType,
   });
+  for (const w of weeks) {
+    const live = store.data.weeks.find((row) => row.id === w.id);
+    if (live) alignEditableProgramStamp(store, live);
+  }
+}
+
+/**
+ * New sessions after a week is signed/locked stay on one open draft
+ * (same provider + Monday + district). Never appended to the locked sheet.
+ */
+function openDraftBesideProcessed(
+  store: MemoryStore,
+  locked: WeeklyPeriod,
+  opts: { providerId: string; programType?: string; schoolId?: string },
+): WeeklyPeriod {
+  const programType =
+    String(opts.programType || '').trim() ||
+    resolveWeekProgramType(store, locked) ||
+    String(locked.programType || '').trim();
+  const siblings = weeksForProviderStart(store, locked.providerId, locked.weekStart);
+  foldEditableSameBinWeeks(store, siblings, { preferProgramType: programType || undefined });
+  const want = canonicalTimesheetProgramKey(programType);
+  const existing = weeksForProviderStart(store, locked.providerId, locked.weekStart).find(
+    (w) =>
+      therapistCanEdit(w.status) &&
+      canonicalTimesheetProgramKey(resolveWeekProgramType(store, w) || w.programType) === want,
+  );
+  if (existing) return existing;
+  const schoolId = String(opts.schoolId || locked.schoolId || '').trim();
+  const school = schoolId ? store.data.schools.find((s) => s.id === schoolId) : undefined;
+  const signer = resolveSchoolOrDistrictSigner(store, school, programType);
+  return store.upsertWeek({
+    id: newId(),
+    providerId: opts.providerId || locked.providerId,
+    weekStart: locked.weekStart,
+    schoolId,
+    programType,
+    status: 'draft',
+    signerName: signer.signerName || locked.signerName || '',
+    signerEmail: signer.signerEmail || locked.signerEmail || '',
+    timesheetKey: '',
+    signedKey: '',
+    envelopeId: '',
+    hhaStatus: 'none',
+    hhaError: '',
+  });
 }
 
 /**
@@ -570,6 +618,9 @@ function pickWeekForScope(
     candidates = scoped;
   }
   if (!candidates.length) return undefined;
+  // A signed/locked sheet stays signed. Later sessions belong on the open draft.
+  const openDrafts = candidates.filter((w) => therapistCanEdit(w.status));
+  if (openDrafts.length) candidates = openDrafts;
   let week =
     (providerId ? candidates.find((w) => w.providerId === providerId) : undefined) ||
     candidates[0];
@@ -582,13 +633,13 @@ function pickWeekForScope(
   }
   // Program-type-only scope: merge every editable matching bin (multi-building programs).
   if (programType && !schoolId && therapistCanEdit(week.status)) {
-    const want = normalizeProgramTypeKey(programType);
+    const want = canonicalTimesheetProgramKey(programType);
     const extras = candidates.filter(
       (w) =>
         w.id !== week!.id &&
         therapistCanEdit(w.status) &&
         (w.providerId === week!.providerId || w.providerId === providerId) &&
-        normalizeProgramTypeKey(resolveWeekProgramType(store, w)) === want,
+        canonicalTimesheetProgramKey(resolveWeekProgramType(store, w)) === want,
     );
     if (extras.length) foldWeeksOnto(store, week, extras);
   } else if (therapistCanEdit(week.status)) {
@@ -624,8 +675,15 @@ function pickWeekForScope(
       patch.signerName = signer.signerName || week.signerName;
       patch.signerEmail = signer.signerEmail || week.signerEmail;
     }
-    if (programType && !String(week.programType || '').trim()) {
-      patch.programType = programType;
+    if (programType && therapistCanEdit(week.status)) {
+      const stamped = String(week.programType || '').trim();
+      const sameDistrict =
+        !stamped ||
+        (canonicalTimesheetProgramKey(stamped) === canonicalTimesheetProgramKey(programType) &&
+          programType.length > stamped.length);
+      if (sameDistrict && stamped !== programType) {
+        patch.programType = programType;
+      }
     }
     if (Object.keys(patch).length) {
       week = store.upsertWeek({ ...week, ...patch });
@@ -2462,11 +2520,12 @@ export async function handleTmsRequest(
     return adminUser(() => {
       const weekStart = String(req.query.weekStart || '').trim();
       const name = String(req.query.name || req.query.q || '').trim();
-      // Heal orphan no-child additional drafts before listing (Astacio-style dupes).
+      // Heal same-district draft fragments (short "UFSD" vs "UFSD Therapy", blank stamps)
+      // before listing. Locked sheets are left alone.
       const healPool = weekStart
         ? store.data.weeks.filter((w) => w.weekStart === weekStart)
         : store.data.weeks;
-      foldOrphanNoChildAdditionalWeeks(store, healPool);
+      foldEditableSameBinWeeks(store, healPool);
       return json(200, {
         weeks: adminWeeksList(store, {
           ...(weekStart ? { weekStart } : {}),
@@ -3162,9 +3221,11 @@ export async function handleTmsRequest(
             : rollup.eligible > 0 && rollup.confirmed === rollup.eligible && rollup.failed === 0;
         const draft = w.status === 'draft' || w.status === 'reopened';
         const isCurrent = w.weekStart === currentStart;
-        const stampedKey = programTypeKey(w.programType || resolvedPt);
+        const stampedKey = canonicalTimesheetProgramKey(w.programType || resolvedPt);
+        const wantKey = canonicalTimesheetProgramKey(programType);
         // Hard exclude bins stamped for a different program than the provider picker.
-        const wrongProgram = Boolean(wantPt && stampedKey && stampedKey !== wantPt);
+        // "Elmont UFSD" and "Elmont UFSD Therapy" are the same district.
+        const wrongProgram = Boolean(wantKey && stampedKey && stampedKey !== wantKey);
         const pending =
           !wrongProgram &&
           (isCurrent || w.status === 'submitted' || !draft) &&
@@ -3577,8 +3638,15 @@ export async function handleTmsRequest(
             patch.schoolId = preferredSchool.id;
           }
         }
-        if (programType && !String(week.programType || '').trim()) {
-          patch.programType = programType;
+        if (programType) {
+          const stamped = String(week.programType || '').trim();
+          if (
+            !stamped ||
+            (canonicalTimesheetProgramKey(stamped) === canonicalTimesheetProgramKey(programType) &&
+              programType.length > stamped.length)
+          ) {
+            patch.programType = programType;
+          }
         }
         if (Object.keys(patch).length) {
           week = store.upsertWeek({ ...week, ...patch });
@@ -3652,16 +3720,29 @@ export async function handleTmsRequest(
       const scopeSchoolId = String(sessionSchoolId || uploadSchoolId || '').trim();
       const scopeProgramType = String(sessionProgramType || uploadProgramType || '').trim();
       // One cache entry per Monday + program type (buildings share the same timesheet).
-      const cacheKey = `${weekStart}::${programTypeKey(scopeProgramType) || '_'}`;
+      const cacheKey = `${weekStart}::${canonicalTimesheetProgramKey(scopeProgramType) || '_'}`;
       let w = weekCache.get(cacheKey);
-      if (w) return w;
+      if (w && therapistCanImportOrAddServices(w.status)) return w;
       const matched = weeksForProviderStart(store, providerId, weekStart);
-      w = pickWeekForScope(store, matched, {
+      foldEditableSameBinWeeks(store, matched, {
+        preferProgramType: scopeProgramType || undefined,
+      });
+      const healed = weeksForProviderStart(store, providerId, weekStart);
+      w = pickWeekForScope(store, healed, {
         providerId,
         // Prefer program-type scope so Middle/High buildings fold onto one sheet.
         schoolId: scopeProgramType ? undefined : scopeSchoolId || undefined,
         programType: scopeProgramType || undefined,
       });
+      // Signed/locked sheet stays put. A scoped upload opens (or reuses) one draft.
+      // An unscoped probe must not create a blank draft next to that locked sheet.
+      if (w && weekIsProcessed(w.status) && (scopeProgramType || scopeSchoolId)) {
+        w = openDraftBesideProcessed(store, w, {
+          providerId,
+          programType: scopeProgramType,
+          schoolId: scopeSchoolId,
+        });
+      }
       if (!w) {
         const school = resolveWeekSchool(store, providerId, {
           preferredSchoolId: scopeSchoolId || undefined,
@@ -3699,8 +3780,16 @@ export async function handleTmsRequest(
           patch.signerName = signer.signerName || w.signerName;
           patch.signerEmail = signer.signerEmail || w.signerEmail;
         }
-        if (scopeProgramType && !String(w.programType || '').trim()) {
-          patch.programType = scopeProgramType;
+        if (scopeProgramType) {
+          const stamped = String(w.programType || '').trim();
+          if (
+            !stamped ||
+            (canonicalTimesheetProgramKey(stamped) ===
+              canonicalTimesheetProgramKey(scopeProgramType) &&
+              scopeProgramType.length > stamped.length)
+          ) {
+            patch.programType = scopeProgramType;
+          }
         }
         // Backfill signer from building or district onto an unsigned program week.
         if (!String(w.signerEmail || '').trim()) {
@@ -4426,14 +4515,16 @@ export async function handleTmsRequest(
               : 'This session was already processed and cannot be edited. Ask an admin if a change is required.',
         });
       }
-    } else if (!therapistCanImportOrAddServices(week.status) && ctx.user.role !== 'admin') {
+    } else if (
+      !therapistCanImportOrAddServices(week.status) &&
+      !weekIsProcessed(week.status) &&
+      ctx.user.role !== 'admin'
+    ) {
       return json(409, {
         error:
           week.status === 'submitted'
             ? 'This week is awaiting signature. Cancel the approval request before adding or editing sessions.'
-            : weekIsProcessed(week.status)
-              ? 'This week is signed/locked. Ask an admin to reopen it before adding sessions.'
-              : 'This week cannot accept new sessions. Ask an admin to reopen it.',
+            : 'This week cannot accept new sessions. Ask an admin to reopen it.',
       });
     }
     const attendance =
@@ -4533,14 +4624,10 @@ export async function handleTmsRequest(
         });
       }
       targetWeek = scoped;
-      if (!therapistCanImportOrAddServices(targetWeek.status) && ctx.user.role !== 'admin') {
+      if (targetWeek.status === 'submitted' && ctx.user.role !== 'admin') {
         return json(409, {
           error:
-            targetWeek.status === 'submitted'
-              ? 'This program week is awaiting signature. Cancel the approval request before adding sessions.'
-              : weekIsProcessed(targetWeek.status)
-                ? 'This program week is signed/locked. Ask an admin to reopen it before adding sessions.'
-                : 'This program week cannot accept new sessions.',
+            'This program week is awaiting signature. Cancel the approval request before adding sessions.',
         });
       }
     } else if (
@@ -4554,13 +4641,13 @@ export async function handleTmsRequest(
         preferProgramType: bodyProgramType || week.programType || undefined,
       });
       const siblings = weeksForProviderStart(store, week.providerId, week.weekStart);
-      const preferPt = programTypeKey(bodyProgramType || week.programType || '');
+      const preferPt = canonicalTimesheetProgramKey(bodyProgramType || week.programType || '');
       const host =
         (preferPt
           ? siblings.find(
               (w) =>
                 therapistCanEdit(w.status) &&
-                programTypeKey(resolveWeekProgramType(store, w)) === preferPt &&
+                canonicalTimesheetProgramKey(resolveWeekProgramType(store, w)) === preferPt &&
                 store.sessionsForWeek(w.id).some((s) => String(s.studentId || '').trim()),
             )
           : undefined) ||
@@ -4578,7 +4665,7 @@ export async function handleTmsRequest(
           ? siblings.find(
               (w) =>
                 therapistCanEdit(w.status) &&
-                programTypeKey(resolveWeekProgramType(store, w)) === preferPt,
+                canonicalTimesheetProgramKey(resolveWeekProgramType(store, w)) === preferPt,
             )
           : undefined) ||
         (therapistCanEdit(week.status) ? week : undefined) ||
@@ -4593,16 +4680,20 @@ export async function handleTmsRequest(
           targetWeek = store.upsertWeek({ ...targetWeek, programType: bodyProgramType });
         }
       }
-      if (!therapistCanImportOrAddServices(targetWeek.status) && ctx.user.role !== 'admin') {
+      if (targetWeek.status === 'submitted' && ctx.user.role !== 'admin') {
         return json(409, {
           error:
-            targetWeek.status === 'submitted'
-              ? 'This program week is awaiting signature. Cancel the approval request before adding sessions.'
-              : weekIsProcessed(targetWeek.status)
-                ? 'This program week is signed/locked. Ask an admin to reopen it before adding sessions.'
-                : 'This program week cannot accept new sessions.',
+            'This program week is awaiting signature. Cancel the approval request before adding sessions.',
         });
       }
+    }
+    if (!existing && weekIsProcessed(targetWeek.status)) {
+      targetWeek = openDraftBesideProcessed(store, targetWeek, {
+        providerId: week.providerId,
+        programType:
+          childProgramType || bodyProgramType || resolveWeekProgramType(store, targetWeek),
+        schoolId: childSchoolId || String(targetWeek.schoolId || ''),
+      });
     }
     const session: SessionRow = {
       id: String(b.id || existing?.id || newId()),
