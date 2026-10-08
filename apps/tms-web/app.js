@@ -40,7 +40,7 @@ const state = {
   therapistPane: sessionStorage.getItem('tmsTherapistPane') || 'current',
   /** When set on Draft tab, open that week’s editor (send timesheet) instead of the draft list. */
   draftFocusWeekStart: sessionStorage.getItem('tmsDraftFocusWeek') || '',
-  /** Pending tab week filter (defaults to current Monday). */
+  /** Add new sessions tab: which week the list shows (upload does not use this). */
   pendingWeekStart: sessionStorage.getItem('tmsPendingWeek') || '',
   processedWeekStart: sessionStorage.getItem('tmsProcessedWeek') || '',
   childDetailTab: sessionStorage.getItem('tmsChildDetailTab') || 'basic',
@@ -108,7 +108,6 @@ const I18N = {
     'nav.children': 'Children',
     'nav.providers': 'Providers',
     'nav.mandates': 'Mandates',
-    'nav.schools': 'Schools',
     'nav.districts': 'Districts',
     'nav.admins': 'Admins',
     'nav.reports': 'Reports',
@@ -227,7 +226,7 @@ const I18N = {
     'forgot.send': 'Send reset code',
     'forgot.sending': 'Sending…',
     'forgot.needEmail': 'Enter your email address.',
-    'therapist.pending': 'Pending Sessions',
+    'therapist.pending': 'Add new sessions',
     'therapist.draft': 'Draft',
     'therapist.processed': 'Processed Sessions',
     'therapist.archive': 'My uploads',
@@ -242,7 +241,7 @@ const I18N = {
     'therapist.signTimesheet': 'Sign timesheet',
     'therapist.sendTimesheet': 'Send timesheet',
     'therapist.processedBlurb':
-      'Sessions successfully synced to HHA (paid). Filter by week if needed. Draft weeks stay under Draft; work awaiting signature stays under Pending Sessions.',
+      'Sessions successfully synced to HHA (paid). Filter by week if needed. Draft weeks stay under Draft; new uploads stay under Add new sessions.',
     'therapist.processedEmpty': 'No HHA-confirmed (paid) sessions for this program yet.',
     'therapist.pendingWeekFilter': 'Week',
     'therapist.allWeeks': 'All weeks',
@@ -268,7 +267,6 @@ const I18N = {
     'nav.children': 'Niños',
     'nav.providers': 'Proveedores',
     'nav.mandates': 'Mandatos',
-    'nav.schools': 'Escuelas',
     'nav.districts': 'Distritos',
     'nav.admins': 'Administradores',
     'nav.reports': 'Informes',
@@ -387,7 +385,7 @@ const I18N = {
     'forgot.send': 'Enviar código',
     'forgot.sending': 'Enviando…',
     'forgot.needEmail': 'Ingrese su dirección de correo.',
-    'therapist.pending': 'Sesiones pendientes',
+    'therapist.pending': 'Agregar sesiones nuevas',
     'therapist.draft': 'Borrador',
     'therapist.processed': 'Sesiones procesadas',
     'therapist.archive': 'Mis cargas',
@@ -474,7 +472,6 @@ function applyStaticI18n() {
     children: 'nav.children',
     providers: 'nav.providers',
     mandates: 'nav.mandates',
-    schools: 'nav.schools',
     districts: 'nav.districts',
     admins: 'nav.admins',
     reports: 'nav.reports',
@@ -483,14 +480,7 @@ function applyStaticI18n() {
     const screen = btn.getAttribute('data-admin');
     const key = adminNav[screen];
     if (!key) return;
-    if (screen === 'schools') {
-      const badge = document.getElementById('schoolsSetupBadge');
-      const count = badge && !badge.hidden ? badge.textContent : '';
-      const hidden = !badge || badge.hidden;
-      btn.innerHTML = `${esc(t(key))} <span id="schoolsSetupBadge" class="nav-alert-badge"${hidden ? ' hidden' : ''}>${esc(count || '')}</span>`;
-    } else {
-      btn.textContent = t(key);
-    }
+    btn.textContent = t(key);
   });
   const headerLang = document.getElementById('headerLang');
   if (headerLang) {
@@ -1174,6 +1164,20 @@ function caseloadChildSelectOptions(mandates, nonePlacement) {
   if (nonePlacement === 'first') return `${none}${rows}`;
   if (nonePlacement === 'last') return `${rows}${none}`;
   return rows || '<option value="">No caseload children</option>';
+}
+
+/** Therapist manual session: caseload children, with No child last (same as admin manual entry). */
+function manualChildOptions(students) {
+  const sorted = [...(students || [])].sort((a, b) => {
+    const la = `${a.firstName || ''} ${a.lastName || ''}`.trim() || a.id;
+    const lb = `${b.firstName || ''} ${b.lastName || ''}`.trim() || b.id;
+    return la.localeCompare(lb, undefined, { sensitivity: 'base' });
+  });
+  const rows = sorted.map((s) => {
+    const label = `${s.firstName || ''} ${s.lastName || ''}`.trim() || s.id;
+    return `<option value="${esc(s.id)}">${esc(label)}</option>`;
+  }).join('');
+  return `${rows}<option value="">No child</option>`;
 }
 
 function sessionChildLabel(s, students) {
@@ -2630,25 +2634,37 @@ async function therapistHome(statusFlash) {
     }
   }
 
-  const addlForm = `
+  const entryCards = `
     <div class="card sec-card">
-      <h2 class="sec"><span class="sec-num">2</span> Additional services</h2>
-      <input type="hidden" id="editSessionId" value="" />
+      <h2 class="sec" id="pManHeading"><span class="sec-num">1</span> Manual session + custom note</h2>
+      <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note. Optional additional-service type (Eval, Documentation, etc.) shows in the Service column. The session attaches to the week of the date of service (within the 14-day locker). You do not pick a week first.</p>
+      <input type="hidden" id="pManEditId" value="" />
+      <input type="hidden" id="pManEditWeekId" value="" />
+      <div class="row">
+        <label>Child
+          <select id="pManStudent">${manualChildOptions(students)}</select>
+        </label>
+        <label>Date of service <input id="pManDos" placeholder="MM/DD/YYYY" /></label>
+      </div>
       <div class="row">
         <label>Service type
-          <select id="additionalServiceType">
-            <option value="">Select…</option>
+          <input id="pManService" placeholder="PT School, ST Individual, OT School" />
+        </label>
+        <label>Additional service (optional)
+          <select id="pManAddlType">
+            <option value="">Regular session</option>
             ${additionalServiceOptions()}
           </select>
         </label>
-        <label>Student
-          <select id="studentId">${studentOptions(students, '', { blankLabel: 'No child' })}</select>
+        <label id="pManRatioWrap">Ratio
+          <select id="pManRatio">
+            ${sessionRatioOptions('1:1')}
+          </select>
         </label>
       </div>
       <div class="row">
-        <label>Date of service <input id="dos" placeholder="MM/DD/YYYY" /></label>
         <label>Attendance
-          <select id="att">
+          <select id="pManAtt">
             <option value="attended">attended</option>
             <option value="missed">missed</option>
             <option value="makeup">makeup</option>
@@ -2656,20 +2672,71 @@ async function therapistHome(statusFlash) {
         </label>
       </div>
       <div class="row">
-        <label>Begin time <input id="beginTime" placeholder="9:00 am" /></label>
-        <label>End time <input id="endTime" placeholder="9:30 am" /></label>
+        <label>Begin time <input id="pManBegin" placeholder="9:00 am" /></label>
+        <label>End time <input id="pManEnd" placeholder="9:30 am" /></label>
       </div>
       <div class="row">
-        <label>CPT code <input id="cptLabel" placeholder="97110x2" /></label>
-        <label id="makeupWrap" hidden>Missed session this makeup covers (required)
-          <select id="makeupOf" required><option value="">Select missed session…</option></select>
+        <label>CPT code <input id="pManCpt" placeholder="97110x2" /></label>
+        <label>Missed reason (if missed) <input id="pManCancel" placeholder="Student Absence / Provider Absence / …" /></label>
+      </div>
+      <div class="row">
+        <label id="pManMakeupWrap" hidden>Missed session this makeup covers (required)
+          <select id="pManMakeupOf"><option value="">Select missed session…</option></select>
         </label>
       </div>
-      <p class="muted" id="makeupEmptyMsg" hidden></p>
-      <label>Notes <textarea id="notes" rows="3"></textarea></label>
-      <p class="muted" id="makeupNotesHint" hidden>${esc(MAKEUP_NOTES_HINT)}</p>
-      <p class="muted">If a group-mandate child is seen alone (or as individual), the note must say no peer/partner was available.</p>
-      <button type="button" class="btn big" id="add">Save session</button>
+      <p class="muted" id="pManMakeupEmpty" hidden></p>
+      <label>Notes <textarea id="pManNotes" rows="3"></textarea></label>
+      <p class="muted" id="pManMakeupNotesHint" hidden>${esc(MAKEUP_NOTES_HINT)}</p>
+      <p class="muted">If a group-mandate child is seen individually (1:1 or no group ratio), the note must say no peer/partner was available. A group visit (2:1 or Group) does not need that phrase when the other child’s note will be entered separately.</p>
+      <label>Custom note file (optional Word/PDF — not parsed) <input id="pManFile" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" /></label>
+      <div class="row">
+        <button type="button" class="btn-primary big" id="pManSave">Submit session</button>
+        <button type="button" class="btn" id="pManCancelEdit" hidden>Cancel edit</button>
+      </div>
+    </div>
+    <div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">2</span> Import session notes</h2>
+      <p>Select one Frontline Related Service Session Notes PDF or a Therapist Activity Output PDF (text-based, not a scan). It can include every session from the last 14 days, even when those dates fall in more than one calendar week — do not split the file by week, and do not pick a week first. Children and schools must already exist from caseload import; this upload will not create them. ${importBlockCopy} Exact duplicates (same child, date, times, and attendance) are skipped — missed and attended at the same slot are kept separate. Each session attaches to the week of its date of service (within the 14-day locker).</p>
+      <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
+      <button class="btn-primary big" id="upload">Import</button>
+      <p class="muted" id="uploadHint">Accepts Frontline session-notes or Therapist Activity Output PDFs. Import caseloads under Mandates. Scanned PDFs are not supported.</p>
+    </div>
+    <div id="uploadIssues" class="upload-issues" hidden></div>`;
+
+  const lockedWeekNote = !isWeekWorkspace
+    ? ''
+    : processed
+      ? `<div class="warn-box">${pane === 'current'
+        ? 'This week is signed and locked, so sessions in the list above cannot be edited or removed. Upload and manual entry still file each date of service onto its own week (the 14-day locker still applies). Ask an admin to reopen this week to change those sessions.'
+        : 'This week is signed and locked. Sessions cannot be edited, removed, or added. Ask an admin to reopen the week if a change is required.'}</div>`
+      : pending
+        ? `<div class="warn-box">${pane === 'current'
+          ? 'Approval is pending for this week, so sessions in the list above are locked. Upload and manual entry still file each date of service onto its own week. Cancel the approval request to edit this week.'
+          : 'Approval is pending. Sessions are locked until you cancel the approval request (returns the week to draft) or the timesheet is signed.'}</div>`
+        : '';
+  const draftEntryCards = isDraftPane && canImport ? entryCards : '';
+  const timesheetHtml = !isWeekWorkspace
+    ? ''
+    : pending || processed
+      ? `<div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">3</span> Timesheet</h2>
+      <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
+    </div>`
+      : isDraftPane
+        ? `<div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">3</span> Sign &amp; send timesheet</h2>
+      <p>1) Sign the timesheet (saves your signature + date). 2) Send the provider-signed PDF to the school signer${signerEmail ? `: ${esc(signerName || signerEmail)} &lt;${esc(signerEmail)}&gt;` : ''}.</p>
+      <div class="row timesheet-actions">
+        <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
+        <button type="button" class="btn big" id="signTimesheet" ${sessions.length && !pending && !processed ? '' : 'disabled'}>${esc(t('therapist.signTimesheet'))}${providerSigned ? ' ✓' : ''}</button>
+        <button type="button" class="btn-primary big${canSend ? '' : ' is-blocked'}" id="submit" title="${esc(sendBlockReason || 'Send timesheet to the school signer')}">Send timesheet</button>
+      </div>
+      <p id="submitHint" class="${canSend ? 'muted' : 'err-inline'}"${canSend ? ' hidden' : ''}>${esc(sendBlockReason || '')}</p>
+    </div>`
+        : `<div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">3</span> Timesheet</h2>
+      <p class="muted">To sign and send a timesheet, open the week from the Draft tab.</p>
+      <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
     </div>`;
 
   view(`
@@ -2786,15 +2853,21 @@ async function therapistHome(statusFlash) {
         }).join('')}
       </table></div>` : ''}
       ` : `
-      <h2>${isDraftPane ? esc(t('therapist.draft')) : 'Pending sessions'}</h2>
+      <h2>${isDraftPane ? esc(t('therapist.draft')) : esc(t('therapist.pending'))}</h2>
       ${isDraftPane ? `<p class="row"><button type="button" class="btn" id="backToDraftList">${esc(t('therapist.backToDrafts'))}</button></p>` : `
+      <p class="muted">Upload one Frontline or Therapist Activity report for sessions in the last 14 days, or enter a session by hand. You do not pick a week first. One PDF may span more than one calendar week — each session attaches to the week of its date of service.</p>
+      </div>
+      ${entryCards}
+      <div class="card">
+      <h3>Sessions on file</h3>
       <div class="row">
         <label>${esc(t('therapist.pendingWeekFilter'))}
           <select id="pendingWeekFilter">
             ${pendingWeekStarts.map((ws) => `<option value="${esc(ws)}" ${state.weekStart === ws ? 'selected' : ''}>${esc(ws)}${ws === mondayIso() ? ' · current' : ''}</option>`).join('') || `<option value="${esc(state.weekStart)}">${esc(state.weekStart)}</option>`}
           </select>
         </label>
-      </div>`}
+      </div>
+      <p class="muted">This week filter only changes the list below. Upload and manual entry do not use it.</p>`}
       ${banner}
       ${week ? approvalBanner(status) : '<div class="warn-box">Contact the office to complete your therapist profile setup.</div>'}
       <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${pending ? ' · awaiting signature (sessions locked)' : ''}${processed ? ' · signed/locked (sessions locked)' : ''}${providerSigned && !pending && !processed ? ' · provider signed' : ''}</p>
@@ -2835,6 +2908,9 @@ async function therapistHome(statusFlash) {
             endTime: s.endTime,
             attendance: s.attendance,
             additionalServiceType: s.additionalServiceType || '',
+            serviceType: s.serviceType || '',
+            cancelReason: s.cancelReason || '',
+            weekId: s.weekId || '',
             notes: s.notes || '',
             cptLabel: s.cptLabel || '',
             makeupOfSessionId: s.makeupOfSessionId || '',
@@ -2850,47 +2926,10 @@ async function therapistHome(statusFlash) {
     </div>
 
     ${isWeekWorkspace ? `
-    ${processed ? `<div class="warn-box">This week is signed and locked. Sessions cannot be edited, removed, or added. Ask an admin to reopen the week if a change is required.</div>` : ''}
-    ${pending ? `<div class="warn-box">Approval is pending. Sessions are locked until you cancel the approval request (returns the week to draft) or the timesheet is signed.</div>` : ''}
-    ${canImport ? `
-    <div class="card sec-card">
-      <h2 class="sec"><span class="sec-num">1</span> Import session notes</h2>
-      <p>Select a Frontline Related Service Session Notes PDF or a Therapist Activity Output PDF (text-based, not a scan). Children and schools must already exist from caseload import; this upload will not create them. ${importBlockCopy} Exact duplicates (same child, date, times, and attendance) are skipped — missed and attended at the same slot are kept separate. Sessions attach to the week of each date of service (within the 14-day locker).</p>
-      <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
-      <button class="btn-primary big" id="upload">Import</button>
-      <p class="muted" id="uploadHint">Accepts Frontline session-notes or Therapist Activity Output PDFs. Import caseloads under Mandates. Scanned PDFs are not supported.</p>
-    </div>
-
-    <div id="uploadIssues" class="upload-issues" hidden></div>
-
-    ${addlForm}
-    ` : `
-    <div id="uploadIssues" class="upload-issues" hidden></div>
-    `}
-
-    ${pending || processed ? `
-    <div class="card sec-card">
-      <h2 class="sec"><span class="sec-num">3</span> Timesheet</h2>
-      <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
-    </div>` : isDraftPane ? `
-    <div class="card sec-card">
-      <h2 class="sec"><span class="sec-num">3</span> Sign &amp; send timesheet</h2>
-      <p>1) Sign the timesheet (saves your signature + date). 2) Send the provider-signed PDF to the school signer${signerEmail ? `: ${esc(signerName || signerEmail)} &lt;${esc(signerEmail)}&gt;` : ''}.</p>
-      <div class="row timesheet-actions">
-        <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
-        <button type="button" class="btn big" id="signTimesheet" ${sessions.length && !pending && !processed ? '' : 'disabled'}>${esc(t('therapist.signTimesheet'))}${providerSigned ? ' ✓' : ''}</button>
-        <button type="button" class="btn-primary big${canSend ? '' : ' is-blocked'}" id="submit" title="${esc(sendBlockReason || 'Send timesheet to the school signer')}">Send timesheet</button>
-      </div>
-      <p id="submitHint" class="${canSend ? 'muted' : 'err-inline'}"${canSend ? ' hidden' : ''}>${esc(sendBlockReason || '')}</p>
-    </div>
-    ` : `
-    <div class="card sec-card">
-      <h2 class="sec"><span class="sec-num">3</span> Timesheet</h2>
-      <p class="muted">To sign and send a timesheet, open the week from the Draft tab.</p>
-      <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
-    </div>
-    `}
+    ${lockedWeekNote}
+    ${draftEntryCards}
     ` : ''}
+    ${timesheetHtml}
   `);
 
   document.querySelectorAll('[data-therapist-pane]').forEach((btn) => {
@@ -3189,17 +3228,64 @@ async function therapistHome(statusFlash) {
     };
   });
 
-  // Draft list has Sign/Send row actions only — no #upload/#add session chrome.
+  // Draft list has Sign/Send row actions only — upload lives on Add new sessions (and an open draft week).
   if (isPriorPane || isArchivePane || isDraftList) return;
 
   const viewEl = document.getElementById('view');
-  if (!canImport) {
+  const showEntry = pane === 'current' || canImport;
+  if (!showEntry) {
     if (viewEl) viewEl.onclick = null;
     return;
   }
   if (!viewEl) return;
 
-  bindMakeupPickers();
+  const syncTherapistRatio = () => {
+    const addl = document.getElementById('pManAddlType')?.value || '';
+    const isAddl = Boolean(addl);
+    const wrap = document.getElementById('pManRatioWrap');
+    const sel = document.getElementById('pManRatio');
+    if (wrap) wrap.hidden = isAddl;
+    if (sel) {
+      sel.disabled = isAddl;
+      if (isAddl) sel.value = '1:1';
+    }
+  };
+  document.getElementById('pManAddlType')?.addEventListener('change', syncTherapistRatio);
+  syncTherapistRatio();
+  bindAdminMakeupNotes();
+
+  const clearTherapistManualEdit = () => {
+    const editId = document.getElementById('pManEditId');
+    if (editId) editId.value = '';
+    const editWeekId = document.getElementById('pManEditWeekId');
+    if (editWeekId) editWeekId.value = '';
+    const heading = document.getElementById('pManHeading');
+    if (heading) heading.innerHTML = '<span class="sec-num">1</span> Manual session + custom note';
+    const saveBtn = document.getElementById('pManSave');
+    if (saveBtn) saveBtn.textContent = 'Submit session';
+    const cancelBtn = document.getElementById('pManCancelEdit');
+    if (cancelBtn) cancelBtn.hidden = true;
+    const fileInput = document.getElementById('pManFile');
+    if (fileInput) fileInput.value = '';
+  };
+  document.getElementById('pManCancelEdit')?.addEventListener('click', () => {
+    clearTherapistManualEdit();
+    const studentEl = document.getElementById('pManStudent');
+    if (studentEl) studentEl.value = '';
+    document.getElementById('pManDos').value = '';
+    document.getElementById('pManService').value = '';
+    document.getElementById('pManAddlType').value = '';
+    const ratioEl = document.getElementById('pManRatio');
+    if (ratioEl) ratioEl.value = '1:1';
+    syncTherapistRatio();
+    document.getElementById('pManAtt').value = 'attended';
+    document.getElementById('pManBegin').value = '';
+    document.getElementById('pManEnd').value = '';
+    document.getElementById('pManCpt').value = '';
+    document.getElementById('pManCancel').value = '';
+    document.getElementById('pManNotes').value = '';
+    void bindAdminMakeupNotes();
+  });
 
   viewEl.onclick = async (e) => {
     const editBtn = e.target.closest('[data-edit-session]');
@@ -3211,33 +3297,59 @@ async function therapistHome(statusFlash) {
       } catch {
         raw = {};
       }
-      document.getElementById('editSessionId').value = raw.id || '';
-      document.getElementById('additionalServiceType').value = raw.additionalServiceType || '';
-      document.getElementById('studentId').value = raw.studentId || '';
-      document.getElementById('dos').value = raw.dateOfService || '';
-      document.getElementById('att').value = raw.attendance || 'attended';
-      document.getElementById('beginTime').value = raw.beginTime || '';
-      document.getElementById('endTime').value = raw.endTime || '';
-      document.getElementById('cptLabel').value = raw.cptLabel || '';
-      document.getElementById('notes').value = raw.notes || '';
-      await bindMakeupPickers();
+      const studentEl = document.getElementById('pManStudent');
+      const studentId = String(raw.studentId || '').trim();
+      if (studentEl && studentId) {
+        const hasOpt = [...studentEl.options].some((o) => o.value === studentId);
+        if (!hasOpt) {
+          const opt = document.createElement('option');
+          opt.value = studentId;
+          opt.textContent = String(raw.studentName || studentId).trim() || studentId;
+          studentEl.insertBefore(opt, studentEl.lastElementChild);
+        }
+        studentEl.value = studentId;
+      } else if (studentEl) {
+        studentEl.value = '';
+      }
+      document.getElementById('pManEditId').value = raw.id || '';
+      document.getElementById('pManEditWeekId').value = raw.weekId || '';
+      document.getElementById('pManDos').value = raw.dateOfService || '';
+      const rawSvc = String(raw.serviceType || '');
+      const extractedRatio = extractSessionRatio(rawSvc);
+      document.getElementById('pManService').value = stripSessionRatio(rawSvc) || rawSvc;
+      document.getElementById('pManAddlType').value = raw.additionalServiceType || '';
+      const ratioEl = document.getElementById('pManRatio');
+      if (ratioEl) ratioEl.value = SESSION_RATIO_OPTIONS.includes(extractedRatio) ? extractedRatio : '1:1';
+      syncTherapistRatio();
+      document.getElementById('pManAtt').value = raw.attendance || 'attended';
+      document.getElementById('pManBegin').value = raw.beginTime || '';
+      document.getElementById('pManEnd').value = raw.endTime || '';
+      document.getElementById('pManCpt').value = raw.cptLabel || '';
+      document.getElementById('pManCancel').value = raw.cancelReason || '';
+      document.getElementById('pManNotes').value = raw.notes || '';
+      const heading = document.getElementById('pManHeading');
+      if (heading) heading.innerHTML = '<span class="sec-num">1</span> Edit session';
+      const saveBtn = document.getElementById('pManSave');
+      if (saveBtn) saveBtn.textContent = 'Update session';
+      const cancelBtn = document.getElementById('pManCancelEdit');
+      if (cancelBtn) cancelBtn.hidden = false;
+      await bindAdminMakeupNotes();
       if (raw.attendance === 'makeup') {
-        const makeupOfEl = document.getElementById('makeupOf');
-        const notesEl = document.getElementById('notes');
+        const makeupOfEl = document.getElementById('pManMakeupOf');
+        const notesEl = document.getElementById('pManNotes');
         await loadMissedOptions(makeupOfEl, raw.makeupOfSessionId || '', {
-          studentId: raw.studentId,
+          studentId,
           excludeSessionId: raw.id || '',
         });
         if (raw.notes) notesEl.value = raw.notes;
         else applyMakeupNoteFromSelection(notesEl, makeupOfEl);
       }
-      document.getElementById('add').textContent = 'Update session';
-      document.getElementById('additionalServiceType')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById('pManHeading')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
     const removeBtn = e.target.closest('[data-remove-session]');
     if (!removeBtn) return;
-    if (!confirm('Remove this session, including any additional services? This cannot be undone.')) return;
+    if (!confirm('Remove this session? This cannot be undone.')) return;
     try {
       await api('DELETE', `/sessions/${removeBtn.getAttribute('data-remove-session')}`);
       await therapistHome({ success: ['Session removed.'] });
@@ -3263,14 +3375,12 @@ async function therapistHome(statusFlash) {
       setStatus('Importing PDF…', '');
       const pdfBase64 = await fileToBase64(file);
       const out = await api('POST', '/week/upload-sessions', {
-        weekStart: state.weekStart,
         providerId,
         schoolId: state.selectedSchoolId || undefined,
         programType: state.selectedProgramType || undefined,
         fileName: file.name || '',
         pdfBase64,
       });
-      state.weekId = out.week.id;
       const split = splitFailedBySeverity(out.failed, out.warnings);
       const warnList = split.yellows;
       const failedList = split.reds;
@@ -3287,7 +3397,7 @@ async function therapistHome(statusFlash) {
       const skippedN = Number(out.skippedCount || (out.skipped || []).length || 0);
       const importedN = Number(out.imported != null ? out.imported : savedList.length);
       const successMsgs = [];
-      if (importedN > 0) successMsgs.push(`Imported ${importedN} session(s).`);
+      if (importedN > 0) successMsgs.push(`Imported ${importedN} session(s) onto the week of each date of service.`);
       if (skippedN > 0) successMsgs.push(`Skipped ${skippedN} already saved session(s).`);
       if (!successMsgs.length && !failedList.length) {
         successMsgs.push(`Imported ${out.parsed || 0} session(s).`);
@@ -3322,30 +3432,28 @@ async function therapistHome(statusFlash) {
     }
   };
 
-  const addBtn = document.getElementById('add');
+  const addBtn = document.getElementById('pManSave');
   if (addBtn) addBtn.onclick = async () => {
     const btn = addBtn;
     try {
-      if (!state.weekId) {
-        if (!providerId) throw new Error('This week is not open yet. Contact the office to complete your provider profile.');
-        const ensured = await api('POST', '/week/ensure', {
-          weekStart: state.weekStart,
-          providerId,
-          schoolId: state.selectedSchoolId || undefined,
-          programType: state.selectedProgramType || undefined,
-        });
-        state.weekId = ensured.week?.id || '';
-      }
-      if (!state.weekId) throw new Error('This week is not open yet. Contact the office for assistance.');
-      const additionalServiceType = document.getElementById('additionalServiceType').value;
-      const studentId = document.getElementById('studentId').value;
-      const dateOfService = document.getElementById('dos').value.trim();
-      const attendance = document.getElementById('att').value;
-      const makeupOfEl = document.getElementById('makeupOf');
-      const notesEl = document.getElementById('notes');
-      const editId = document.getElementById('editSessionId').value.trim();
-      if (!additionalServiceType) throw new Error('Select a service type.');
+      const editId = document.getElementById('pManEditId')?.value?.trim() || '';
+      const editWeekId = document.getElementById('pManEditWeekId')?.value?.trim() || '';
+      const studentId = document.getElementById('pManStudent')?.value || '';
+      const dateOfService = document.getElementById('pManDos')?.value?.trim() || '';
+      const attendance = document.getElementById('pManAtt')?.value || 'attended';
+      const makeupOfEl = document.getElementById('pManMakeupOf');
+      const notesEl = document.getElementById('pManNotes');
+      const cancelReason = document.getElementById('pManCancel')?.value?.trim() || '';
+      const additionalServiceTypeEarly = document.getElementById('pManAddlType')?.value || '';
+      const serviceTypeBase = document.getElementById('pManService')?.value?.trim() || '';
+      const ratioSel = document.getElementById('pManRatio')?.value || '1:1';
+      const serviceTypeEarly = additionalServiceTypeEarly
+        ? serviceTypeBase
+        : serviceTypeWithRatioUi(serviceTypeBase, ratioSel || '1:1');
+      if (!providerId) throw new Error('Your provider profile is not linked yet. Contact the office for assistance.');
+      if (!studentId && !additionalServiceTypeEarly) throw new Error('Select a child.');
       if (!dateOfService) throw new Error('Enter the date of service.');
+      if (!additionalServiceTypeEarly && !serviceTypeBase) throw new Error('Service type is required.');
       if (attendance === 'makeup') {
         const makeupOfSessionId = makeupOfEl?.value || '';
         if (!makeupOfSessionId) {
@@ -3353,32 +3461,68 @@ async function therapistHome(statusFlash) {
         }
         applyMakeupNoteFromSelection(notesEl, makeupOfEl);
       }
-      const notes = notesEl.value.trim();
+      const notes = notesEl?.value || '';
+      const fileInput = document.getElementById('pManFile');
+      const file = fileInput?.files?.[0] || null;
+      if (file) {
+        const lower = String(file.name || '').toLowerCase();
+        if (!/\.(pdf|doc|docx)$/.test(lower)) {
+          throw new Error('Note file must be a PDF or Word document (.doc / .docx).');
+        }
+      }
       btn.disabled = true;
-      btn.textContent = 'Saving…';
+      btn.textContent = editId ? 'Updating…' : 'Submitting…';
       clearTransientErrors();
-      setStatus('Saving session…', '');
-      await api('POST', '/week/sessions', {
+      setStatus(editId ? 'Updating session…' : 'Submitting session…', '');
+      const weekStart = mondayFromDos(dateOfService) || mondayIso();
+      const child = students.find((s) => s.id === studentId);
+      const childSchoolId = String(child?.schoolId || '').trim();
+      const existingRow = editId ? sessions.find((x) => x.id === editId) : null;
+      const sameWeek = Boolean(editId && editWeekId) && String(existingRow?.weekStart || '') === weekStart;
+      let weekId = sameWeek ? editWeekId : '';
+      if (!weekId) {
+        const ensured = await api('POST', '/week/ensure', {
+          providerId,
+          weekStart,
+          schoolId: childSchoolId || state.selectedSchoolId || undefined,
+          programType: state.selectedProgramType || undefined,
+        });
+        weekId = ensured.week?.id || '';
+      }
+      if (!weekId) throw new Error('Could not open a week for this date of service.');
+      const payload = {
         id: editId || undefined,
-        weekId: state.weekId,
+        weekId,
         studentId,
         dateOfService,
-        beginTime: document.getElementById('beginTime').value,
-        endTime: document.getElementById('endTime').value,
+        beginTime: document.getElementById('pManBegin')?.value || '',
+        endTime: document.getElementById('pManEnd')?.value || '',
         attendance,
+        cancelReason,
         makeupOfSessionId: attendance === 'makeup' ? (makeupOfEl?.value || '') : '',
-        additionalServiceType,
-        programType: state.selectedProgramType || undefined,
-        cptLabel: document.getElementById('cptLabel').value.trim(),
+        cptLabel: document.getElementById('pManCpt')?.value?.trim() || '',
         notes,
-      });
-      await therapistHome({ success: [editId ? 'Session updated.' : 'Session saved.'] });
+        programType: state.selectedProgramType || undefined,
+      };
+      if (serviceTypeEarly) payload.serviceType = serviceTypeEarly;
+      if (additionalServiceTypeEarly) payload.additionalServiceType = additionalServiceTypeEarly;
+      if (file) {
+        payload.fileName = file.name;
+        payload.fileBase64 = await fileToBase64(file);
+        payload.fileLabel = `Custom note — ${dateOfService} — ${file.name}`;
+      }
+      const out = await api('POST', '/week/sessions', payload);
+      const warns = Array.isArray(out.warnings) ? out.warnings : [];
+      const okMsg = editId
+        ? (out.archive || out.file ? 'Session updated; custom note archived (not parsed).' : 'Session updated.')
+        : (out.archive || out.file ? 'Session saved; custom note archived (not parsed).' : 'Session saved.');
+      await therapistHome({ success: [okMsg], warn: warns });
     } catch (e) {
       const errs = Array.isArray(e.errors) && e.errors.length ? e.errors : [e.message];
       const warns = Array.isArray(e.warnings) ? e.warnings : [];
       setStatus({ error: errs, warn: warns });
       btn.disabled = false;
-      btn.textContent = document.getElementById('editSessionId')?.value ? 'Update session' : 'Save session';
+      btn.textContent = document.getElementById('pManEditId')?.value?.trim() ? 'Update session' : 'Submit session';
     }
   };
 
@@ -3577,7 +3721,16 @@ function explainHhaTriage(detail) {
     /caregiver shift overlaps/i.test(t) ||
     (id === '-310' && /overlap/i.test(t));
   if (shiftOverlap) {
-    return 'This child already has a visit at this time in HHA. Cancel that HHA visit or change the TMS time, then retry.';
+    const groupOverlap =
+      /do not cancel the group mate/i.test(t) || /this is a group visit/i.test(t);
+    if (groupOverlap) {
+      const mate = t.match(/at the same time as ([^.]+)\./i)?.[1]?.trim() || '';
+      const who = mate
+        ? `This is a group visit at the same time as ${mate}.`
+        : 'This is a group. The other child is supposed to be in HHA at this time.';
+      return `${who} Do not cancel that visit. HHA blocked this child because one caregiver cannot be on two patients until overlapping shifts are allowed, then retry.`;
+    }
+    return 'This caregiver already has a visit at this time in HHA. Cancel that HHA visit or change the TMS time, then retry.';
   }
   if (id === '-74' && /PayCodeID/i.test(t)) {
     return 'The pay code sent is not on this caregiver in HHA.';
@@ -4257,7 +4410,7 @@ async function adminChildDetail(studentId, opts = {}) {
   const calSummary = detail.schoolCalendarSummary || formatCalendarSummary(cal);
   const calendarLine = calSummary
     ? `<p class="muted"><strong>Calendar:</strong> ${esc(calSummary)}${(cal?.offDays || []).length ? ` — off: ${esc((cal.offDays || []).slice().sort().join(', '))}` : ''}</p>`
-    : '<p class="muted"><strong>Calendar:</strong> Not set (open the school under Schools)</p>';
+    : '<p class="muted"><strong>Calendar:</strong> Not set (open the school under Districts)</p>';
   // Only show providers that have a real providerId (never name-only / unmatched text).
   const assignedProviders = detail.assignedProviders?.length
     ? detail.assignedProviders.filter((p) => String(p.id || '').trim())
@@ -4952,32 +5105,6 @@ async function adminProviderDetail(providerId) {
           <button type="button" class="btn-primary" id="pSendTimesheet">Send timesheet</button>
         </div>
         <p class="muted" id="pSendTimesheetHint" hidden></p>
-
-        <h3 style="margin-top:1.25rem">Additional services</h3>
-        <p class="muted">Same service types as the therapist workspace, including paid absence. Saved onto the same draft week as regular sessions for this therapist (use Program type / school signer above when there is more than one). Rows show as <strong>Additional: …</strong> in the Service column and on the timesheet.</p>
-        <div class="row">
-          <label>Service type
-            <select id="pAddlType">
-              <option value="">Select…</option>
-              ${additionalServiceOptions()}
-            </select>
-          </label>
-          <label>Child
-            <select id="pAddlStudent">${caseloadChildSelectOptions(mandates, 'first')}</select>
-          </label>
-        </div>
-        <div class="row">
-          <label>Date of service <input id="pAddlDos" placeholder="MM/DD/YYYY" /></label>
-          <label>Begin / end
-            <div class="row">
-              <input id="pAddlBegin" placeholder="9:00 am" />
-              <input id="pAddlEnd" placeholder="9:30 am" />
-            </div>
-          </label>
-        </div>
-        <label>Notes <textarea id="pAddlNotes" rows="2"></textarea></label>
-        <label>CPT code <input id="pAddlCpt" placeholder="97110x2" /></label>
-        <button type="button" class="btn" id="pAddlSave">Save additional service</button>
       </div>
 
       <div class="detail-pane"${provTab === 'reports' ? '' : ' hidden'}>
@@ -5586,57 +5713,6 @@ async function adminProviderDetail(providerId) {
       }
     }
   };
-  document.getElementById('pAddlSave').onclick = async () => {
-    try {
-      const additionalServiceType = document.getElementById('pAddlType').value;
-      const studentId = document.getElementById('pAddlStudent').value;
-      const dateOfService = document.getElementById('pAddlDos').value.trim();
-      if (!additionalServiceType) throw new Error('Select a service type.');
-      if (!dateOfService) throw new Error('Enter the date of service.');
-      const weekStart = mondayFromDos(dateOfService) || mondayIso();
-      const schoolSel = document.getElementById('pTimesheetSchool');
-      const pickerSchoolId = schoolSel?.value || '';
-      const pickerProgramType =
-        schoolSel?.selectedOptions?.[0]?.getAttribute('data-program-type') || '';
-      const childSchoolId = studentId
-        ? String(
-            sessions.find((x) => x.studentId === studentId)?.schoolId
-              || mandates.find((m) => m.studentId === studentId)?.schoolId
-              || '',
-          ).trim()
-        : '';
-      const childProgramType = studentId
-        ? String(
-            sessions.find((x) => x.studentId === studentId)?.programType
-              || sessions.find((x) => x.studentId === studentId)?.district
-              || mandates.find((m) => m.studentId === studentId)?.programType
-              || '',
-          ).trim()
-        : '';
-      // No-child rows join the program bin from the timesheet picker (or child's program).
-      const programType = childProgramType || pickerProgramType || '';
-      const ensured = await api('POST', '/week/ensure', {
-        providerId,
-        weekStart,
-        schoolId: childSchoolId || pickerSchoolId || undefined,
-        programType: programType || undefined,
-      });
-      await api('POST', '/week/sessions', {
-        weekId: ensured.week?.id,
-        studentId,
-        dateOfService,
-        beginTime: document.getElementById('pAddlBegin').value,
-        endTime: document.getElementById('pAddlEnd').value,
-        attendance: additionalServiceType === 'paid_absence' ? 'attended' : 'attended',
-        additionalServiceType,
-        programType: programType || undefined,
-        cptLabel: document.getElementById('pAddlCpt')?.value?.trim() || '',
-        notes: document.getElementById('pAddlNotes').value,
-      });
-      setStatus('Additional service saved.', 'ok');
-      await adminProviderDetail(providerId);
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
   document.querySelectorAll('[data-del-file]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       try {
@@ -5702,6 +5778,13 @@ async function adminProviderDetail(providerId) {
   });
 }
 
+function leaveSchoolEditor() {
+  const back = state.schoolBackDistrict;
+  state.schoolBackDistrict = null;
+  if (back && (back.id || back.name)) return adminDistrictDetail(back.id, back.name);
+  return adminDistricts();
+}
+
 async function adminSchoolDetail(schoolId) {
   const [detail, duesOut] = await Promise.all([
     api('GET', `/admin/schools/${schoolId}`),
@@ -5730,13 +5813,15 @@ async function adminSchoolDetail(schoolId) {
         }
       : null,
   );
+  const schoolBack = state.schoolBackDistrict;
+  const schoolBackLabel = schoolBack?.name ? `← ${schoolBack.name}` : '← Districts';
   const setupBanner = setup.incomplete
     ? `<div class="err-box school-setup-banner"><strong>School setup incomplete</strong><p>${esc(setup.message || 'This school needs a calendar and/or address.')}</p>
         <ul>${setup.missingCalendar ? '<li>Add a school calendar (first day, last day, off days).</li>' : ''}${setup.missingAddress ? '<li>Add a full address (street, city, state, zip) for HHA CreatePatient.</li>' : ''}</ul></div>`
     : '';
   view(`
     <div class="card">
-      <button type="button" class="btn" id="backSchools">← Schools</button>
+      <button type="button" class="btn" id="backFromSchool">${esc(schoolBackLabel)}</button>
       <h2 class="${setup.incomplete ? 'school-name-incomplete' : ''}">${esc(school.name || 'School')}</h2>
       ${setupBanner}
       <p class="muted">${esc(detail.studentCount || 0)} children on caseload</p>
@@ -5916,7 +6001,7 @@ async function adminSchoolDetail(schoolId) {
       void refreshSchoolsSetupBadge();
     } catch (e) { setStatus(e.message, 'err'); }
   };
-  document.getElementById('backSchools').onclick = () => adminSchools();
+  document.getElementById('backFromSchool').onclick = () => leaveSchoolEditor();
   document.getElementById('saveSchool').onclick = async () => {
     try {
       await api('POST', '/admin/schools', {
@@ -5940,7 +6025,7 @@ async function adminSchoolDetail(schoolId) {
       if (!confirm('Remove this school? Its due dates will be deleted and children will be unlinked from it. This cannot be undone.')) return;
       await api('DELETE', `/admin/schools/${schoolId}`);
       setStatus('School removed.', 'ok');
-      await adminSchools();
+      await leaveSchoolEditor();
     } catch (e) { setStatus(e.message, 'err'); }
   };
   document.getElementById('duebtn').onclick = async () => {
@@ -6352,7 +6437,20 @@ function showDistrictDetail(d) {
     </div>
     <div class="card">
       <h3>Schools in this district</h3>
-      <p class="muted">Linked via school.district or children with this program type. Set school.district on a school to wire it here.</p>
+      <p class="muted">Linked via school.district or children with this program type. Open a school to edit the signer, address, calendar, and progress-report due dates.</p>
+      <div class="entry-collapsed" id="addDistrictSchoolCollapsed">
+        <button type="button" class="btn-primary" id="openAddDistrictSchool">Add school</button>
+      </div>
+      <div id="addDistrictSchoolForm" hidden>
+        <h4>Add school</h4>
+        <label>School <input id="dsSchoolName" /></label>
+        <label>Signer name <input id="dsSchoolSignerName" /></label>
+        <label>Signer email <input id="dsSchoolSignerEmail" type="email" /></label>
+        <div class="entry-form-actions">
+          <button type="button" class="btn-primary" id="saveDistrictSchool">Save school</button>
+          <button type="button" class="btn" id="cancelAddDistrictSchool">Cancel</button>
+        </div>
+      </div>
       <table>
         <tr><th>School</th><th>Building signer</th><th></th></tr>
         ${schools.map((s) => `<tr>
@@ -6397,135 +6495,49 @@ function showDistrictDetail(d) {
     };
   }
   document.querySelectorAll('[data-open-school]').forEach((btn) => {
-    btn.addEventListener('click', () => adminSchoolDetail(btn.getAttribute('data-open-school')));
+    btn.addEventListener('click', () => {
+      state.schoolBackDistrict = { id: String(d.id || ''), name: String(d.name || '') };
+      adminSchoolDetail(btn.getAttribute('data-open-school'));
+    });
   });
+  const setAddSchoolOpen = (open) => {
+    const collapsed = document.getElementById('addDistrictSchoolCollapsed');
+    const form = document.getElementById('addDistrictSchoolForm');
+    if (collapsed) collapsed.hidden = open;
+    if (form) form.hidden = !open;
+  };
+  document.getElementById('openAddDistrictSchool').onclick = () => setAddSchoolOpen(true);
+  document.getElementById('cancelAddDistrictSchool').onclick = () => setAddSchoolOpen(false);
+  document.getElementById('saveDistrictSchool').onclick = async () => {
+    try {
+      const name = document.getElementById('dsSchoolName').value.trim();
+      if (!name) throw new Error('Enter a school name.');
+      const out = await api('POST', '/admin/schools', {
+        name,
+        district: d.name || '',
+        signerName: document.getElementById('dsSchoolSignerName').value,
+        signerEmail: document.getElementById('dsSchoolSignerEmail').value,
+      });
+      setStatus('School saved.', 'ok');
+      const schoolId = out.school?.id || '';
+      if (schoolId) {
+        state.schoolBackDistrict = { id: String(d.id || ''), name: String(d.name || '') };
+        await adminSchoolDetail(schoolId);
+      } else {
+        const row = await loadDistrictDetail(d.id, d.name);
+        if (row) showDistrictDetail(row);
+      }
+    } catch (e) { setStatus(e.message, 'err'); }
+  };
 }
 
 async function adminSchools(opts = {}) {
-  if (opts.focusSchoolId) state.focusSchoolId = opts.focusSchoolId;
-  const schoolsOut = await api('GET', '/admin/schools');
-  const schools = schoolsOut.schools || [];
-  const calendarsBySchoolId = schoolsOut.calendarsBySchoolId || {};
-  const setupBySchoolId = schoolsOut.setupBySchoolId || {};
-  const incompleteSchools = schools
-    .map((s) => ({
-      school: s,
-      setup: schoolSetupFromApi(s, calendarsBySchoolId[s.id], setupBySchoolId[s.id]),
-    }))
-    .filter((x) => x.setup.incomplete);
-  updateSchoolsSetupBadge(incompleteSchools.length);
-  const setupAlert = incompleteSchools.length
-    ? `<div class="err-box school-setup-banner status-banner">
-        <strong>${incompleteSchools.length === 1 ? '1 school needs setup' : `${incompleteSchools.length} schools need setup`}</strong>
-        <p>Schools stay red until a calendar and full address are saved (address is required for HHA CreatePatient).</p>
-        <ul>${incompleteSchools.map(({ school: s, setup }) => {
-          const needs = [
-            setup.missingCalendar ? 'calendar' : '',
-            setup.missingAddress ? 'address' : '',
-          ].filter(Boolean).join(' + ');
-          return `<li><button type="button" class="linkish school-name-incomplete" data-open-school="${esc(s.id)}">${esc(s.name)}</button> — needs ${esc(needs)}</li>`;
-        }).join('')}</ul>
-      </div>`
-    : '';
-  view(`
-    <div class="card entry-card">
-      <div class="entry-collapsed" id="addSchoolCollapsed">
-        <button type="button" class="btn-primary" id="openAddSchool">Add school</button>
-      </div>
-      <div id="addSchoolForm" hidden>
-        <h2>Add school</h2>
-        <label>School <input id="sname" /></label>
-        <label>Signer name <input id="signerName" /></label>
-        <label>Signer email <input id="signerEmail" /></label>
-        <div class="entry-form-actions">
-          <button class="btn-primary big" id="school">Save school</button>
-          <button type="button" class="btn" id="cancelAddSchool">Cancel</button>
-        </div>
-      </div>
-    </div>
-    ${setupAlert}
-    <div class="card">
-      <h2>Schools</h2>
-      <p class="muted">Open a school to manage the signer, address, progress-report due dates, and calendar. Incomplete schools are shown in red until calendar and address are set.</p>
-      ${bulkBar('schools')}
-      <table>
-        <tr>${bulkTh('schools')}<th>School</th><th>Signer</th><th>Setup</th><th>Calendar</th><th></th></tr>
-        ${schools.map((s) => {
-          const cal = calendarsBySchoolId[s.id];
-          const summary = formatCalendarSummary(cal);
-          const setup = schoolSetupFromApi(s, cal, setupBySchoolId[s.id]);
-          const setupLabel = setup.incomplete
-            ? [
-                setup.missingCalendar ? 'Calendar' : '',
-                setup.missingAddress ? 'Address' : '',
-              ].filter(Boolean).join(' + ') || 'Incomplete'
-            : 'Ready';
-          return `<tr class="${setup.incomplete ? 'school-row-incomplete' : ''}">
-          ${bulkTd('schools', s.id)}
-          <td><button type="button" class="linkish ${setup.incomplete ? 'school-name-incomplete' : ''}" data-open-school="${esc(s.id)}">${esc(s.name)}</button></td>
-          <td>${esc(s.signerName || s.signerEmail || '')}</td>
-          <td>${setup.incomplete ? `<span class="school-setup-flag">${esc(`Needs ${setupLabel}`)}</span>` : '<span class="muted">Ready</span>'}</td>
-          <td>${summary ? esc(summary) : '<span class="muted">Not set</span>'}</td>
-          <td>
-            <button type="button" class="btn" data-open-school="${esc(s.id)}">Open</button>
-            <button type="button" class="btn" data-del-school="${esc(s.id)}">Remove</button>
-          </td>
-        </tr>`;
-        }).join('') || '<tr><td colspan="6">None</td></tr>'}
-      </table>
-    </div>
-  `);
-
-  bindBulkDelete('schools', {
-    noun: 'schools',
-    deleteOne: async (id) => {
-      if (state.focusSchoolId === id) state.focusSchoolId = '';
-      await api('DELETE', `/admin/schools/${id}`);
-    },
-    refresh: () => adminSchools(),
-  });
-
-  const setAddSchoolOpen = (open) => {
-    const c = document.getElementById('addSchoolCollapsed');
-    const f = document.getElementById('addSchoolForm');
-    if (c) c.hidden = open;
-    if (f) f.hidden = !open;
-  };
-  document.getElementById('openAddSchool').onclick = () => setAddSchoolOpen(true);
-  document.getElementById('cancelAddSchool').onclick = () => setAddSchoolOpen(false);
-
-  document.querySelectorAll('[data-open-school]').forEach((btn) => {
-    btn.addEventListener('click', () => adminSchoolDetail(btn.getAttribute('data-open-school')));
-  });
-  document.querySelectorAll('[data-del-school]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
-      try {
-        if (!confirm('Remove this school? Its due dates will be deleted and children will be unlinked from it. This cannot be undone.')) return;
-        const id = btn.getAttribute('data-del-school');
-        if (state.focusSchoolId === id) state.focusSchoolId = '';
-        const out = await api('DELETE', `/admin/schools/${id}`);
-        setStatus(out.message || 'School removed.', 'ok');
-        await adminSchools();
-      } catch (e) { setStatus(e.message, 'err'); }
-    });
-  });
-  document.getElementById('school').onclick = async () => {
-    try {
-      const out = await api('POST', '/admin/schools', {
-        name: document.getElementById('sname').value,
-        signerName: document.getElementById('signerName').value,
-        signerEmail: document.getElementById('signerEmail').value,
-      });
-      const schoolId = out.school?.id || '';
-      setStatus('School saved.', 'ok');
-      if (schoolId) await adminSchoolDetail(schoolId);
-      else await adminSchools();
-    } catch (e) { setStatus(e.message, 'err'); }
-  };
-
-  if (opts.focusSchoolId) {
-    await adminSchoolDetail(opts.focusSchoolId);
+  const focusId = String(opts.focusSchoolId || '').trim();
+  if (focusId) {
+    await adminSchoolDetail(focusId);
+    return;
   }
+  await adminDistricts();
 }
 
 async function adminAdmins() {
@@ -9522,7 +9534,6 @@ document.getElementById('adminNav').onclick = (e) => {
   if (screen === 'children') adminChildren();
   if (screen === 'providers') adminProviders();
   if (screen === 'mandates') adminMandates();
-  if (screen === 'schools') adminSchools();
   if (screen === 'districts') adminDistricts();
   if (screen === 'admins') adminAdmins();
   if (screen === 'reports') {
@@ -9830,8 +9841,6 @@ async function showRole() {
   // Therapists get one page — never show therapist tab nav
   document.getElementById('therapistNav').hidden = true;
   document.getElementById('adminNav').hidden = !admin;
-  if (admin) void refreshSchoolsSetupBadge();
-  else updateSchoolsSetupBadge(0);
   document.getElementById('rolePick').hidden = COGNITO_MODE;
   const label = admin ? t('nav.admin') : t('nav.therapist');
   document.getElementById('whoami').textContent = COGNITO_MODE && state.email ? `${state.email} — ${label}` : label;
