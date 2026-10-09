@@ -5668,12 +5668,22 @@ async function adminProviderDetail(providerId) {
         providerSigned: true,
       });
       if (block) {
+        const lines = (errors.length ? errors : [block])
+          .map((line) => String(line || '').trim())
+          .filter(Boolean);
+        if (!lines.length) lines.push(block);
+        const warns = (Array.isArray(detail.warnings) ? detail.warnings : [])
+          .map((line) => String(line || '').trim())
+          .filter(Boolean);
         if (hint) {
           hint.hidden = false;
           hint.className = 'err-inline';
-          hint.textContent = block;
+          hint.innerHTML = [
+            ...lines.map((line) => `<div>${esc(line)}</div>`),
+            ...warns.map((line) => `<div class="warn-inline">${esc(line)}</div>`),
+          ].join('');
         }
-        setStatus({ error: [block], warn: detail.warnings || [] });
+        setStatus({ error: lines, warn: warns });
         return;
       }
       btn.disabled = true;

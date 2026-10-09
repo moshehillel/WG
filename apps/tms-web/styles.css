@@ -1373,6 +1373,11 @@ tr.hard { background: #fef2f2; }
   font-size: 0.92rem;
   font-weight: 500;
 }
+.err-inline .warn-inline {
+  color: #9a3412;
+  font-weight: 500;
+  margin-top: 0.35rem;
+}
 .action-toast {
   position: fixed;
   left: 50%;
