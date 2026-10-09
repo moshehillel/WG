@@ -72,7 +72,11 @@ export const LUNA_ERROR_CATALOG = `ERROR CATALOG (match on keywords / ErrorID; e
 
 • Service type is required
   Means: Session Service type is blank; needed for entry and HHA pay-code naming.
-  Do: Set Service type on the session (match HHA naming), then save/retry.`;
+  Do: Set Service type on the session (match HHA naming), then save/retry.
+
+• Missing note (yellow) — not “N of M this week”
+  Means: The yellow week line lists only a missed session that has no note (child, date, missed). A session with a note counts toward the weekly mandate whether attendance is attended or missed. One attended note plus one missed note in the same week fills a 2x mandate, so there is no yellow. A child who was simply not seen (no session row) is not a missing note — do not describe that as “1 of 2 this week”. Attended or makeup with no note is a separate red “Service note is required” blocker and still blocks submit; yellow does not repeat that red line.
+  Do: Add the note on the missed session. Fill attended/makeup notes before submit (red). Yellow does not block submit.`;
 
 export const LUNA_HOWTO = `HOW-TO (White Glove TMS):
 

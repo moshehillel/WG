@@ -1080,7 +1080,7 @@ describe('TMS API weekly loop', () => {
       },
     });
     const studentId = (parsed.body as { student: { id: string } }).student.id;
-    const weekStart = '2026-08-31';
+    const weekStart = '2026-10-05';
     const ensured = await handleTmsRequest(store, {
       method: 'POST',
       path: '/week/ensure',
@@ -1097,7 +1097,7 @@ describe('TMS API weekly loop', () => {
       body: {
         weekId,
         studentId,
-        dateOfService: '08/31/2026',
+        dateOfService: '10/05/2026',
         beginTime: '9:00 am',
         endTime: '9:30 am',
         attendance: 'attended',
@@ -1113,7 +1113,8 @@ describe('TMS API weekly loop', () => {
       query: { weekStart },
       body: {},
     });
-    expect((weekEmpty.body as { warnings: string[] }).warnings.length).toBeGreaterThan(0);
+    const emptyWarnings = (weekEmpty.body as { warnings: string[] }).warnings;
+    expect(emptyWarnings.some((w) => /Under mandate|Missing note/i.test(w))).toBe(false);
     expect((weekEmpty.body as { errors: string[] }).errors.some((e) => /required/i.test(e))).toBe(true);
     const blockedSubmit = await handleTmsRequest(store, {
       method: 'POST',
@@ -1135,7 +1136,7 @@ describe('TMS API weekly loop', () => {
     const missingRows = (missing.body as { rows: Array<{ studentName: string; weekId: string; date: string }> }).rows;
     expect(missingRows[0]?.studentName).toMatch(/Aiden/);
     expect(missingRows[0]?.weekId).toBe(weekId);
-    expect(missingRows[0]?.date).toBe('08/31/2026');
+    expect(missingRows[0]?.date).toBe('10/05/2026');
     const sessionId = (emptyAdded.body as { session: { id: string } }).session.id;
     const patchedShort = await handleTmsRequest(store, {
       method: 'POST',
@@ -1147,7 +1148,8 @@ describe('TMS API weekly loop', () => {
     expect(patchedShort.status).toBe(200);
     expect((patchedShort.body as { session: { notes: string } }).session.notes).toBe('gait');
 
-    // Very short notes are accepted; under-mandate (1 of 2) remains a warning only.
+    // A short note clears the red locker. One noted visit against 2x is not a yellow
+    // (no second session row, so nothing is a missing note).
     const weekShort = await handleTmsRequest(store, {
       method: 'GET',
       path: '/week',
@@ -1158,7 +1160,11 @@ describe('TMS API weekly loop', () => {
     expect((weekShort.body as { errors: string[] }).errors.some((e) => /required|incomplete/i.test(e))).toBe(
       false,
     );
-    expect((weekShort.body as { warnings: string[] }).warnings.length).toBeGreaterThan(0);
+    expect(
+      (weekShort.body as { warnings: string[] }).warnings.some((w) =>
+        /Under mandate|Missing note/i.test(w),
+      ),
+    ).toBe(false);
 
     const shortSubmit = await handleTmsRequest(store, {
       method: 'POST',
@@ -1183,7 +1189,7 @@ describe('TMS API weekly loop', () => {
       body: { id: sessionId, weekId, notes: 'Service Provided: longer gait notes in gym' },
     });
     expect(patched.status).toBe(200);
-    expect((patched.body as { session: { dateOfService: string; notes: string } }).session.dateOfService).toBe('08/31/2026');
+    expect((patched.body as { session: { dateOfService: string; notes: string } }).session.dateOfService).toBe('10/05/2026');
     expect((patched.body as { session: { notes: string } }).session.notes).toMatch(/gait/);
 
     const weekAfter = await handleTmsRequest(store, {
@@ -1196,7 +1202,11 @@ describe('TMS API weekly loop', () => {
     expect((weekAfter.body as { errors: string[] }).errors.some((e) => /required|incomplete/i.test(e))).toBe(
       false,
     );
-    expect((weekAfter.body as { warnings: string[] }).warnings.length).toBeGreaterThan(0);
+    expect(
+      (weekAfter.body as { warnings: string[] }).warnings.some((w) =>
+        /Under mandate|Missing note/i.test(w),
+      ),
+    ).toBe(false);
   });
 
   it('rejects unauthenticated requests when dev headers are disabled', async () => {

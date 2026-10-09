@@ -95,3 +95,9 @@ Source of truth for the live bot: `packages/tms-api/src/luna-knowledge.ts`.
 **Means:** Session Service type is blank.
 
 **Do:** Set Service type, save/retry.
+
+## Missing note (yellow)
+
+**Means:** The yellow week line lists only a missed session that has no note (child, date, missed). A noted session counts toward the weekly mandate whether the child was attended or missed. One attended note plus one missed note in the same week fills a 2× mandate — no yellow. A child who was simply not seen (no session row) is not a missing note, so there is no “N of M this week” yellow. Attended or makeup with no note stays a red “Service note is required” blocker and still blocks submit. Yellow does not repeat that red line and does not block submit.
+
+**Do:** Add the note on the missed session. Fill attended/makeup notes before submit.
