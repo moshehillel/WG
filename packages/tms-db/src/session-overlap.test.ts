@@ -7,7 +7,9 @@ import {
   childHasGroupMandate,
   childGroupSizeCap,
   presentGroupPeerCount,
+  hhaOverlapGroupMate,
   notesMentionNoPeerAvailable,
+  sessionExplicitlyMarkedGroup,
   soloGroupMandateNoteWarning,
 } from './session-overlap.js';
 import { sessionPayAmount, sessionUsesGroupPayRate, blankProviderPay } from './provider-pay.js';
@@ -522,6 +524,7 @@ describe('solo group → individual pay (absent peers)', () => {
         presentGroupPeerCount: 0,
       }),
     ).toBeNull();
+    // Explicit group (Group / 2:1) with the partner not on this row yet — do not demand the phrase.
     expect(
       soloGroupMandateNoteWarning({
         notes: 'Service Provided: group game',
@@ -531,7 +534,65 @@ describe('solo group → individual pay (absent peers)', () => {
         mandates,
         presentGroupPeerCount: 0,
       }),
-    ).toMatch(/blocked|no peer was available|no partner available/i);
+    ).toBeNull();
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: custom group note',
+        serviceType: 'PT School Group 2:1',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+        presentGroupPeerCount: 0,
+      }),
+    ).toBeNull();
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: custom group note',
+        serviceType: 'PT School 5:1',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+        presentGroupPeerCount: 0,
+      }),
+    ).toBeNull();
+    expect(sessionExplicitlyMarkedGroup('PT School Group 2:1')).toBe(true);
+    expect(sessionExplicitlyMarkedGroup('PT School 1:1')).toBe(false);
+    expect(sessionExplicitlyMarkedGroup('PT School')).toBe(false);
+    // Group CPT 97150 is a group visit when the row is not tagged 1:1. No second child required.
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: LE strengthening',
+        serviceType: 'Physical Therapy',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+        presentGroupPeerCount: 0,
+        cptCodes: ['97150'],
+      }),
+    ).toBeNull();
+    expect(sessionExplicitlyMarkedGroup('Physical Therapy', { cptCodes: ['97150'] })).toBe(true);
+    // True solo: 1:1, or an individual CPT with no group ratio, still demands the note.
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: LE strengthening',
+        serviceType: 'Physical Therapy 1:1',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+        presentGroupPeerCount: 0,
+        cptCodes: ['97150'],
+      }),
+    ).toMatch(/no peer was available|no partner available/i);
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: LE strengthening',
+        serviceType: 'Physical Therapy',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+        cptCodes: ['97110'],
+      }),
+    ).toMatch(/no peer was available|no partner available/i);
   });
 
   it('does not demand no-partner note for true 1:1 when child also has individual mandate', () => {
@@ -548,7 +609,7 @@ describe('solo group → individual pay (absent peers)', () => {
         mandates,
       }),
     ).toBeNull();
-    // Group-tagged alone still needs the note even with dual mandates.
+    // Explicit group still skips the note even with dual mandates and no partner row yet.
     expect(
       soloGroupMandateNoteWarning({
         notes: 'Service Provided: group game',
@@ -558,7 +619,7 @@ describe('solo group → individual pay (absent peers)', () => {
         mandates,
         presentGroupPeerCount: 0,
       }),
-    ).toMatch(/no peer was available|no partner available/i);
+    ).toBeNull();
   });
 
   it('accepts common no-peer synonym phrasings', () => {
@@ -575,6 +636,8 @@ describe('solo group → individual pay (absent peers)', () => {
       'group mate is absent',
       'partner absent',
       'group partner was absent',
+      'No group member available for a group session',
+      'no group members available',
     ];
     for (const phrase of ok) {
       expect(notesMentionNoPeerAvailable(`Service Provided: ${phrase}`)).toBe(true);
@@ -595,5 +658,68 @@ describe('solo group → individual pay (absent peers)', () => {
     expect(notesMentionNoPeerAvailable('no one appropriate to group him with')).toBe(true);
     expect(notesMentionNoPeerAvailable('not appropriate to group her with peers')).toBe(true);
     expect(notesMentionNoPeerAvailable('Student worked on LE strengthening')).toBe(false);
+  });
+});
+
+describe('hhaOverlapGroupMate', () => {
+  const raw =
+    'HHA CreateSchedule failed: "Your shift is overlapping with Patient: [WGC-PS922524305/Hussnain Musa ]  Overlapping shifts are not allowed." (ErrorID=-310)';
+  const students = [
+    { id: 'st1', firstName: 'Issa', lastName: 'Hussnain', programId: '922524306' },
+    { id: 'st2', firstName: 'Musa', lastName: 'Hussnain', programId: '922524305' },
+  ];
+
+  it('matches a same-clock 2:1 peer named in the HHA overlap', () => {
+    const mate = hhaOverlapGroupMate({
+      message: raw,
+      candidate: sess({
+        id: 'a',
+        studentId: 'st1',
+        serviceType: 'Physical Therapy 2:1',
+        beginTime: '10:00 am',
+        endTime: '10:30 am',
+      }),
+      peers: [
+        sess({
+          id: 'b',
+          studentId: 'st2',
+          serviceType: 'Physical Therapy 2:1',
+          beginTime: '10:00 am',
+          endTime: '10:30 am',
+        }),
+      ],
+      students,
+    });
+    expect(mate?.id).toBe('st2');
+  });
+
+  it('does not treat a same-child duplicate or an individual peer as a group mate', () => {
+    expect(
+      hhaOverlapGroupMate({
+        message:
+          'overlapping with Patient: [WGC-PS922524306/Hussnain Issa ] Overlapping shifts are not allowed.',
+        candidate: sess({
+          id: 'a',
+          studentId: 'st1',
+          serviceType: 'Physical Therapy 2:1',
+        }),
+        peers: [
+          sess({
+            id: 'b',
+            studentId: 'st2',
+            serviceType: 'Physical Therapy 2:1',
+          }),
+        ],
+        students,
+      }),
+    ).toBeNull();
+    expect(
+      hhaOverlapGroupMate({
+        message: raw,
+        candidate: sess({ id: 'a', studentId: 'st1', serviceType: 'Physical Therapy' }),
+        peers: [sess({ id: 'b', studentId: 'st2', serviceType: 'Physical Therapy 2:1' })],
+        students,
+      }),
+    ).toBeNull();
   });
 });

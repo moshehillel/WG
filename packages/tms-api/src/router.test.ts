@@ -4050,6 +4050,52 @@ describe('TMS solo-group / group-mandate note locker', () => {
     expect(sessions[0]?.payAmount).toBe(62.5);
   });
 
+  it('accepts a 2:1 CPT 97150 group row with no no-peer sentence and no second child', async () => {
+    const { store, provider } = await seedGroupMandateChild();
+    const note =
+      "Momin transitioned well to PT with some encouragement today. He engaged in LE PRE's, balance and coordination training (jumping on and off target, running activity). vc and visual demonstration required ModA. Improvement noted with jumping stance";
+    // Ratio column is emitted before the service date, the way this Frontline table extracts.
+    const uploaded = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-10-05',
+        pdfText: [
+          'Summary of Related Service Session Notes (continued)',
+          'Service: Physical Therapy',
+          'Service Provider: Pat Lee',
+          'From: 10/04/2026 To: 10/10/2026',
+          'Student Name: Odne, Aiden, D.O.B. 07/12/2019',
+          'Ratio',
+          '2:1',
+          '10/09/2026',
+          '8:40 am',
+          '9:10 am',
+          `Service Provided: ${note}`,
+          '97150',
+          '1',
+          signedBlock('Oct 9 2026 10:23AM'),
+        ].join('\n'),
+      },
+    });
+    expect(uploaded.status).toBe(200);
+    const body = uploaded.body as {
+      ok: boolean;
+      saved: Array<{ serviceType?: string }>;
+      failed: Array<{ error: string }>;
+    };
+    expect(body.failed || []).toEqual([]);
+    expect(body.ok).toBe(true);
+    expect(body.saved).toHaveLength(1);
+    const saved = store.data.sessions.find((s) => s.dateOfService === '10/09/2026');
+    expect(saved?.serviceType).toMatch(/2\s*:\s*1|Group/i);
+    expect(saved?.cptCodes).toContain('97150');
+    expect(saved?.notes).not.toMatch(/no peer|no partner/i);
+  });
+
   it('rejects manual add without reason; accepts edit with reason; blocks submit if missing', async () => {
     const { store, provider, studentId, weekId } = await seedGroupMandateChild();
 

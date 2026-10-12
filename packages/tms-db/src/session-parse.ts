@@ -1,4 +1,4 @@
-import { notesMentionNoPeerAvailable } from './mandate.js';
+import { notesMentionNoPeerAvailable, sessionLooksGroup } from './mandate.js';
 import { extractMakeupForDate, MAKEUP_COVERED_DATE_PREFIX } from './makeup-date.js';
 import { clockToMinutes } from './provider-pay.js';
 import {
@@ -94,6 +94,60 @@ export function clipSessionNotes(raw: string, max = 1600): string {
   const suffix = ` ${bits.join('; ')}`;
   const budget = Math.max(0, max - suffix.length);
   return `${kept.slice(0, budget).trim()}${suffix}`;
+}
+
+/** Frontline ratio token (1:1, 2:1, 5:1). Clock times like 8:40 / 9:10 do not match. */
+const FRONTLINE_RATIO_TOKEN_RE = /\b([1-9]\d?)\s*:\s*1\b/;
+
+export function normalizeFrontlineRatioToken(raw: string): string {
+  const m = String(raw || '').match(FRONTLINE_RATIO_TOKEN_RE);
+  if (!m) return '';
+  return `${Number(m[1])}:1`;
+}
+
+/**
+ * Ratio printed in a column before the service date (Frontline sometimes emits
+ * Ratio, then the date/clock/CPT). Do not cross a prior note or signature.
+ */
+export function frontlineRatioBeforeServiceDate(blob: string, dateIdx: number): string {
+  const start = Math.max(0, dateIdx - 500);
+  let window = blob.slice(start, dateIdx);
+  const boundaryRe =
+    /Student\s+Name\s*:|Provider\s+Signature|Telehealth\s*:|Service\s+Provided\s*:|Provider\s+Absence\s*:|Student\s+Absence\s*:|Provider\s+Not\s+Available\s*:|Student\s+Not\s+Available\s*:|School\s+Closed\s*:|Staff\s+Shortage\s*:/gi;
+  let endOfBoundary = -1;
+  for (const m of window.matchAll(boundaryRe)) {
+    endOfBoundary = (m.index ?? 0) + m[0].length;
+  }
+  if (endOfBoundary >= 0) window = window.slice(endOfBoundary);
+  const dates = [...window.matchAll(/\d{1,2}\/\d{1,2}\/\d{2,4}/g)];
+  if (dates.length) {
+    const d = dates[dates.length - 1]!;
+    window = window.slice((d.index ?? 0) + d[0].length);
+  }
+  return normalizeFrontlineRatioToken(window);
+}
+
+/**
+ * Service type used for group vs solo. Explicit 1:1 stays individual.
+ * CPT 97150 with no ratio is a group procedure (Frontline bills one unit per visit).
+ */
+export function serviceTypeForFrontlineRow(
+  headerService: string,
+  ratio: string,
+  cptCodes: readonly string[] | undefined,
+): string {
+  const ratioNorm = normalizeFrontlineRatioToken(ratio);
+  let base = String(headerService || '').trim();
+  if (ratioNorm === '1:1') {
+    base = base.replace(/\s+\bGroup\b$/i, '').trim();
+  }
+  const withRatio = serviceTypeWithRatio(base, ratioNorm);
+  const looks = sessionLooksGroup(withRatio);
+  if (looks === true || looks === false) return withRatio;
+  if ((cptCodes || []).some((c) => String(c || '').trim() === '97150')) {
+    return [withRatio, 'Group'].filter(Boolean).join(' ').trim();
+  }
+  return withRatio;
 }
 
 /** Combine Frontline Service header + per-session ratio (1:1 / 2:1) for mandate matching. */
@@ -676,10 +730,30 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
     }
     const notes = clipSessionNotes(fullNotes);
 
+    // Explicit TA / Frontline absence labels (not clinical prose like "missed a turn").
+    const explicitAbsenceLabel = /(?:^|[\n\r]|Notes\s)\s*(?:Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|Student\s+Absent|School\s+Closed|Staff\s+Shortage|Absent|Missed|Cancelled|Canceled|No[\s-]?Show)\s*:/i.test(
+      fullNotes || slice,
+    ) || /^(?:Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|Student\s+Absent|School\s+Closed|Staff\s+Shortage|Absent|Missed|Cancelled|Canceled|No[\s-]?Show)\b/i.test(
+      String(fullNotes || '').trim(),
+    );
+
     // Use fullNotes || slice so absence / peer-absent keywords still classify correctly.
-    const attendance: ParsedSessionNote['attendance'] = makeupFor
+    let attendance: ParsedSessionNote['attendance'] = makeupFor
       ? 'makeup'
       : attendanceFromNotes(fullNotes || slice, hit.beginTime, hit.endTime);
+    const cptPreview = parseCptCoverage(slice);
+    const signedPreview = sessionIsSigned(slice);
+    // Signed + billed Therapist Activity rows are attended even when clinical notes
+    // mention "absent"/"missed" casually — unless an explicit absence label is present.
+    if (
+      !makeupFor &&
+      attendance === 'missed' &&
+      !explicitAbsenceLabel &&
+      cptPreview.totalUnits > 0 &&
+      signedPreview
+    ) {
+      attendance = 'attended';
+    }
     // Missed notes must not keep invented/clock times from the activity header.
     const beginTime = attendance === 'missed' ? '' : hit.beginTime;
     const endTime = attendance === 'missed' ? '' : hit.endTime;
@@ -687,7 +761,7 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
     const cpt =
       attendance === 'missed'
         ? { codes: [] as string[], totalUnits: 0, procedures: [] as string[] }
-        : parseCptCoverage(slice);
+        : cptPreview;
     rows.push({
       studentName,
       providerName,
@@ -730,6 +804,27 @@ function lastMatchEnd(re: RegExp, s: string): number {
   return last;
 }
 
+/**
+ * True when text after a slash-date looks like a new Frontline session column row
+ * (ratio + CPT, clocks + Service Provided, or a fresh absence Log Type).
+ * Used so a filled prior miss note does not swallow the next DOS on its own line
+ * (Christopher Ginda: Student Not Available 9/8 … then 09/10/2026 1:1 97530 …).
+ */
+function looksLikeFrontlineSessionRowAfterDate(blob: string, idx: number): boolean {
+  const afterDate = blob.slice(idx).replace(/^\d{1,2}\/\d{1,2}\/\d{2,4}/, '');
+  const head = afterDate.slice(0, 280);
+  if (/\b[1-4]\s*:\s*1\b/.test(head) && /\b\d{4,5}\b/.test(head)) return true;
+  if (
+    /\d{1,2}:\d{2}\s*[ap]\.?m\.?/i.test(head) &&
+    /Service\s+Provided\s*:/i.test(head)
+  ) {
+    return true;
+  }
+  // Next row is another miss/absence Log Type (empty or with its own note).
+  if (FRONTLINE_ABSENCE_LABEL_RE.test(head)) return true;
+  return false;
+}
+
 /** True when this slash-date is a Frontline service-date row (not From/To/DOB/makeup). */
 function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   const before = blob.slice(Math.max(0, idx - 64), idx);
@@ -748,6 +843,8 @@ function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   // Dates inside a filled Log Type / Notes body (after Service Provided: …) before
   // Signature/Telehealth are not service-date rows. Empty absence labels
   // ("Provider Absence:\n09/03/…") still allow the next DOS on the following line.
+  // Filled miss notes that run until the next column DOS must also allow that DOS
+  // when the following lines look like a new Frontline session row.
   const lookback = blob.slice(Math.max(0, idx - 2500), idx);
   const logTypeEnd = lastMatchEnd(FRONTLINE_LOG_TYPE_IN_BLOB_RE, lookback);
   const boundaryEnd = lastMatchEnd(FRONTLINE_NOTE_BOUNDARY_RE, lookback);
@@ -758,7 +855,9 @@ function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   // student) is the signature stamp, not the next session. Cutting the slice
   // there dropped the stamp and marked a signed visit unsigned.
   if (sigEnd > teleEnd && sigEnd > studentEnd && sigEnd >= logTypeEnd) return false;
-  if (logTypeEnd > boundaryEnd && /\S/.test(lookback.slice(logTypeEnd))) return false;
+  if (logTypeEnd > boundaryEnd && /\S/.test(lookback.slice(logTypeEnd))) {
+    if (!looksLikeFrontlineSessionRowAfterDate(blob, idx)) return false;
+  }
   return true;
 }
 
@@ -1049,6 +1148,13 @@ export function mergeFrontlineSplitCptRows(rows: ParsedSessionNote[]): ParsedSes
       sourceSlice: [prev.sourceSlice, row.sourceSlice].filter(Boolean).join('\n'),
       cancelReason: prev.cancelReason || row.cancelReason,
       ratio: prev.ratio || row.ratio,
+      serviceType: serviceTypeForFrontlineRow(
+        !prev.ratio && (prev.ratio || row.ratio)
+          ? prev.serviceType.replace(/\s+\bGroup\b$/i, '').trim()
+          : prev.serviceType,
+        prev.ratio ? '' : prev.ratio || row.ratio,
+        combined.codes,
+      ),
       beginTime,
       endTime,
     };
@@ -1118,10 +1224,11 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       beginTime = '';
       endTime = '';
     }
-    // Group ratio only (1:1, 2:1). Clock times like 9:30 must not become the service type.
+    // Group ratio (1:1, 2:1, N:1). Clock times like 8:40 / 9:10 must not become the service type.
+    // Column order sometimes prints Ratio before the service date, outside this slice.
     const ratio = absenceOnly
       ? ''
-      : (slice.match(/\b([1-4]\s*:\s*1)\b/) || [])[1] || '';
+      : normalizeFrontlineRatioToken(slice) || frontlineRatioBeforeServiceDate(blob, idx);
     const location = schoolFromSlice(slice);
     // Real building / Setting wins. District header is the match key only when Setting is not a school.
     const schoolName = location || reportSchool || districtHeader;
@@ -1142,7 +1249,7 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       notes: bannerOnly
         ? ''
         : noteText || (attendance === 'missed' ? sliceFallback : ''),
-      serviceType: serviceTypeWithRatio(serviceType, ratio),
+      serviceType: serviceTypeForFrontlineRow(serviceType, ratio, cpt.codes),
       location: location || schoolName,
       ratio,
       cptCodes: cpt.codes,

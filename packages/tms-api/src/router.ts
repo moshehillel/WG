@@ -1442,6 +1442,7 @@ export async function handleTmsRequest(
       const soloNoteErr = soloGroupMandateNoteError({
         notes: s.notes,
         serviceType: s.serviceType,
+        cptCodes: s.cptCodes,
         studentId: s.studentId,
         attendance: s.attendance,
         mandates: store.data.mandates,
@@ -3520,6 +3521,7 @@ export async function handleTmsRequest(
       const soloNote = soloGroupMandateNoteError({
         notes: s.notes,
         serviceType: s.serviceType,
+        cptCodes: s.cptCodes,
         studentId: s.studentId,
         attendance: s.attendance,
         mandates: store.data.mandates,
@@ -4288,6 +4290,7 @@ export async function handleTmsRequest(
         const soloNoteErr = soloGroupMandateNoteError({
           notes: item.session.notes,
           serviceType: item.session.serviceType,
+          cptCodes: item.session.cptCodes,
           studentId: item.session.studentId,
           attendance: item.session.attendance,
           mandates: store.data.mandates,
@@ -4781,6 +4784,7 @@ export async function handleTmsRequest(
       const soloNoteErr = soloGroupMandateNoteError({
         notes: session.notes,
         serviceType: session.serviceType,
+        cptCodes: session.cptCodes,
         studentId: session.studentId,
         attendance: session.attendance,
         mandates: store.data.mandates,
@@ -4962,6 +4966,7 @@ export async function handleTmsRequest(
       const soloNoteErr = soloGroupMandateNoteError({
         notes: s.notes,
         serviceType: s.serviceType,
+        cptCodes: s.cptCodes,
         studentId: s.studentId,
         attendance: s.attendance,
         mandates: store.data.mandates,
@@ -5130,6 +5135,7 @@ export async function handleTmsRequest(
       const soloNoteErr = soloGroupMandateNoteError({
         notes: s.notes,
         serviceType: s.serviceType,
+        cptCodes: s.cptCodes,
         studentId: s.studentId,
         attendance: s.attendance,
         mandates: store.data.mandates,

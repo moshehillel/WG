@@ -125,13 +125,31 @@ function sessionIsIndividualForPay(s: Pick<OverlapSession, 'serviceType'>): bool
 }
 
 /**
- * Hard locker when a group-mandate child is documented individually / alone:
- * note must say no peer/partner was available (or clear equivalent).
- * Covers individual/1:1 tags and group-tagged sessions with no present peers.
+ * Explicit group visit: service text contains Group, ratio N:1 with N >= 2,
+ * or group CPT 97150 when the row is not tagged 1:1 / Individual.
+ * A partner who is not in TMS yet does not make this an individual visit.
+ */
+export function sessionExplicitlyMarkedGroup(
+  serviceType: string,
+  extra?: { ratio?: string | null; cptCodes?: readonly string[] | null },
+): boolean {
+  const combined = [serviceType, extra?.ratio].filter((s) => String(s || '').trim()).join(' ');
+  const looks = sessionLooksGroup(combined);
+  // True solo tag wins. Billing 97150 on a 1:1 row does not skip the no-peer note.
+  if (looks === false) return false;
+  if (looks === true) return true;
+  return (extra?.cptCodes || []).some((c) => String(c || '').trim() === '97150');
+}
+
+/**
+ * Hard locker when a group-mandate child is actually seen individually
+ * (ratio 1:1 / Individual, or no group ratio): the note must say no peer/partner
+ * was available (or a clear equivalent).
  *
- * Dual mandate (individual + group): a normal 1:1 / individual visit without a
- * no-partner note covers the individual mandate — do not demand the note.
- * Group-tagged sessions with zero present peers still require the note.
+ * An explicit group session (Group, 2:1 / N:1, or CPT 97150) is not blocked
+ * just because the partner child is not on this row yet — that note is entered
+ * separately. Dual mandate (individual + group): a normal 1:1 visit without a
+ * no-partner note covers the individual mandate and does not demand the note.
  */
 export function soloGroupMandateNoteError(opts: {
   notes: string;
@@ -139,17 +157,26 @@ export function soloGroupMandateNoteError(opts: {
   studentId: string;
   attendance: string;
   mandates?: Mandate[];
+  /** Kept for callers. Explicit group sessions no longer use peer count for this gate. */
   presentGroupPeerCount?: number;
+  /** Frontline CPT codes. 97150 is a group procedure when the row is not 1:1. */
+  cptCodes?: readonly string[] | null;
+  /** Parsed ratio token when it was not copied into serviceType. */
+  ratio?: string | null;
 }): string | null {
   if (opts.attendance !== 'attended' && opts.attendance !== 'makeup') return null;
   if (!childHasGroupMandate(opts.studentId, opts.mandates)) return null;
-  const looksGroup = sessionLooksGroup(opts.serviceType) === true;
-  const peers = opts.presentGroupPeerCount ?? 0;
-  // Group with other present peers → no special note.
-  if (looksGroup && peers >= 1) return null;
+  if (
+    sessionExplicitlyMarkedGroup(opts.serviceType, {
+      ratio: opts.ratio,
+      cptCodes: opts.cptCodes,
+    })
+  ) {
+    return null;
+  }
   if (notesMentionNoPeerAvailable(opts.notes)) return null;
   // True individual visit when the child also has an individual mandate.
-  if (!looksGroup && childHasIndividualMandate(opts.studentId, opts.mandates)) {
+  if (childHasIndividualMandate(opts.studentId, opts.mandates)) {
     return null;
   }
   return (
@@ -275,6 +302,70 @@ export function sessionOverlapError(opts: SessionOverlapCheckOpts): string | nul
   }
 
   return groupClusterSizeError(opts);
+}
+
+/** Patient token from HHA -310 text: `[WGC-PS922524305/Hussnain Musa ]`. */
+export function hhaOverlapPatientToken(message: string): { admission: string; name: string } {
+  const inner = String(message || '').match(/\[([^\]]+)\]/)?.[1]?.trim() || '';
+  const slash = inner.indexOf('/');
+  if (slash < 0) return { admission: inner, name: '' };
+  return {
+    admission: inner.slice(0, slash).trim(),
+    name: inner.slice(slash + 1).trim(),
+  };
+}
+
+function nameTokensMatch(a: string, b: string): boolean {
+  const norm = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  const left = norm(a).split(' ').filter(Boolean).sort().join(' ');
+  const right = norm(b).split(' ').filter(Boolean).sort().join(' ');
+  return Boolean(left) && left === right;
+}
+
+export type GroupMateStudent = {
+  id: string;
+  firstName?: string;
+  lastName?: string;
+  /** Caseload id HHA embeds in the admission number (922524305 → WGC-PS922524305). */
+  programId?: string;
+};
+
+/**
+ * The -310 names a different child who is a real group mate of this session
+ * (same clock, both group-tagged). Same-child duplicates return null.
+ */
+export function hhaOverlapGroupMate(opts: {
+  message: string;
+  candidate: OverlapSession;
+  peers: OverlapSession[];
+  mandates?: Mandate[];
+  students?: GroupMateStudent[];
+}): GroupMateStudent | null {
+  const { admission, name } = hhaOverlapPatientToken(opts.message);
+  if (!admission && !name) return null;
+  if (!occupiesProviderTime(opts.candidate)) return null;
+  const byId = new Map((opts.students || []).map((s) => [s.id, s]));
+  for (const peer of opts.peers) {
+    if (!peer.studentId || peer.studentId === opts.candidate.studentId) continue;
+    if (!occupiesProviderTime(peer)) continue;
+    if (!sameDateOfService(opts.candidate.dateOfService, peer.dateOfService)) continue;
+    if (!sessionsHaveInteriorOverlap(opts.candidate, peer)) continue;
+    if (!overlapExceptionAllows(opts.candidate, peer, opts.mandates)) continue;
+    const student = byId.get(peer.studentId);
+    if (!student) continue;
+    const program = String(student.programId || '').replace(/\s+/g, '').toLowerCase();
+    const adm = admission.replace(/\s+/g, '').toLowerCase();
+    const programHit = Boolean(program) && adm.includes(program);
+    const full = `${student.firstName || ''} ${student.lastName || ''}`.trim();
+    const nameHit = Boolean(name) && nameTokensMatch(name, full);
+    if (programHit || nameHit) return student;
+  }
+  return null;
 }
 
 /**
