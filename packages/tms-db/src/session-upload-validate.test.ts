@@ -16,6 +16,7 @@ import {
   clipSessionNotes,
   mergeFrontlineSplitCptRows,
   parseWeeklySessionText,
+  stripFrontlineContinuedPageBanner,
 } from './session-parse.js';
 
 describe('service type required', () => {
@@ -243,6 +244,71 @@ No
     const samuel = rows.filter((r) => /Samuel|Legagneur/i.test(r.studentName));
     expect(samuel).toHaveLength(1);
     expect(samuel[0]?.cptUnits).toBe(2);
+  });
+
+  it('drops a continued-page Frontline banner from Provider Absence notes', () => {
+    const banner = (page: number) => `
+Page ${page} of 20
+Summary of Related Service Session Notes (continued)
+District/Agency/BOCES: Elmont Union Free School District
+Service: Physical Therapy
+From: 10/04/2026 To: 10/10/2026
+Service Provider: Stein, Bari Rachel
+`;
+    const rows = parseWeeklySessionText(`
+District/Agency/BOCES: Elmont Union Free School District
+Summary of Related Service Session Notes
+Service: Physical Therapy
+From: 10/04/2026 To: 10/10/2026
+Service Provider: Stein, Bari Rachel
+Student Name: Hernandez, Aleena
+10/08/2026
+ 0
+Alden Terrace School
+Provider Absence:
+${banner(11)}
+Student Name: Iniguez, Matthew
+10/08/2026
+ 0
+Alden Terrace School
+Provider Absence: Therapist was out for a medical appointment.
+${banner(12)}
+`);
+    const aleena = rows.find((r) => /aleena/i.test(r.studentName));
+    const matthew = rows.find((r) => /matthew/i.test(r.studentName));
+    expect(rows).toHaveLength(2);
+    expect(aleena?.attendance).toBe('missed');
+    expect(aleena?.dateOfService).toBe('10/08/2026');
+    expect(aleena?.schoolName).toMatch(/Alden Terrace/i);
+    expect(aleena?.cancelReason).toMatch(/Provider Absence/i);
+    expect(aleena?.notes).toBe('');
+    expect(matthew?.attendance).toBe('missed');
+    expect(matthew?.cancelReason).toMatch(/Provider Absence/i);
+    expect(matthew?.notes).toMatch(/medical appointment/i);
+    expect(matthew?.notes).not.toMatch(/Page\s+12\s+of\s+20/i);
+    expect(matthew?.notes).not.toMatch(/Summary of Related Service Session Notes/i);
+    expect(matthew?.notes).not.toMatch(/District\/Agency/i);
+    expect(matthew?.notes).not.toMatch(/Service Provider/i);
+
+    const collapsed =
+      'Provider Absence: Page 11 of 20 Summary of Related Service Session Notes (continued) District/Agency/BOCES: Elmont Union Free School District Service: Physical Therapy From: 10/04/2026 To: 10/10/2026 Service Provider: Stein, Bari Rachel';
+    expect(stripFrontlineContinuedPageBanner(collapsed)).toBe('');
+    expect(stripFrontlineContinuedPageBanner('Provider Absence: Page 20 of 20')).toBe('');
+    expect(
+      stripFrontlineContinuedPageBanner(
+        'Student Not Available: 9/24- Received message from Christophers father. Christopher still being sick. Page 1 of 1',
+      ),
+    ).toMatch(/still being sick/i);
+    expect(
+      stripFrontlineContinuedPageBanner(
+        'Provider Absence: Therapist was out sick. Page 6 of 20 Summary of Related Service Session Notes (continued) District/Agency/BOCES: Elmont Union Free School District Service: Physical Therapy From: 10/04/2026 To: 10/10/2026 Service Provider: Stein, Bari Rachel',
+      ),
+    ).toMatch(/Therapist was out sick/);
+    expect(
+      stripFrontlineContinuedPageBanner(
+        'Provider Absence: Therapist was out sick. Page 6 of 20 Summary of Related Service Session Notes (continued) District/Agency/BOCES: Elmont Union Free School District Service: Physical Therapy From: 10/04/2026 To: 10/10/2026 Service Provider: Stein, Bari Rachel',
+      ),
+    ).not.toMatch(/Page\s+6\s+of\s+20/);
   });
 });
 

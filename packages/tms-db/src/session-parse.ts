@@ -848,6 +848,133 @@ function sessionClockWindowKey(beginTime: string, endTime: string): string {
   return a <= b ? `${a}|${b}` : `${b}|${a}`;
 }
 
+const FRONTLINE_LOG_LABEL_ONLY_RE =
+  /^(?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|Make[\s-]?up)\s*:?\s*$/i;
+
+/** Next header / log-type token that ends a continued-page field value. */
+const FRONTLINE_BANNER_VALUE_STOP =
+  'Page\\s+\\d+\\s+of\\s+\\d+|Summary\\s+of\\s+Related\\s+Service\\s+Session\\s+Notes|District\\s*/\\s*Agency|Service\\s*:|From\\s*:|Service\\s+Provider\\s*:|Student\\s+Name\\s*:|Provider\\s+Signature|Telehealth\\s*:|Service\\s+Provided\\s*:|Provider\\s+Absence\\s*:|Provider\\s+Not\\s+Available\\s*:|Student\\s+Absence\\s*:|Student\\s+Not\\s+Available\\s*:|School\\s+Closed\\s*:|Staff\\s+Shortage\\s*:';
+
+function frontlineBannerValue(): string {
+  return `(?:(?!\\b(?:${FRONTLINE_BANNER_VALUE_STOP})).)*`;
+}
+
+/**
+ * How much of `rest` (starting at a page-header anchor) is the reprinted
+ * Frontline continued-page banner. Returns 0 when `rest` is not that banner.
+ */
+function consumeFrontlinePageBanner(rest: string): number {
+  let i = 0;
+  const eat = (re: RegExp): boolean => {
+    const ws = /^\s+/.exec(rest.slice(i));
+    if (ws) i += ws[0].length;
+    const m = re.exec(rest.slice(i));
+    if (!m || m[0].length === 0) return false;
+    i += m[0].length;
+    return true;
+  };
+  const head = rest.slice(i).replace(/^\s+/, '');
+  const isPage = /^Page\s+\d+\s+of\s+\d+/i.test(head);
+  const isSummary = /^Summary\s+of\s+Related\s+Service\s+Session\s+Notes/i.test(head);
+  const isDistrict = /^District\s*\/\s*Agency(?:\s*\/\s*BOCES)?\s*:/i.test(head);
+  if (isPage) {
+    const after = head.replace(/^Page\s+\d+\s+of\s+\d+\s*/i, '');
+    if (
+      !/^Summary\s+of\s+Related\s+Service\s+Session\s+Notes/i.test(after) &&
+      !/^District\s*\/\s*Agency(?:\s*\/\s*BOCES)?\s*:/i.test(after)
+    ) {
+      return 0;
+    }
+  } else if (isDistrict) {
+    if (
+      !/\bFrom\s*:\s*\d{1,2}\/\d{1,2}\/\d{2,4}\s+To\s*:/i.test(rest) ||
+      !/\bService\s+Provider\s*:/i.test(rest)
+    ) {
+      return 0;
+    }
+  } else if (!isSummary) {
+    return 0;
+  }
+
+  const value = frontlineBannerValue();
+  let progressed = true;
+  let hops = 0;
+  while (progressed && hops++ < 16) {
+    progressed = false;
+    if (eat(/^Page\s+\d+\s+of\s+\d+/i)) progressed = true;
+    if (
+      eat(
+        /^Summary\s+of\s+Related\s+Service\s+Session\s+Notes(?:\s*\(\s*continued\s*\))?/i,
+      )
+    ) {
+      progressed = true;
+    }
+    if (
+      eat(
+        new RegExp(
+          `^District\\s*/\\s*Agency(?:\\s*/\\s*BOCES)?\\s*:\\s*${value}`,
+          'i',
+        ),
+      )
+    ) {
+      progressed = true;
+    }
+    if (eat(new RegExp(`^Service\\s*:\\s*(?!Provided\\b)${value}`, 'i'))) progressed = true;
+    if (
+      eat(/^From\s*:\s*\d{1,2}\/\d{1,2}\/\d{2,4}\s+To\s*:\s*\d{1,2}\/\d{1,2}\/\d{2,4}/i)
+    ) {
+      progressed = true;
+    }
+    if (eat(new RegExp(`^Service\\s+Provider\\s*:\\s*${value}`, 'i'))) progressed = true;
+    if (eat(new RegExp(`^Student\\s+Name\\s*:\\s*${value}`, 'i'))) progressed = true;
+  }
+  return i;
+}
+
+function frontlineBannerStartIndex(text: string): number {
+  const re =
+    /\b(?:Page\s+\d+\s+of\s+\d+|Summary\s+of\s+Related\s+Service\s+Session\s+Notes|District\s*\/\s*Agency(?:\s*\/\s*BOCES)?\s*:)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    const idx = m.index ?? -1;
+    if (idx < 0) continue;
+    if (consumeFrontlinePageBanner(text.slice(idx)) > 0) return idx;
+  }
+  return -1;
+}
+
+/**
+ * Drop a Frontline continued-page header that was captured as the session note.
+ * "Page N of M", "Summary of Related Service Session Notes (continued)", and the
+ * reprinted District/Agency/BOCES, Service, From/To, and Service Provider lines.
+ * A real absence sentence before that banner is kept. When the label is followed
+ * only by the banner, the stored note is empty (the miss reason already records it).
+ */
+export function stripFrontlineContinuedPageBanner(raw: string): string {
+  let s = String(raw || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return '';
+  let removed = false;
+  for (let n = 0; n < 6; n++) {
+    const idx = frontlineBannerStartIndex(s);
+    if (idx < 0) break;
+    const consumed = consumeFrontlinePageBanner(s.slice(idx));
+    if (consumed <= 0) break;
+    removed = true;
+    s = `${s.slice(0, idx)} ${s.slice(idx + consumed)}`.replace(/\s+/g, ' ').trim();
+  }
+  if (removed && FRONTLINE_LOG_LABEL_ONLY_RE.test(s)) return '';
+  // A miss row can end on "Page N of M" alone when the rest of the header
+  // was cut off. That is still the page banner, not an absence sentence.
+  const withoutLonePage = s.replace(/\bPage\s+\d+\s+of\s+\d+\b/gi, ' ').replace(/\s+/g, ' ').trim();
+  if (withoutLonePage !== s) {
+    if (!withoutLonePage || FRONTLINE_LOG_LABEL_ONLY_RE.test(withoutLonePage)) return '';
+    return withoutLonePage;
+  }
+  return s;
+}
+
 function mergeStudentKey(name: string): string {
   return normEntityName(
     String(name || '')
@@ -970,7 +1097,10 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
     if (makeupFor && !/make\s*up\s*for\s*:/i.test(fullNotes)) {
       fullNotes = `Make up for: ${makeupFor}${fullNotes ? ` ${fullNotes}` : ''}`.trim();
     }
-    const notes = clipSessionNotes(fullNotes);
+    const strippedNotes = stripFrontlineContinuedPageBanner(fullNotes);
+    const notes = clipSessionNotes(strippedNotes);
+    // Provider Absence followed only by the next page's header is not a narrative.
+    const bannerOnly = Boolean(notesMatch) && !String(strippedNotes || '').trim();
     const absenceOnly =
       FRONTLINE_ABSENCE_LABEL_RE.test(slice) && !/Service\s+Provided\s*:/i.test(slice);
     // Missed Frontline rows have no Session Start/End — never borrow times from a later visit.
@@ -996,7 +1126,10 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
     // Real building / Setting wins. District header is the match key only when Setting is not a school.
     const schoolName = location || reportSchool || districtHeader;
     const cpt = attendance === 'missed' ? { codes: [] as string[], totalUnits: 0, procedures: [] as string[] } : parseCptCoverage(slice);
-    const noteText = notes || (absenceOnly ? slice.replace(/\s+/g, ' ').trim().slice(0, 200) : '');
+    const sliceFallback = stripFrontlineContinuedPageBanner(
+      slice.replace(/\s+/g, ' ').trim(),
+    ).slice(0, 200);
+    const noteText = bannerOnly ? '' : notes || (absenceOnly ? sliceFallback : '');
     rows.push({
       studentName: studentNameBefore(blob, idx, fallbackStudent),
       providerName,
@@ -1006,7 +1139,9 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       endTime,
       attendance,
       cancelReason: cancellationFromNotes(noteText || slice, attendance),
-      notes: noteText || (attendance === 'missed' ? slice.replace(/\s+/g, ' ').trim().slice(0, 200) : ''),
+      notes: bannerOnly
+        ? ''
+        : noteText || (attendance === 'missed' ? sliceFallback : ''),
       serviceType: serviceTypeWithRatio(serviceType, ratio),
       location: location || schoolName,
       ratio,
