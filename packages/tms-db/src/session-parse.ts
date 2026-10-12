@@ -854,7 +854,15 @@ function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   // A slash date still inside Provider Signature (before Telehealth / the next
   // student) is the signature stamp, not the next session. Cutting the slice
   // there dropped the stamp and marked a signed visit unsigned.
-  if (sigEnd > teleEnd && sigEnd > studentEnd && sigEnd >= logTypeEnd) return false;
+  // When Telehealth is printed to the left of the signature, the stamp header
+  // is the latest boundary for the rest of the page. A following row that
+  // carries a ratio or two session clocks is still a real visit (Troy 12:47).
+  if (sigEnd > teleEnd && sigEnd > studentEnd && sigEnd >= logTypeEnd) {
+    const after = blob.slice(idx, idx + 180);
+    const clocks = after.match(/\d{1,2}:\d{2}\s*[ap]\.?m\.?/gi) || [];
+    const hasRatio = /(?:^|\n)\s*[1-9]\d?\s*:\s*1\b/.test(after.slice(0, 48));
+    if (clocks.length < 2 && !hasRatio) return false;
+  }
   if (logTypeEnd > boundaryEnd && /\S/.test(lookback.slice(logTypeEnd))) {
     if (!looksLikeFrontlineSessionRowAfterDate(blob, idx)) return false;
   }
@@ -1162,6 +1170,63 @@ export function mergeFrontlineSplitCptRows(rows: ParsedSessionNote[]): ParsedSes
   return out;
 }
 
+const FRONTLINE_CPT_CODE_RE = /^(?:97\d{3}|925\d{2}|926\d{2}|961\d{2}|975\d{2})$/;
+const FRONTLINE_ICD_CODE_RE = /^[A-Z]\d{2}(?:\.\d{1,4})?$/i;
+
+type FrontlineBackTok = { tok: string; start: number };
+
+/** Token immediately before `from`, skipping whitespace. Stops at punctuation. */
+function readFrontlineBackToken(blob: string, from: number): FrontlineBackTok | null {
+  let j = from;
+  while (j > 0 && /\s/.test(blob[j - 1]!)) j--;
+  if (j <= 0) return null;
+  const end = j;
+  while (j > 0 && /[A-Za-z0-9.]/.test(blob[j - 1]!)) j--;
+  if (j === end) return null;
+  return { tok: blob.slice(j, end), start: j };
+}
+
+/**
+ * Frontline sometimes emits the CPT / units / ICD textbox before the service
+ * date (the code sits on the right of the row, but the content stream writes
+ * it first). That cluster belongs to the upcoming row. A CPT that follows
+ * "Service Provided" is the previous row's code and stays there.
+ */
+function cptClusterIsLeading(blob: string, clusterStart: number): boolean {
+  const pre = blob.slice(Math.max(0, clusterStart - 4000), clusterStart);
+  const sig = lastMatchEnd(
+    /Provider\s+Signature\s*\/?\s*Credentials|Telehealth\s*:|Student\s+Name\s*:/gi,
+    pre,
+  );
+  const note = lastMatchEnd(/Service\s+Provided\s*:/gi, pre);
+  return note <= sig;
+}
+
+/** Start of a leading CPT cluster immediately before this service date, else `dateIdx`. */
+function frontlineLeadingCptStart(blob: string, dateIdx: number): number {
+  const tokens: FrontlineBackTok[] = [];
+  let cursor = dateIdx;
+  for (let n = 0; n < 3; n++) {
+    const tok = readFrontlineBackToken(blob, cursor);
+    if (!tok) break;
+    tokens.push(tok);
+    cursor = tok.start;
+  }
+  let i = 0;
+  if (tokens[i] && FRONTLINE_ICD_CODE_RE.test(tokens[i]!.tok) && !FRONTLINE_CPT_CODE_RE.test(tokens[i]!.tok)) {
+    i++;
+  }
+  if (tokens[i] && /^\d{1,2}$/.test(tokens[i]!.tok)) i++;
+  const cpt = tokens[i];
+  if (!cpt || !FRONTLINE_CPT_CODE_RE.test(cpt.tok)) return dateIdx;
+  if (!cptClusterIsLeading(blob, cpt.start)) return dateIdx;
+  return cpt.start;
+}
+
+function frontlineClockTimes(slice: string): string[] {
+  return [...slice.matchAll(/(\d{1,2}:\d{2}\s*[ap]\.?m\.?)/gi)].map((m) => m[1]!);
+}
+
 function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
   const blob = String(text || '');
   const fallbackStudent = cleanStudentName(
@@ -1189,7 +1254,15 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
   }
   for (const { dateOfService, idx } of dateHits.slice(0, 80)) {
     const end = frontlineSessionBlockEnd(blob, idx, dateOfService);
-    const slice = blob.slice(idx, end);
+    // CPT printed before this date belongs here. The next row's leading CPT
+    // must not stay on this slice (that dropped 97110 and kept only 97112).
+    const sliceStart = frontlineLeadingCptStart(blob, idx);
+    let sliceEnd = end;
+    if (end < blob.length && /^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(blob.slice(end))) {
+      const lead = frontlineLeadingCptStart(blob, end);
+      if (lead < end && lead > idx) sliceEnd = lead;
+    }
+    const slice = blob.slice(sliceStart, sliceEnd);
     const notesMatch = slice.match(
       /(?:Service Provided:|Provider Absence:|Provider Not Available:|Student Absence:|Student Not Available:|School Closed:|Staff Shortage:|Make[\s-]?up)[\s\S]*?(?=\n\s*(?:Provider\s+Signature|Telehealth:)|$)/i,
     );
@@ -1213,7 +1286,12 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
     let beginTime = '';
     let endTime = '';
     if (!absenceOnly) {
-      const times = [...slice.matchAll(/(\d{1,2}:\d{2}\s*[ap]\.?m\.?)/gi)].map((m) => m[1]!);
+      // Signature stamp "10:39AM" is not the session clock when start/end
+      // are already printed before Telehealth / Provider Signature.
+      const sigAt = slice.search(/Provider\s+Signature\s*\/?\s*Credentials|Telehealth\s*:/i);
+      const beforeSig = sigAt >= 0 ? slice.slice(0, sigAt) : slice;
+      const beforeTimes = frontlineClockTimes(beforeSig);
+      const times = beforeTimes.length >= 2 ? beforeTimes : frontlineClockTimes(slice);
       beginTime = times[0] || '';
       endTime = times[1] || '';
     }
