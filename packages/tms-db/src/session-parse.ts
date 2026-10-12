@@ -669,7 +669,8 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
       }
     }
     const makeupFor =
-      extractMakeupForDate(fullNotes) || extractMakeupForDate(slice);
+      extractMakeupForDate(fullNotes, { referenceDos: hit.dateOfService }) ||
+      extractMakeupForDate(slice, { referenceDos: hit.dateOfService });
     if (makeupFor && !/make\s*up\s*for\s*:/i.test(fullNotes)) {
       fullNotes = `Make up for: ${makeupFor}${fullNotes ? ` ${fullNotes}` : ''}`.trim();
     }
@@ -964,7 +965,8 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       .replace(/\s+/g, ' ')
       .trim();
     const makeupFor =
-      extractMakeupForDate(fullNotes) || extractMakeupForDate(slice);
+      extractMakeupForDate(fullNotes, { referenceDos: dateOfService }) ||
+      extractMakeupForDate(slice, { referenceDos: dateOfService });
     if (makeupFor && !/make\s*up\s*for\s*:/i.test(fullNotes)) {
       fullNotes = `Make up for: ${makeupFor}${fullNotes ? ` ${fullNotes}` : ''}`.trim();
     }

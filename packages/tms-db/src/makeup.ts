@@ -45,6 +45,24 @@ function dateTokens(dos: string): string[] {
     tokens.add(`${String(y).slice(2)}`);
     tokens.add(`${mo}/${d}/${String(y).slice(2)}`);
     tokens.add(`${mm}/${dd}/${String(y).slice(2)}`);
+    // Notes often say "9/9 makeup session" without a year.
+    tokens.add(`${mo}/${d}`);
+    tokens.add(`${mm}/${dd}`);
+    tokens.add(`${mo}/${dd}`);
+    tokens.add(`${mm}/${d}`);
+  } else {
+    // Bare M/D from notes (year not yet inferred) — still match miss DOS tokens above.
+    const md = raw.match(/^(\d{1,2})\/(\d{1,2})$/);
+    if (md) {
+      const mo = Number(md[1]);
+      const d = Number(md[2]);
+      const mm = String(mo).padStart(2, '0');
+      const dd = String(d).padStart(2, '0');
+      tokens.add(`${mo}/${d}`);
+      tokens.add(`${mm}/${dd}`);
+      tokens.add(`${mo}/${dd}`);
+      tokens.add(`${mm}/${d}`);
+    }
   }
   return [...tokens].filter(Boolean);
 }
@@ -197,7 +215,9 @@ export function resolveMakeupOfSessionId(
     return { makeupOfSessionId: session.makeupOfSessionId, via: 'miss' };
   }
 
-  const forDate = extractMakeupForDate(session.notes);
+  const forDate = extractMakeupForDate(session.notes, {
+    referenceDos: session.dateOfService,
+  });
   if (forDate) {
     const miss = findUnusedMissOnDate(
       allSessions,
