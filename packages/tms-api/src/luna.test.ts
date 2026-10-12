@@ -33,7 +33,8 @@ describe('luna', () => {
     expect(prompt).toMatch(/import caseload/i);
     expect(prompt).toMatch(/no peer/i);
     expect(prompt).toMatch(/Service type is required/i);
-    expect(prompt).toMatch(/Missing note/i);
+    expect(prompt).toMatch(/Under mandate \(yellow\)/i);
+    expect(prompt).toMatch(/1 of 2 this week/i);
     expect(prompt).toMatch(/does not block submit/i);
     expect(prompt).toMatch(/PDF upload/i);
     expect(prompt).toMatch(/Send to HHA/i);

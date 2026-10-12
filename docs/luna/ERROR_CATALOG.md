@@ -96,8 +96,8 @@ Source of truth for the live bot: `packages/tms-api/src/luna-knowledge.ts`.
 
 **Do:** Set Service type, save/retry.
 
-## Missing note (yellow)
+## Under mandate (yellow)
 
-**Means:** The yellow week line lists only a missed session that has no note (child, date, missed). A noted session counts toward the weekly mandate whether the child was attended or missed. One attended note plus one missed note in the same week fills a 2× mandate — no yellow. A child who was simply not seen (no session row) is not a missing note, so there is no “N of M this week” yellow. Attended or makeup with no note stays a red “Service note is required” blocker and still blocks submit. Yellow does not repeat that red line and does not block submit.
+**Means:** Yellow means fewer submitted sessions than the weekly mandate. Every submitted session counts, whether attendance is attended or missed. Notes do not matter. One attended and one missed in the same week fill a 2× mandate — no yellow. One submitted session against a mandate of two is “Under mandate for Maya: 1 of 2 this week.” Zero submitted sessions is “0 of 2.” Attended or makeup with no note stays a red “Service note is required” blocker and still blocks submit. Yellow does not repeat that red line and does not block submit.
 
-**Do:** Add the note on the missed session. Fill attended/makeup notes before submit.
+**Do:** Add the missing session(s). Fill attended/makeup notes before submit.

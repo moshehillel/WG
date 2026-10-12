@@ -1114,7 +1114,10 @@ describe('TMS API weekly loop', () => {
       body: {},
     });
     const emptyWarnings = (weekEmpty.body as { warnings: string[] }).warnings;
-    expect(emptyWarnings.some((w) => /Under mandate|Missing note/i.test(w))).toBe(false);
+    expect(emptyWarnings.some((w) => /Missing note/i.test(w))).toBe(false);
+    expect(emptyWarnings.some((w) => /Under mandate for Aiden Odne: 1 of 2 this week/i.test(w))).toBe(
+      true,
+    );
     expect((weekEmpty.body as { errors: string[] }).errors.some((e) => /required/i.test(e))).toBe(true);
     const blockedSubmit = await handleTmsRequest(store, {
       method: 'POST',
@@ -1148,8 +1151,7 @@ describe('TMS API weekly loop', () => {
     expect(patchedShort.status).toBe(200);
     expect((patchedShort.body as { session: { notes: string } }).session.notes).toBe('gait');
 
-    // A short note clears the red locker. One noted visit against 2x is not a yellow
-    // (no second session row, so nothing is a missing note).
+    // A short note clears the red locker. One submitted session against 2x is still yellow.
     const weekShort = await handleTmsRequest(store, {
       method: 'GET',
       path: '/week',
@@ -1160,11 +1162,11 @@ describe('TMS API weekly loop', () => {
     expect((weekShort.body as { errors: string[] }).errors.some((e) => /required|incomplete/i.test(e))).toBe(
       false,
     );
-    expect(
-      (weekShort.body as { warnings: string[] }).warnings.some((w) =>
-        /Under mandate|Missing note/i.test(w),
-      ),
-    ).toBe(false);
+    const shortWarnings = (weekShort.body as { warnings: string[] }).warnings;
+    expect(shortWarnings.some((w) => /Missing note/i.test(w))).toBe(false);
+    expect(shortWarnings.some((w) => /Under mandate for Aiden Odne: 1 of 2 this week/i.test(w))).toBe(
+      true,
+    );
 
     const shortSubmit = await handleTmsRequest(store, {
       method: 'POST',
@@ -1202,11 +1204,11 @@ describe('TMS API weekly loop', () => {
     expect((weekAfter.body as { errors: string[] }).errors.some((e) => /required|incomplete/i.test(e))).toBe(
       false,
     );
-    expect(
-      (weekAfter.body as { warnings: string[] }).warnings.some((w) =>
-        /Under mandate|Missing note/i.test(w),
-      ),
-    ).toBe(false);
+    const afterWarnings = (weekAfter.body as { warnings: string[] }).warnings;
+    expect(afterWarnings.some((w) => /Missing note/i.test(w))).toBe(false);
+    expect(afterWarnings.some((w) => /Under mandate for Aiden Odne: 1 of 2 this week/i.test(w))).toBe(
+      true,
+    );
   });
 
   it('rejects unauthenticated requests when dev headers are disabled', async () => {

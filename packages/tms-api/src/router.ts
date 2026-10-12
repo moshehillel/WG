@@ -3493,8 +3493,7 @@ export async function handleTmsRequest(
           nameMap,
           {
             ...mandateWeekOpts(store),
-            // Caseload kids with 0 sessions still feed monthly/cycle checks.
-            // A week with no session row is not a missing note (no weekly N-of-M yellow).
+            // Caseload kids with 0 sessions still feed weekly 0-of-N, monthly, and cycle checks.
             includeStudentIds: students.map((s) => s.id),
           },
         )

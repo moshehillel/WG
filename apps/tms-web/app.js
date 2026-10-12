@@ -2880,7 +2880,7 @@ async function therapistHome(statusFlash) {
       `}
       ${isWeekWorkspace && errors.length ? `<div class="err-box status-banner" id="weekErrorsBox" data-week-issue="errors"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss errors">×</button><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
       ${isWeekWorkspace && warnings.length ? `<div class="warn-box status-banner" id="weekWarningsBox" data-week-issue="warnings"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss warnings">×</button><strong>Warnings (submission is still allowed).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
-      ${isWeekWorkspace ? `<p class="muted">Red indicates a blocking issue (no mandate on file, over-mandate, or a required note on an attended or makeup session). Yellow lists a missed session that is missing its note, or other soft warnings. Yellow does not block submit.</p>
+      ${isWeekWorkspace ? `<p class="muted">Red indicates a blocking issue (no mandate on file, over-mandate, or a required note on an attended or makeup session). Yellow means fewer submitted sessions than the mandate (attended and missed both count). Yellow does not block submit.</p>
       <div class="table-wrap">
       <table>
         <tr><th>Date</th><th>Child</th><th>Service</th><th>CPT</th><th>Time</th><th>Attendance</th><th>Notes</th><th></th></tr>
@@ -2891,7 +2891,7 @@ async function therapistHome(statusFlash) {
           const flags = s.aiFlags || [];
           const underChild = (warnings || []).some(
             (w) =>
-              /under\s+(?:monthly\s+|cycle\s+)?mandate|missing note/i.test(String(w || '')) &&
+              /under\s+(?:monthly\s+|cycle\s+)?mandate/i.test(String(w || '')) &&
               name &&
               String(w).toLowerCase().includes(String(name).toLowerCase()),
           );

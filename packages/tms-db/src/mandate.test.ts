@@ -98,31 +98,32 @@ describe('mandate math', () => {
 
   it('alerts under mandate', () => {
     const r = checkMandate(mandate(), [sess()]);
-    // Attended shortfall is still tracked for the group-over hint. It is not a yellow line.
     expect(r.under).toBe(true);
     expect(r.over).toBe(false);
-    expect(r.message).toBe('');
+    expect(r.used).toBe(1);
+    expect(r.message).toBe('Under mandate: 1 of 2 this week.');
   });
 
   it('missed does not consume the attended over-count', () => {
-    const missed = sess({ id: 'a', attendance: 'missed' });
-    const attended = sess({ id: 'b' });
+    const missed = sess({ id: 'a', attendance: 'missed', notes: '' });
+    const attended = sess({ id: 'b', notes: '' });
     const r = checkMandate(mandate(), [missed, attended]);
     expect(r.used).toBe(1);
     expect(r.over).toBe(false);
-    // Both rows have notes and together fill 2x, so the week has no yellow.
+    expect(r.under).toBe(false);
+    // One attended + one missed fill 2x even with no notes.
     const week = checkMandatesForWeek([mandate()], [missed, attended], [missed, attended], {
       st1: 'Maya',
     });
     expect(week.warnings.filter((w) => /Under mandate|Missing note/i.test(w))).toEqual([]);
   });
 
-  it('does not yellow-warn when one attended note and one missed note fill a 2x week', () => {
+  it('does not yellow-warn when one attended and one missed fill a 2x week, notes or not', () => {
     const attended = sess({
       id: 'a',
       dateOfService: '09/01/2026',
       attendance: 'attended',
-      notes: 'Service Provided: gait',
+      notes: '',
     });
     const missed = sess({
       id: 'b',
@@ -130,7 +131,7 @@ describe('mandate math', () => {
       attendance: 'missed',
       beginTime: '',
       endTime: '',
-      notes: 'Student Absence: student not in school',
+      notes: '',
     });
     const { errors, warnings } = checkMandatesForWeek(
       [mandate({ frequencyPerWeek: 2 })],
@@ -142,33 +143,50 @@ describe('mandate math', () => {
     expect(warnings.filter((w) => /Under mandate|Missing note/i.test(w))).toEqual([]);
   });
 
-  it('yellow-lists only a missed session that is missing its note', () => {
+  it('yellow-warns 1 of 2 when only one session is submitted, attended or missed', () => {
     const attended = sess({
       id: 'a',
       dateOfService: '09/01/2026',
-      notes: 'Service Provided: gait',
+      notes: '',
     });
+    const attendedWeek = checkMandatesForWeek(
+      [mandate({ frequencyPerWeek: 2 })],
+      [attended],
+      [attended],
+      { st1: 'Maya' },
+    );
+    expect(attendedWeek.warnings).toEqual(['Under mandate for Maya: 1 of 2 this week.']);
+    expect(attendedWeek.warnings.some((w) => /Missing note/i.test(w))).toBe(false);
+
     const missed = sess({
       id: 'b',
       dateOfService: '09/03/2026',
       attendance: 'missed',
       beginTime: '',
       endTime: '',
-      notes: '   ',
+      notes: '',
     });
-    const { warnings } = checkMandatesForWeek(
+    const missedWeek = checkMandatesForWeek(
       [mandate({ frequencyPerWeek: 2 })],
-      [attended, missed],
-      [attended, missed],
+      [missed],
+      [missed],
       { st1: 'Maya' },
     );
-    expect(warnings.some((w) => /Under mandate|of 2 this week/i.test(w))).toBe(false);
-    expect(warnings).toEqual(['Missing note for Maya on 09/03/2026 (missed).']);
+    expect(missedWeek.warnings).toEqual(['Under mandate for Maya: 1 of 2 this week.']);
   });
 
-  it('does not yellow-warn an attended session missing a note', () => {
-    const row = sess({ id: 'a', notes: '', dateOfService: '09/02/2026' });
-    const { warnings } = checkMandatesForWeek([mandate()], [row], [row], { st1: 'Maya' });
+  it('does not yellow-warn a missing note when the weekly mandate is filled', () => {
+    const row = sess({
+      id: 'a',
+      notes: '',
+      dateOfService: '09/02/2026',
+    });
+    const { warnings } = checkMandatesForWeek(
+      [mandate({ frequencyPerWeek: 1 })],
+      [row],
+      [row],
+      { st1: 'Maya' },
+    );
     expect(warnings.some((w) => /Missing note|Under mandate/i.test(w))).toBe(false);
     expect(
       screenServiceNote({
@@ -182,12 +200,7 @@ describe('mandate math', () => {
     ).toContain('Service note is required.');
   });
 
-  it('does not yellow-warn a pure shortfall with no session row', () => {
-    const only = sess({ id: 'a', notes: 'Service Provided: gait' });
-    const partial = checkMandatesForWeek([mandate({ frequencyPerWeek: 2 })], [only], [only], {
-      st1: 'Maya',
-    });
-    expect(partial.warnings.filter((w) => /Under mandate|Missing note/i.test(w))).toEqual([]);
+  it('yellow-warns 0 of 2 when no session is submitted against the mandate', () => {
     const none = checkMandatesForWeek(
       [mandate({ frequencyPerWeek: 2 })],
       [],
@@ -195,7 +208,10 @@ describe('mandate math', () => {
       { st1: 'Maya' },
       { includeStudentIds: ['st1'] },
     );
-    expect(none.warnings.filter((w) => /Under mandate|Missing note/i.test(w))).toEqual([]);
+    expect(none.warnings.filter((w) => /Missing note/i.test(w))).toEqual([]);
+    expect(none.warnings.filter((w) => /Under mandate/i.test(w))).toEqual([
+      'Under mandate for Maya: 0 of 2 this week.',
+    ]);
   });
 
   it('does not let an extra noted miss exceed the weekly mandate', () => {
@@ -300,8 +316,11 @@ describe('mandate math', () => {
     );
     expect(errors.filter((e) => /exceeds the mandate/i.test(e))).toEqual([]);
     expect(errors.filter((e) => /no partner available|no peer was available/i.test(e))).toEqual([]);
-    // Group has no session row. That is not a missing note, so no weekly yellow.
-    expect(warnings.filter((w) => /Under mandate|Missing note/i.test(w))).toEqual([]);
+    // Group has no submitted session, so it is 0 of 1. The individual visit fills individual.
+    expect(warnings.filter((w) => /Missing note/i.test(w))).toEqual([]);
+    expect(warnings.filter((w) => /Under mandate/i.test(w))).toEqual([
+      'Under mandate for Jason Dual (PT group): 0 of 1 this week.',
+    ]);
   });
 
   it('two solo-group / no-partner 1:1s still over the group mandate', () => {
@@ -910,10 +929,13 @@ describe('makeup', () => {
       { includeStudentIds: ['st1'] },
     );
     expect(weekCheck.warnings.some((w) => /Makeup authorization/i.test(w))).toBe(false);
-    expect(weekCheck.warnings.filter((w) => /Under mandate|Missing note/i.test(w))).toEqual([]);
+    expect(weekCheck.warnings.filter((w) => /Missing note/i.test(w))).toEqual([]);
+    expect(weekCheck.warnings.filter((w) => /Under mandate/i.test(w))).toEqual([
+      'Under mandate for Test Child (PT individual): 0 of 2 this week.',
+    ]);
   });
 
-  it('labels a missing note on the group mandate, not as an attended-count shortfall', () => {
+  it('counts a missed group session toward the group mandate even with no note', () => {
     const individual = mandate({
       id: 'm-ind',
       ratioGroup: false,
@@ -950,21 +972,25 @@ describe('makeup', () => {
       { st1: 'Maya' },
     );
     expect(errors).toEqual([]);
-    expect(warnings.some((w) => /Under mandate|of 1 this week/i.test(w))).toBe(false);
-    expect(warnings).toEqual(['Missing note for Maya (PT group) on 09/03/2026 (missed).']);
+    expect(warnings.filter((w) => /Missing note/i.test(w))).toEqual([]);
+    expect(warnings.filter((w) => /Under mandate/i.test(w))).toEqual([]);
 
-    const notedMiss = sess({
-      ...missed,
-      notes: 'Student Absence: student not in school',
+    const shortGroup = mandate({
+      ...group,
+      frequencyPerWeek: 2,
+      sessionsPerPeriod: 2,
     });
-    const filled = checkMandatesForWeek(
-      [individual, group],
-      [attended, notedMiss],
-      [attended, notedMiss],
+    const short = checkMandatesForWeek(
+      [individual, shortGroup],
+      [attended, missed],
+      [attended, missed],
       { st1: 'Maya' },
     );
-    expect(filled.errors).toEqual([]);
-    expect(filled.warnings.filter((w) => /Under mandate|Missing note/i.test(w))).toEqual([]);
+    expect(short.errors).toEqual([]);
+    expect(short.warnings.filter((w) => /Missing note/i.test(w))).toEqual([]);
+    expect(short.warnings.filter((w) => /Under mandate/i.test(w))).toEqual([
+      'Under mandate for Maya (PT group): 1 of 2 this week.',
+    ]);
   });
 });
 

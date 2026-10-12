@@ -433,6 +433,19 @@ function sessionsCountingTowardWeekly(weekSessions: SessionRow[]): SessionRow[] 
   );
 }
 
+/**
+ * Weekly yellow frequency: every submitted attended or missed session counts.
+ * Notes do not matter. Makeup rows stay out (separate makeup rules) and never
+ * drop a missed session from this count.
+ */
+function sessionsSubmittedTowardWeekly(weekSessions: SessionRow[]): SessionRow[] {
+  return weekSessions.filter(
+    (s) =>
+      !isAdditionalServiceSession(s) &&
+      (s.attendance === 'attended' || s.attendance === 'missed'),
+  );
+}
+
 function whoLabel(opts: MandateCheckOpts): string {
   const name = String(opts.studentLabel || '').trim();
   const service = String(opts.serviceLabel || '').trim();
@@ -442,27 +455,14 @@ function whoLabel(opts: MandateCheckOpts): string {
   return 'this child';
 }
 
-/**
- * Yellow week lines list missed sessions that have no note.
- * Attended and makeup empty notes stay the red "Service note is required" locker.
- */
-function yellowMissingNoteLines(sessions: SessionRow[], opts: MandateCheckOpts): string[] {
-  const lines: string[] = [];
-  for (const s of sessions) {
-    if (isAdditionalServiceSession(s)) continue;
-    if (s.attendance !== 'missed') continue;
-    if (String(s.notes || '').trim()) continue;
-    const who = whoLabel(opts);
-    const dos = String(s.dateOfService || '').trim() || 'unknown date';
-    lines.push(`Missing note for ${who} on ${dos} (missed).`);
-  }
-  return lines;
-}
-
-/** True for a regular weekly mandate. Its attended shortfall is not a yellow "N of M" line. */
-function isWeeklyAttendedShortfall(mandate: Mandate | undefined): boolean {
-  if (!mandate || isMakeupKindMandate(mandate)) return false;
-  return mandateFrequencyKind(mandate) === 'weekly';
+function weeklyUnderMandateMessage(
+  opts: MandateCheckOpts,
+  submitted: number,
+  allowed: number,
+): string {
+  const named = String(opts.studentLabel || '').trim() || String(opts.serviceLabel || '').trim();
+  const who = named ? ` for ${whoLabel(opts)}` : '';
+  return `Under mandate${who}: ${submitted} of ${allowed} this week.`;
 }
 
 function sessionSlotWithNoteContext(session: SessionRow): string {
@@ -533,9 +533,9 @@ function resolveStudentLabel(
 }
 
 /**
- * Attended counts toward weekly over-mandate. A linked makeup does not.
- * A noted missed session fills the weekly mandate for the yellow check: there is
- * no "N of M this week" warning. Yellow lists only missed sessions missing a note.
+ * Attended counts toward weekly over-mandate. A missed session does not.
+ * Yellow under-mandate counts every submitted attended or missed session.
+ * Notes do not matter. Linked and unlinked makeups stay on makeup rules.
  */
 export function checkMandate(
   mandate: Mandate | undefined,
@@ -713,16 +713,21 @@ export function checkMandate(
         : 'No mandate on file for this student — import blocked. Ask the office to import the caseload or add a mandate.',
     };
   }
+  const submitted = sessionsSubmittedTowardWeekly(weekSessions).length;
+  // Over stays attended-only: an extra miss must not exceed the weekly mandate.
   const over = used > allowed;
-  // `under` stays the attended shortfall so dual individual+group over-hints still fire.
-  // It is not a yellow "N of M this week" line — that warning was removed.
-  const under = used < allowed;
+  // Yellow is a missing session. Attended and missed both count; notes do not.
+  const under = submitted < allowed;
   return {
     used,
     allowed,
     over,
     under,
-    message: over ? overMandateMessage(opts, counted, used, allowed, 'weekly') : '',
+    message: over
+      ? overMandateMessage(opts, counted, used, allowed, 'weekly')
+      : under
+        ? weeklyUnderMandateMessage(opts, submitted, allowed)
+        : '',
   };
 }
 
@@ -739,8 +744,7 @@ export type MandateWeekCheckOpts = {
     | Record<string, string>;
   /**
    * Also evaluate these children when they have no sessions this week
-   * (monthly / cycle shortfall and calendar fallback). A week with no session
-   * row is not a missing note and does not emit a weekly under-mandate yellow.
+   * (weekly 0-of-N, monthly / cycle shortfall, and calendar fallback).
    */
   includeStudentIds?: readonly string[];
 };
@@ -776,7 +780,7 @@ function resolveSchoolNameForStudent(
  * Multiple mandates per student (e.g. individual + group) are each checked
  * against sessions assigned to that mandate — second rows are not dropped.
  * No mandate on file → error (import blocked).
- * Weekly yellow lists missed sessions missing a note (noted attended + missed fill the week).
+ * Weekly yellow is fewer submitted sessions than the mandate (attended and missed both count; notes do not).
  * Monthly / cycle shortfall remains a warning. Makeup-auth under-use does not warn.
  * school_day_cycle → densest school-day window over-check (not a silent skip).
  * Pass calendarByStudentId (or calendar) so off-days / year bounds apply.
@@ -826,7 +830,6 @@ export function checkMandatesForWeek(
         calendar,
       });
       errors.push(result.message);
-      warnings.push(...yellowMissingNoteLines(rows, { studentLabel }));
       continue;
     }
 
@@ -845,14 +848,7 @@ export function checkMandatesForWeek(
         monthAnchorDos,
       });
       if (result.over || result.missingMandate) errors.push(result.message);
-      else if (
-        result.under &&
-        result.message &&
-        !isWeeklyAttendedShortfall(studentMandates[0])
-      ) {
-        warnings.push(result.message);
-      }
-      warnings.push(...yellowMissingNoteLines(rows, { studentLabel }));
+      else if (result.under && result.message) warnings.push(result.message);
       continue;
     }
 
@@ -903,20 +899,10 @@ export function checkMandatesForWeek(
             ' If this session covers the group mandate, the note must say no partner available (or group partner absent / makeup session).';
         }
         errors.push(msg);
-      } else if (result.under && result.message && !isWeeklyAttendedShortfall(mandate)) {
+      } else if (result.under && result.message) {
         warnings.push(result.message);
       }
-      const serviceLabel = `${mandate.discipline || mandate.serviceType || 'service'}${
-        mandate.ratioGroup ? ' group' : ' individual'
-      }`;
-      warnings.push(
-        ...yellowMissingNoteLines(byMandateId.get(mandate.id) ?? [], {
-          studentLabel,
-          serviceLabel,
-        }),
-      );
     }
-    warnings.push(...yellowMissingNoteLines(unmatched, { studentLabel }));
     const unmatchedUsed = unmatched.filter(
       (s) => s.attendance === 'attended' && !makeupExemptFromWeeklyMandate(s),
     );
