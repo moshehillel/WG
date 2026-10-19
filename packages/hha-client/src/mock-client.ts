@@ -169,6 +169,26 @@ export class MockHhaClient implements HhaClient {
     return { id, created: true };
   }
 
+  /** New patient every call — same name does not reuse an existing row. */
+  async createPatient(patient: HhaPatient): Promise<UpsertResult> {
+    this.calls.push('createPatient');
+    const id = randomUUID();
+    const stored = { ...patient, id };
+    const place = (key: string | undefined) => {
+      if (!key) return;
+      const prev = this.patients.get(key);
+      // A shared Program Id must not erase the other child's chart.
+      if (prev && prev.id !== id && !this.patients.has(prev.id)) {
+        this.patients.set(prev.id, prev);
+      }
+      this.patients.set(key, stored);
+    };
+    this.patients.set(id, stored);
+    place(patient.externalId);
+    if (patient.caseId && patient.caseId !== patient.externalId) place(patient.caseId);
+    return { id, created: true };
+  }
+
   async upsertContract(contract: Parameters<HhaClient['upsertContract']>[0]): Promise<UpsertResult> {
     this.calls.push('upsertContract');
     const patientKey = contract.patientId;

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
+  canCreatePatient,
+  createPatientDefaultsFromEnv,
   formatHhaPatientMismatch,
   inferCreateScheduleType,
   isAlreadyBilledConfirmFault,
@@ -19,28 +21,42 @@ import {
   extractDisciplineFromServiceType,
   isGroupSchoolBillingServiceName,
   isIndividualSchoolBillingServiceName,
+  canonicalContractProgramName,
+  lookupContractId,
+  schoolBillingDurationMinutes,
+  schoolBillingServiceNameCandidates,
 } from '@white-glove/shared';
 import {
+  dominantProgramTypeForSessions,
   labelHhaTransferError,
   mandateDurationMinutesForSession,
   newId,
   nowIso,
   preferredMandateForSession,
+  sessionShorterThanMandateError,
   presentGroupPeerCount,
   providerDaySessions,
+  hhaOverlapGroupMate,
   sessionBillingKind,
   sessionDurationMinutes,
   sessionPayCodeRate,
   sessionUsesGroupPayRate,
+  isHhaTransferSession,
+  isPaidAbsenceSession,
   soloGroupMandateNoteError,
   sessionServiceTypeRequiredError,
   additionalServiceWithoutChild,
   isAdditionalServiceType,
+  isNoChildPlaceholderName,
+  normalizeProgramTypeKey,
+  resolveWeekProgramType,
+  unambiguousSiblingProgramType,
   weekHhaErrorFromTransfers,
   weekHhaRollup,
   type Mandate,
   type MemoryStore,
   type SessionRow,
+  type Student,
   type WeeklyPeriod,
 } from '@white-glove/tms-db';
 import { acquireHhaWeekLock } from './hha-week-lock.js';
@@ -66,11 +82,11 @@ type StudentForHha = {
 /**
  * Resolve HHA PatientID for a TMS student.
  * Order: trusted hhaPatientId → findPatient (MR/Program Id, admission, name+DOB)
- * → CreatePatient only if no chart was found at all.
+ * → CreatePatient when no chart matches this child's first name, last name, and DOB.
  * A chosen chart (stored id, MR/program-id hit, or name hit) is used only when
  * first name, last name, and date of birth are this TMS child. A mismatch is
- * not saved and does not CreateSchedule. A mismatched MR hit does not create
- * a patient when the name search finds nobody.
+ * not saved and does not CreateSchedule. That mismatch does not block creating
+ * the real child, and the new PatientID is saved only after the returned chart matches.
  * CreatePatient address = school address (when provided). DOB = student.dob from caseload
  * (“Student BirthDate”) or admin edit — no fake DOB.
  */
@@ -94,7 +110,6 @@ export async function resolveHhaPatientId(options: {
   if (!student) return undefined;
 
   const programId = student.programId?.trim() || undefined;
-  let refused: { patientId: string; demo: PatientDemoFields } | undefined;
 
   if (!forceResearch && isTrustedHhaPatientId(student.hhaPatientId, programId)) {
     const stored = student.hhaPatientId!.trim();
@@ -105,7 +120,6 @@ export async function resolveHhaPatientId(options: {
     }
     if (patientIdentityMatches(student, demo)) return stored;
     options.clearStoredPatientId?.(stored);
-    refused = { patientId: stored, demo };
   }
 
   // MR / admission / name search. The MR hit is not used until the chart matches.
@@ -119,9 +133,13 @@ export async function resolveHhaPatientId(options: {
   if (found) {
     const accepted = await acceptPatientChart(hha, student, found);
     if (accepted === found) return found;
-    if (accepted) refused = accepted;
-    // MR (or the search hit) is a different child. Run the existing name search
-    // only — do not invent another fallback and do not create a patient.
+    if (!accepted) {
+      throw new Error(
+        `HHA patient ${found} was found but the chart name and date of birth could not be verified. Refusing to transfer.`,
+      );
+    }
+    // Confirmed different child. The existing name search may still find this child.
+    // Do not invent another fallback. A mismatch does not get the visit.
     const byName =
       student.firstName?.trim() && student.lastName?.trim()
         ? await hha.findPatient({
@@ -133,29 +151,46 @@ export async function resolveHhaPatientId(options: {
     if (byName && byName !== found) {
       const named = await acceptPatientChart(hha, student, byName);
       if (named === byName) return byName;
-      if (named) refused = named;
+      if (!named) {
+        throw new Error(
+          `HHA patient ${byName} was found but the chart name and date of birth could not be verified. Refusing to transfer.`,
+        );
+      }
     }
-    throw new Error(
-      formatHhaPatientMismatch({
-        patientId: (refused ?? { patientId: found, demo: {} }).patientId,
-        chart: refused?.demo ?? {},
-        student,
-      }),
-    );
+    // No name+DOB match. Create this child. upsertPatient would return the MR hit.
   }
 
-  if (refused) {
-    throw new Error(
-      formatHhaPatientMismatch({
-        patientId: refused.patientId,
-        chart: refused.demo,
-        student,
-      }),
-    );
-  }
+  return createPatientWhenUnmatched({ hha, student, schoolAddress, programId });
+}
 
-  // Create only when search found nobody. A rejected chart never reaches here.
-  const created = await hha.upsertPatient({
+const CREATE_PATIENT_FIELD_LABELS: Record<string, string> = {
+  officeId: 'Office',
+  coordinatorId: 'Coordinator',
+  firstName: 'First Name',
+  lastName: 'Last Name',
+  dateOfBirth: 'Date of Birth',
+  address1: 'Address',
+  city: 'City',
+  state: 'State',
+  zipCode: 'Zip Code',
+  caseId: 'Program Id / Case Id',
+  gender: 'Gender',
+};
+
+/**
+ * CreatePatient with the demographics TMS already has.
+ * Does not search again: a prior MR or name hit that failed the name+DOB check
+ * must not be returned or scheduled. The new id is returned only when the
+ * chart HHA gives back is this child.
+ */
+async function createPatientWhenUnmatched(options: {
+  hha: HhaClient;
+  student: StudentForHha;
+  schoolAddress?: SchoolAddressForPatient;
+  programId?: string;
+}): Promise<string> {
+  const { hha, student, schoolAddress, programId } = options;
+  const patient = {
     firstName: student.firstName,
     lastName: student.lastName,
     dateOfBirth: student.dob || undefined,
@@ -166,7 +201,25 @@ export async function resolveHhaPatientId(options: {
     city: schoolAddress?.city?.trim() || undefined,
     state: schoolAddress?.state?.trim() || undefined,
     zipCode: schoolAddress?.zipCode?.trim() || undefined,
-  });
+  };
+  const readiness = canCreatePatient(patient, createPatientDefaultsFromEnv());
+  if (!readiness.ok) {
+    const missingLabels = readiness.missing.map((key) => CREATE_PATIENT_FIELD_LABELS[key] ?? key);
+    throw new Error(
+      `CreatePatient FAILED — missing required field(s): ${missingLabels.join(', ')}.`,
+    );
+  }
+
+  // createPatient does not look up MR or name. upsertPatient would hand back the mismatch.
+  const created = await hha.createPatient(patient);
+  const demo = await hha.getPatientDemographicsFields(created.id);
+  if (!demo.chartLoaded || !patientIdentityMatches(student, demo)) {
+    throw new Error(
+      demo.chartLoaded
+        ? formatHhaPatientMismatch({ patientId: created.id, chart: demo, student })
+        : `CreatePatient returned PatientID ${created.id} but the chart name and date of birth could not be verified. Not saving it.`,
+    );
+  }
   return created.id;
 }
 
@@ -210,6 +263,131 @@ function persistStudentHhaPatientId(
   const student = store.data.students.find((s) => s.id === studentId);
   if (!student || student.hhaPatientId === patientId) return;
   store.upsertStudent({ ...student, hhaPatientId: patientId });
+}
+
+/** CreatePatient requires a birth date. This is not a real student's DOB. */
+const NO_CHILD_PLACEHOLDER_DOB = '2000-01-01';
+
+/**
+ * CreatePatient requires a street address. Used only on a new "no child"
+ * patient when the week and its students have no complete school address.
+ * Never written onto a school or a real child.
+ */
+const NO_CHILD_PLACEHOLDER_ADDRESS: Required<SchoolAddressForPatient> = {
+  address1: '1 Placeholder St',
+  city: 'New York',
+  state: 'NY',
+  zipCode: '10001',
+};
+
+/** Unique Program Id / AdmissionID so each no-child row is a new HHA patient. */
+function noChildCaseId(sessionId: string): string {
+  const hex = createHash('sha256')
+    .update(`${sessionId}|${nowIso()}|${Math.random()}`)
+    .digest('hex');
+  const digits = BigInt(`0x${hex.slice(0, 12)}`).toString(10).padStart(10, '0').slice(0, 10);
+  return `NC${digits}`;
+}
+
+function completeSchoolAddress(
+  school: { id?: string; address1?: string; city?: string; state?: string; zipCode?: string } | undefined,
+): (SchoolAddressForPatient & { schoolId: string }) | undefined {
+  if (!school) return undefined;
+  const address1 = school.address1?.trim();
+  const city = school.city?.trim();
+  const state = school.state?.trim();
+  const zipCode = school.zipCode?.trim();
+  if (!address1 || !city || !state || !zipCode) return undefined;
+  return { address1, city, state, zipCode, schoolId: String(school.id || '').trim() };
+}
+
+/**
+ * Address for a no-child placeholder: the week's school, else a real student
+ * on this week, else any student already on this program type.
+ * Undefined when none of those have a complete address; the caller then puts
+ * NO_CHILD_PLACEHOLDER_ADDRESS on the new patient only.
+ */
+function schoolAddressForNoChild(
+  store: MemoryStore,
+  week: WeeklyPeriod,
+  programType: string,
+): (SchoolAddressForPatient & { schoolId: string }) | undefined {
+  const fromWeek = completeSchoolAddress(store.data.schools.find((s) => s.id === week.schoolId));
+  if (fromWeek) return fromWeek;
+
+  const key = normalizeProgramTypeKey(programType);
+  const onWeek = new Set(
+    store
+      .sessionsForWeek(week.id)
+      .map((s) => String(s.studentId || '').trim())
+      .filter(Boolean),
+  );
+  const ranked = store.data.students
+    .filter((st) => !isNoChildPlaceholderName(st))
+    .filter((st) => onWeek.has(st.id) || (key && normalizeProgramTypeKey(st.programType) === key))
+    .sort((a, b) => Number(onWeek.has(b.id)) - Number(onWeek.has(a.id)));
+  for (const st of ranked) {
+    const addr = completeSchoolAddress(store.data.schools.find((s) => s.id === st.schoolId));
+    if (addr) return addr;
+  }
+  return undefined;
+}
+
+/**
+ * New TMS child + HHA patient (first "no", last "child") on this week's contract.
+ * Never searches or reuses an existing "no child" patient — one patient per row.
+ * Does not write the session's studentId.
+ */
+async function createNoChildPlaceholderForSession(options: {
+  store: MemoryStore;
+  hha: HhaClient;
+  week: WeeklyPeriod;
+  sessionId: string;
+  serviceCode?: string;
+  /** Saved on the no-child row. Does not require a caseload child named "no child". */
+  programType?: string;
+}): Promise<Student> {
+  const { store, hha, week } = options;
+  const programType =
+    canonicalContractProgramName(options.programType) ||
+    canonicalContractProgramName(week.programType) ||
+    canonicalContractProgramName(resolveWeekProgramType(store, week)) ||
+    canonicalContractProgramName(unambiguousSiblingProgramType(store, week));
+  const contractNum = await hha.resolveContractId(programType);
+  if (!contractNum) {
+    throw new Error(
+      `No HHA ContractID for program type "${programType || '(missing)'}" — needed to create a no-child patient for this additional service`,
+    );
+  }
+  const schoolAddress = schoolAddressForNoChild(store, week, programType);
+  const address = schoolAddress ?? NO_CHILD_PLACEHOLDER_ADDRESS;
+  const caseId = noChildCaseId(options.sessionId);
+  const student = store.upsertStudent({
+    id: newId(),
+    schoolId: schoolAddress?.schoolId || String(week.schoolId || '').trim(),
+    firstName: 'no',
+    lastName: 'child',
+    dob: NO_CHILD_PLACEHOLDER_DOB,
+    programId: caseId,
+    programType,
+    hhaPatientId: '',
+    createdAt: nowIso(),
+  });
+  const created = await hha.createPatient({
+    firstName: 'no',
+    lastName: 'child',
+    dateOfBirth: NO_CHILD_PLACEHOLDER_DOB,
+    caseId,
+    externalId: caseId,
+    serviceCode: options.serviceCode?.trim() || undefined,
+    address1: address.address1,
+    city: address.city,
+    state: address.state,
+    zipCode: address.zipCode,
+  });
+  student.hhaPatientId = created.id;
+  store.upsertStudent(student);
+  return student;
 }
 
 /**
@@ -365,17 +543,40 @@ async function locateOrScheduleVisitWithPatientRecovery(options: {
     store.upsertStudent({ ...live, hhaPatientId: '' });
     live.hhaPatientId = '';
 
-    // 2) Search first; 3) CreatePatient only if not found; then persist.
-    const recovered = await resolveHhaPatientId({
-      hha,
-      student: {
-        ...live,
-        hhaPatientId: '',
-        serviceCode: options.visit.serviceCode || live.programType,
-      },
-      schoolAddress: schoolAddressForStudent(store, live),
-      forceResearch: true,
-    });
+    // 2) Real children: search first, CreatePatient only if not found.
+    //    No-child placeholders: always a new patient (never reuse another "no child").
+    let recovered: string | undefined;
+    if (isNoChildPlaceholderName(live)) {
+      const caseId = noChildCaseId(live.id);
+      const addr = schoolAddressForStudent(store, live);
+      const created = await hha.createPatient({
+        firstName: 'no',
+        lastName: 'child',
+        dateOfBirth: live.dob?.trim() || NO_CHILD_PLACEHOLDER_DOB,
+        caseId,
+        externalId: caseId,
+        serviceCode: options.visit.serviceCode || undefined,
+        address1: addr?.address1,
+        city: addr?.city,
+        state: addr?.state,
+        zipCode: addr?.zipCode,
+      });
+      live.programId = caseId;
+      live.hhaPatientId = created.id;
+      store.upsertStudent(live);
+      recovered = created.id;
+    } else {
+      recovered = await resolveHhaPatientId({
+        hha,
+        student: {
+          ...live,
+          hhaPatientId: '',
+          serviceCode: options.visit.serviceCode || live.programType,
+        },
+        schoolAddress: schoolAddressForStudent(store, live),
+        forceResearch: true,
+      });
+    }
     if (!recovered) {
       throw new Error(
         `HHA PatientID ${patientId} invalid for agency (ErrorID=-56); search/create found no patient for ${live.firstName} ${live.lastName}`.trim(),
@@ -445,8 +646,18 @@ export async function transferLockedWeek(options: {
   week: WeeklyPeriod;
   hha: HhaClient;
   actorId: string;
+  /** Flush after each session write so a dropped HTTP response still shows triage. */
+  afterSession?: () => Promise<void>;
 }): Promise<{ ok: boolean; transferred: number; errors: string[] }> {
   const { store, week, hha } = options;
+  const checkpoint = async () => {
+    if (!options.afterSession) return;
+    try {
+      await options.afterSession();
+    } catch (err) {
+      console.error('[hha-transfer] checkpoint persist failed', err);
+    }
+  };
   if (week.status !== 'locked' && week.status !== 'signed') {
     return { ok: false, transferred: 0, errors: ['Week must be signed or locked before HHA.'] };
   }
@@ -455,15 +666,28 @@ export async function transferLockedWeek(options: {
     return { ok: false, transferred: 0, errors: [lock.error] };
   }
   try {
-  const provider = store.data.providers.find((p) => p.id === week.providerId);
-  const sessions = store
-    .sessionsForWeek(week.id)
-    .filter((s) => s.attendance === 'attended' || s.attendance === 'makeup');
+  let workingWeek = week;
+  // Locked weeks keep a stamped programType forever. If caseload was renamed
+  // (e.g. Related Services → Valley Stream School District 24) after lock, the
+  // dashboard still shows the stale label. Refresh when stamp has no HHA
+  // ContractID but session students do — transfer already uses student.programType.
+  const liveProgram = dominantProgramTypeForSessions(
+    store,
+    store.sessionsForWeek(workingWeek.id),
+  );
+  const stampedProgram = String(workingWeek.programType || '').trim();
+  if (
+    liveProgram &&
+    lookupContractId(liveProgram) &&
+    (!stampedProgram || !lookupContractId(stampedProgram))
+  ) {
+    workingWeek = store.upsertWeek({ ...workingWeek, programType: liveProgram });
+  }
+  const provider = store.data.providers.find((p) => p.id === workingWeek.providerId);
+  const sessions = store.sessionsForWeek(workingWeek.id).filter((s) => isHhaTransferSession(s));
   const errors: string[] = [];
   let transferred = 0;
   for (const session of sessions) {
-    // Documentation / meetings / etc. with no student are not patient visits.
-    if (additionalServiceWithoutChild(session)) continue;
     const existing = store.transferForSession(session.id);
     const priorVisitId = existing?.hhaVisitId?.trim() || '';
     const priorVisitIdOk = /^\d+$/.test(priorVisitId);
@@ -485,6 +709,7 @@ export async function transferLockedWeek(options: {
         updatedAt: nowIso(),
       });
       transferred += 1;
+      await checkpoint();
       continue;
     }
     if (existing?.status === 'failed' && priorVisitIdOk && alreadyBilledErr) {
@@ -495,9 +720,10 @@ export async function transferLockedWeek(options: {
         updatedAt: nowIso(),
       });
       transferred += 1;
+      await checkpoint();
       continue;
     }
-    const student = store.data.students.find((s) => s.id === session.studentId);
+    let student = store.data.students.find((s) => s.id === session.studentId);
     let scheduledVisitId = priorVisitId;
     try {
       if (!provider) {
@@ -514,9 +740,15 @@ export async function transferLockedWeek(options: {
       const matchedMandate = preferredMandateForSession(session, store.data.mandates);
       const mandateMinutes = mandateDurationMinutesForSession(session, store.data.mandates);
       const billingKind = sessionBillingKind(session);
-      // School billing duration bucket from mandate (not Frontline clock rounding).
-      // Fall back to session clock when mandate is unmatched / missing RS Duration —
-      // otherwise buildSchoolBillingServiceName fails with duration=(missing).
+      // Edelia: school billing and pay follow the mandate length, never the clock.
+      // A visit shorter than that mandate is blocked (15 min on a 30-min mandate).
+      // Additional services are the exception and still use the clock.
+      // A group-mandate child seen individually (no peer / individual tag) is
+      // billed and paid as individual at that same mandate length.
+      const shortErr = sessionShorterThanMandateError(session, store.data.mandates);
+      if (shortErr) {
+        throw new Error(shortErr);
+      }
       const billingDurationMinutes =
         billingKind === 'school' ? (mandateMinutes ?? clockMinutes) : clockMinutes;
       // Peers first: Moshe rule — never bill group while paying individual.
@@ -525,7 +757,7 @@ export async function transferLockedWeek(options: {
       const ratePeers = providerDaySessions(
         store.data.sessions,
         store.data.weeks,
-        week.providerId,
+        workingWeek.providerId,
         session.dateOfService,
         session.id,
       );
@@ -542,6 +774,7 @@ export async function transferLockedWeek(options: {
         const soloNoteErr = soloGroupMandateNoteError({
           notes: session.notes || '',
           serviceType: session.serviceType || '',
+          cptCodes: session.cptCodes,
           studentId: session.studentId,
           attendance: session.attendance,
           mandates: store.data.mandates,
@@ -561,13 +794,49 @@ export async function transferLockedWeek(options: {
         billingKind === 'school' ? matchedMandate?.billingServiceName?.trim() : '';
       // Multi-peer: rewrite legacy individual stamp → group.
       // Solo: rewrite group stamp → individual (never group-bill + individual-pay).
+      // Stored name follows the mandate duration. A real group stays on the
+      // group code. Seen individually rewrites that stamp to the individual code.
+      const storedDuration = schoolBillingDurationMinutes(storedBillingName);
+      const storedDurationOk =
+        billingDurationMinutes == null ||
+        storedDuration == null ||
+        storedDuration === billingDurationMinutes;
       const storedOkForVisit =
         Boolean(storedBillingName) &&
+        storedDurationOk &&
         (useGroupBilling
           ? !isIndividualSchoolBillingServiceName(storedBillingName)
           : !isGroupSchoolBillingServiceName(storedBillingName));
-      const billingServiceName =
-        (storedOkForVisit ? storedBillingName : '') ||
+      const clockCandidates = schoolBillingServiceNameCandidates({
+        discipline,
+        kind: billingKind,
+        durationMinutes: billingDurationMinutes,
+        group: useGroupBilling,
+      });
+      const mandateGroupName =
+        useGroupBilling && storedBillingName && isGroupSchoolBillingServiceName(storedBillingName)
+          ? storedBillingName
+          : useGroupBilling
+            ? buildSchoolBillingServiceName({
+                discipline,
+                kind: billingKind,
+                durationMinutes: mandateMinutes ?? undefined,
+                group: true,
+              })
+            : undefined;
+      const nameCandidates = [
+        ...(storedOkForVisit && storedBillingName ? [storedBillingName] : []),
+        ...clockCandidates.filter((name) => name !== storedBillingName),
+      ];
+      if (
+        mandateGroupName &&
+        isGroupSchoolBillingServiceName(mandateGroupName) &&
+        !nameCandidates.includes(mandateGroupName)
+      ) {
+        nameCandidates.push(mandateGroupName);
+      }
+      let billingServiceName =
+        nameCandidates[0] ||
         buildSchoolBillingServiceName({
           discipline,
           kind: billingKind,
@@ -587,21 +856,38 @@ export async function transferLockedWeek(options: {
         discipline ||
         session.serviceType ||
         undefined;
-      let patientId = await resolveHhaPatientId({
-        hha,
-        student: student
-          ? { ...student, serviceCode: createServiceHint }
-          : undefined,
-        schoolAddress: schoolAddressForStudent(store, student),
-        clearStoredPatientId: (badId) => {
-          if (!student) return;
-          const live = store.data.students.find((s) => s.id === student.id);
-          if (!live || (live.hhaPatientId || '').trim() !== badId) return;
-          live.hhaPatientId = '';
-          store.upsertStudent({ ...live, hhaPatientId: '' });
-          student.hhaPatientId = '';
-        },
-      });
+      let patientId: string | undefined;
+      const paidAbsenceNoChild =
+        !String(session.studentId || '').trim() && isPaidAbsenceSession(session);
+      if (additionalServiceWithoutChild(session) || paidAbsenceNoChild) {
+        // New patient on this week's contract, then CreateSchedule on that patient.
+        // Session stays without a studentId so it is not attached to a real child.
+        student = await createNoChildPlaceholderForSession({
+          store,
+          hha,
+          week: workingWeek,
+          sessionId: session.id,
+          serviceCode: createServiceHint,
+          programType: session.programType,
+        });
+        patientId = student.hhaPatientId;
+      } else {
+        patientId = await resolveHhaPatientId({
+          hha,
+          student: student
+            ? { ...student, serviceCode: createServiceHint }
+            : undefined,
+          schoolAddress: schoolAddressForStudent(store, student),
+          clearStoredPatientId: (badId) => {
+            if (!student) return;
+            const live = store.data.students.find((s) => s.id === student.id);
+            if (!live || (live.hhaPatientId || '').trim() !== badId) return;
+            live.hhaPatientId = '';
+            store.upsertStudent({ ...live, hhaPatientId: '' });
+            student.hhaPatientId = '';
+          },
+        });
+      }
       if (!patientId) {
         throw new Error(`No HHA patient for ${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim());
       }
@@ -618,14 +904,19 @@ export async function transferLockedWeek(options: {
           `No HHA ContractID for program type "${student?.programType?.trim() || '(missing)'}" — needed for patient primary contract / CreateSchedule`,
         );
       }
-      const serviceCodeId = await hha.resolveServiceCodeId(
-        billingServiceName,
-        contractNum,
-        student?.programType,
-      );
+      const tryNames = nameCandidates.length ? nameCandidates : [billingServiceName];
+      let serviceCodeId: string | undefined;
+      for (const name of tryNames) {
+        const id = await hha.resolveServiceCodeId(name, contractNum, student?.programType);
+        if (!id) continue;
+        billingServiceName = name;
+        serviceCodeId = id;
+        break;
+      }
       if (!serviceCodeId) {
+        const also = tryNames.length > 1 ? ` (also tried ${tryNames.slice(1).join(', ')})` : '';
         throw new Error(
-          `Service code "${billingServiceName}" not found in HHA billing codes for this contract — create it under the contract (case-insensitive name match)`,
+          `Service code "${tryNames[0]}" not found in HHA billing codes for this contract — create it under the contract (case-insensitive name match)${also}`,
         );
       }
       // Existing HHA patients may be locked to PCA/RN/OT-only AcceptedServices.
@@ -669,7 +960,7 @@ export async function transferLockedWeek(options: {
       });
       if (!pay) {
         throw new Error(
-          `No HHA pay code rate for session (discipline=${discipline ?? '(missing)'}, attendance=${session.attendance}) — set provider duration/group/eval/additional rates`,
+          `No HHA pay code rate for session (discipline=${discipline ?? '(missing)'}, attendance=${session.attendance}${isPaidAbsenceSession(session) ? ', paid absence' : ''}) — set provider duration/group/eval/additional rates`,
         );
       }
       const payCodeId = await hha.resolvePayCodeId(pay.payCodeName);
@@ -704,6 +995,22 @@ export async function transferLockedWeek(options: {
           ? 'Skilled'
           : 'Non-Skilled';
 
+      // HHA CreateSchedule requires PrimaryBillTo Minutes === schedule window, and the
+      // service-code unit must match that window. PT School 30 + 60-min clock → ErrorID=-11.
+      const billingUnitMinutes = schoolBillingDurationMinutes(billingServiceName);
+      if (
+        billingKind === 'school' &&
+        billingUnitMinutes != null &&
+        clockMinutes != null &&
+        billingUnitMinutes !== clockMinutes
+      ) {
+        throw new Error(
+          `Session clock is ${clockMinutes} min but HHA billing "${billingServiceName}" is ${billingUnitMinutes} min — ` +
+            `the rate and service code stay on the mandate. Change the session times to ${billingUnitMinutes} min, then re-send. ` +
+            `CreateSchedule fails with ErrorID=-11 when these disagree.`,
+        );
+      }
+
       const priorVisitId = existing?.hhaVisitId?.trim() || '';
       const scheduled = await locateOrScheduleVisitWithPatientRecovery({
         store,
@@ -727,7 +1034,7 @@ export async function transferLockedWeek(options: {
           programType: student?.programType,
           providerName: `${provider.firstName} ${provider.lastName}`,
           payRate: String(rate),
-          // Visit clock length stays Frontline begin/end; pay/billing buckets use mandate above.
+          // Must equal schedule window (begin/end). School billing name comes from mandate above.
           durationMinutes: clockMinutes ?? undefined,
         },
       });
@@ -740,7 +1047,7 @@ export async function transferLockedWeek(options: {
       store.upsertTransfer({
         id: existing?.id || newId(),
         sessionId: session.id,
-        weekId: week.id,
+        weekId: workingWeek.id,
         status: 'confirmed',
         hhaVisitId: result.id,
         lastError: '',
@@ -748,6 +1055,7 @@ export async function transferLockedWeek(options: {
         updatedAt: nowIso(),
       });
       transferred += 1;
+      await checkpoint();
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
       // -401 Already Billed: visit is done in HHA for payroll — keep/restore confirmed, do not fail week.
@@ -756,7 +1064,7 @@ export async function transferLockedWeek(options: {
         store.upsertTransfer({
           id: existing?.id || newId(),
           sessionId: session.id,
-          weekId: week.id,
+          weekId: workingWeek.id,
           status: 'confirmed',
           hhaVisitId: visitFromErr || existing?.hhaVisitId || '',
           lastError: '',
@@ -764,6 +1072,7 @@ export async function transferLockedWeek(options: {
           updatedAt: nowIso(),
         });
         transferred += 1;
+        await checkpoint();
         continue;
       }
       // Surface clearer admin text for overloaded ErrorID=-310 variants.
@@ -772,10 +1081,35 @@ export async function transferLockedWeek(options: {
         const peer =
           raw.match(/overlapping with Patient:\s*\[([^\]]+)\]/i)?.[1]?.trim() ||
           raw.match(/Patient:\s*\[([^\]]+)\]/i)?.[1]?.trim();
-        message =
-          `HHA caregiver shift overlaps an existing visit` +
-          (peer ? ` for ${peer}` : '') +
-          ` at this time — cancel/reschedule the conflicting HHA visit or change the TMS session time, then re-send. (${raw})`;
+        const groupMate = hhaOverlapGroupMate({
+          message: raw,
+          candidate: session,
+          peers: providerDaySessions(
+            store.data.sessions,
+            store.data.weeks,
+            workingWeek.providerId,
+            session.dateOfService,
+            session.id,
+          ),
+          mandates: store.data.mandates,
+          students: store.data.students,
+        });
+        if (groupMate) {
+          const mateName = `${groupMate.firstName || ''} ${groupMate.lastName || ''}`.trim() || peer || 'the group mate';
+          // HHA CreateSchedule has no overlap bypass. CreateLinkedSchedule is for payer-linked
+          // contracts, not a second patient on the same caregiver clock. Each group child still
+          // needs their own visit; the office must allow overlapping caregiver shifts.
+          message =
+            `This is a group visit at the same time as ${mateName}. ` +
+            `HHA already has that group mate and will not put this caregiver on a second patient at that time. ` +
+            `Do not cancel the group mate. ` +
+            `CreateSchedule has no group-overlap exception — allow overlapping caregiver shifts in HHA, then re-send. (${raw})`;
+        } else {
+          message =
+            `HHA caregiver shift overlaps an existing visit` +
+            (peer ? ` for ${peer}` : '') +
+            ` at this time — cancel/reschedule the conflicting HHA visit or change the TMS session time, then re-send. (${raw})`;
+        }
       } else if (/only select OT Service Code/i.test(raw) || /Service code inconsistency/i.test(raw)) {
         message =
           `HHA patient AcceptedServices does not allow this visit’s service code (often OT-only patient + PT visit). ` +
@@ -798,27 +1132,28 @@ export async function transferLockedWeek(options: {
       store.upsertTransfer({
         id: existing?.id || newId(),
         sessionId: session.id,
-        weekId: week.id,
+        weekId: workingWeek.id,
         status: 'failed',
         hhaVisitId: visitFromErr,
         lastError: message,
         payloadHash: hashSession(session),
         updatedAt: nowIso(),
       });
+      await checkpoint();
     }
   }
   // Double-send can leave a blank failed row beside a confirmed sibling. Drop it
   // so triage cannot show a -310 (or other) error for a visit already in HHA.
-  const droppedStaleFailed = store.dropSupersededFailedTransfers({ weekId: week.id });
-  const rollup = weekHhaRollup(store, week.id);
+  const droppedStaleFailed = store.dropSupersededFailedTransfers({ weekId: workingWeek.id });
+  const rollup = weekHhaRollup(store, workingWeek.id);
   store.upsertWeek({
-    ...week,
+    ...workingWeek,
     // Derive from all eligible sessions — never mark the week confirmed while failures remain.
     hhaStatus: rollup.status,
     // Triage text = currently-failed transfers only (do not keep stale -401 blobs after heal).
-    hhaError: weekHhaErrorFromTransfers(store, week.id),
+    hhaError: weekHhaErrorFromTransfers(store, workingWeek.id),
   });
-  store.audit(options.actorId, 'hha_transfer', `week:${week.id}`, null, {
+  store.audit(options.actorId, 'hha_transfer', `week:${workingWeek.id}`, null, {
     transferred,
     errors,
     droppedStaleFailed: droppedStaleFailed.length,
@@ -826,6 +1161,7 @@ export async function transferLockedWeek(options: {
       ? 'drop superseded failed HHA transfer'
       : '',
   });
+  await checkpoint();
   return { ok: errors.length === 0, transferred, errors };
   } finally {
     await lock.release();
