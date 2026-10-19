@@ -27,6 +27,13 @@ export type { PatientPlacement, ReuseContractPlacementResult } from './placement
 export { resolvePlacementForService } from './resolve-placement.js';
 export { AmbiguousPatientNameError } from './patient-errors.js';
 export {
+  formatHhaPatientMismatch,
+  patientDobKey,
+  patientIdentityMatches,
+  patientNameKey,
+} from './patient-identity.js';
+export type { PatientIdentityChart, PatientIdentityStudent } from './patient-identity.js';
+export {
   isAlreadyDischargedError,
   isInvalidHhaPatientError,
   isInvalidHhaVisitError,

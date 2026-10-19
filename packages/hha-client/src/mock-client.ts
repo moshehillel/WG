@@ -123,6 +123,10 @@ export class MockHhaClient implements HhaClient {
       [...this.patients.values()].find((p) => p.id === patientId);
     if (!patient) return {};
     return {
+      chartLoaded: true,
+      firstName: patient.firstName,
+      lastName: patient.lastName,
+      dateOfBirth: patient.dateOfBirth,
       gender: patient.gender,
       address1: patient.address1,
       city: patient.city,

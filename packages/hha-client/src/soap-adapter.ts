@@ -322,7 +322,15 @@ export class SoapHhaClientAdapter implements HhaClient {
     const zip4 = xmlFirstTag(xml, 'Zip4');
     const zipCode =
       zip && zip4 && !zip.includes('-') ? `${zip}-${zip4}` : zip || undefined;
+    const rawDob =
+      xmlFirstTag(xml, 'DOB') ??
+      xmlFirstTag(xml, 'BirthDate') ??
+      xmlFirstTag(xml, 'DateOfBirth');
     return {
+      chartLoaded: true,
+      firstName: xmlFirstTag(xml, 'FirstName') || undefined,
+      lastName: xmlFirstTag(xml, 'LastName') || undefined,
+      dateOfBirth: rawDob || undefined,
       gender: rawGender ? normalizeHhaGender(rawGender) : undefined,
       address1: xmlFirstTag(xml, 'Address1') || undefined,
       city: xmlFirstTag(xml, 'City') || undefined,

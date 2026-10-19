@@ -92,6 +92,15 @@ export interface PatientDemoFields {
   city?: string;
   state?: string;
   zipCode?: string;
+  firstName?: string;
+  lastName?: string;
+  dateOfBirth?: string;
+  /**
+   * True when this client actually returned a chart.
+   * A mock stub PatientID with no chart leaves this unset so tests can still
+   * pass a stored id. A loaded chart must be compared before it is used.
+   */
+  chartLoaded?: boolean;
 }
 
 /** Result of ensuring HHA AcceptedServices includes required disciplines. */

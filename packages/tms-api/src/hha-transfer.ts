@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
 import {
+  formatHhaPatientMismatch,
   inferCreateScheduleType,
   isAlreadyBilledConfirmFault,
   isInvalidHhaPatientError,
   isInvalidHhaVisitError,
   isTrustedHhaPatientId,
   mapServiceToDiscipline,
+  patientIdentityMatches,
   payCodeLookupCandidates,
   psDateToIso,
   type HhaClient,
+  type PatientDemoFields,
 } from '@white-glove/hha-client';
 import {
   buildPayCodeName,
@@ -63,7 +66,11 @@ type StudentForHha = {
 /**
  * Resolve HHA PatientID for a TMS student.
  * Order: trusted hhaPatientId → findPatient (MR/Program Id, admission, name+DOB)
- * → CreatePatient only if no match. Never create when a search hit exists.
+ * → CreatePatient only if no chart was found at all.
+ * A chosen chart (stored id, MR/program-id hit, or name hit) is used only when
+ * first name, last name, and date of birth are this TMS child. A mismatch is
+ * not saved and does not CreateSchedule. A mismatched MR hit does not create
+ * a patient when the name search finds nobody.
  * CreatePatient address = school address (when provided). DOB = student.dob from caseload
  * (“Student BirthDate”) or admin edit — no fake DOB.
  */
@@ -77,16 +84,31 @@ export async function resolveHhaPatientId(options: {
    * Used after ErrorID=-56 (invalid PatientID for agency).
    */
   forceResearch?: boolean;
+  /**
+   * Stored hhaPatientId failed the name+DOB check. Caller clears it so the
+   * next send cannot reuse the other child. Matching ids are not cleared.
+   */
+  clearStoredPatientId?: (patientId: string) => void;
 }): Promise<string | undefined> {
   const { hha, student, schoolAddress, forceResearch } = options;
   if (!student) return undefined;
 
   const programId = student.programId?.trim() || undefined;
+  let refused: { patientId: string; demo: PatientDemoFields } | undefined;
+
   if (!forceResearch && isTrustedHhaPatientId(student.hhaPatientId, programId)) {
-    return student.hhaPatientId!.trim();
+    const stored = student.hhaPatientId!.trim();
+    const demo = await hha.getPatientDemographicsFields(stored);
+    if (!demo.chartLoaded) {
+      // No chart on this client (unit-test stub). A live chart is always compared.
+      return stored;
+    }
+    if (patientIdentityMatches(student, demo)) return stored;
+    options.clearStoredPatientId?.(stored);
+    refused = { patientId: stored, demo };
   }
 
-  // Always search before create (MR / admission / name+DOB inside findPatient).
+  // MR / admission / name search. The MR hit is not used until the chart matches.
   const found = await hha.findPatient({
     caseId: programId,
     externalId: programId,
@@ -94,9 +116,45 @@ export async function resolveHhaPatientId(options: {
     lastName: student.lastName,
     dateOfBirth: student.dob || undefined,
   });
-  if (found) return found;
+  if (found) {
+    const accepted = await acceptPatientChart(hha, student, found);
+    if (accepted === found) return found;
+    if (accepted) refused = accepted;
+    // MR (or the search hit) is a different child. Run the existing name search
+    // only — do not invent another fallback and do not create a patient.
+    const byName =
+      student.firstName?.trim() && student.lastName?.trim()
+        ? await hha.findPatient({
+            firstName: student.firstName,
+            lastName: student.lastName,
+            dateOfBirth: student.dob || undefined,
+          })
+        : undefined;
+    if (byName && byName !== found) {
+      const named = await acceptPatientChart(hha, student, byName);
+      if (named === byName) return byName;
+      if (named) refused = named;
+    }
+    throw new Error(
+      formatHhaPatientMismatch({
+        patientId: (refused ?? { patientId: found, demo: {} }).patientId,
+        chart: refused?.demo ?? {},
+        student,
+      }),
+    );
+  }
 
-  // Create only when no HHA child matches — upsertPatient also re-checks before CreatePatient.
+  if (refused) {
+    throw new Error(
+      formatHhaPatientMismatch({
+        patientId: refused.patientId,
+        chart: refused.demo,
+        student,
+      }),
+    );
+  }
+
+  // Create only when search found nobody. A rejected chart never reaches here.
   const created = await hha.upsertPatient({
     firstName: student.firstName,
     lastName: student.lastName,
@@ -110,6 +168,22 @@ export async function resolveHhaPatientId(options: {
     zipCode: schoolAddress?.zipCode?.trim() || undefined,
   });
   return created.id;
+}
+
+/**
+ * Loaded chart that is this child → the PatientID.
+ * Loaded chart that is someone else → that chart, so the caller can refuse it.
+ * No chart → undefined (caller must not treat the id as verified).
+ */
+async function acceptPatientChart(
+  hha: HhaClient,
+  student: StudentForHha,
+  patientId: string,
+): Promise<string | { patientId: string; demo: PatientDemoFields } | undefined> {
+  const demo = await hha.getPatientDemographicsFields(patientId);
+  if (!demo.chartLoaded) return undefined;
+  if (patientIdentityMatches(student, demo)) return patientId;
+  return { patientId, demo };
 }
 
 function schoolAddressForStudent(
@@ -519,6 +593,14 @@ export async function transferLockedWeek(options: {
           ? { ...student, serviceCode: createServiceHint }
           : undefined,
         schoolAddress: schoolAddressForStudent(store, student),
+        clearStoredPatientId: (badId) => {
+          if (!student) return;
+          const live = store.data.students.find((s) => s.id === student.id);
+          if (!live || (live.hhaPatientId || '').trim() !== badId) return;
+          live.hhaPatientId = '';
+          store.upsertStudent({ ...live, hhaPatientId: '' });
+          student.hhaPatientId = '';
+        },
       });
       if (!patientId) {
         throw new Error(`No HHA patient for ${student?.firstName ?? ''} ${student?.lastName ?? ''}`.trim());

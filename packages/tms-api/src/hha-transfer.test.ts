@@ -129,19 +129,27 @@ describe('ensurePatientAuthorizationForVisit', () => {
 });
 
 describe('resolveHhaPatientId', () => {
-  it('uses trusted hhaPatientId without calling find', async () => {
+  it('uses trusted hhaPatientId without calling find when the chart is the same child', async () => {
     const hha = new MockHhaClient();
+    hha.patients.set('999001', {
+      id: '999001',
+      firstName: 'ANA',
+      lastName: 'Binaj PT*',
+      dateOfBirth: '03/15/2018',
+    });
     const id = await resolveHhaPatientId({
       hha,
       student: {
         firstName: 'Ana',
         lastName: 'Binaj',
+        dob: '2018-03-15',
         programId: '49247',
         hhaPatientId: '999001',
       },
     });
     expect(id).toBe('999001');
     expect(hha.calls).not.toContain('findPatient');
+    expect(hha.calls).not.toContain('upsertPatient');
   });
 
   it('rejects Program Id copied into hhaPatientId and finds by caseId', async () => {
@@ -149,6 +157,7 @@ describe('resolveHhaPatientId', () => {
     const existing = await hha.upsertPatient({
       firstName: 'Ana',
       lastName: 'Binaj',
+      dateOfBirth: '2018-03-15',
       caseId: '49247',
       externalId: '49247',
     });
@@ -158,6 +167,7 @@ describe('resolveHhaPatientId', () => {
       student: {
         firstName: 'Ana',
         lastName: 'Binaj',
+        dob: '2018-03-15',
         programId: '49247',
         // Footgun: Program Id mistakenly stored as PatientID
         hhaPatientId: '49247',
@@ -168,25 +178,30 @@ describe('resolveHhaPatientId', () => {
     expect(hha.calls).not.toContain('upsertPatient');
   });
 
-  it('finds by Program Id before create when name would miss', async () => {
+  it('rejects an MR hit that is a different child and does not create a patient', async () => {
     const hha = new MockHhaClient();
     const existing = await hha.upsertPatient({
-      firstName: 'Different',
-      lastName: 'Name',
-      caseId: '922522794',
-      externalId: '922522794',
+      firstName: 'Elijah',
+      lastName: 'George',
+      dateOfBirth: '2018-10-03',
+      caseId: '258268743',
+      externalId: '258268743',
     });
     hha.calls.length = 0;
-    const id = await resolveHhaPatientId({
-      hha,
-      student: {
-        firstName: 'Omar',
-        lastName: 'Abedin',
-        programId: '922522794',
-        hhaPatientId: '',
-      },
-    });
-    expect(id).toBe(existing.id);
+    await expect(
+      resolveHhaPatientId({
+        hha,
+        student: {
+          firstName: 'Max',
+          lastName: 'Campbell',
+          dob: '2018-03-12',
+          programId: '258268743',
+          hhaPatientId: '',
+        },
+      }),
+    ).rejects.toThrow(
+      `HHA patient ${existing.id} is Elijah George (dob 2018-10-03), not Max Campbell (dob 2018-03-12). Refusing to transfer.`,
+    );
     expect(hha.calls.filter((c) => c === 'upsertPatient')).toHaveLength(0);
   });
 
@@ -219,6 +234,176 @@ describe('resolveHhaPatientId', () => {
   });
 });
 
+describe('transfer refuses a different HHA child', () => {
+  function seedMaxWeek(store: MemoryStore, hhaPatientId: string) {
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Regine',
+      lastName: 'Souverain',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Max',
+      lastName: 'Campbell',
+      dob: '2018-03-12',
+      programId: '258268743',
+      programType: 'Westbury UFSD',
+      hhaPatientId,
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-09-21',
+      status: 'locked',
+      signerName: 'R',
+      signerEmail: 'r@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-24',
+      beginTime: '09:00',
+      endTime: '09:30',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: 'School',
+      notes: 'eval',
+      aiFlags: [],
+    });
+    seedSchoolMandate(store, {
+      studentId: student.id,
+      providerId: provider.id,
+      durationMinutes: 30,
+      serviceType: 'PT School',
+    });
+    return { student, week };
+  }
+
+  it('does not save an MR hit whose name and date of birth are a different child', async () => {
+    const store = new MemoryStore();
+    const { student, week } = seedMaxWeek(store, '');
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+    const elijah = await hha.upsertPatient({
+      firstName: 'Elijah',
+      lastName: 'George',
+      dateOfBirth: '2018-10-03',
+      caseId: '258268743',
+      externalId: '258268743',
+    });
+    hha.calls.length = 0;
+
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+
+    expect(result.ok).toBe(false);
+    expect(result.transferred).toBe(0);
+    expect(result.errors[0]).toContain(
+      `HHA patient ${elijah.id} is Elijah George (dob 2018-10-03), not Max Campbell (dob 2018-03-12). Refusing to transfer.`,
+    );
+    expect(store.data.students.find((s) => s.id === student.id)?.hhaPatientId).toBe('');
+    expect(hha.calls).not.toContain('upsertPatient');
+    expect(hha.calls).not.toContain('locateOrScheduleVisit');
+    expect([...hha.visits.values()]).toHaveLength(0);
+  });
+
+  it('accepts an MR hit with the same name and date of birth', async () => {
+    const store = new MemoryStore();
+    const { student, week } = seedMaxWeek(store, '');
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+    const max = await hha.upsertPatient({
+      firstName: 'MAX',
+      lastName: 'Campbell PT*',
+      dateOfBirth: '03/12/2018',
+      caseId: '258268743',
+      externalId: '258268743',
+    });
+    hha.calls.length = 0;
+
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(store.data.students.find((s) => s.id === student.id)?.hhaPatientId).toBe(max.id);
+    const visit = [...hha.visits.values()][0];
+    expect(visit?.patientId).toBe(max.id);
+  });
+
+  it('does not reuse a stored hhaPatientId that is a different child, and clears it', async () => {
+    const store = new MemoryStore();
+    const { student, week } = seedMaxWeek(store, '23975457');
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+    hha.patients.set('23975457', {
+      id: '23975457',
+      firstName: 'Elijah',
+      lastName: 'George',
+      dateOfBirth: '2018-10-03',
+      caseId: '258268743',
+      externalId: '258268743',
+    });
+    hha.calls.length = 0;
+
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]).toContain(
+      'HHA patient 23975457 is Elijah George (dob 2018-10-03), not Max Campbell (dob 2018-03-12). Refusing to transfer.',
+    );
+    expect(store.data.students.find((s) => s.id === student.id)?.hhaPatientId).toBe('');
+    expect(hha.calls).not.toContain('upsertPatient');
+    expect(hha.calls).not.toContain('locateOrScheduleVisit');
+    expect([...hha.visits.values()]).toHaveLength(0);
+    expect(hha.patients.get('23975457')?.firstName).toBe('Elijah');
+  });
+
+  it('keeps a stored hhaPatientId when the chart is still this child', async () => {
+    const store = new MemoryStore();
+    const { student, week } = seedMaxWeek(store, '25149934');
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
+    hha.patients.set('25149934', {
+      id: '25149934',
+      firstName: 'Max',
+      lastName: 'Campbell',
+      dateOfBirth: '2018-03-12',
+      caseId: '258268743',
+      externalId: '258268743',
+    });
+    hha.calls.length = 0;
+
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+
+    expect(result.ok).toBe(true);
+    expect(store.data.students.find((s) => s.id === student.id)?.hhaPatientId).toBe('25149934');
+    expect(hha.calls).not.toContain('findPatient');
+    expect([...hha.visits.values()][0]?.patientId).toBe('25149934');
+  });
+});
+
 describe('transferLockedWeek Program Id', () => {
   it('links student via programId and confirms transfer with school billing + pay codes', async () => {
     const store = new MemoryStore();
@@ -246,7 +431,7 @@ describe('transferLockedWeek Program Id', () => {
       schoolId: '',
       firstName: 'Ana',
       lastName: 'Binaj',
-      dob: '',
+      dob: '2016-04-02',
       programId: '1012074',
       programType: 'Baldwin UFSD',
       hhaPatientId: '',
@@ -289,8 +474,9 @@ describe('transferLockedWeek Program Id', () => {
     const hha = new MockHhaClient();
     hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-school-30');
     const existing = await hha.upsertPatient({
-      firstName: 'X',
-      lastName: 'Y',
+      firstName: 'Ana',
+      lastName: 'Binaj',
+      dateOfBirth: '2016-04-02',
       caseId: '1012074',
       externalId: '1012074',
     });
