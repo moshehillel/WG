@@ -473,14 +473,20 @@ export class MemoryStore {
     const rows = this.data.hhaTransfers.filter((t) => t.sessionId === sessionId);
     if (!rows.length) return undefined;
     const rank = (s: string | undefined) =>
-      s === 'confirmed' ? 0 : s === 'pending' || s === 'sent' ? 1 : s === 'failed' ? 2 : 3;
+      s === 'confirmed' || s === 'manual'
+        ? 0
+        : s === 'pending' || s === 'sent'
+          ? 1
+          : s === 'failed'
+            ? 2
+            : 3;
     return [...rows].sort((a, b) => rank(a.status) - rank(b.status))[0];
   }
 
   /**
-   * Remove failed transfer rows when the same session already has a confirmed
-   * or sent+VisitID row. Sessions whose only row is still failed are left alone.
-   * Does not delete confirmed rows and does not cancel HHA visits.
+   * Remove failed transfer rows when the same session already has a confirmed,
+   * manual already-in-HHA, or sent+VisitID row. Sessions whose only row is still
+   * failed are left alone. Does not delete settled rows and does not cancel HHA visits.
    */
   dropSupersededFailedTransfers(opts?: { weekId?: string }): HhaTransfer[] {
     const rows = this.data.hhaTransfers || [];
@@ -501,11 +507,14 @@ export class MemoryStore {
   }
 }
 
-/** Confirmed, or sent with a numeric HHA VisitID — the visit is already in HHA. */
+/**
+ * The visit is done for triage and for a later send: TMS confirmed it, an admin
+ * marked it already in HHA (`manual`, no VisitID), or it was sent with a numeric VisitID.
+ */
 export function isSettledHhaTransfer(
   t: Pick<HhaTransfer, 'status' | 'hhaVisitId'> | undefined | null,
 ): boolean {
   if (!t) return false;
-  if (t.status === 'confirmed') return true;
+  if (t.status === 'confirmed' || t.status === 'manual') return true;
   return t.status === 'sent' && /^\d+$/.test(String(t.hhaVisitId || '').trim());
 }

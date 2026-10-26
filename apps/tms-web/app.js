@@ -4451,18 +4451,30 @@ function parseTriageChunk(chunk) {
   return { who: '', detail: chunk.trim() };
 }
 
-function renderTriageList(errorText) {
-  const chunks = splitTriageChunks(errorText);
+function renderTriageList(errorText, failures) {
+  const structured = Array.isArray(failures)
+    ? failures.filter((f) => f && String(f.error || '').trim())
+    : [];
+  const chunks = structured.length
+    ? structured.map((f) => ({
+        chunk: String(f.error),
+        sessionId: String(f.sessionId || '').trim(),
+      }))
+    : splitTriageChunks(errorText).map((chunk) => ({ chunk, sessionId: '' }));
   if (!chunks.length) return '<p class="muted">No error detail available.</p>';
   return `<div class="triage-list">${chunks
-    .map((chunk) => {
+    .map(({ chunk, sessionId }) => {
       const { who, detail } = parseTriageChunk(chunk);
       const plain = explainHhaTriage(detail || chunk);
       const tech = hhaTechnicalLine(detail || chunk);
+      const already = sessionId
+        ? `<p class="triage-item-actions"><button type="button" class="btn" data-triage-already="${esc(sessionId)}" title="The visit was entered in HHA by hand. Keep this TMS session and do not send it again.">Already in HHA</button></p>`
+        : '';
       return `<article class="triage-item">
         ${who ? `<h3 class="triage-item-who">${esc(who)}</h3>` : ''}
         <p class="triage-item-plain">${esc(plain)}</p>
         ${tech ? `<p class="triage-item-hha">${esc(tech)}</p>` : ''}
+        ${already}
       </article>`;
     })
     .join('')}</div>`;
@@ -4551,7 +4563,20 @@ async function sendWeekToHha(weekId) {
   }
 }
 
-function showTriageDetail(errorText, weekId) {
+let triageOpenToken = 0;
+
+async function showTriageDetail(errorText, weekId) {
+  const token = ++triageOpenToken;
+  let failures = [];
+  if (weekId) {
+    try {
+      const out = await api('GET', `/weeks/${encodeURIComponent(weekId)}/hha-failures`);
+      failures = Array.isArray(out?.failures) ? out.failures : [];
+    } catch {
+      failures = [];
+    }
+  }
+  if (token !== triageOpenToken) return;
   closeTimesheetModal();
   const existing = document.getElementById('triageModal');
   if (existing) existing.remove();
@@ -4573,13 +4598,36 @@ function showTriageDetail(errorText, weekId) {
           <button type="button" class="btn" data-close-triage>Close</button>
         </div>
       </div>
-      <p class="muted">Each failed session is listed on its own. Fix the issue, then use <strong>Send to HHA</strong> to retry.</p>
-      ${renderTriageList(errorText)}
+      <p class="muted">Each failed session is listed on its own. Fix the issue, then use <strong>Send to HHA</strong> to retry. If the visit was entered in HHA by hand, use <strong>Already in HHA</strong> on that session. The TMS session stays, and a later send skips it.</p>
+      ${renderTriageList(errorText, failures)}
     </div>
   `;
   backdrop.addEventListener('click', async (e) => {
     if (e.target === backdrop || e.target.closest('[data-close-triage]')) {
       backdrop.remove();
+      return;
+    }
+    const already = e.target.closest('[data-triage-already]');
+    if (already) {
+      const sessionId = already.getAttribute('data-triage-already') || '';
+      if (!sessionId || already.disabled) return;
+      const who =
+        already.closest('.triage-item')?.querySelector('.triage-item-who')?.textContent?.trim() ||
+        'this session';
+      const ok = confirm(
+        `Mark ${who} as already in HHA? The TMS session stays. TMS will not call HHA or store a VisitID, and a later send will skip this visit.`,
+      );
+      if (!ok) return;
+      already.disabled = true;
+      try {
+        await api('POST', `/sessions/${encodeURIComponent(sessionId)}/hha-already`, {});
+        backdrop.remove();
+        setStatus('Marked already in HHA. The session stays in TMS.', 'ok');
+        await adminDash();
+      } catch (err) {
+        already.disabled = false;
+        setStatus(err.message || 'Could not mark already in HHA.', 'err');
+      }
       return;
     }
     const retry = e.target.closest('[data-triage-hha]');

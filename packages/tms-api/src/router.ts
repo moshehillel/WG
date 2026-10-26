@@ -91,6 +91,7 @@ import {
   findDistrictDirectoryRow,
   decodeDistrictPathId,
   resolveSchoolOrDistrictSigner,
+  weekHhaFailures,
   weekHhaRollup,
   isHhaTransferSession,
   normalizeProgramTypeKey,
@@ -118,7 +119,7 @@ import {
 } from './archive-bundle.js';
 import { authenticate, requireAdmin, type AuthContext } from './auth.js';
 import { screenNoteWithOptionalBedrock } from './bedrock.js';
-import { transferLockedWeek } from './hha-transfer.js';
+import { markSessionAlreadyInHha, transferLockedWeek } from './hha-transfer.js';
 import { buildTimesheetPdf, formatTimesheetSignDate, isPaidAbsenceSession } from './timesheet.js';
 import {
   createSignEnvelope,
@@ -3611,7 +3612,7 @@ export async function handleTmsRequest(
       (provider?.id === providerId ? provider : undefined);
     const confirmedSessionIds = new Set(
       (store.data.hhaTransfers || [])
-        .filter((t) => t.status === 'confirmed')
+        .filter((t) => t.status === 'confirmed' || t.status === 'manual')
         .map((t) => t.sessionId),
     );
     const wantPt = programTypeKey(programType);
@@ -6116,6 +6117,28 @@ export async function handleTmsRequest(
       });
       return json(200, { week: next, bytes: buf.length, signedKey, timesheetKey });
     });
+  }
+
+  if (req.method === 'GET' && /^\/weeks\/[^/]+\/hha-failures$/.test(path)) {
+    const denied = requireAdmin(ctx);
+    if (denied) return json(403, { error: denied });
+    const weekId = path.split('/')[2] || '';
+    const week = store.data.weeks.find((w) => w.id === weekId);
+    if (!week) return json(404, { error: 'Week not found.' });
+    return json(200, { failures: weekHhaFailures(store, weekId) });
+  }
+
+  if (req.method === 'POST' && /^\/sessions\/[^/]+\/hha-already$/.test(path)) {
+    const denied = requireAdmin(ctx);
+    if (denied) return json(403, { error: denied });
+    const sessionId = path.split('/')[2] || '';
+    const result = markSessionAlreadyInHha({
+      store,
+      sessionId,
+      actorId: ctx.user.id,
+    });
+    if (!result.ok) return json(result.status, { error: result.error });
+    return json(200, result);
   }
 
   if (req.method === 'POST' && /^\/weeks\/[^/]+\/hha$/.test(path)) {

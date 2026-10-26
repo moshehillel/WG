@@ -5,7 +5,11 @@ export type WeekStatus = 'draft' | 'submitted' | 'signed' | 'locked' | 'reopened
 /** Outcome of the school SignNow request on this week. Week `status` stays the edit/lock machine. */
 export type SignatureRequestStatus = 'pending' | 'cancelled' | 'retrieved' | 'completed';
 export type Attendance = 'attended' | 'missed' | 'makeup' | 'paid_absence';
-export type HhaTransferStatus = 'none' | 'pending' | 'sent' | 'confirmed' | 'failed';
+/**
+ * `manual` — an admin marked the visit already in HHA. TMS did not create it and
+ * stores no VisitID. The transfer pipeline skips it. It is not a TMS confirmation.
+ */
+export type HhaTransferStatus = 'none' | 'pending' | 'sent' | 'confirmed' | 'failed' | 'manual';
 export type DueKind = 'progress' | 'annual' | 'reeval';
 /** Weekly = Freq per calendar week. school_day_cycle = Freq per N school days (6 or 10). monthly = Freq per calendar month. */
 export type FrequencyKind = 'weekly' | 'school_day_cycle' | 'monthly';

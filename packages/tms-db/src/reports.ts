@@ -251,7 +251,9 @@ export function weekHhaRollup(store: MemoryStore, weekId: string): WeekHhaRollup
   for (const s of eligibleSessions) {
     const t = store.transferForSession(s.id);
     const st = t?.status;
-    if (st === 'confirmed') confirmed += 1;
+    // `manual` is already in HHA without a TMS VisitID. Count it done so the week
+    // can leave failed triage, but the session row stays `manual` (not a TMS create).
+    if (st === 'confirmed' || st === 'manual') confirmed += 1;
     else if (st === 'failed') failed += 1;
     else if (st === 'pending' || st === 'sent') pending += 1;
     else unset += 1;
@@ -522,6 +524,38 @@ export function weekProgressReport(
       a.mandateLabel.localeCompare(b.mandateLabel),
   );
   return rows;
+}
+
+export type HhaFailureRow = { sessionId: string; error: string };
+
+/**
+ * One row per session whose transfer is still failed. Used by HHA Triage so each
+ * session can be marked already in HHA without parsing the joined error blob.
+ */
+export function weekHhaFailures(store: MemoryStore, weekId: string): HhaFailureRow[] {
+  const rows = store.data.hhaTransfers || [];
+  const settledSessions = new Set(
+    rows.filter((t) => isSettledHhaTransfer(t)).map((t) => t.sessionId),
+  );
+  const seen = new Set<string>();
+  const out: HhaFailureRow[] = [];
+  for (const t of rows) {
+    if (t.weekId !== weekId || t.status !== 'failed') continue;
+    if (settledSessions.has(t.sessionId) || seen.has(t.sessionId)) continue;
+    seen.add(t.sessionId);
+    const raw = String(t.lastError || '').trim();
+    const session = (store.data.sessions || []).find((s) => s.id === t.sessionId);
+    const student = session
+      ? (store.data.students || []).find((s) => s.id === session.studentId)
+      : undefined;
+    const childName = student ? `${student.firstName} ${student.lastName}`.trim() : '';
+    const error = labelHhaTransferError(
+      raw || 'HHA transfer failed (no detail stored).',
+      { childName, session },
+    );
+    out.push({ sessionId: t.sessionId, error });
+  }
+  return out;
 }
 
 /** Live triage text: only currently-failed transfers (ignore stale week.hhaError after -401 heal). */
@@ -933,12 +967,20 @@ export function formatEasternDateTime(iso: string | undefined): string {
 }
 
 /**
+ * Payroll report only. `manual` is settled for triage but TMS did not create a visit
+ * and there is no VisitID, so it is not a successful transfer row.
+ */
+function isTmsRecordedHhaTransfer(t: HhaTransfer): boolean {
+  return isSettledHhaTransfer(t) && t.status !== 'manual';
+}
+
+/**
  * One successful transfer per session: confirmed beats sent+VisitID.
  * Failed-only sessions are dropped. Leftover failed duplicates are ignored
- * when a settled row exists.
+ * when a settled row exists. Manual already-in-HHA marks are not TMS transfers.
  */
 function pickSuccessfulHhaTransfer(list: HhaTransfer[]): HhaTransfer | null {
-  const settled = list.filter((t) => isSettledHhaTransfer(t));
+  const settled = list.filter((t) => isTmsRecordedHhaTransfer(t));
   if (!settled.length) return null;
   const confirmed = settled.filter((t) => t.status === 'confirmed');
   const pool = confirmed.length ? confirmed : settled;
@@ -1008,7 +1050,7 @@ export function hhaTransfersReport(
 
   const rows: HhaTransferReportRow[] = [];
   for (const [sessionId, list] of bySession) {
-    const settled = list.filter((t) => isSettledHhaTransfer(t));
+    const settled = list.filter((t) => isTmsRecordedHhaTransfer(t));
     if (!settled.length) continue;
     const confirmed = settled.filter((t) => t.status === 'confirmed');
     const pool = confirmed.length ? confirmed : settled;

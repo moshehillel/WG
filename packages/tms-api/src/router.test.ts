@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
 import { MockHhaClient } from '@white-glove/hha-client';
 import { MemoryStore, newId, nowIso } from '@white-glove/tms-db';
+import { weeksNeedingHhaTransfer } from './hha-auto-transfer.js';
 import { handleTmsRequest } from './router.js';
 
 process.env.TMS_ALLOW_DEV_HEADERS = '1';
@@ -6692,5 +6693,203 @@ describe('signature request cancel and retrieve', () => {
     });
     expect(none.status).toBe(409);
     expect(store.data.weeks.find((w) => w.id === draft.id)?.status).toBe('draft');
+  });
+});
+
+describe('HHA triage already in HHA', () => {
+  it('marks a failed session without deleting it, and a later transfer skips it', async () => {
+    const { store, provider } = storeWithTherapist();
+    const jeremiahStudent = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Jeremiah',
+      lastName: 'Brunson',
+      dob: '2016-04-02',
+      programId: '924049',
+      programType: 'Test District No Contract',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const otherStudent = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Noah',
+      lastName: 'Example',
+      dob: '2015-01-01',
+      programId: '100',
+      programType: 'Test District No Contract',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-10-12',
+      status: 'locked',
+      signerName: 'Principal',
+      signerEmail: 'principal@school.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'failed',
+      hhaError: 'overlap',
+    });
+    const sessionBase = {
+      weekId: week.id,
+      attendance: 'attended' as const,
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT Individual 1:1',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [] as string[],
+    };
+    const jeremiah = store.upsertSession({
+      ...sessionBase,
+      id: newId(),
+      studentId: jeremiahStudent.id,
+      dateOfService: '2026-10-16',
+      beginTime: '12:30 pm',
+      endTime: '1:00 pm',
+    });
+    const other = store.upsertSession({
+      ...sessionBase,
+      id: newId(),
+      studentId: otherStudent.id,
+      dateOfService: '2026-10-16',
+      beginTime: '2:00 pm',
+      endTime: '2:30 pm',
+    });
+    const overlap =
+      'HHA caregiver shift overlaps an existing visit (ErrorID=-310). Overlapping shifts are not allowed.';
+    store.upsertTransfer({
+      id: newId(),
+      sessionId: jeremiah.id,
+      weekId: week.id,
+      status: 'failed',
+      hhaVisitId: '',
+      lastError: overlap,
+      payloadHash: 'jeremiah',
+      updatedAt: nowIso(),
+    });
+    store.upsertTransfer({
+      id: newId(),
+      sessionId: other.id,
+      weekId: week.id,
+      status: 'failed',
+      hhaVisitId: '',
+      lastError: 'Pay code missing (ErrorID=-74).',
+      payloadHash: 'other',
+      updatedAt: nowIso(),
+    });
+
+    const denied = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/sessions/${jeremiah.id}/hha-already`,
+      headers: thH,
+      query: {},
+      body: {},
+    });
+    expect(denied.status).toBe(403);
+    expect(store.transferForSession(jeremiah.id)?.status).toBe('failed');
+
+    const marked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/sessions/${jeremiah.id}/hha-already`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(marked.status).toBe(200);
+    expect(store.data.sessions.find((s) => s.id === jeremiah.id)?.studentId).toBe(jeremiahStudent.id);
+    expect(store.transferForSession(jeremiah.id)).toMatchObject({
+      status: 'manual',
+      hhaVisitId: '',
+      lastError: '',
+    });
+    expect(store.transferForSession(other.id)?.status).toBe('failed');
+
+    const mid = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/weeks',
+      headers: adminH,
+      query: { weekStart: week.weekStart },
+      body: {},
+    });
+    const midWeek = (
+      mid.body as { weeks: Array<{ id: string; hhaStatus: string; hhaFailed: number }> }
+    ).weeks.find((w) => w.id === week.id);
+    expect(midWeek?.hhaStatus).toBe('failed');
+    expect(midWeek?.hhaFailed).toBe(1);
+    expect(weeksNeedingHhaTransfer(store).some((w) => w.id === week.id)).toBe(true);
+
+    const openFailures = await handleTmsRequest(store, {
+      method: 'GET',
+      path: `/weeks/${week.id}/hha-failures`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    const failureIds = (openFailures.body as { failures: Array<{ sessionId: string }> }).failures.map(
+      (f) => f.sessionId,
+    );
+    expect(failureIds).toEqual([other.id]);
+
+    const hha = new MockHhaClient();
+    hha.resolveContractId = async () => {
+      hha.calls.push('resolveContractId');
+      return undefined;
+    };
+    await handleTmsRequest(
+      store,
+      { method: 'POST', path: `/weeks/${week.id}/hha`, headers: adminH, query: {}, body: {} },
+      { hha },
+    );
+    expect(store.data.sessions.find((s) => s.id === jeremiah.id)).toBeTruthy();
+    expect(store.transferForSession(jeremiah.id)).toMatchObject({
+      status: 'manual',
+      hhaVisitId: '',
+      lastError: '',
+    });
+    expect(store.transferForSession(other.id)?.status).toBe('failed');
+    expect(store.data.sessions.filter((s) => s.weekId === week.id)).toHaveLength(2);
+
+    const markedOther = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/sessions/${other.id}/hha-already`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(markedOther.status).toBe(200);
+    const done = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/weeks',
+      headers: adminH,
+      query: { weekStart: week.weekStart },
+      body: {},
+    });
+    const doneWeek = (
+      done.body as { weeks: Array<{ id: string; hhaStatus: string; hhaFailed: number; hhaError?: string }> }
+    ).weeks.find((w) => w.id === week.id);
+    expect(doneWeek?.hhaFailed).toBe(0);
+    expect(doneWeek?.hhaStatus).toBe('confirmed');
+    expect(doneWeek?.hhaError || '').toBe('');
+    expect(weeksNeedingHhaTransfer(store).some((w) => w.id === week.id)).toBe(false);
+    expect(store.data.sessions.filter((s) => s.weekId === week.id)).toHaveLength(2);
+
+    const hhaAgain = new MockHhaClient();
+    const again = await handleTmsRequest(
+      store,
+      { method: 'POST', path: `/weeks/${week.id}/hha`, headers: adminH, query: {}, body: {} },
+      { hha: hhaAgain },
+    );
+    expect(again.status).toBe(200);
+    expect((again.body as { ok: boolean; errors: string[] }).ok).toBe(true);
+    expect((again.body as { errors: string[] }).errors).toEqual([]);
+    expect(hhaAgain.calls).toEqual([]);
+    expect(store.transferForSession(jeremiah.id)).toMatchObject({ status: 'manual', hhaVisitId: '' });
+    expect(store.transferForSession(other.id)).toMatchObject({ status: 'manual', hhaVisitId: '' });
+    expect(store.data.sessions.map((s) => s.id).sort()).toEqual([jeremiah.id, other.id].sort());
   });
 });

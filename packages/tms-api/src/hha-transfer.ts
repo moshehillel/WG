@@ -53,6 +53,7 @@ import {
   unambiguousSiblingProgramType,
   weekHhaErrorFromTransfers,
   weekHhaRollup,
+  type HhaTransferStatus,
   type Mandate,
   type MemoryStore,
   type SessionRow,
@@ -641,6 +642,79 @@ export function sessionDiscipline(
   );
 }
 
+/**
+ * Admin mark: the visit was created in HHA by hand, so Send to HHA cannot create
+ * it (overlap). Keeps the TMS session, does not call HHA, and does not invent a VisitID.
+ * Week status is the live rollup — a remaining failed session keeps the week failed.
+ */
+export function markSessionAlreadyInHha(options: {
+  store: MemoryStore;
+  sessionId: string;
+  actorId: string;
+}):
+  | { ok: true; sessionId: string; weekId: string; hhaStatus: HhaTransferStatus; hhaVisitId: '' }
+  | { ok: false; status: number; error: string } {
+  const sessionId = String(options.sessionId || '').trim();
+  const session = options.store.data.sessions.find((s) => s.id === sessionId);
+  if (!session) return { ok: false, status: 404, error: 'Session not found.' };
+  const week = options.store.data.weeks.find((w) => w.id === session.weekId);
+  if (!week) return { ok: false, status: 404, error: 'Week not found.' };
+  const existing = options.store.transferForSession(session.id);
+  if (existing?.status === 'manual') {
+    const rollup = weekHhaRollup(options.store, week.id);
+    return {
+      ok: true,
+      sessionId: session.id,
+      weekId: week.id,
+      hhaStatus: rollup.status,
+      hhaVisitId: '',
+    };
+  }
+  if (!existing || existing.status !== 'failed') {
+    return {
+      ok: false,
+      status: 409,
+      error: 'Only a failed HHA transfer can be marked already in HHA.',
+    };
+  }
+  const priorWeekId = existing.weekId;
+  options.store.upsertTransfer({
+    ...existing,
+    sessionId: session.id,
+    weekId: week.id,
+    status: 'manual',
+    hhaVisitId: '',
+    lastError: '',
+    updatedAt: nowIso(),
+  });
+  const refreshWeek = (weekId: string) => {
+    const live = options.store.data.weeks.find((w) => w.id === weekId);
+    if (!live) return;
+    const rollup = weekHhaRollup(options.store, weekId);
+    options.store.upsertWeek({
+      ...live,
+      hhaStatus: rollup.status,
+      hhaError: weekHhaErrorFromTransfers(options.store, weekId),
+    });
+  };
+  refreshWeek(week.id);
+  if (priorWeekId && priorWeekId !== week.id) refreshWeek(priorWeekId);
+  const rollup = weekHhaRollup(options.store, week.id);
+  options.store.audit(options.actorId, 'hha_already_in_hha', `session:${session.id}`, existing, {
+    status: 'manual',
+    hhaVisitId: '',
+    weekId: week.id,
+    note: 'Marked already in HHA. TMS did not create this visit.',
+  });
+  return {
+    ok: true,
+    sessionId: session.id,
+    weekId: week.id,
+    hhaStatus: rollup.status,
+    hhaVisitId: '',
+  };
+}
+
 export async function transferLockedWeek(options: {
   store: MemoryStore;
   week: WeeklyPeriod;
@@ -689,6 +763,10 @@ export async function transferLockedWeek(options: {
   let transferred = 0;
   for (const session of sessions) {
     const existing = store.transferForSession(session.id);
+    // Already entered in HHA by hand. No VisitID — do not CreateSchedule or ConfirmVisits.
+    if (existing?.status === 'manual') {
+      continue;
+    }
     const priorVisitId = existing?.hhaVisitId?.trim() || '';
     const priorVisitIdOk = /^\d+$/.test(priorVisitId);
     const alreadyBilledErr = isAlreadyBilledConfirmFault(undefined, existing?.lastError);

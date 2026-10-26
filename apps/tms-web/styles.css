@@ -1173,6 +1173,9 @@ button.linkish.school-name-incomplete {
   margin: 0;
   line-height: 1.45;
 }
+.triage-item-actions {
+  margin: 0.7rem 0 0;
+}
 .triage-item-hha {
   margin: 0.5rem 0 0;
   font-size: 0.78rem;
