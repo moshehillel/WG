@@ -4615,6 +4615,7 @@ function showTriageDetail(errorText, weekId) {
 async function adminDash() {
   let d = { timesheet: { draft: 0, submitted: 0, signed: 0, locked: 0 }, hha: { pending: 0, confirmed: 0, failed: 0 } };
   let weeks = [];
+  let weeksLoadError = '';
   if (!state.adminWeeksWeekStart) state.adminWeeksWeekStart = mondayIso();
   const weeksAll = state.adminWeeksAll === true;
   const weeksWeekStart = mondayFromDos(state.adminWeeksWeekStart) || mondayIso();
@@ -4622,6 +4623,8 @@ async function adminDash() {
   const weeksName = String(state.adminWeeksName || '').trim();
   const weeksDistrict = String(state.adminWeeksDistrict || '').trim();
   const weeksHhaErrors = state.adminWeeksHhaErrors === true;
+  const sameMonday = (weekStart) =>
+    (mondayFromDos(weekStart) || String(weekStart || '').trim()) === weeksWeekStart;
   try {
     d = await api('GET', '/dashboard');
   } catch (err) {
@@ -4632,15 +4635,25 @@ async function adminDash() {
     if (!weeksAll && weeksWeekStart) q.set('weekStart', weeksWeekStart);
     if (weeksName) q.set('name', weeksName);
     const qs = q.toString();
-    const listed = await api('GET', `/admin/weeks${qs ? `?${qs}` : ''}`);
-    weeks = Array.isArray(listed?.weeks) ? listed.weeks : [];
-    // Client-side guard: API must honor weekStart; keep UI truthful if an old deploy leaks rows.
-    if (!weeksAll && weeksWeekStart) {
-      weeks = weeks.filter((w) => String(w.weekStart || '').trim() === weeksWeekStart);
+    let listed = null;
+    try {
+      listed = await api('GET', `/admin/weeks${qs ? `?${qs}` : ''}`);
+    } catch (err) {
+      // A weekStart query that the proxy drops into the path comes back 404.
+      // The unfiltered list still has the rows; filter them here.
+      if (weeksAll || !weeksWeekStart) throw err;
+      listed = await api('GET', `/admin/weeks${weeksName ? `?${new URLSearchParams({ name: weeksName })}` : ''}`);
     }
+    weeks = Array.isArray(listed?.weeks) ? listed.weeks : [];
+    if (!weeksAll && weeksWeekStart && weeks.length === 0) {
+      const all = await api('GET', `/admin/weeks${weeksName ? `?${new URLSearchParams({ name: weeksName })}` : ''}`);
+      weeks = Array.isArray(all?.weeks) ? all.weeks : [];
+    }
+    if (!weeksAll && weeksWeekStart) weeks = weeks.filter((w) => sameMonday(w.weekStart));
   } catch (err) {
     console.warn('admin weeks load failed', err);
     weeks = [];
+    weeksLoadError = err?.message || 'Could not load weeks.';
   }
   // District options from the week/name result set (before district / HHA filters).
   const districtOptions = [
@@ -4786,7 +4799,7 @@ async function adminDash() {
           <td>${esc(w.signerName || w.signerEmail || '—')}</td>
           <td data-hha-status="${esc(String(w.hhaStatus || 'none'))}">${hhaStatusCell(w)}</td>
           <td class="week-actions">${weekActions(w)}</td>
-        </tr>`).join('') || `<tr><td colspan="9">No weeks match these filters.</td></tr>`}
+        </tr>`).join('') || `<tr><td colspan="9">${esc(weeksLoadError || 'No weeks match these filters.')}</td></tr>`}
       </table>
       </div>
     </div>
