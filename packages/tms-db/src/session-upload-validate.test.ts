@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   cptDurationError,
+  cptSessionLooksGroup,
   extractNoteProgressForCompare,
   missedSessionReasonError,
   normalizeNoteForCompare,
@@ -85,6 +86,16 @@ describe('CPT duration units', () => {
     expect(missedSessionReasonError('attended', '', '')).toBeNull();
   });
 
+  it('accepts Therapist Activity / CPSE absence synonyms as Frontline reasons', () => {
+    // Astacio / Meriwether-style Therapist Activity rows use "Student Absent", not "Student Absence".
+    expect(missedSessionReasonError('missed', '', 'Student Absent')).toBeNull();
+    expect(missedSessionReasonError('missed', 'Student Absent', '')).toBeNull();
+    expect(missedSessionReasonError('missed', '', 'Student Absent: student not in school')).toBeNull();
+    expect(missedSessionReasonError('missed', '', 'student not in school')).toBeNull();
+    expect(missedSessionReasonError('missed', '', 'Absent:')).toBeNull();
+    expect(missedSessionReasonError('missed', '', 'Provider Absent')).toBeNull();
+  });
+
   it('does not treat missed notes as copy-paste sources', () => {
     expect(noteIsCopyPasteSource('missed', 'Provider Absence:')).toBe(false);
     expect(noteIsCopyPasteSource('attended', 'Service Provided: gait work')).toBe(true);
@@ -128,6 +139,58 @@ describe('CPT duration units', () => {
     expect(cptDurationError('9:30 am', '10:00 am', 'CPT: 97150 Units: 1', 'attended')).toBeNull();
     // Timed individual codes still need 15-min coverage.
     expect(cptDurationError('9:00 am', '9:30 am', '97110x1', 'attended')).toMatch(/need 2 unit/i);
+  });
+
+  it('allows untimed PT eval CPT 97165–97168 x1 for typical session lengths', () => {
+    // PT eval / re-eval codes are session-based (1 unit covers the visit).
+    expect(cptDurationError('10:00 am', '10:30 am', '97165x1', 'attended')).toBeNull();
+    expect(cptDurationError('10:00 am', '10:30 am', 'CPT: 97165 Units: 1', 'attended')).toBeNull();
+    expect(cptDurationError('9:00 am', '9:45 am', '97166x1', 'attended')).toBeNull();
+    expect(cptDurationError('1:00 pm', '2:00 pm', '97167x1', 'attended')).toBeNull();
+    expect(cptDurationError('10:00 am', '10:30 am', '97168x1', 'attended')).toBeNull();
+    // Timed individual codes still need 15-min coverage.
+    expect(cptDurationError('10:00 am', '10:30 am', '97110x1', 'attended')).toMatch(/need 2 unit/i);
+  });
+
+  it('detects group ratio / service type for CPT duration', () => {
+    expect(cptSessionLooksGroup('3:1')).toBe(true);
+    expect(cptSessionLooksGroup('Physical Therapy 3:1')).toBe(true);
+    expect(cptSessionLooksGroup('PT School Group')).toBe(true);
+    expect(cptSessionLooksGroup('PT School', '2:1')).toBe(true);
+    expect(cptSessionLooksGroup('1:1')).toBe(false);
+    expect(cptSessionLooksGroup('PT School Individual')).toBe(false);
+    expect(cptSessionLooksGroup('PT School')).toBe(false);
+  });
+
+  it('allows 1 CPT unit for group sessions regardless of code (Aleena / Elmont 3:1)', () => {
+    // Group ratio → 1 unit covers the whole visit (97150-style), even for timed/eval CPTs.
+    expect(
+      cptDurationError('10:00 am', '10:30 am', '97165x1', 'attended', {
+        ratio: '3:1',
+        serviceType: 'Physical Therapy 3:1',
+      }),
+    ).toBeNull();
+    expect(
+      cptDurationError('10:00 am', '10:30 am', '97110x1', 'attended', { ratio: '2:1' }),
+    ).toBeNull();
+    expect(
+      cptDurationError('1:30 pm', '2:00 pm', '97150x1', 'attended', {
+        serviceType: 'Physical Therapy 2:1',
+      }),
+    ).toBeNull();
+    expect(
+      cptDurationError('9:00 am', '9:45 am', '97112x1', 'attended', {
+        serviceType: 'OT School Group',
+      }),
+    ).toBeNull();
+    // Individual / 1:1 still needs timed units for timed codes.
+    expect(
+      cptDurationError('10:00 am', '10:30 am', '97110x1', 'attended', { ratio: '1:1' }),
+    ).toMatch(/need 2 unit/i);
+    // Group still needs at least 1 unit.
+    expect(
+      cptDurationError('10:00 am', '10:30 am', '', 'attended', { ratio: '3:1' }),
+    ).toMatch(/CPT units missing/i);
   });
 
   it('parses CPT from weekly session text slices', () => {

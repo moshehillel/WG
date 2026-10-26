@@ -126,6 +126,12 @@ export interface HhaClient {
     disciplines: string[],
   ): Promise<EnsureAcceptedServicesResult>;
   upsertPatient(patient: HhaPatient): Promise<UpsertResult>;
+  /**
+   * Always CreatePatient. Does not search by name or Program Id.
+   * Used for no-child additional services: each row needs its own patient
+   * on that row's contract, even when another "no child" patient already exists.
+   */
+  createPatient(patient: HhaPatient): Promise<UpsertResult>;
   upsertContract(contract: HhaContract): Promise<UpsertResult>;
   upsertAuthorization(auth: HhaAuthorization): Promise<UpsertResult>;
   locateOrScheduleVisit(visit: HhaVisit): Promise<UpsertResult>;
@@ -156,6 +162,16 @@ export interface HhaClient {
   ): Promise<string | undefined>;
   getClockingDetails(visitId: string, expected: HhaVisit): Promise<HhaClockingDetails>;
   approveVisit(visitId: string): Promise<void>;
+  /**
+   * After a real visit is in HHA, delete 1:00–1:30 AM scaffolding visits
+   * for this patient and caregiver. Leaves the real visit (keepVisitId) in place.
+   */
+  removeEvvPlaceholderVisits(options: {
+    patientId: string;
+    caregiverId?: string;
+    visitDate?: string;
+    keepVisitId?: string;
+  }): Promise<{ deletedVisitIds: string[] }>;
   /** Gluck closure — discharge every active placement on the patient. */
   updateClosedCase(update: ClosedCaseUpdate): Promise<void>;
   /** Discharge service report — one placement only. */

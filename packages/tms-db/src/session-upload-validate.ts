@@ -96,6 +96,11 @@ const UNTIMED_SESSION_CPT = new Set([
   '92610',
   // Therapeutic procedure(s), group (2+) — Frontline bills one 97150 per visit.
   '97150',
+  // PT evaluations / re-eval — untimed, 1 unit covers the visit regardless of clock length.
+  '97165', // PT evaluation, low complexity
+  '97166', // PT evaluation, moderate complexity
+  '97167', // PT evaluation, high complexity
+  '97168', // Re-evaluation of PT established plan of care
 ]);
 
 export function cptCodesAreUntimedSession(codes: string[]): boolean {
@@ -165,11 +170,39 @@ export function timedCptUnits(coverage: CptCoverage): {
   return { timedUnits, timedProcedures, untimedCodes, timedCodes };
 }
 
+/**
+ * True when Frontline documents a group visit (ratio N:1 with N≥2, or "group" in
+ * service type / ratio). Group sessions bill 1 CPT unit for the whole clock —
+ * same as 97150 — even if the CPT code itself is normally timed.
+ */
+export function cptSessionLooksGroup(
+  serviceTypeOrRatio?: string | null,
+  ratio?: string | null,
+): boolean {
+  const parts = [serviceTypeOrRatio, ratio].map((s) => String(s || '').trim()).filter(Boolean);
+  for (const s of parts) {
+    if (/\bgroup\b/i.test(s)) return true;
+    const m = s.match(/\b(\d+)\s*:\s*1\b/);
+    if (m && Number(m[1]) >= 2) return true;
+  }
+  return false;
+}
+
+export type CptDurationOpts = {
+  /** Parsed / stored service type (often includes ratio, e.g. "PT School 3:1"). */
+  serviceType?: string;
+  /** Frontline ratio token (e.g. "2:1", "3:1"). */
+  ratio?: string;
+  /** Explicit override when caller already knows the visit is group. */
+  groupSession?: boolean;
+};
+
 export function cptDurationError(
   beginTime: string,
   endTime: string,
   sliceOrCoverage: string | CptCoverage,
   attendance: string,
+  opts?: CptDurationOpts,
 ): string | null {
   if (attendance !== 'attended' && attendance !== 'makeup') return null;
   const coverage =
@@ -181,6 +214,12 @@ export function cptDurationError(
     if (!coverage.codes.length || coverage.totalUnits < 1) {
       return 'CPT units missing for attended/makeup session (need at least 1 unit).';
     }
+    return null;
+  }
+  const isGroup =
+    opts?.groupSession === true || cptSessionLooksGroup(opts?.serviceType, opts?.ratio);
+  // Group visit: 1 CPT unit covers the full session (97150-style), regardless of code.
+  if (isGroup && coverage.totalUnits >= 1) {
     return null;
   }
   const required = requiredCptUnitsForDuration(minutes);
@@ -274,20 +313,30 @@ export const FRONTLINE_MISSED_REASONS = [
   'Provider Absence',
 ] as const;
 
-/** Match a Frontline miss reason label anywhere in text (allows `Label: details`). */
+/**
+ * Match a Frontline miss reason label anywhere in text (allows `Label: details`).
+ * Also accepts Therapist Activity / CPSE synonyms (Student Absent, student not in school).
+ */
 export const FRONTLINE_MISSED_REASON_RE =
-  /\b(?:student\s+not\s+available|provider\s+not\s+available|school\s+closed|staff\s+shortage|student\s+absence|provider\s+absence)\b/i;
+  /\b(?:student\s+not\s+available|provider\s+not\s+available|school\s+closed|staff\s+shortage|student\s+absence|provider\s+absence|student\s+absent|provider\s+absent|student\s+not\s+in\s+school)\b/i;
 
 /** Canonical Frontline label when notes/cancelReason match a known miss reason; else ''. */
 export function matchFrontlineMissedReason(text: string): string {
   const n = String(text || '');
   if (!n.trim()) return '';
+  // Prefer longer Frontline dropdown labels before TA short forms (absent vs absence).
   if (/provider\s+absence/i.test(n)) return 'Provider Absence';
   if (/student\s+absence/i.test(n)) return 'Student Absence';
   if (/student\s+not\s+available/i.test(n)) return 'Student Not Available';
   if (/provider\s+not\s+available/i.test(n)) return 'Provider Not Available';
   if (/school\s+closed/i.test(n)) return 'School Closed';
   if (/staff\s+shortage/i.test(n)) return 'Staff Shortage';
+  // Therapist Activity / RS Converter synonyms → canonical Frontline reasons.
+  if (/provider\s+absent\b/i.test(n)) return 'Provider Absence';
+  if (/student\s+absent\b/i.test(n)) return 'Student Absence';
+  if (/student\s+not\s+in\s+school\b/i.test(n)) return 'Student Absence';
+  // Bare absence label on a missed TA row (notes often start with "Absent:" / "Absent ").
+  if (/^\s*absent\b/i.test(n) || /\babsent\s*:/i.test(n)) return 'Student Absence';
   return '';
 }
 

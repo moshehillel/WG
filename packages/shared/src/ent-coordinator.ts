@@ -10,7 +10,22 @@ export function stripWrappingQuotes(raw: string | undefined): string {
   return v;
 }
 
-/** Comma-separated numeric IDs → GraphQL CoordinatorId string e.g. "68033,67321" */
+/**
+ * Sessions unscheduled-visit coordinators.
+ * Billu Markowitz (84898) and Grace Greenfeld (67321 and 67322).
+ */
+export const SESSION_COORDINATOR_IDS = ['84898', '67321', '67322'] as const;
+
+/**
+ * Sessions unscheduled-visit coordinator list.
+ * Always Billu Markowitz and both Grace Greenfeld ids.
+ * A missing value, Abigail Creech, Esty Neuman, or any other id cannot change it.
+ */
+export function resolveSessionCoordinatorIds(_raw?: string): string {
+  return SESSION_COORDINATOR_IDS.join(',');
+}
+
+/** Comma-separated numeric IDs → GraphQL CoordinatorId string e.g. "84898,67321,67322" */
 export function parseCoordinatorIds(raw: string | undefined): string {
   const src = stripWrappingQuotes(raw)
     .split(/[,;|]/)

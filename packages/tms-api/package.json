@@ -28,7 +28,8 @@
     "@white-glove/hha-client": "*",
     "@white-glove/shared": "*",
     "@white-glove/tms-db": "*",
-    "aws-jwt-verify": "^4.0.1"
+    "aws-jwt-verify": "^4.0.1",
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.146",

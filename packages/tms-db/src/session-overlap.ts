@@ -100,7 +100,7 @@ export function childGroupSizeCap(studentId: string, mandates?: Mandate[]): numb
 
 /**
  * Group↔group may share a clock window only when both sessions are group-tagged
- * (Group / 2:1 / 3:1 / 4:1). Group-mandate kids seen individually (individual / 1:1 /
+ * (Group, or any N:1 with N >= 2). Group-mandate kids seen individually (individual / 1:1 /
  * no group token) are treated as individual for overlap — a later peer in the same
  * window is blocked even if both have group mandates.
  */

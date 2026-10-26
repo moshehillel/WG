@@ -43,6 +43,8 @@ import {
   mandateDurationMinutesForSession,
   soloGroupMandateNoteError,
   findStudentForActivityName,
+  afterReopen,
+  planSignatureRequestEnd,
   therapistCanEdit,
   therapistCanImportOrAddServices,
   therapistCanMutateExistingSession,
@@ -52,7 +54,7 @@ import {
   validateMakeup,
   weekStartFromDos,
   additionalServiceLabel,
-  additionalServiceWithoutChild,
+  isNoChildPlaceholderName,
   isAdditionalServiceType,
   sessionListedChildName,
   emptySchoolCalendar,
@@ -61,6 +63,7 @@ import {
   normalizeOffDays,
   parseOffDaysCsv,
   parseSchoolCalendarPdfText,
+  parseSchoolCycleDays,
   SCHOOL_CALENDAR_PDF_HINT,
   SCHOOL_CALENDAR_PDF_NO_TEXT_ERROR,
   schoolSetupIncomplete,
@@ -89,8 +92,10 @@ import {
   decodeDistrictPathId,
   resolveSchoolOrDistrictSigner,
   weekHhaRollup,
+  isHhaTransferSession,
   normalizeProgramTypeKey,
   type AppSettings,
+  type ArchiveRecord,
   type AppUser,
   type Discipline,
   type FrequencyKind,
@@ -102,13 +107,23 @@ import {
   type Student,
   type WeeklyPeriod,
 } from '@white-glove/tms-db';
+import { canonicalContractProgramName } from '@white-glove/shared';
+import {
+  archiveDownloadName,
+  isPdfBytes,
+  mergePdfBuffers,
+  mergedArchiveFilename,
+  sortArchivesByDate,
+  zipStoredFiles,
+} from './archive-bundle.js';
 import { authenticate, requireAdmin, type AuthContext } from './auth.js';
 import { screenNoteWithOptionalBedrock } from './bedrock.js';
 import { transferLockedWeek } from './hha-transfer.js';
-import { buildTimesheetPdf, formatTimesheetSignDate } from './timesheet.js';
+import { buildTimesheetPdf, formatTimesheetSignDate, isPaidAbsenceSession } from './timesheet.js';
 import {
   createSignEnvelope,
   downloadSignedDocument,
+  endOpenSignRequest,
   envelopeCompleted,
   resendSignEnvelopeInvite,
   SignNowApiError,
@@ -322,6 +337,20 @@ function mandateWeekOpts(store: MemoryStore): {
   };
 }
 
+/**
+ * Week-screen mandate check: yellow under-mandate only for this provider's
+ * caseload, and only while the mandate is active for the week being viewed.
+ */
+function providerWeekMandateOpts(store: MemoryStore, providerId: string, weekStart: string) {
+  const id = String(providerId || '').trim();
+  return {
+    ...mandateWeekOpts(store),
+    ...(id ? { caseloadProviderIds: providerLookupIds(store, id) } : {}),
+    weekStart: String(weekStart || '').trim(),
+    asOf: new Date().toISOString().slice(0, 10),
+  };
+}
+
 function overMandateSummary(errors: string[]): string {
   if (!errors.length) return 'This upload exceeds the mandate.';
   if (errors.length === 1) return errors[0]!;
@@ -361,6 +390,149 @@ function formatUploadRowLabel(row: {
     endTime: String(row.endTime || ''),
   } as SessionRow);
   return `${who} — ${slot}`;
+}
+
+/**
+ * Single unlock for a signed/locked week (admin Reopen and provider Revoke signature).
+ * Sessions stay. HHA visit rows and hhaStatus stay. School signer name/email stay so the
+ * timesheet bin does not change. Signature artifacts are cleared.
+ */
+async function revokeWeekSignature(
+  store: MemoryStore,
+  ctx: AuthContext,
+  weekId: string,
+): Promise<HttpResponse> {
+  const week = store.data.weeks.find((w) => w.id === weekId);
+  if (!week) return json(404, { error: 'Week not found.' });
+  if (ctx.user.role !== 'admin') {
+    const provider = providerFor(store, ctx.user);
+    if (!provider || week.providerId !== provider.id) {
+      return json(403, { error: 'You can only revoke the signature on your own week.' });
+    }
+  }
+  const nextStatus = afterReopen(week.status);
+  if (!nextStatus) {
+    return json(409, { error: 'Only a signed or locked week can have its signature revoked.' });
+  }
+  if (week.envelopeId) {
+    await voidSignEnvelope(week.envelopeId, 'Timesheet signature revoked in TMS');
+  }
+  const next = store.upsertWeek({
+    ...week,
+    status: nextStatus,
+    hhaStatus: week.hhaStatus,
+    providerSignedKey: '',
+    providerSignedAt: '',
+    envelopeId: '',
+    signedKey: '',
+    timesheetKey: '',
+  });
+  markTimesheetArchivesStatus(store, week.id, nextStatus);
+  store.audit(ctx.user.id, 'revoke_signature', `week:${week.id}`, week, next);
+  return json(200, {
+    week: next,
+    message: 'Signature revoked. The week is unsigned and can be edited and signed again.',
+  });
+}
+
+/**
+ * Cancel or retrieve an outstanding school signature request.
+ * The week returns to draft (unsigned, sendable). Timesheet PDF history is kept.
+ * A completed signature is not voided. A repeat of the same outcome is a no-op.
+ */
+async function endWeekSignatureRequest(
+  store: MemoryStore,
+  ctx: AuthContext,
+  weekId: string,
+  mode: 'cancel' | 'retrieve',
+): Promise<HttpResponse> {
+  const week = store.data.weeks.find((w) => w.id === weekId);
+  if (!week) return json(404, { error: 'Week not found.' });
+  if (ctx.user.role !== 'admin') {
+    const provider = providerFor(store, ctx.user);
+    if (!provider || week.providerId !== provider.id) {
+      return json(403, {
+        error:
+          mode === 'cancel'
+            ? 'You can only cancel your own signature request.'
+            : 'You can only retrieve your own signature request.',
+      });
+    }
+  }
+  const plan = planSignatureRequestEnd(week, mode);
+  if (!plan.ok) return json(plan.status, { error: plan.message });
+  if (plan.noop) {
+    return json(200, { week, noop: true, message: plan.message });
+  }
+
+  const envelopeId = String(week.envelopeId || '').trim();
+  let retrievedPdf: Uint8Array | null = null;
+  if (envelopeId) {
+    const ended = await endOpenSignRequest(envelopeId, {
+      mode,
+      reason:
+        mode === 'cancel'
+          ? 'Timesheet signature request cancelled in TMS'
+          : 'Timesheet signature request retrieved in TMS',
+    });
+    if (!ended.ok) {
+      return json(ended.alreadyComplete ? 409 : 502, { error: ended.error });
+    }
+    retrievedPdf = ended.pdf;
+  }
+
+  const signatureRequestStatus = mode === 'cancel' ? 'cancelled' : 'retrieved';
+  const retrievedTimesheetKey =
+    mode === 'retrieve' && retrievedPdf?.length ? `tms/retrieved/${week.id}.pdf` : week.retrievedTimesheetKey || '';
+  const next = store.upsertWeek({
+    ...week,
+    status: 'draft',
+    signatureRequestStatus,
+    signatureRequestAt: nowIso(),
+    envelopeId: '',
+    retrievedTimesheetKey,
+    hhaStatus: week.hhaStatus,
+  });
+  markTimesheetArchivesStatus(store, week.id, signatureRequestStatus);
+
+  let archiveId = '';
+  if (mode === 'retrieve' && retrievedPdf?.length) {
+    const saved = await persistArchivePdf({
+      store,
+      kind: 'timesheet',
+      sourceType: 'timesheet',
+      userId: ctx.user.id,
+      providerId: week.providerId,
+      schoolId: week.schoolId,
+      weekId: week.id,
+      weekStart: week.weekStart,
+      filename: `timesheet-${week.weekStart}-retrieved.pdf`,
+      s3Key: retrievedTimesheetKey,
+      status: 'retrieved',
+      pdf: Buffer.from(retrievedPdf),
+    });
+    archiveId = saved?.id || '';
+  }
+
+  store.audit(
+    ctx.user.id,
+    mode === 'cancel' ? 'cancel_signature_request' : 'retrieve_signature_request',
+    `week:${week.id}`,
+    week,
+    next,
+  );
+  const message =
+    mode === 'cancel'
+      ? 'Signature request cancelled. The signer link is closed. This week is unsigned and can be sent again. The timesheet PDF stays in history as cancelled.'
+      : retrievedPdf?.length
+        ? 'Signature request retrieved. The current timesheet is ready to review, the signer link is closed, and this week can be edited and sent again.'
+        : 'Signature request retrieved. The signer link is closed and this week can be edited and sent again.';
+  return json(200, {
+    week: next,
+    noop: false,
+    ...(archiveId ? { archiveId } : {}),
+    message,
+  });
 }
 
 function providerFor(store: MemoryStore, user: AppUser) {
@@ -403,6 +575,60 @@ function contentTypeForStoredFile(s3Key: string, label?: string): string {
     default:
       return 'application/octet-stream';
   }
+}
+
+/** Bytes for an archive row, including signed-timesheet fallbacks when S3 expired the object. */
+async function loadArchiveFile(store: MemoryStore, row: ArchiveRecord): Promise<Buffer | null> {
+  if (!row.s3Key) return null;
+  let pdf = await getPdfFromS3(row.s3Key);
+  if (!pdf?.length && row.kind === 'timesheet' && row.weekId) {
+    const week = store.data.weeks.find((w) => w.id === row.weekId);
+    const alts = [
+      week?.signedKey,
+      week ? `tms/signed/${week.id}.pdf` : '',
+      week?.timesheetKey,
+      week ? `tms/timesheets/${week.id}.pdf` : '',
+      week?.providerSignedKey,
+    ].filter((k, i, arr): k is string => Boolean(k) && k !== row.s3Key && arr.indexOf(k) === i);
+    for (const alt of alts) {
+      pdf = await getPdfFromS3(alt);
+      if (pdf?.length) {
+        store.upsertArchive({ ...row, s3Key: alt, status: row.status || week?.status || '' });
+        break;
+      }
+    }
+    const envelopeId = String(week?.envelopeId || '').trim();
+    if (!pdf?.length && week && envelopeId && !envelopeId.startsWith('email:')) {
+      try {
+        const bytes = await downloadSignedDocument(envelopeId);
+        if (bytes?.length) {
+          pdf = Buffer.from(bytes);
+          const signedKey = week.signedKey || `tms/signed/${week.id}.pdf`;
+          const timesheetKey = week.timesheetKey || `tms/timesheets/${week.id}.pdf`;
+          await putLockerPdf(signedKey, pdf);
+          if (timesheetKey !== signedKey) await putLockerPdf(timesheetKey, pdf);
+          store.upsertWeek({ ...week, signedKey, timesheetKey });
+          store.upsertArchive({
+            ...row,
+            s3Key: signedKey,
+            status: row.status || week.status || 'locked',
+            filename: row.filename || `timesheet-${week.weekStart}-signed.pdf`,
+          });
+          console.info('[tms-esign] archive open restored signed PDF', {
+            weekId: week.id,
+            bytes: pdf.length,
+          });
+        }
+      } catch (err) {
+        console.warn(
+          '[tms-esign] archive open signed PDF restore failed',
+          err instanceof Error ? err.message : err,
+          { weekId: week.id },
+        );
+      }
+    }
+  }
+  return pdf?.length ? pdf : null;
 }
 
 /** Same-name provider ids (orphan twins) so week/session lookup matches admin detail. */
@@ -734,7 +960,7 @@ function programTypesForProvider(store: MemoryStore, providerId: string): string
 }
 
 function programTypeKey(v: string): string {
-  return String(v || '').trim().toLowerCase();
+  return normalizeProgramTypeKey(v);
 }
 
 function sessionMatchesProgramType(
@@ -866,6 +1092,46 @@ function schoolDistrictForWeek(
     if (label) return label;
   }
   return '';
+}
+
+function uniqueTrimmed(values: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const t = String(value || '').trim();
+    const key = t.toLocaleLowerCase();
+    if (!t || seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}
+
+/** Same row payload as a single-week timesheet, so merge can sort through buildTimesheetPdf. */
+function timesheetSourceRowsForWeek(store: MemoryStore, week: WeeklyPeriod) {
+  const provider = store.data.providers.find((p) => p.id === week.providerId);
+  return store.sessionsForWeek(week.id).map((session) => {
+    const dayPeers = providerDaySessions(
+      store.data.sessions,
+      store.data.weeks,
+      week.providerId,
+      session.dateOfService,
+      session.id,
+    );
+    const payOpts = {
+      presentGroupPeerCount: presentGroupPeerCount({
+        candidate: session,
+        peers: dayPeers,
+        mandates: store.data.mandates,
+      }),
+      mandateDurationMinutes: mandateDurationMinutesForSession(session, store.data.mandates),
+    };
+    return {
+      session,
+      student: store.data.students.find((s) => s.id === session.studentId) as Student | undefined,
+      payAmount: provider ? sessionPayAmount(provider, session, payOpts) : null,
+    };
+  });
 }
 
 function cptLabelFromParts(codes: string[], procedures: string[], units: number): string {
@@ -1042,7 +1308,7 @@ function visibleStudents(
   programType?: string,
 ): Student[] {
   if (user.role === 'admin') {
-    let all = store.data.students;
+    let all = store.data.students.filter((s) => !isNoChildPlaceholderName(s));
     const pt = String(programType || '').trim();
     if (pt) {
       const key = programTypeKey(pt);
@@ -1063,7 +1329,9 @@ function visibleStudents(
   const fromWeek = new Set(
     weekRows.flatMap((w) => store.sessionsForWeek(w.id).map((s) => s.studentId)),
   );
-  let students = store.data.students.filter((s) => mandated.has(s.id) || fromWeek.has(s.id));
+  let students = store.data.students.filter(
+    (s) => (mandated.has(s.id) || fromWeek.has(s.id)) && !isNoChildPlaceholderName(s),
+  );
   const pt = String(programType || '').trim();
   // Prefer program-type scope (district/payer) over building-level schoolId.
   if (pt) {
@@ -1140,6 +1408,7 @@ function providerPayFields(
     'payRate30Min',
     'payRate42Min',
     'payRate45Min',
+    'payRateGroup15Min',
     'payRateGroup30Min',
     'payRateGroup42Min',
     'payRateGroup45Min',
@@ -1202,7 +1471,7 @@ function reportXlsxWeekProgress(
         'Child',
         'Provider',
         'School',
-        'Mandate',
+        'Service type',
         'Week',
         'Mandate expected',
         'Sessions delivered',
@@ -1520,6 +1789,8 @@ export async function handleTmsRequest(
     const locked = store.upsertWeek({
       ...week,
       status: 'locked',
+      signatureRequestStatus: 'completed',
+      signatureRequestAt: nowIso(),
       timesheetKey,
       signedKey: signedPdfOk ? signedKey : week.signedKey || '',
     });
@@ -1677,18 +1948,7 @@ export async function handleTmsRequest(
       return json(403, { error: 'You can only open your own archived files.' });
     }
     if (!row.s3Key) return json(404, { error: 'No file stored for this archive item.' });
-    let pdf = await getPdfFromS3(row.s3Key);
-    // Locked timesheets may live at tms/signed/{weekId}.pdf after SignNow — fall back if needed.
-    if (!pdf && row.kind === 'timesheet' && row.weekId) {
-      const week = store.data.weeks.find((w) => w.id === row.weekId);
-      const alt = week?.signedKey || (week ? `tms/signed/${week.id}.pdf` : '');
-      if (alt && alt !== row.s3Key) {
-        pdf = await getPdfFromS3(alt);
-        if (pdf?.length) {
-          store.upsertArchive({ ...row, s3Key: alt, status: row.status || week?.status || '' });
-        }
-      }
-    }
+    const pdf = await loadArchiveFile(store, row);
     if (!pdf) return json(404, { error: 'Archived file missing from storage.' });
     const safeName = String(row.filename || 'archive.pdf').replace(/[^\w.\-]+/g, '_');
     const ctype = contentTypeForStoredFile(row.s3Key, row.filename);
@@ -1699,6 +1959,106 @@ export async function handleTmsRequest(
         'content-disposition': `${ctype === 'application/pdf' ? 'inline' : 'attachment'}; filename="${safeName}"`,
       },
       body: pdf,
+    };
+  }
+
+  if (req.method === 'POST' && path === '/archive/bundle') {
+    const raw = obj(req).ids;
+    const ids = [
+      ...new Set(
+        (Array.isArray(raw) ? raw : []).map((id) => String(id || '').trim()).filter(Boolean),
+      ),
+    ];
+    const mode = String(obj(req).mode || '').trim();
+    if (mode !== 'zip' && mode !== 'pdf') {
+      return json(400, { error: 'Choose download or merge.' });
+    }
+    if (!ids.length) return json(400, { error: 'Select at least one file.' });
+    if (ids.length > 40) return json(400, { error: 'Select up to 40 files at a time.' });
+    const provider = providerFor(store, ctx.user);
+    const providerIds = provider?.id ? providerLookupIds(store, provider.id) : [];
+    const access = {
+      role: ctx.user.role,
+      userId: ctx.user.id,
+      providerId: provider?.id,
+      providerIds,
+    };
+    const picked: ArchiveRecord[] = [];
+    for (const id of ids) {
+      const row = store.archiveById(id);
+      if (!row) return json(404, { error: 'Archive item not found.' });
+      if (!canAccessArchive(row, access)) {
+        return json(403, { error: 'You can only download your own archived files.' });
+      }
+      picked.push(row);
+    }
+    const ordered = sortArchivesByDate(picked);
+    const loaded: Array<ArchiveRecord & { bytes: Buffer; providerName: string }> = [];
+    const missing: string[] = [];
+    for (const row of ordered) {
+      const bytes = row.s3Key ? await loadArchiveFile(store, row) : null;
+      if (!bytes?.length) {
+        missing.push(row.filename || row.id);
+        continue;
+      }
+      const who = store.data.providers.find((p) => p.id === row.providerId);
+      loaded.push({
+        ...row,
+        bytes,
+        providerName: who ? `${who.firstName} ${who.lastName}`.trim() : '',
+      });
+    }
+    if (!loaded.length || missing.length) {
+      return json(404, {
+        error: `Archived file missing from storage: ${missing.join(', ')}. Leave those rows unchecked and try again.`,
+      });
+    }
+    if (mode === 'pdf') {
+      const notPdf = loaded.filter((row) => !isPdfBytes(row.bytes));
+      if (notPdf.length) {
+        const names = notPdf.map((row) => row.filename || row.id).join(', ');
+        return json(400, {
+          error: `Merge needs PDF files. Download the selected files to keep ${names}, or leave those rows unchecked.`,
+        });
+      }
+      let merged: Buffer;
+      try {
+        merged = await mergePdfBuffers(loaded.map((row) => row.bytes));
+      } catch (err) {
+        console.warn('[tms-archive] merge failed', err instanceof Error ? err.message : err);
+        return json(400, { error: 'One of the selected PDFs could not be combined. Download the files separately.' });
+      }
+      const filename = mergedArchiveFilename(loaded);
+      return {
+        status: 200,
+        headers: {
+          'content-type': 'application/pdf',
+          'content-disposition': `attachment; filename="${filename}"`,
+        },
+        body: merged,
+      };
+    }
+    const used = new Set<string>();
+    const files = loaded.map((row, index) => ({
+      name: archiveDownloadName(row, index, used),
+      data: row.bytes,
+    }));
+    const starts = sortArchivesByDate(loaded)
+      .map((row) => String(row.weekStart || row.createdAt || '').slice(0, 10))
+      .filter(Boolean);
+    const span =
+      starts.length === 0
+        ? 'selected'
+        : starts[0] === starts[starts.length - 1]
+          ? starts[0]
+          : `${starts[0]}-to-${starts[starts.length - 1]}`;
+    return {
+      status: 200,
+      headers: {
+        'content-type': 'application/zip',
+        'content-disposition': `attachment; filename="archive-${span}.zip"`,
+      },
+      body: zipStoredFiles(files),
     };
   }
 
@@ -2226,6 +2586,7 @@ export async function handleTmsRequest(
           yearStart: proposed.yearStart,
           yearEnd: proposed.yearEnd,
           offDays: proposed.offDays,
+          ...(before?.cycleDays != null ? { cycleDays: before.cycleDays } : {}),
         });
         store.audit(ctx.user.id, 'parse_school_calendar_pdf', `school:${schoolId}`, before, {
           parsed,
@@ -2275,11 +2636,18 @@ export async function handleTmsRequest(
       const csv = String(b.offDaysCsv ?? b.offDaysText ?? '').trim();
       if (csv) offDays = normalizeOffDays([...offDays, ...parseOffDaysCsv(csv)]);
       const before = store.schoolCalendarForSchool(schoolId) ?? null;
+      let cycleDays = before?.cycleDays;
+      if (Object.prototype.hasOwnProperty.call(b, 'cycleDays')) {
+        const parsedCycle = parseSchoolCycleDays(b.cycleDays);
+        if (!parsedCycle.ok) return json(400, { error: parsedCycle.error });
+        cycleDays = parsedCycle.cycleDays;
+      }
       const calendar = store.upsertSchoolCalendar({
         schoolId,
         yearStart,
         yearEnd,
         offDays,
+        ...(cycleDays != null ? { cycleDays } : {}),
       });
       store.audit(ctx.user.id, 'upsert_school_calendar', `school:${schoolId}`, before, calendar);
       return json(200, { calendar, message: 'School calendar saved.' });
@@ -2533,6 +2901,80 @@ export async function handleTmsRequest(
           ...(name ? { name } : {}),
         }),
       });
+    });
+  }
+
+  if (req.method === 'POST' && path === '/admin/weeks/timesheets/merge') {
+    return adminUser(() => {
+      const raw = obj(req).weekIds;
+      const ids = [
+        ...new Set(
+          (Array.isArray(raw) ? raw : [])
+            .map((id) => String(id || '').trim())
+            .filter(Boolean),
+        ),
+      ];
+      if (!ids.length) return json(400, { error: 'Select at least one week to merge.' });
+      if (ids.length > 40) return json(400, { error: 'Merge up to 40 weeks at a time.' });
+      const found: WeeklyPeriod[] = [];
+      const missing: string[] = [];
+      for (const id of ids) {
+        const week = store.data.weeks.find((w) => w.id === id);
+        if (!week) missing.push(id);
+        else found.push(week);
+      }
+      if (missing.length) return json(404, { error: 'One or more selected weeks were not found.' });
+      const byDate = found
+        .slice()
+        .sort((a, b) => String(a.weekStart || '').localeCompare(String(b.weekStart || '')));
+      const rows = found.flatMap((week) => timesheetSourceRowsForWeek(store, week));
+      const providerNames = uniqueTrimmed(
+        found.map((week) => {
+          const provider = store.data.providers.find((p) => p.id === week.providerId);
+          return provider ? `${provider.firstName} ${provider.lastName}`.trim() : '';
+        }),
+      );
+      const providerLabel =
+        providerNames.length === 1
+          ? providerNames[0]!
+          : providerNames.length > 1 && providerNames.length <= 3
+            ? providerNames.join(', ')
+            : providerNames.length > 3
+              ? `${providerNames.length} providers`
+              : 'Multiple providers';
+      const starts = byDate.map((week) => String(week.weekStart || '').trim()).filter(Boolean);
+      const weekOf =
+        starts.length === 0
+          ? ''
+          : starts[0] === starts[starts.length - 1]
+            ? starts[0]!
+            : `${starts[0]} to ${starts[starts.length - 1]}`;
+      const signerNames = uniqueTrimmed(found.map((week) => week.signerName));
+      const signerEmails = uniqueTrimmed(found.map((week) => week.signerEmail));
+      const districts = uniqueTrimmed(found.map((week) => schoolDistrictForWeek(store, week.id)));
+      const base = byDate[0] || found[0]!;
+      // buildTimesheetPdf sorts rows by date of service, then begin time, then child.
+      const pdf = buildTimesheetPdf({
+        week: {
+          ...base,
+          weekStart: weekOf,
+          status: 'combined' as WeeklyPeriod['status'],
+        },
+        providerLabel,
+        signerName: signerNames.length === 1 ? signerNames[0]! : signerNames.length ? 'Multiple signers' : '',
+        signerEmail: signerEmails.length === 1 ? signerEmails[0]! : '',
+        schoolDistrict: districts.length === 1 ? districts[0] : '',
+        rows,
+      });
+      const filename = `timesheet-merged-${String(starts[0] || 'weeks').replace(/[^\d-]/g, '')}.pdf`;
+      return {
+        status: 200,
+        headers: {
+          'content-type': 'application/pdf',
+          'content-disposition': `attachment; filename="${filename}"`,
+        },
+        body: Buffer.from(pdf),
+      };
     });
   }
 
@@ -2872,6 +3314,7 @@ export async function handleTmsRequest(
       const student = store.upsertStudent({
         ...existing,
         firstName: pickStr(b.firstName, existing.firstName),
+        middleName: b.middleName != null ? String(b.middleName).trim() : existing.middleName || '',
         lastName: pickStr(b.lastName, existing.lastName),
         dob: pickStr(b.dob, existing.dob),
         schoolId: pickStr(b.schoolId, existing.schoolId),
@@ -3211,11 +3654,7 @@ export async function handleTmsRequest(
         const rollup = weekHhaRollup(store, w.id);
         // Paid rollup for Processed uses confirmed transfers; when program-scoped, only count scoped.
         const scopedConfirmed = scoped.filter((s) => confirmedSessionIds.has(s.id)).length;
-        const scopedEligible = scoped.filter(
-          (s) =>
-            (s.attendance === 'attended' || s.attendance === 'makeup') &&
-            !additionalServiceWithoutChild(s),
-        ).length;
+        const scopedEligible = scoped.filter((s) => isHhaTransferSession(s)).length;
         const fullyPaid =
           wantPt
             ? scopedEligible > 0 && scopedConfirmed === scopedEligible
@@ -3341,7 +3780,7 @@ export async function handleTmsRequest(
               s,
               student ? `${student.firstName} ${student.lastName}`.trim() : '',
             ),
-            programType: String(student?.programType || w.programType || '').trim(),
+            programType: String(s.programType || student?.programType || w.programType || '').trim(),
             schoolId: String(student?.schoolId || '').trim(),
             hhaStatus: transfer?.status || 'none',
           };
@@ -3493,8 +3932,9 @@ export async function handleTmsRequest(
           store.data.sessions,
           nameMap,
           {
-            ...mandateWeekOpts(store),
+            ...providerWeekMandateOpts(store, providerId, weekStart || week.weekStart || ''),
             // Caseload kids with 0 sessions still feed weekly 0-of-N, monthly, and cycle checks.
+            // Discharged mandates and other providers' children are not yellow under-mandate warnings.
             includeStudentIds: students.map((s) => s.id),
           },
         )
@@ -3915,7 +4355,7 @@ export async function handleTmsRequest(
           targetWeek.status === 'submitted'
             ? 'Week is awaiting signature — cancel approval before importing.'
             : weekIsProcessed(targetWeek.status)
-              ? 'Week is signed/locked — ask an admin to reopen before importing.'
+              ? 'Week is signed/locked — revoke the signature before importing.'
               : 'This week cannot accept imports.';
         failed.push({
           studentName,
@@ -4448,7 +4888,7 @@ export async function handleTmsRequest(
       store.sessionsForWeek(week.id),
       store.data.sessions,
       names,
-      mandateWeekOpts(store),
+      providerWeekMandateOpts(store, providerId, week.weekStart),
     );
 
     const archiveId = await archiveUploadPdf(
@@ -4515,7 +4955,7 @@ export async function handleTmsRequest(
           error:
             week.status === 'submitted'
               ? 'Approval is pending. Cancel the signature request before editing sessions.'
-              : 'This session was already processed and cannot be edited. Ask an admin if a change is required.',
+              : 'This session was already processed and cannot be edited. Revoke the signature on this week before changing it.',
         });
       }
     } else if (
@@ -4530,14 +4970,22 @@ export async function handleTmsRequest(
             : 'This week cannot accept new sessions. Ask an admin to reopen it.',
       });
     }
-    const attendance =
-      b.attendance === 'missed' || b.attendance === 'makeup' || b.attendance === 'attended'
+    let attendance =
+      b.attendance === 'missed' ||
+      b.attendance === 'makeup' ||
+      b.attendance === 'attended' ||
+      b.attendance === 'paid_absence'
         ? b.attendance
         : existing?.attendance || 'attended';
     const rawAdditional = b.additionalServiceType;
     let additionalServiceType: SessionRow['additionalServiceType'] =
-      existing?.additionalServiceType || '';
-    if (rawAdditional === '' || rawAdditional == null) {
+      String(existing?.additionalServiceType || '') === 'paid_absence'
+        ? ''
+        : existing?.additionalServiceType || '';
+    if (rawAdditional === 'paid_absence' || attendance === 'paid_absence') {
+      attendance = 'paid_absence';
+      additionalServiceType = '';
+    } else if (rawAdditional === '' || rawAdditional == null) {
       if (Object.prototype.hasOwnProperty.call(b, 'additionalServiceType')) {
         additionalServiceType = '';
       }
@@ -4545,7 +4993,7 @@ export async function handleTmsRequest(
       additionalServiceType = rawAdditional;
     } else {
       return json(400, {
-        error: 'Pick a valid additional service: Eval, Progress report, Consultation, Meetings, Documentation, or Paid absence.',
+        error: 'Pick a valid additional service: Eval, Progress report, Consultation, Meetings, or Documentation.',
       });
     }
     const serviceTypeFromAdditional = additionalServiceType
@@ -4573,7 +5021,7 @@ export async function handleTmsRequest(
     // Route new sessions onto the child's program-type timesheet bin.
     let targetWeek = week;
     const requestedStudentId = pickStr(b.studentId, existing?.studentId || '');
-    const bodyProgramType = String(b.programType || '').trim();
+    const bodyProgramType = canonicalContractProgramName(String(b.programType || ''));
     const childStudent = store.data.students.find((st) => st.id === requestedStudentId);
     const childSchoolId = String(childStudent?.schoolId || '').trim();
     const childProgramType = String(childStudent?.programType || '').trim();
@@ -4677,7 +5125,7 @@ export async function handleTmsRequest(
         targetWeek = host;
         if (
           bodyProgramType &&
-          therapistCanEdit(targetWeek.status) &&
+          (therapistCanEdit(targetWeek.status) || ctx.user.role === 'admin') &&
           !String(targetWeek.programType || '').trim()
         ) {
           targetWeek = store.upsertWeek({ ...targetWeek, programType: bodyProgramType });
@@ -4698,6 +5146,14 @@ export async function handleTmsRequest(
         schoolId: childSchoolId || String(targetWeek.schoolId || ''),
       });
     }
+    const noChildAdditional =
+      Boolean(additionalServiceType) && !String(requestedStudentId || '').trim();
+    const sentProgram = Object.prototype.hasOwnProperty.call(b, 'programType');
+    const sessionProgramType = noChildAdditional
+      ? sentProgram
+        ? bodyProgramType
+        : canonicalContractProgramName(existing?.programType || '')
+      : '';
     const session: SessionRow = {
       id: String(b.id || existing?.id || newId()),
       weekId: targetWeek.id,
@@ -4713,6 +5169,7 @@ export async function handleTmsRequest(
         serviceTypeFromAdditional || existing?.serviceType || '',
       ),
       additionalServiceType,
+      programType: sessionProgramType || undefined,
       location: pickStr(b.location, existing?.location || ''),
       notes: pickStr(b.notes, existing?.notes || ''),
       cptCodes,
@@ -4724,6 +5181,14 @@ export async function handleTmsRequest(
     if (additionalServiceType && !b.serviceType) {
       session.serviceType = serviceTypeFromAdditional;
     }
+    if (
+      session.programType &&
+      (therapistCanEdit(targetWeek.status) || ctx.user.role === 'admin') &&
+      !String(targetWeek.programType || '').trim()
+    ) {
+      targetWeek = store.upsertWeek({ ...targetWeek, programType: session.programType });
+      session.weekId = targetWeek.id;
+    }
     session.studentId = String(session.studentId || '').trim();
     if (!session.studentId && !isAdditionalServiceType(session.additionalServiceType || '')) {
       const childRequired = 'Select a child.';
@@ -4732,15 +5197,19 @@ export async function handleTmsRequest(
     const serviceTypeErr = sessionServiceTypeRequiredError(session.serviceType);
     if (serviceTypeErr) return json(400, { error: serviceTypeErr, errors: [serviceTypeErr] });
     if (session.attendance === 'missed') {
-      session.beginTime = '';
-      session.endTime = '';
       session.makeupOfSessionId = '';
-      const missedReasonErr = missedSessionReasonError(
-        session.attendance,
-        session.cancelReason,
-        session.notes,
-      );
-      if (missedReasonErr) return json(400, { error: missedReasonErr, errors: [missedReasonErr] });
+      // Paid absence is payable on the timesheet and keeps its clock.
+      // Unpaid misses stay off the sheet and still drop times / require a Frontline reason.
+      if (!isPaidAbsenceSession(session)) {
+        session.beginTime = '';
+        session.endTime = '';
+        const missedReasonErr = missedSessionReasonError(
+          session.attendance,
+          session.cancelReason,
+          session.notes,
+        );
+        if (missedReasonErr) return json(400, { error: missedReasonErr, errors: [missedReasonErr] });
+      }
     } else if (session.attendance !== 'makeup') {
       session.makeupOfSessionId = '';
     }
@@ -4829,7 +5298,7 @@ export async function handleTmsRequest(
       store.sessionsForWeek(targetWeek.id),
       store.data.sessions,
       studentNameById(store),
-      mandateWeekOpts(store),
+      providerWeekMandateOpts(store, targetWeek.providerId, targetWeek.weekStart),
     );
     if (check.errors.length) {
       store.removeSession(session.id);
@@ -4945,7 +5414,7 @@ export async function handleTmsRequest(
       sessions,
       store.data.sessions,
       studentNameById(store),
-      mandateWeekOpts(store),
+      providerWeekMandateOpts(store, week.providerId, week.weekStart),
     );
     if (check.errors.length) {
       return json(400, {
@@ -5114,7 +5583,7 @@ export async function handleTmsRequest(
       sessions,
       store.data.sessions,
       studentNameById(store),
-      mandateWeekOpts(store),
+      providerWeekMandateOpts(store, week.providerId, week.weekStart),
     );
     if (check.errors.length) {
       return json(400, {
@@ -5303,7 +5772,13 @@ export async function handleTmsRequest(
       return json(status, { error: msg });
     }
     const timesheetKey = `tms/timesheets/${next.id}.pdf`;
-    store.upsertWeek({ ...next, envelopeId: envelope.envelopeId, timesheetKey });
+    store.upsertWeek({
+      ...next,
+      envelopeId: envelope.envelopeId,
+      timesheetKey,
+      signatureRequestStatus: 'pending',
+      signatureRequestAt: nowIso(),
+    });
     const existingTs = findTimesheetArchive(store, next.id);
     await persistArchivePdf({
       store,
@@ -5492,34 +5967,15 @@ export async function handleTmsRequest(
     return servePdf(Buffer.from(pdf), `timesheet-${week.weekStart}.pdf`);
   }
 
-  if (req.method === 'POST' && /^\/weeks\/[^/]+\/cancel-approval$/.test(path)) {
-    const week = store.data.weeks.find((w) => w.id === path.split('/')[2]);
-    if (!week) return json(404, { error: 'Week not found.' });
-    if (week.status !== 'submitted') {
-      return json(409, { error: 'Only a pending (submitted) timesheet can cancel approval.' });
-    }
-    if (ctx.user.role !== 'admin') {
-      const provider = providerFor(store, ctx.user);
-      if (!provider || week.providerId !== provider.id) {
-        return json(403, { error: 'You can only cancel your own pending timesheet.' });
-      }
-    }
-    if (week.envelopeId) {
-      await voidSignEnvelope(week.envelopeId, 'Timesheet approval cancelled in TMS');
-    }
-    const next = store.upsertWeek({
-      ...week,
-      status: 'draft',
-      envelopeId: '',
-      timesheetKey: '',
-      signedKey: '',
-    });
-    markTimesheetArchivesStatus(store, week.id, 'draft');
-    store.audit(ctx.user.id, 'cancel_approval', `week:${week.id}`, week, next);
-    return json(200, {
-      week: next,
-      message: 'Approval request cancelled. Week is back to draft.',
-    });
+  if (
+    req.method === 'POST' &&
+    /^\/weeks\/[^/]+\/(?:cancel-approval|cancel-signature)$/.test(path)
+  ) {
+    return endWeekSignatureRequest(store, ctx, path.split('/')[2] || '', 'cancel');
+  }
+
+  if (req.method === 'POST' && /^\/weeks\/[^/]+\/retrieve-signature$/.test(path)) {
+    return endWeekSignatureRequest(store, ctx, path.split('/')[2] || '', 'retrieve');
   }
 
   if (req.method === 'POST' && /^\/weeks\/[^/]+\/resend-invite$/.test(path)) {
@@ -5576,7 +6032,7 @@ export async function handleTmsRequest(
           week.status === 'submitted'
             ? 'Approval is pending. Cancel the signature request before removing sessions.'
             : weekIsProcessed(week.status)
-              ? 'This session was already processed and cannot be removed.'
+              ? 'This session was already processed and cannot be removed. Revoke the signature on this week before removing it.'
               : 'This week is locked. Ask an admin to reopen it.',
       });
     }
@@ -5611,23 +6067,7 @@ export async function handleTmsRequest(
   }
 
   if (req.method === 'POST' && /^\/admin\/weeks\/[^/]+\/reopen$/.test(path)) {
-    return adminUser(() => {
-      const week = store.data.weeks.find((w) => w.id === path.split('/')[3]);
-      if (!week) return json(404, { error: 'Week not found.' });
-      if (week.status !== 'locked' && week.status !== 'signed') {
-        return json(409, { error: 'Only signed or locked weeks can be reopened.' });
-      }
-      const next = store.upsertWeek({
-        ...week,
-        status: 'reopened',
-        hhaStatus: week.hhaStatus,
-        providerSignedKey: '',
-        providerSignedAt: '',
-        envelopeId: '',
-      });
-      store.audit(ctx.user.id, 'reopen_week', `week:${week.id}`, week, next);
-      return json(200, { week: next });
-    });
+    return revokeWeekSignature(store, ctx, path.split('/')[3] || '');
   }
 
   /** Re-download completed SignNow PDF into locker (fixes missing scribble after lock). */
@@ -5689,6 +6129,7 @@ export async function handleTmsRequest(
       week: store.data.weeks.find((w) => w.id === week.id)!,
       hha: deps.hha,
       actorId: ctx.user.id,
+      afterSession: deps.persistNow,
     });
     return json(result.ok ? 200 : 207, result);
   }

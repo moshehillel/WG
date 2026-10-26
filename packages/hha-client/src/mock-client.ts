@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { HhaClockingDetails, HhaPatient, HhaVisit } from '@white-glove/shared';
 import { lookupContractId, lookupServiceCode, lookupServiceCodeAlias } from '@white-glove/shared';
 import { stripLeadingZerosFromNumericId } from './create-patient-builder.js';
+import { isEvvPlaceholderSchedule } from './hha-time.js';
 import { findReusableContractPlacement } from './placements.js';
 import { resolvePlacementForService } from './resolve-placement.js';
 import { isTrustedHhaPatientId, toFindPatientOptions } from './resolve-patient-id.js';
@@ -41,6 +42,14 @@ export class MockHhaClient implements HhaClient {
   /** PatientIDs that CreateSchedule rejects with ErrorID=-56 (stale / wrong agency). */
   readonly invalidPatientIds = new Set<string>();
   readonly calls: string[] = [];
+  /** 1:00–1:30 AM scaffolding visits. removeEvvPlaceholderVisits drops matches. */
+  placeholderVisits: Array<{
+    id: string;
+    patientId: string;
+    caregiverId?: string;
+    startTime: string;
+    endTime: string;
+  }> = [];
 
   async findPatient(options: FindPatientOptions): Promise<string | undefined> {
     this.calls.push('findPatient');
@@ -338,6 +347,27 @@ export class MockHhaClient implements HhaClient {
       matchesExpected: Boolean(clockIn && clockOut),
       notes: 'mock clocking',
     };
+  }
+
+  async removeEvvPlaceholderVisits(options: {
+    patientId: string;
+    caregiverId?: string;
+    visitDate?: string;
+    keepVisitId?: string;
+  }): Promise<{ deletedVisitIds: string[] }> {
+    this.calls.push('removeEvvPlaceholderVisits');
+    const deletedVisitIds: string[] = [];
+    this.placeholderVisits = this.placeholderVisits.filter((visit) => {
+      if (visit.id === options.keepVisitId) return true;
+      if (visit.patientId !== options.patientId) return true;
+      if (options.caregiverId && visit.caregiverId && visit.caregiverId !== options.caregiverId) {
+        return true;
+      }
+      if (!isEvvPlaceholderSchedule(visit.startTime, visit.endTime)) return true;
+      deletedVisitIds.push(visit.id);
+      return false;
+    });
+    return { deletedVisitIds };
   }
 
   async approveVisit(visitId: string): Promise<void> {

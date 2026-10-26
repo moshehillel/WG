@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { lookupContractId, PROGRAM_CONTRACT_MAP } from './contract-map.js';
+import {
+  canonicalContractProgramName,
+  lookupContractId,
+  PROGRAM_CONTRACT_MAP,
+} from './contract-map.js';
 
 describe('lookupContractId', () => {
   it('resolves program type to HHA ContractID', () => {
@@ -10,6 +14,8 @@ describe('lookupContractId', () => {
   it('treats a period as optional so Fred S Keller matches ContractID 72817', () => {
     expect(lookupContractId('Fred S. Keller School')).toBe(72817);
     expect(lookupContractId('Fred S keller school')).toBe(72817);
+    expect(canonicalContractProgramName('Fred S keller school')).toBe('Fred S. Keller School');
+    expect(canonicalContractProgramName('Fred S. Keller School')).toBe('Fred S. Keller School');
   });
 
   it('does not match a different school', () => {

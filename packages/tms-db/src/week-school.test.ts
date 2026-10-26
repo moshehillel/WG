@@ -4,6 +4,7 @@ import { nowIso, newId } from './ids.js';
 import {
   canonicalTimesheetProgramKey,
   foldOrphanNoChildAdditionalWeeks,
+  unambiguousSiblingProgramType,
   resolveWeekProgramType,
   splitWeekBySchoolBins,
   timesheetBinKeyForParts,
@@ -589,6 +590,51 @@ describe('week-school bins', () => {
     expect(store.data.weeks).toHaveLength(1);
     expect(store.data.weeks[0]?.id).toBe(host.id);
     expect(store.sessionsForWeek(host.id).map((s) => s.id).sort()).toEqual(['s-addl', 's-child']);
+  });
+
+  it('treats Fred S Keller with or without a period as one timesheet bin', () => {
+    expect(canonicalTimesheetProgramKey('Fred S. Keller School')).toBe(
+      canonicalTimesheetProgramKey('Fred S keller school'),
+    );
+  });
+
+  it('reads Fred S Keller from the sibling week when the no-child sheet is blank', () => {
+    const store = emptyStore();
+    const providerId = 'p-keller';
+    const schoolId = 'sch-keller';
+    const base = {
+      providerId,
+      weekStart: '2026-09-14',
+      schoolId,
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none' as const,
+      hhaError: '',
+    };
+    const orphan = store.upsertWeek({
+      ...base,
+      id: 'wk-orphan',
+      status: 'locked',
+      programType: '',
+    });
+    store.upsertWeek({
+      ...base,
+      id: 'wk-kids',
+      status: 'locked',
+      programType: 'Fred S keller school',
+    });
+    expect(unambiguousSiblingProgramType(store, orphan)).toBe('Fred S keller school');
+
+    store.upsertWeek({
+      ...base,
+      id: 'wk-other',
+      status: 'locked',
+      programType: 'Baldwin UFSD',
+    });
+    expect(unambiguousSiblingProgramType(store, orphan)).toBe('');
   });
 
   it('treats a short UFSD label and the HHA Therapy suffix as one timesheet bin', () => {

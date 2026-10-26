@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractDistrictAgencyHeader,
+  isHomeschooledSchoolName,
   isNonSchoolLikeSetting,
   looksLikeDistrictLabel,
   parseWeeklySessionText,
@@ -179,6 +180,40 @@ Sep 23 2026 10:40AM
         'Hicksville UFSD',
         { name: 'Trinity Lutheran', district: '' },
         'Westbury UFSD',
+      ),
+    ).toBe(true);
+  });
+
+  it('allows a Homeschooled child on a real report district and still rejects a different school', () => {
+    const valley = 'Valley Stream Union Free School District No. 24';
+    expect(isHomeschooledSchoolName('Homeschooled')).toBe(true);
+    expect(isHomeschooledSchoolName('home schooled')).toBe(true);
+    expect(isHomeschooledSchoolName('Home School')).toBe(true);
+    expect(isHomeschooledSchoolName('Elmont Union Free School District')).toBe(false);
+    for (const label of ['Homeschooled', 'Home schooled', 'Home School', 'Homeschool']) {
+      expect(
+        pdfSchoolConflictsWithChild(valley, { name: label, district: '' }, ''),
+      ).toBe(false);
+    }
+    expect(
+      pdfSchoolConflictsWithChild(
+        valley,
+        { name: 'Elmont Union Free School District', district: 'Elmont UFSD' },
+        'Elmont UFSD',
+      ),
+    ).toBe(true);
+    expect(
+      pdfSchoolConflictsWithChild(
+        valley,
+        { name: 'Clara H. Carlson School', district: 'Elmont Union Free School District' },
+        '',
+      ),
+    ).toBe(true);
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Powells Lane',
+        { name: 'Clara H. Carlson School', district: '' },
+        'Valley Stream Union Free School District No. 24',
       ),
     ).toBe(true);
   });

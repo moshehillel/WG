@@ -149,7 +149,30 @@ export function schoolDaysBetween(
   return count;
 }
 
-/** Short label for admin UI, e.g. "Sep 2 – Jun 25, 12 off days". */
+/** Cycle lengths an admin can set on a school calendar. Mandate periods may still name another N from caseload text. */
+export const SCHOOL_CYCLE_LENGTHS = [6, 10] as const;
+export type SchoolCycleLength = (typeof SCHOOL_CYCLE_LENGTHS)[number];
+
+export function isSchoolCycleLength(n: number): n is SchoolCycleLength {
+  return (SCHOOL_CYCLE_LENGTHS as readonly number[]).includes(n);
+}
+
+/**
+ * Parse a school-calendar cycle length.
+ * Blank clears the field. 6 and 10 are the only saved choices.
+ */
+export function parseSchoolCycleDays(
+  raw: unknown,
+): { ok: true; cycleDays: SchoolCycleLength | undefined } | { ok: false; error: string } {
+  if (raw == null || raw === '') return { ok: true, cycleDays: undefined };
+  const n = typeof raw === 'number' ? raw : Number(String(raw).trim());
+  if (!Number.isInteger(n) || !isSchoolCycleLength(n)) {
+    return { ok: false, error: 'Cycle length must be 6 or 10 school days.' };
+  }
+  return { ok: true, cycleDays: n };
+}
+
+/** Short label for admin UI, e.g. "Sep 2 – Jun 25, 12 off days, 10-day cycle". */
 export function schoolCalendarSummary(calendar: SchoolCalendar | null | undefined): string {
   if (!calendar?.yearStart || !calendar?.yearEnd) return '';
   const fmt = (iso: string) => {
@@ -159,5 +182,8 @@ export function schoolCalendarSummary(calendar: SchoolCalendar | null | undefine
   };
   const n = calendar.offDays?.length ?? 0;
   const offLabel = n === 1 ? '1 off day' : `${n} off days`;
-  return `${fmt(calendar.yearStart)} – ${fmt(calendar.yearEnd)}, ${offLabel}`;
+  const cycleDays = Number(calendar.cycleDays);
+  const cycle =
+    Number.isInteger(cycleDays) && isSchoolCycleLength(cycleDays) ? `, ${cycleDays}-day cycle` : '';
+  return `${fmt(calendar.yearStart)} – ${fmt(calendar.yearEnd)}, ${offLabel}${cycle}`;
 }

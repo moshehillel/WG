@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { caregiverSearchNameOrders, psDateToIso } from './hha-time.js';
+import { caregiverSearchNameOrders, isEvvPlaceholderSchedule, psDateToIso } from './hha-time.js';
 
 describe('psDateToIso', () => {
   it('expands MM/DD/YY into YYYY-MM-DD (00–69 → 2000s)', () => {
@@ -67,5 +67,28 @@ describe('caregiverSearchNameOrders', () => {
           !a.lastName.includes('*'),
       ),
     ).toBe(true);
+  });
+
+  it('keeps multi-word surname from Last, First (Donaldson Fortune, Shayena)', () => {
+    const attempts = caregiverSearchNameOrders('Donaldson Fortune, Shayena');
+    expect(attempts).toEqual(
+      expect.arrayContaining([
+        { lastName: 'Donaldson Fortune', firstName: 'Shayena' },
+        { firstName: 'Shayena', lastName: 'Donaldson Fortune' },
+        // HHA often stores maiden-only LastName
+        { lastName: 'Donaldson', firstName: 'Shayena' },
+        { firstName: 'Shayena', lastName: 'Donaldson' },
+        { lastName: 'Fortune', firstName: 'Shayena' },
+      ]),
+    );
+  });
+});
+
+describe('isEvvPlaceholderSchedule', () => {
+  it('matches the 1:00–1:30 AM scaffolding window in HHMM or 12-hour form', () => {
+    expect(isEvvPlaceholderSchedule('0100', '0130')).toBe(true);
+    expect(isEvvPlaceholderSchedule('1:00 AM', '1:30 AM')).toBe(true);
+    expect(isEvvPlaceholderSchedule('09:00', '09:30')).toBe(false);
+    expect(isEvvPlaceholderSchedule('13:00', '13:30')).toBe(false);
   });
 });

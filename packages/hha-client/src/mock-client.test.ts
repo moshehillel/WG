@@ -19,6 +19,25 @@ describe('MockHhaClient', () => {
     expect(second.id).toBe(first.id);
   });
 
+  it('createPatient always inserts a new row even when the name already exists', async () => {
+    const client = new MockHhaClient();
+    const first = await client.createPatient({
+      firstName: 'no',
+      lastName: 'child',
+      caseId: 'NC1',
+      externalId: 'NC1',
+    });
+    const second = await client.createPatient({
+      firstName: 'no',
+      lastName: 'child',
+      caseId: 'NC2',
+      externalId: 'NC2',
+    });
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(true);
+    expect(second.id).not.toBe(first.id);
+  });
+
   it('approves visits and validates transfers', async () => {
     const client = new MockHhaClient();
     const patient = await client.upsertPatient({

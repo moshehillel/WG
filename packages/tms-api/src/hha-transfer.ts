@@ -843,6 +843,14 @@ export async function transferLockedWeek(options: {
           durationMinutes: billingDurationMinutes,
           group: useGroupBilling,
         });
+      if (!billingServiceName && billingKind === 'additional') {
+        const disc = discipline ?? 'PT';
+        throw new Error(
+          clockMinutes == null
+            ? `Additional service has no start and end time. A 30-minute visit uses "${disc} additional services 30". A 60-minute visit uses "${disc} additional services 60".`
+            : `Additional service is ${clockMinutes} min. Use a 30-minute visit for "${disc} additional services 30" or a 60-minute visit for "${disc} additional services 60".`,
+        );
+      }
       if (!billingServiceName) {
         throw new Error(
           `Cannot build HHA billing service name (discipline=${discipline ?? '(missing)'}, kind=${billingKind}, duration=${billingDurationMinutes ?? '(missing)'})`,
@@ -995,8 +1003,9 @@ export async function transferLockedWeek(options: {
           ? 'Skilled'
           : 'Non-Skilled';
 
-      // HHA CreateSchedule requires PrimaryBillTo Minutes === schedule window, and the
-      // service-code unit must match that window. PT School 30 + 60-min clock → ErrorID=-11.
+      // HHA CreateSchedule requires PrimaryBillTo hours+minutes to equal the schedule
+      // window, and the service-code unit must match that window. Minutes stay 0–59
+      // (60 min is Hours=1, Minutes=0). PT School 30 + 60-min clock → ErrorID=-11.
       const billingUnitMinutes = schoolBillingDurationMinutes(billingServiceName);
       if (
         billingKind === 'school' &&
@@ -1012,6 +1021,8 @@ export async function transferLockedWeek(options: {
       }
 
       const priorVisitId = existing?.hhaVisitId?.trim() || '';
+      // Paid absence stays "paid absence" on the timesheet. CreateSchedule has no
+      // attendance field, so the visit is the same attended school visit HHA confirms.
       const scheduled = await locateOrScheduleVisitWithPatientRecovery({
         store,
         hha,
@@ -1120,8 +1131,9 @@ export async function transferLockedWeek(options: {
           `Re-send after office config allows ConfirmVisits with TimesheetApproved=Yes. (${raw})`;
       } else if (isInvalidHhaVisitError(err)) {
         message =
-          `HHA visit was scheduled but ConfirmVisits could not read the VisitID yet (ErrorID=-415). ` +
-          `Re-send to confirm + approve timesheet — VisitID ${scheduledVisitId || '(unknown)'}. (${raw})`;
+          `HHA visit was scheduled but the new VisitID was still unreadable after waiting (ErrorID=-415). ` +
+          `The schedule is in HHA and Confirm Visit was not checked. ` +
+          `Re-send to confirm it — VisitID ${scheduledVisitId || '(unknown)'}. (${raw})`;
       }
       const childName = student
         ? `${student.firstName} ${student.lastName}`.trim()

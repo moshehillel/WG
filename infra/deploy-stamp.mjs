@@ -13,6 +13,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..');
 
+/** Prefix for aws CLI — set AWS_NO_VERIFY_SSL=1 when NetFree/MITM breaks CA trust. */
+function awsCli() {
+  return process.env.AWS_NO_VERIFY_SSL === '1' ? 'aws --no-verify-ssl' : 'aws';
+}
+
 export function readGitSha() {
   try {
     return execSync('git rev-parse --short HEAD', {
@@ -38,12 +43,13 @@ export function stampLambdaGitEnv(fnName, opts = {}) {
   const sha = opts.sha || readGitSha();
   const builtAt = opts.builtAt || stampBuiltAt();
 
-  execSync(`aws lambda wait function-updated --region ${region} --function-name ${fnName}`, {
+  const aws = awsCli();
+  execSync(`${aws} lambda wait function-updated --region ${region} --function-name ${fnName}`, {
     stdio: 'inherit',
   });
 
   const prevRaw = execSync(
-    `aws lambda get-function-configuration --region ${region} --function-name ${fnName} --query Environment.Variables --output json`,
+    `${aws} lambda get-function-configuration --region ${region} --function-name ${fnName} --query Environment.Variables --output json`,
     { encoding: 'utf8' },
   );
   const prev = JSON.parse(prevRaw);
@@ -63,7 +69,7 @@ export function stampLambdaGitEnv(fnName, opts = {}) {
 
   try {
     execSync(
-      `aws lambda update-function-configuration --region ${region} --function-name ${fnName} --environment file://${tmp} --query "{TMS_GIT_SHA:Environment.Variables.TMS_GIT_SHA,TMS_BUILT_AT:Environment.Variables.TMS_BUILT_AT,LastModified:LastModified}" --output json`,
+      `${aws} lambda update-function-configuration --region ${region} --function-name ${fnName} --environment file://${tmp} --query "{TMS_GIT_SHA:Environment.Variables.TMS_GIT_SHA,TMS_BUILT_AT:Environment.Variables.TMS_BUILT_AT,LastModified:LastModified}" --output json`,
       { stdio: 'inherit' },
     );
   } finally {

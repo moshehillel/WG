@@ -30,7 +30,7 @@ HHA pay codes are titled **discipline + $rate**, or **discipline + Group + $rate
 | **More than mandate groupSize** | Blocked |
 | **Small Group / Group** (no numeric size) | Stored **groupSize = 2** (client: small group = fewer than 3); overlap still caps legacy null at 2 |
 | **Group-mandate seen individually** | Individual pay; note should say **no peer available**; treated as **individual for overlap** (later peer in same window blocked) |
-| **Group↔group share window** | Only when both sessions are **group-tagged** (Group / 2:1 / 3:1 / 4:1) |
+| **Group↔group share window** | Only when both sessions are **group-tagged** (the word Group, or any N:1 with N ≥ 2). There is no maximum N. |
 
 | Source | Field | Example |
 |--------|-------|---------|
@@ -61,11 +61,12 @@ Create these **exact** ServiceCode names under each school contract (lookup is c
 | ~42 min group | `{Disc} school group 42` | `OT school group 42`, … |
 | ~45 min group | `{Disc} school group 45` | `OT school group 45`, … |
 | ~60 min / other group | `{Disc} school group 60` | `OT school group 60`, … |
-| Additional | `{Disc} additional services` | `OT additional services`, … |
+| Additional 30 min | `{Disc} additional services 30` | `PT additional services 30`, … |
+| Additional 60 min | `{Disc} additional services 60` | `PT additional services 60`, … |
 
-**Duration bucket:** from the **matching mandate’s authorized duration** (same as TMS provider pay) — nearest of 30 / 42 / 45 within **3 minutes** of that mandate length; otherwise **60**. Do **not** derive the bucket from Frontline session clock length.
+**Duration bucket:** from the **matching mandate’s authorized duration** (same as TMS provider pay) — nearest of 15 / 30 / 42 / 45 within **3 minutes** of that mandate length; otherwise **60**. Do **not** derive the bucket or the rate from the session clock. A school session shorter than the mandate (15 minutes on a 30-minute mandate) is blocked. **Additional services** are the exception: their pay and their HHA code follow the clock. 30 minutes uses `{Disc} additional services 30`. 60 minutes uses `{Disc} additional services 60`. A row with no start and end has no length, so it cannot pick a code.
 
-**Kind detection:** `additionalServiceType=eval` or “eval” in Service Type → School eval; other additional kinds (progress report, consultation, meetings, paid absence) → additional services; else school + duration. **Group vs individual** comes from the mandate (`ratioGroup` / group size), not from whether the session had present peers (solo-group pay may still use individual rates).
+**Kind detection:** `additionalServiceType=eval` or “eval” in Service Type → School eval; other additional kinds (progress report, consultation, meetings, paid absence) → additional services; else school + duration. A real group (peers present) stays on the group code and group rate. A group-mandate child **seen individually** is changed to the individual service code and the individual rate, both at the mandate length.
 
 **Caseload import naming (Sep 2026):** On mandate upsert from caseload, store `billingServiceName` = `{Disc} school {bucket}` (individual) or `{Disc} school group {bucket}` (group) from discipline + RS Duration + ratio. Keep Related Service (`serviceType`) for therapist display. HHA week transfer prefers the stored name; falls back to compute-from-mandate for older rows (and rewrites legacy group rows that were stamped without “group”). Eval / additional are not caseload mandates.
 
@@ -127,7 +128,7 @@ Preview must flag new Service Types **and** pay codes that fail the discipline+r
 
 **Optional:** SES HTML + CSV when a verified From identity works (`ALERT_ALWAYS_SNS=true` still publishes SNS every time).
 
-**Current subscribers:** `elefkowitz@whiteglovecare.net`, `moshe@advancedautomations.net`, `ggreenfeld@whiteglovecare.net` (Grace Greenfeld), `alowy@whiteglovecare.net` (Aliza Lowy), `gfriedman@whiteglovecare.net` (Gila Friedman)
+**Current subscribers:** `elefkowitz@whiteglovecare.net`, `moshe@advancedautomations.net`, `ggreenfeld@whiteglovecare.net` (Grace Greenfeld), `alowy@whiteglovecare.net` (Aliza Lowy), `gfriedman@whiteglovecare.net` (Gila Friedman), `miris@whiteglovecare.net`, `rlebovits@whiteglovecare.net`
 
 ### TMS HHA failure digest (SES)
 
@@ -254,8 +255,9 @@ RS Provider on caseload import **must match an existing TMS therapist** (First L
 | **Processed Sessions (provider)** | Signed/locked (paid) sessions only — Session date, Attended status, Start/End time, Pay rate. No week wording. |
 | **Pending Sessions (provider)** | Draft / reopened / submitted workbench; reload control says **Reload sessions**. |
 | **Awaiting signature (submitted)** | Provider sessions fully locked — cancel approval to return to draft before any edit/import/add |
-| **Signed / locked** | Provider sessions fully locked — admin reopen required before edits |
-| **New sessions while locked** | Providers may **not** add/import until cancel (submitted) or admin reopen (signed/locked). Admins may still override. Age locker (14 days) still applies when unlocked. |
+| **Signed / locked** | Provider sessions fully locked until the provider (own week) or an admin revokes the signature. Revoke uses the existing reopen path: status returns to **reopened** (unsigned and editable). Sessions stay. Provider sign time, envelope id, and signed PDF keys are cleared. School signer name/email stay so the timesheet bin does not change. |
+| **Revoke after HHA** | Allowed, same as the previous admin reopen. `hhaStatus` and HHA visit ids are left as they are. Revoke does not delete or change HHA visits. |
+| **New sessions while locked** | Providers may **not** add/import on that signed sheet until cancel (submitted) or the signature is revoked (signed/locked). Admins may still override. Age locker (14 days), mandate duration, and note lockers still apply after revoke. |
 | **Makeup** | Requires unused miss on that date **or** leftover makeup-auth capacity; **no mandate → hard block** |
 | **Cycle / school-day mandates** | Skip **weekly** over-check; enforce densest **N school-day** window instead (calendar off-days when set; else Mon–Fri) |
 | **Monthly mandates** | Manual period option; over-check uses calendar month |

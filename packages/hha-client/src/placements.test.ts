@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  backdatePlacementStart,
   findReusableContractPlacement,
   isPlacementOverlapFault,
   parsePatientPlacements,
@@ -149,6 +150,33 @@ describe('findReusableContractPlacement (cover-date reuse)', () => {
       { contractId: '73268', visitDate: '2025-10-15' },
     );
     expect(result).toEqual({ kind: 'none' });
+  });
+
+  it('backdates a future start to the visit so CreateSchedule sees an active contract', () => {
+    expect(
+      backdatePlacementStart(
+        { placementId: '8655160', startDate: '2026-09-30' },
+        '09/29/26',
+      ),
+    ).toBe('2026-09-29');
+  });
+
+  it('does not move a start that already covers the visit', () => {
+    expect(
+      backdatePlacementStart(
+        { placementId: '1', startDate: '2026-09-09' },
+        '2026-09-29',
+      ),
+    ).toBeUndefined();
+  });
+
+  it('does not backdate a placement discharged before the visit', () => {
+    expect(
+      backdatePlacementStart(
+        { placementId: '1', startDate: '2026-10-01', dischargeDate: '2026-09-01' },
+        '2026-09-29',
+      ),
+    ).toBeUndefined();
   });
 
   it('legacy: reuses sole undischarged same-contract when dates do not cover', () => {

@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCreatePatientBody,
   canCreatePatient,
+  CREATE_PATIENT_COORDINATOR_ID,
+  createPatientDefaultsFromEnv,
+  resolveCreatePatientCoordinatorId,
   formatAdmissionId,
   formatMedicaidNumber,
   mapServiceToDiscipline,
@@ -45,7 +48,7 @@ describe('create-patient-builder', () => {
       },
       {
         officeId: 1025,
-        coordinatorId: 81103,
+        coordinatorId: CREATE_PATIENT_COORDINATOR_ID,
         sourceOfAdmission: 9300,
         branchId: 10073742,
         teamId: 2036,
@@ -81,7 +84,7 @@ describe('create-patient-builder', () => {
       },
       {
         officeId: 1025,
-        coordinatorId: 81103,
+        coordinatorId: CREATE_PATIENT_COORDINATOR_ID,
         sourceOfAdmission: 9300,
         branchId: 10073742,
         teamId: 2036,
@@ -117,7 +120,7 @@ describe('create-patient-builder', () => {
       },
       {
         officeId: 1025,
-        coordinatorId: 81103,
+        coordinatorId: CREATE_PATIENT_COORDINATOR_ID,
         sourceOfAdmission: 9300,
         branchId: 10073742,
         teamId: 2036,
@@ -148,10 +151,103 @@ describe('create-patient-builder', () => {
     expect(parseZipCode('11710-0000')).toEqual({ zip5: 11710, zip4: '0000' });
   });
 
+  it('sends Billu Markowitz when HHA_COORDINATOR_ID is unset', () => {
+    const defaults = createPatientDefaultsFromEnv({} as NodeJS.ProcessEnv);
+    expect(defaults.coordinatorId).toBe(CREATE_PATIENT_COORDINATOR_ID);
+    const xml = buildCreatePatientBody(
+      {
+        firstName: 'Omar',
+        lastName: 'Abedin',
+        dateOfBirth: '2020-01-01',
+        caseId: '922522794',
+        address1: '1 Main St',
+        city: 'Bronx',
+        state: 'NY',
+        zipCode: '10459',
+      },
+      {
+        ...defaults,
+        sourceOfAdmission: 9300,
+        branchId: 10073742,
+        teamId: 2036,
+        locationId: 12284,
+        mobilityStatusId: 2495,
+        evacuationZoneId: 10003239,
+        defaultGender: 'Male',
+      },
+      {
+        branchId: 10073742,
+        teamId: 2036,
+        locationId: 12284,
+        mobilityStatusId: 2495,
+        evacuationZoneId: 10003239,
+      },
+    );
+    expect(xml).toContain('<CoordinatorID1>84898</CoordinatorID1>');
+    expect(xml).not.toContain('81103');
+    expect(xml).not.toContain('68033');
+  });
+
+  it('does not send Abigail Creech or Esty Neuman on CreatePatient', () => {
+    expect(resolveCreatePatientCoordinatorId(81103)).toBe(84898);
+    expect(resolveCreatePatientCoordinatorId(68033)).toBe(84898);
+    expect(resolveCreatePatientCoordinatorId(6573)).toBe(84898);
+    expect(resolveCreatePatientCoordinatorId(67321)).toBe(84898);
+    expect(resolveCreatePatientCoordinatorId(0)).toBe(84898);
+    expect(resolveCreatePatientCoordinatorId(undefined)).toBe(84898);
+    for (const blocked of [81103, 68033, 6573]) {
+      const defaults = createPatientDefaultsFromEnv({
+        HHA_COORDINATOR_ID: String(blocked),
+      } as NodeJS.ProcessEnv);
+      expect(defaults.coordinatorId).toBe(84898);
+      const xml = buildCreatePatientBody(
+        {
+          firstName: 'Omar',
+          lastName: 'Abedin',
+          dateOfBirth: '2020-01-01',
+          caseId: '922522794',
+          address1: '1 Main St',
+          city: 'Bronx',
+          state: 'NY',
+          zipCode: '10459',
+        },
+        {
+          officeId: 1025,
+          coordinatorId: blocked,
+          sourceOfAdmission: 9300,
+          branchId: 10073742,
+          teamId: 2036,
+          locationId: 12284,
+          mobilityStatusId: 2495,
+          evacuationZoneId: 10003239,
+          defaultGender: 'Male',
+        },
+        {
+          branchId: 10073742,
+          teamId: 2036,
+          locationId: 12284,
+          mobilityStatusId: 2495,
+          evacuationZoneId: 10003239,
+        },
+      );
+      expect(xml).toContain('<CoordinatorID1>84898</CoordinatorID1>');
+      expect(xml).not.toContain(String(blocked));
+      expect(xml).not.toContain('81103');
+      expect(xml).not.toContain('68033');
+    }
+  });
+
+  it('uses Billu Markowitz when HHA_COORDINATOR_ID is 84898', () => {
+    const defaults = createPatientDefaultsFromEnv({
+      HHA_COORDINATOR_ID: '84898',
+    } as NodeJS.ProcessEnv);
+    expect(defaults.coordinatorId).toBe(84898);
+  });
+
   it('validates required create fields', () => {
     const check = canCreatePatient(
       { firstName: 'Zachary', lastName: 'Aboagye', dateOfBirth: '12/19/2023' },
-      { officeId: 1025, coordinatorId: 81103 },
+      { officeId: 1025, coordinatorId: CREATE_PATIENT_COORDINATOR_ID },
     );
     expect(check.ok).toBe(false);
     if (!check.ok) expect(check.missing).toContain('address1');
@@ -175,7 +271,7 @@ describe('create-patient-builder', () => {
       },
       {
         officeId: 1025,
-        coordinatorId: 81103,
+        coordinatorId: CREATE_PATIENT_COORDINATOR_ID,
         sourceOfAdmission: 9300,
         branchId: 10073742,
         teamId: 2036,
@@ -215,7 +311,7 @@ describe('create-patient-builder', () => {
       },
       {
         officeId: 1025,
-        coordinatorId: 81103,
+        coordinatorId: CREATE_PATIENT_COORDINATOR_ID,
         sourceOfAdmission: 9300,
         branchId: 10073742,
         teamId: 2036,

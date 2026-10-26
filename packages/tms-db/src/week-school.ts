@@ -15,7 +15,9 @@ export function normalizeProgramTypeKey(programType: string | undefined | null):
   return String(programType || '')
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, ' ');
+    .replace(/\./g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /**
@@ -98,7 +100,9 @@ export function dominantProgramTypeForSessions(
   const counts = new Map<string, { n: number; label: string }>();
   for (const s of sessions) {
     const student = store.data.students.find((st) => st.id === s.studentId);
-    const label = programTypeForStudent(student);
+    // No-child additional rows store the program on the session. A caseload
+    // child named "no child" is not required.
+    const label = programTypeForStudent(student) || String(s.programType || '').trim();
     if (!label) continue;
     const key = normalizeProgramTypeKey(label);
     const cur = counts.get(key);
@@ -133,6 +137,37 @@ export function resolveWeekProgramType(store: MemoryStore, week: WeeklyPeriod): 
     return fromSessions.length >= stamped.length ? fromSessions : stamped;
   }
   return stamped;
+}
+
+/**
+ * Program already stored on another timesheet for this provider, Monday, and
+ * school. A locked no-child documentation sheet can be split off with a blank
+ * programType while the children's sheet for that week still has the contract
+ * name. Returns '' when more than one program is present.
+ */
+export function unambiguousSiblingProgramType(
+  store: MemoryStore,
+  week: WeeklyPeriod,
+): string {
+  const schoolId = String(week.schoolId || '').trim();
+  const labels = new Map<string, string>();
+  for (const other of store.data.weeks) {
+    if (other.id === week.id) continue;
+    if (other.providerId !== week.providerId) continue;
+    if (other.weekStart !== week.weekStart) continue;
+    const otherSchool = String(other.schoolId || '').trim();
+    if (schoolId && otherSchool && otherSchool !== schoolId) continue;
+    const raw =
+      String(other.programType || '').trim() ||
+      dominantProgramTypeForSessions(store, store.sessionsForWeek(other.id));
+    if (!raw) continue;
+    const key = canonicalTimesheetProgramKey(raw);
+    if (!key) continue;
+    const prev = labels.get(key);
+    if (!prev || raw.length > prev.length) labels.set(key, raw);
+  }
+  if (labels.size !== 1) return '';
+  return [...labels.values()][0] || '';
 }
 
 /**

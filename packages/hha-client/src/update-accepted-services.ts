@@ -176,7 +176,6 @@ export function parseDemoEchoFromXml(
     teamId?: string;
     branchId?: string;
     locationId?: string;
-    coordinatorId?: string;
   },
 ): AcceptedServicesDemoEcho {
   const addressId =
@@ -210,8 +209,7 @@ export function parseDemoEchoFromXml(
     coordinatorId1:
       xmlFirstTag(demographicsXml, 'CoordinatorID1') ||
       xmlNestedId(demographicsXml, 'Coordinator1') ||
-      xmlNestedId(demographicsXml, 'Coordinator') ||
-      defaults?.coordinatorId,
+      xmlNestedId(demographicsXml, 'Coordinator'),
     coordinatorId2:
       xmlFirstTag(demographicsXml, 'CoordinatorID2') ||
       xmlNestedId(demographicsXml, 'Coordinator2'),

@@ -54,6 +54,10 @@ import {
 } from './hha-xml-parse.js';
 import { buildCreateScheduleBody } from './schedule-builder.js';
 import {
+  removeEvvPlaceholderVisits as deleteEvvPlaceholderVisits,
+  type PlaceholderRemovalCache,
+} from './evv-placeholder.js';
+import {
   buildCreatePatientBody,
   canCreatePatient,
   createPatientDefaultsFromEnv,
@@ -76,8 +80,10 @@ import {
 } from './pay-code-resolve.js';
 import {
   activePlacements,
+  backdatePlacementStart,
   findReusableContractPlacement,
   isPlacementOverlapFault,
+  normalizePlacementDate,
   parsePatientPlacements,
 } from './placements.js';
 import { resolvePlacementForService } from './resolve-placement.js';
@@ -119,6 +125,27 @@ function assertOk(result: SoapCallResult, context: string): void {
       `HHA ${context} failed: ${result.errorMessage ?? result.status ?? 'unknown'} (ErrorID=${result.errorId ?? '-'})`,
     );
   }
+}
+
+/**
+ * GetVisitInfoV2 often returns -415 for a VisitID CreateSchedule just returned.
+ * Reads a few seconds apart still fail. Wait 5s, then 10s, then 15s, and read again.
+ * A read that succeeds skips the remaining waits.
+ */
+export const VISIT_ID_READ_RETRY_MS = [5_000, 10_000, 15_000] as const;
+
+export async function readVisitUntilReady(
+  read: () => Promise<SoapCallResult>,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  waits: readonly number[] = VISIT_ID_READ_RETRY_MS,
+): Promise<SoapCallResult> {
+  let info = await read();
+  for (const waitMs of waits) {
+    if (info.ok || info.errorId !== '-415') break;
+    await sleep(waitMs);
+    info = await read();
+  }
+  return info;
 }
 
 /** CreateSchedule -310 is overloaded. Only shift-overlap means a visit was just created. */
@@ -168,6 +195,10 @@ export class SoapHhaClientAdapter implements HhaClient {
   private loadedContractServiceCodes = new Set<number>();
   private disciplineCache?: Array<{ id: string; name: string }>;
   private dischargeReasonId?: string;
+  /** Agency catalog from the first successful GetVisitEditReasonActionTaken this process. */
+  private confirmReasonPairs?: VisitConfirmReasonPair[];
+  private placeholderRemoval: PlaceholderRemovalCache = { cleared: new Set() };
+  private lastReasonLookupError = '';
   private readonly createPatientDefaults: CreatePatientDefaults;
   private readonly referenceCache?: HhaReferenceCache;
   readonly defaultOfficeId?: number;
@@ -366,8 +397,12 @@ export class SoapHhaClientAdapter implements HhaClient {
       teamId: String(defaults.teamId),
       branchId: String(defaults.branchId),
       locationId: String(defaults.locationId),
-      coordinatorId: String(defaults.coordinatorId),
     });
+    if (!echo.coordinatorId1) {
+      throw new Error(
+        `Refusing UpdatePatientDemographics for patient ${patientId}: the chart has no Coordinator ID. No coordinator is configured.`,
+      );
+    }
 
     const { merged, missing } = mergeAcceptedServices(echo.acceptedServices, wanted);
     if (!missing.length) {
@@ -395,7 +430,6 @@ export class SoapHhaClientAdapter implements HhaClient {
       teamId: String(defaults.teamId),
       branchId: String(defaults.branchId),
       locationId: String(defaults.locationId),
-      coordinatorId: String(defaults.coordinatorId),
     });
 
     const afterUpper = new Set(afterEcho.acceptedServices.map((d) => d.toUpperCase()));
@@ -439,6 +473,19 @@ export class SoapHhaClientAdapter implements HhaClient {
       if (ids[0]) return { id: String(ids[0]), created: false };
     }
 
+    return this.insertNewPatient(patient);
+  }
+
+  /**
+   * CreatePatient with no name or Program Id search.
+   * AllowDuplicate is already set on the SOAP body. Callers must pass a unique
+   * caseId so AdmissionID is not shared with another "no child" patient.
+   */
+  async createPatient(patient: HhaPatient): Promise<UpsertResult> {
+    return this.insertNewPatient(patient);
+  }
+
+  private async insertNewPatient(patient: HhaPatient): Promise<UpsertResult> {
     const readiness = canCreatePatient(patient, this.createPatientDefaults);
     if (!readiness.ok) {
       const fieldLabels: Record<string, string> = {
@@ -545,6 +592,37 @@ export class SoapHhaClientAdapter implements HhaClient {
       return findReusableContractPlacement(parsePatientPlacements(res.bodyXml ?? ''), reuseOpts);
     };
 
+    /**
+     * Reused placement that starts after this visit is not an active contract
+     * on the visit day (CreateSchedule ErrorID=-310). Move StartDate back to
+     * the visit — never later than the date already on the placement.
+     */
+    const ensureStartCoversVisit = async (placement: {
+      placementId: string;
+      startDate?: string;
+      dischargeDate?: string;
+    }) => {
+      const earlier = backdatePlacementStart(placement, coverDate);
+      if (!earlier) return;
+      const upd = await this.soap.call(
+        'UpdatePatientContract',
+        `<PatientContractInfo>
+  <PatientID>${escape(contract.patientId)}</PatientID>
+  <PlacementID>${escape(placement.placementId)}</PlacementID>
+  <UpdateStartDate>true</UpdateStartDate>
+  <StartDate>${escape(earlier)}</StartDate>
+</PatientContractInfo>`,
+      );
+      if (!upd.ok) {
+        const current = normalizePlacementDate(placement.startDate) ?? placement.startDate ?? '(missing)';
+        throw new Error(
+          `HHA contract starts ${current}, which is after visit ${coverDate}, so CreateSchedule has no active contract. ` +
+            `UpdateStartDate to ${earlier} failed: ${upd.errorMessage ?? upd.status} (ErrorID=${upd.errorId ?? '-'}). ` +
+            `In HHA, set this contract's service start date to ${earlier} or earlier, then retry.`,
+        );
+      }
+    };
+
     let beforeAdd = await tryReuse(coverDate);
     if (beforeAdd.kind === 'none' && coverDate !== startIso) {
       beforeAdd = await tryReuse(startIso);
@@ -553,6 +631,28 @@ export class SoapHhaClientAdapter implements HhaClient {
       beforeAdd = await tryReuseAll();
     }
     if (beforeAdd.kind === 'reuse') {
+      await ensureStartCoversVisit(beforeAdd.placement);
+      // Blank / wrong ServiceCode on an otherwise reusable placement (ServiceCode ID=-1)
+      // still blocks CreateSchedule — stamp the billing ServiceCodeID when HHA allows.
+      const haveSc = contract.serviceCodeId?.trim();
+      const placedSc = beforeAdd.placement.serviceCodeId?.trim();
+      if (haveSc && (!placedSc || placedSc === '-1' || placedSc !== haveSc)) {
+        const upd = await this.soap.call(
+          'UpdatePatientContract',
+          `<PatientContractInfo>
+  <PatientID>${escape(contract.patientId)}</PatientID>
+  <PlacementID>${escape(beforeAdd.placement.placementId)}</PlacementID>
+  <UpdateServiceCode>true</UpdateServiceCode>
+  <ServiceCodeID>${escape(haveSc)}</ServiceCodeID>
+</PatientContractInfo>`,
+        );
+        if (!upd.ok) {
+          console.warn(
+            `[hha] UpdateServiceCode placement ${beforeAdd.placement.placementId} → ${haveSc} failed: ` +
+              `${upd.errorMessage ?? upd.status} (ErrorID=${upd.errorId ?? '-'})`,
+          );
+        }
+      }
       return { id: beforeAdd.placement.placementId, created: false };
     }
     if (beforeAdd.kind === 'ambiguous') {
@@ -587,6 +687,7 @@ export class SoapHhaClientAdapter implements HhaClient {
         afterOverlap = await tryReuseAll();
       }
       if (afterOverlap.kind === 'reuse') {
+        await ensureStartCoversVisit(afterOverlap.placement);
         return { id: afterOverlap.placement.placementId, created: false };
       }
       if (afterOverlap.kind === 'ambiguous') {
@@ -1048,45 +1149,75 @@ export class SoapHhaClientAdapter implements HhaClient {
       // written from the global static ID map and bypass alias→contract lookup.
       const alias = lookupServiceCodeAlias(serviceType, programType);
 
-      await this.loadServiceCodesForContract(contractId);
-      const rows = this.serviceCodeRowsByContract.get(contractId) ?? [];
-
-      // Cache is only a hint: ServiceCodeID must appear on this contract's
-      // GetBillingServiceCodes list (same gate as CreatePatientAuthorization).
-      if (programType?.trim() && !alias) {
-        const cached = await this.referenceCache?.getProgramServiceCodeId(
-          programType,
-          serviceType,
-        );
-        if (cached && rows.some((r) => r.id === cached)) {
-          return [cached];
-        }
-      }
-
-      const ids = resolveServiceCodeIdsFromRows({
+      // GetBillingServiceCodes is kept for the life of this Lambda process (no TTL).
+      // A code created in HHA after that snapshot is invisible until the container
+      // recycles. If this lookup is against that snapshot and misses, read HHA once more.
+      const hadSnapshot = this.loadedContractServiceCodes.has(contractId);
+      let ids = await this.matchContractServiceCodeIds(
         serviceType,
+        contractId,
         programType,
-        rows,
-      });
-      if (!ids.length) return [];
-
-      if (programType?.trim()) {
-        await this.referenceCache?.putProgramServiceCodeId(programType, serviceType, ids[0]!, {
-          ...(alias?.hhaServiceCodeName
-            ? { hhaServiceName: alias.hhaServiceCodeName }
-            : {}),
-        });
-      }
-      // Flat service cache is program-agnostic; do not store aliased resolutions
-      // (Americare OT ≠ Extended "OT SOC/ROC OASIS" for the same PS label).
-      if (!alias) {
-        await this.referenceCache?.putServiceCodeId(serviceType, ids[0]!);
+        alias,
+      );
+      if (!ids.length && hadSnapshot) {
+        this.loadedContractServiceCodes.delete(contractId);
+        this.serviceCodeRowsByContract.delete(contractId);
+        console.info(
+          `[tms-hha] billing codes refreshed after cache miss contract=${contractId} service="${serviceType}"`,
+        );
+        ids = await this.matchContractServiceCodeIds(
+          serviceType,
+          contractId,
+          programType,
+          alias,
+        );
       }
       return ids;
     }
 
     const single = await this.resolveServiceCodeIdWithoutContract(serviceType);
     return single ? [single] : [];
+  }
+
+  private async matchContractServiceCodeIds(
+    serviceType: string,
+    contractId: number,
+    programType: string | undefined,
+    alias: ReturnType<typeof lookupServiceCodeAlias>,
+  ): Promise<string[]> {
+    await this.loadServiceCodesForContract(contractId);
+    const rows = this.serviceCodeRowsByContract.get(contractId) ?? [];
+
+    // Cache is only a hint: ServiceCodeID must appear on this contract's
+    // GetBillingServiceCodes list (same gate as CreatePatientAuthorization).
+    if (programType?.trim() && !alias) {
+      const cached = await this.referenceCache?.getProgramServiceCodeId(
+        programType,
+        serviceType,
+      );
+      if (cached && rows.some((r) => r.id === cached)) {
+        return [cached];
+      }
+    }
+
+    const ids = resolveServiceCodeIdsFromRows({
+      serviceType,
+      programType,
+      rows,
+    });
+    if (!ids.length) return [];
+
+    if (programType?.trim()) {
+      await this.referenceCache?.putProgramServiceCodeId(programType, serviceType, ids[0]!, {
+        ...(alias?.hhaServiceCodeName ? { hhaServiceName: alias.hhaServiceCodeName } : {}),
+      });
+    }
+    // Flat service cache is program-agnostic; do not store aliased resolutions
+    // (Americare OT ≠ Extended "OT SOC/ROC OASIS" for the same PS label).
+    if (!alias) {
+      await this.referenceCache?.putServiceCodeId(serviceType, ids[0]!);
+    }
+    return ids;
   }
 
   private async resolveServiceCodeIdWithoutContract(
@@ -1338,18 +1469,24 @@ export class SoapHhaClientAdapter implements HhaClient {
     };
   }
 
+  async removeEvvPlaceholderVisits(options: {
+    patientId: string;
+    caregiverId?: string;
+    visitDate?: string;
+    keepVisitId?: string;
+  }): Promise<{ deletedVisitIds: string[] }> {
+    return deleteEvvPlaceholderVisits(this.soap, options, this.placeholderRemoval);
+  }
+
   async approveVisit(visitId: string): Promise<void> {
     const numericId = Number(visitId);
     if (!Number.isFinite(numericId) || numericId <= 0) {
       throw new Error(`approveVisit requires numeric VisitID, got ${visitId}`);
     }
 
-    // Brief retries: CreateSchedule VisitIDs are sometimes not readable for a moment (-415).
-    let info = await this.soap.getVisitInfoV2(numericId);
-    for (let attempt = 0; !info.ok && info.errorId === '-415' && attempt < 3; attempt += 1) {
-      await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
-      info = await this.soap.getVisitInfoV2(numericId);
-    }
+    // CreateSchedule VisitIDs are often unreadable for a short time (-415).
+    // Do not burst several reads in a few seconds; that still leaves the visit unconfirmed.
+    const info = await readVisitUntilReady(() => this.soap.getVisitInfoV2(numericId));
     assertOk(info, 'GetVisitInfoV2');
 
     // Already billed or timesheet-approved — skip ConfirmVisits (avoids -401 fail loops on Retry).
@@ -1366,9 +1503,10 @@ export class SoapHhaClientAdapter implements HhaClient {
     const visitFlags = parseTimesheetFlags(info.bodyXml);
     const reasonPairs = await this.resolveConfirmReasonPairs(numericId);
     if (!reasonPairs.length) {
-      throw new Error(
-        'ConfirmVisits requires ReasonCode/ActionCode; enable GetVisitEditReasonActionTaken on sandbox or configure HHA_REASON_LOOKUP_URL + HHA_REASON_LOOKUP_VISIT_ID',
-      );
+      const detail = this.lastReasonLookupError
+        ? `ConfirmVisits could not load ReasonCode/ActionCode: ${this.lastReasonLookupError}`
+        : 'ConfirmVisits requires ReasonCode/ActionCode; enable GetVisitEditReasonActionTaken on sandbox or configure HHA_REASON_LOOKUP_URL + HHA_REASON_LOOKUP_VISIT_ID';
+      throw new Error(detail);
     }
 
     const errors: string[] = [];
@@ -1399,17 +1537,29 @@ export class SoapHhaClientAdapter implements HhaClient {
     );
   }
 
-  /** Load reason/action codes: sandbox visit first, then optional prod read-only fallback. */
+  /**
+   * Reason/action codes are an agency catalog. Reuse the first good response
+   * so one visit's empty/error reply does not fail ConfirmVisits, and so a
+   * 56-session week does not re-download the catalog every visit.
+   */
   private async resolveConfirmReasonPairs(visitId: number): Promise<VisitConfirmReasonPair[]> {
+    if (this.confirmReasonPairs?.length) return this.confirmReasonPairs;
+
     const fromVisit = await this.fetchReasonPairs(this.soap, visitId);
-    if (fromVisit.length) return fromVisit;
+    if (fromVisit.length) {
+      this.confirmReasonPairs = fromVisit;
+      return fromVisit;
+    }
 
     if (this.reasonLookup && this.reasonLookupVisitId) {
       const fromProd = await this.fetchReasonPairs(
         this.reasonLookup,
         this.reasonLookupVisitId,
       );
-      if (fromProd.length) return fromProd;
+      if (fromProd.length) {
+        this.confirmReasonPairs = fromProd;
+        return fromProd;
+      }
     }
 
     return [];
@@ -1419,9 +1569,26 @@ export class SoapHhaClientAdapter implements HhaClient {
     client: HhaSoapClient,
     visitId: number,
   ): Promise<VisitConfirmReasonPair[]> {
-    const res = await client.getVisitEditReasonActionTaken(visitId);
-    if (!res.ok) return [];
-    return parseVisitEditReasonPairs(res.bodyXml);
+    let last = '';
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const res = await client.getVisitEditReasonActionTaken(visitId);
+      if (res.ok) {
+        const pairs = parseVisitEditReasonPairs(res.bodyXml);
+        if (pairs.length) {
+          this.lastReasonLookupError = '';
+          return pairs;
+        }
+        last = `no reason/action pairs for visit ${visitId}`;
+      } else {
+        const msg = String(res.errorMessage || res.status || 'failed').trim();
+        last = `${msg} (ErrorID=${res.errorId ?? '-'})`;
+      }
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+    this.lastReasonLookupError = last;
+    return [];
   }
 
   async listPatientPlacements(

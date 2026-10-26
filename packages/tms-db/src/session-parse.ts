@@ -1,5 +1,9 @@
 import { notesMentionNoPeerAvailable, sessionLooksGroup } from './mandate.js';
-import { extractMakeupForDate, MAKEUP_COVERED_DATE_PREFIX } from './makeup-date.js';
+import {
+  extractMakeupForDate,
+  MAKEUP_COVERED_DATE_PREFIX,
+  MAKEUP_PHRASE_RE,
+} from './makeup-date.js';
 import { clockToMinutes } from './provider-pay.js';
 import {
   FRONTLINE_MISSED_REASON_RE,
@@ -40,7 +44,7 @@ const MISSED_RE = new RegExp(
   `${FRONTLINE_MISSED_REASON_RE.source}|\\b(?:student not in school|student absent|absent|missed|cancell?ed|no[\\s-]?show|did not attend|not present|refused)\\b`,
   'i',
 );
-const MAKEUP_RE = /\b(makeup|make[\s-]?up)\b/i;
+const MAKEUP_RE = /\b(makeup|m+ake[\s-]?up)\b/i;
 const FRONTLINE_ABSENCE_LABEL_RE =
   /(?:Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage)\s*:/i;
 const SERVICE_PROVIDED_RE = /Service\s+Provided\s*:/i;
@@ -84,10 +88,7 @@ export function clipSessionNotes(raw: string, max = 1600): string {
   if (notesMentionNoPeerAvailable(full) && !notesMentionNoPeerAvailable(kept)) {
     bits.push('no partner available');
   }
-  if (
-    /\b(?:makeup|make[\s-]?up)\s+session\b|\bmake[\s-]?up\s+for\b/i.test(full) &&
-    !/\b(?:makeup|make[\s-]?up)\s+session\b|\bmake[\s-]?up\s+for\b/i.test(kept)
-  ) {
+  if (MAKEUP_PHRASE_RE.test(full) && !MAKEUP_PHRASE_RE.test(kept)) {
     bits.push('makeup session');
   }
   if (!bits.length) return kept;
@@ -97,7 +98,7 @@ export function clipSessionNotes(raw: string, max = 1600): string {
 }
 
 /** Frontline ratio token (1:1, 2:1, 5:1). Clock times like 8:40 / 9:10 do not match. */
-const FRONTLINE_RATIO_TOKEN_RE = /\b([1-9]\d?)\s*:\s*1\b/;
+const FRONTLINE_RATIO_TOKEN_RE = /\b([1-9]\d*)\s*:\s*1\b/;
 
 export function normalizeFrontlineRatioToken(raw: string): string {
   const m = String(raw || '').match(FRONTLINE_RATIO_TOKEN_RE);
@@ -186,7 +187,7 @@ function scrubPeerAbsentPhrases(notes: string): string {
 
 /** Frontline "Log Type / Notes" label — text before the colon is attendance status. */
 const FRONTLINE_LOG_TYPE_LEAD_RE =
-  /^\s*((?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|Make[\s-]?up))\s*:/i;
+  /^\s*((?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|M+ake[\s-]?up))\s*:/i;
 
 export function attendanceFromNotes(
   notes: string,
@@ -199,13 +200,16 @@ export function attendanceFromNotes(
   if (lead) {
     const label = lead[1] || '';
     if (/^Service\s+Provided$/i.test(label)) {
-      if (MAKEUP_RE.test(n) && /make[\s-]?up\s+(?:for|session)/i.test(n)) return 'makeup';
+      if (MAKEUP_RE.test(n) && MAKEUP_PHRASE_RE.test(n)) return 'makeup';
       return 'attended';
     }
-    if (/^Make[\s-]?up$/i.test(label)) return 'makeup';
+    if (/^M+ake[\s-]?up$/i.test(label)) return 'makeup';
     // Provider Absence / Student Not Available / School Closed / etc.
     return 'missed';
   }
+  // "MMAKE-UP for 10/8/26 (Provider absence)" is a makeup. The parenthetical
+  // is why the earlier visit was missed, not the status of this visit.
+  if (MAKEUP_RE.test(n) && MAKEUP_PHRASE_RE.test(n)) return 'makeup';
   if (
     /provider absence|student absence|student not available|student not in school|student absent/i.test(
       n,
@@ -215,7 +219,7 @@ export function attendanceFromNotes(
   }
   // Solo group: peer/group mate absent + Service Provided → this student attended.
   if (SERVICE_PROVIDED_RE.test(n) && notesMentionNoPeerAvailable(n)) {
-    if (MAKEUP_RE.test(n) && /make[\s-]?up\s+(?:for|session)/i.test(n)) return 'makeup';
+    if (MAKEUP_RE.test(n) && MAKEUP_PHRASE_RE.test(n)) return 'makeup';
     return 'attended';
   }
   const forMissScan = scrubPeerAbsentPhrases(n);
@@ -223,12 +227,12 @@ export function attendanceFromNotes(
   if (MAKEUP_RE.test(n) && !MISSED_RE.test(forMissScan)) return 'makeup';
   if (
     MAKEUP_RE.test(n) &&
-    /make[\s-]?up\s+(?:for|session)/i.test(n) &&
+    MAKEUP_PHRASE_RE.test(n) &&
     !FRONTLINE_MISSED_REASON_RE.test(n)
   ) {
     return 'makeup';
   }
-  if (MISSED_RE.test(forMissScan) && !/make[\s-]?up session/i.test(n)) return 'missed';
+  if (MISSED_RE.test(forMissScan) && !/m+ake[\s-]?up session/i.test(n)) return 'missed';
   if (timeIn && timeOut) return 'attended';
   return 'missed';
 }
@@ -421,7 +425,7 @@ function isNumericOrRatioSchoolToken(name: string): boolean {
   const n = String(name || '').replace(/\s+/g, ' ').trim();
   if (!n) return true;
   if (/^\d+(?:\.\d+)?$/.test(n)) return true;
-  if (/^[1-9]\s*:\s*[1-9]\d?$/.test(n)) return true;
+  if (/^[1-9]\d*\s*:\s*[1-9]\d*$/.test(n)) return true;
   // Building / school labels need letters; reject punctuation-only scraps.
   if (!/[A-Za-z]/.test(n)) return true;
   if (n.length < 3) return true;
@@ -539,7 +543,7 @@ function frontlineUnlabeledSetting(slice: string): string {
   for (const line of lines) {
     if (/^\d{1,2}\/\d{1,2}\/\d{2,4}/.test(line)) continue;
     if (/\d{1,2}:\d{2}\s*[ap]\.?m\.?/i.test(line)) continue;
-    if (/^(?:Service Provided|Provider Absence|Provider Not Available|Student Absence|Student Not Available|School Closed|Staff Shortage|Provider Signature|Telehealth|Make[\s-]?up)\b/i.test(line)) {
+    if (/^(?:Service Provided|Provider Absence|Provider Not Available|Student Absence|Student Not Available|School Closed|Staff Shortage|Provider Signature|Telehealth|M+ake[\s-]?up)\b/i.test(line)) {
       break;
     }
     // Labeled Setting/School already handled above; if the value was rejected (e.g. "1"), skip the line.
@@ -787,7 +791,7 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
 
 /** Log Type label that opens a Frontline clinical / absence note block. */
 const FRONTLINE_LOG_TYPE_IN_BLOB_RE =
-  /(?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|Make[\s-]?up)\s*:/gi;
+  /(?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|M+ake[\s-]?up)\s*:/gi;
 
 /** Ends a note block so the next slash-date can be a real service-date row again. */
 const FRONTLINE_NOTE_BOUNDARY_RE =
@@ -813,7 +817,7 @@ function lastMatchEnd(re: RegExp, s: string): number {
 function looksLikeFrontlineSessionRowAfterDate(blob: string, idx: number): boolean {
   const afterDate = blob.slice(idx).replace(/^\d{1,2}\/\d{1,2}\/\d{2,4}/, '');
   const head = afterDate.slice(0, 280);
-  if (/\b[1-4]\s*:\s*1\b/.test(head) && /\b\d{4,5}\b/.test(head)) return true;
+  if (/\b\d+\s*:\s*1\b/.test(head) && /\b\d{4,5}\b/.test(head)) return true;
   if (
     /\d{1,2}:\d{2}\s*[ap]\.?m\.?/i.test(head) &&
     /Service\s+Provided\s*:/i.test(head)
@@ -860,7 +864,7 @@ function isFrontlineServiceDateHit(blob: string, idx: number): boolean {
   if (sigEnd > teleEnd && sigEnd > studentEnd && sigEnd >= logTypeEnd) {
     const after = blob.slice(idx, idx + 180);
     const clocks = after.match(/\d{1,2}:\d{2}\s*[ap]\.?m\.?/gi) || [];
-    const hasRatio = /(?:^|\n)\s*[1-9]\d?\s*:\s*1\b/.test(after.slice(0, 48));
+    const hasRatio = /(?:^|\n)\s*[1-9]\d*\s*:\s*1\b/.test(after.slice(0, 48));
     if (clocks.length < 2 && !hasRatio) return false;
   }
   if (logTypeEnd > boundaryEnd && /\S/.test(lookback.slice(logTypeEnd))) {
@@ -881,7 +885,7 @@ function isFrontlinePageBreakStudentHeader(blob: string, studentNameIdx: number)
   if (sigIdx < 0) return false;
   const beforeSig = after.slice(0, sigIdx);
   if (
-    /(?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|Make[\s-]?up)\s*:/i.test(
+    /(?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|M+ake[\s-]?up)\s*:/i.test(
       beforeSig,
     )
   ) {
@@ -956,7 +960,7 @@ function sessionClockWindowKey(beginTime: string, endTime: string): string {
 }
 
 const FRONTLINE_LOG_LABEL_ONLY_RE =
-  /^(?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|Make[\s-]?up)\s*:?\s*$/i;
+  /^(?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|M+ake[\s-]?up)\s*:?\s*$/i;
 
 /** Next header / log-type token that ends a continued-page field value. */
 const FRONTLINE_BANNER_VALUE_STOP =
@@ -1264,7 +1268,7 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
     }
     const slice = blob.slice(sliceStart, sliceEnd);
     const notesMatch = slice.match(
-      /(?:Service Provided:|Provider Absence:|Provider Not Available:|Student Absence:|Student Not Available:|School Closed:|Staff Shortage:|Make[\s-]?up)[\s\S]*?(?=\n\s*(?:Provider\s+Signature|Telehealth:)|$)/i,
+      /(?:Service Provided:|Provider Absence:|Provider Not Available:|Student Absence:|Student Not Available:|School Closed:|Staff Shortage:|M+ake[\s-]?up)[\s\S]*?(?=\n\s*(?:Provider\s+Signature|Telehealth:)|$)/i,
     );
     // Classify attendance from the full note block before clipping for storage.
     let fullNotes = String(notesMatch?.[0] || '')
@@ -1348,13 +1352,17 @@ export function parseWeeklySessionText(text: string): ParsedSessionNote[] {
   return parseFrontlineWeeklySessionText(text);
 }
 
-export function splitPersonName(raw: string): { first: string; last: string } {
-  const s = String(raw || '')
+function cleanPersonName(raw: string): string {
+  return String(raw || '')
     .replace(/\(white glove\)/gi, '')
     .replace(/\(.*?\)/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/,$/, '')
     .trim();
+}
+
+export function splitPersonName(raw: string): { first: string; last: string } {
+  const s = cleanPersonName(raw);
   if (!s) return { first: '', last: '' };
   if (s.includes(',')) {
     const bits = s.split(',').map((p) => p.trim()).filter(Boolean);
@@ -1377,20 +1385,25 @@ export function mappingName(raw: string): { first: string; last: string } {
  * A trailing single-letter initial is ignored (LIPSCOMB J vs Lipscomb).
  * Different surnames stay different — JR, MICHAEL does not match Davis, Michael.
  */
-export function activityStudentNameKey(first: string, last: string): string {
-  const norm = (s: string) =>
-    String(s || '')
-      .toLowerCase()
-      .replace(/[-']/g, ' ')
-      .replace(/[^a-z0-9\s]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  const f = norm(first);
-  const l = norm(last).replace(/\s+[a-z]$/, '').trim();
-  return `${l}|${f}`;
+function normActivityNamePart(s: string): string {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[-']/g, ' ')
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-type NamedStudent = { firstName: string; lastName: string };
+/** Last-name compare key. Drops one trailing initial (LIPSCOMB J vs Lipscomb). */
+function activityLastKey(last: string): string {
+  return normActivityNamePart(last).replace(/\s+[a-z]$/, '').trim();
+}
+
+export function activityStudentNameKey(first: string, last: string): string {
+  return `${activityLastKey(last)}|${normActivityNamePart(first)}`;
+}
+
+type NamedStudent = { firstName: string; lastName: string; middleName?: string };
 
 function exactStudentName<T extends NamedStudent>(
   students: readonly T[],
@@ -1406,9 +1419,67 @@ function exactStudentName<T extends NamedStudent>(
 }
 
 /**
+ * "First Middle Last" and "Last, First Middle".
+ * Tokens between first and last must equal the stored middle name.
+ * A blank middle, a different middle, or an extra token that is not that
+ * middle name does not match.
+ */
+function findStudentByStoredMiddle<T extends NamedStudent>(
+  students: readonly T[],
+  rawName: string,
+): T | undefined {
+  const s = cleanPersonName(rawName);
+  if (!s) return undefined;
+
+  let first = '';
+  let middle = '';
+  let last = '';
+  if (s.includes(',')) {
+    const bits = s.split(',').map((p) => p.trim()).filter(Boolean);
+    const given = (bits.slice(1).join(' ') || '').split(/\s+/).filter(Boolean);
+    if (given.length < 2) return undefined;
+    last = bits[0] ?? '';
+    first = given[0] ?? '';
+    middle = given.slice(1).join(' ');
+  } else {
+    const parts = s.split(/\s+/).filter(Boolean);
+    if (parts.length < 3) return undefined;
+    const compoundFirst = parts.slice(0, -1).join(' ');
+    const compoundLast = parts[parts.length - 1] ?? '';
+    // "Muhammad Ali Suhail" is also the full name of a child whose first name
+    // is "Muhammad Ali". That child is a different person — do not pick one.
+    if (
+      students.some(
+        (st) =>
+          normActivityNamePart(st.firstName) === normActivityNamePart(compoundFirst) &&
+          activityLastKey(st.lastName) === activityLastKey(compoundLast),
+      )
+    ) {
+      return undefined;
+    }
+    first = parts[0] ?? '';
+    last = compoundLast;
+    middle = parts.slice(1, -1).join(' ');
+  }
+
+  const f = normActivityNamePart(first);
+  const m = normActivityNamePart(middle);
+  const l = activityLastKey(last);
+  if (!f || !m || !l) return undefined;
+
+  return students.find((st) => {
+    const mid = normActivityNamePart(st.middleName || '');
+    if (!mid || mid !== m) return false;
+    return normActivityNamePart(st.firstName) === f && activityLastKey(st.lastName) === l;
+  });
+}
+
+/**
  * Resolve a parsed Activity/Frontline name to one caseload student.
- * Exact match first. Then one unique hyphen/initial-insensitive hit.
- * Ambiguous loose hits are not returned.
+ * Exact first+last match first, then a stored middle name included on the
+ * timesheet, then one unique hyphen/initial-insensitive hit.
+ * Ambiguous loose hits are not returned. A middle-name hit that points at a
+ * different child than the loose hit is not returned.
  */
 export function findStudentForActivityName<T extends NamedStudent>(
   students: readonly T[],
@@ -1423,13 +1494,17 @@ export function findStudentForActivityName<T extends NamedStudent>(
       ? exactStudentName(students, person.last, person.first)
       : undefined);
   if (exact) return exact;
+  const withMiddle = findStudentByStoredMiddle(students, rawName);
   const key = activityStudentNameKey(person.first, person.last);
   const [lastKey, firstKey] = key.split('|');
-  if (!lastKey || !firstKey) return undefined;
-  const loose = students.filter(
-    (s) => activityStudentNameKey(s.firstName, s.lastName) === key,
-  );
-  return loose.length === 1 ? loose[0] : undefined;
+  const loose =
+    lastKey && firstKey
+      ? students.filter((s) => activityStudentNameKey(s.firstName, s.lastName) === key)
+      : [];
+  const looseHit = loose.length === 1 ? loose[0] : undefined;
+  if (withMiddle && looseHit && withMiddle !== looseHit) return undefined;
+  if (withMiddle) return withMiddle;
+  return looseHit;
 }
 
 export function nameKey(first: string, last: string): string {
@@ -1491,11 +1566,23 @@ export function schoolNamesConflict(pdfSchool: string, knownSchool: string): boo
 }
 
 /**
+ * Caseload school label for a child taught at home.
+ * Those children are served through the district or school printed on the report.
+ */
+export function isHomeschooledSchoolName(name: string): boolean {
+  const n = normEntityName(name);
+  if (!n) return false;
+  return /^(?:homeschooled|home schooled|homeschool|home school)$/.test(n);
+}
+
+/**
  * PDF school vs child's building (+ optional district / program type).
  * District-level Frontline headers (e.g. "Westbury Union Free School District")
  * may match the child's program type / school.district even when the caseload
  * school is a building name like "Powells Lane". Concrete building names still
  * must match the child's building.
+ * A Homeschooled / Home schooled / Home School caseload label is not a mismatch
+ * against a real report district or school (the session keeps that report school).
  */
 export function pdfSchoolConflictsWithChild(
   pdfSchool: string,
@@ -1506,6 +1593,13 @@ export function pdfSchoolConflictsWithChild(
   const building = String(known?.name || '').trim();
   if (!pdf || !building) return false;
   if (!schoolNamesConflict(pdf, building)) return false;
+  if (
+    isHomeschooledSchoolName(building) &&
+    !isGenericSettingLabel(pdf) &&
+    !isNonSchoolLikeSetting(pdf)
+  ) {
+    return false;
+  }
   if (!looksLikeDistrictLabel(pdf)) return true;
   const district = String(known?.district || '').trim();
   if (district && !schoolNamesConflict(pdf, district)) return false;

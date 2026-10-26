@@ -1,7 +1,12 @@
+import { serviceTypeLooksGroup } from '@white-glove/shared';
 import * as XLSX from 'xlsx';
 import { disciplineFromServiceType, schoolBillingServiceNameForMandate } from './mandate.js';
 import type { MemoryStore } from './memory-store.js';
 import { newId, nowIso } from './ids.js';
+import {
+  normalizeProgramTypeKey,
+  resolveWeekProgramType,
+} from './week-school.js';
 import type {
   Discipline,
   FrequencyKind,
@@ -264,7 +269,8 @@ function cell(cells: string[], idx: number): string {
 
 function parseRatioGroup(raw: string): boolean {
   const s = String(raw || '').toLowerCase();
-  if (/\bgroup\b|\b2\s*:\s*1\b|\b3\s*:\s*1\b|\b4\s*:\s*1\b|\bsmall\s*group\b/.test(s)) return true;
+  // Any N:1 with N >= 2 is a group. The old allowlist stopped at 4:1 and stored 5:1 as individual.
+  if (serviceTypeLooksGroup(s) || /\bsmall\s*group\b/.test(s)) return true;
   if (/\bindividual\b|\b1\s*:\s*1\b/.test(s)) return false;
   return false;
 }
@@ -1024,9 +1030,19 @@ export function reassignProviderOwnedData(
   }
   for (const w of [...store.data.weeks]) {
     if (w.providerId !== fromId) continue;
-    const clash = store.data.weeks.find(
-      (x) => x.id !== w.id && x.providerId === toId && x.weekStart === w.weekStart,
+    // Clash only within the same program-type bin (provider + Monday + program).
+    // Matching on weekStart alone used to merge Hicksville + Island Park onto one
+    // row and inherit a submitted lock across programs.
+    const fromPt = normalizeProgramTypeKey(
+      String(w.programType || '').trim() || resolveWeekProgramType(store, w),
     );
+    const clash = store.data.weeks.find((x) => {
+      if (x.id === w.id || x.providerId !== toId || x.weekStart !== w.weekStart) return false;
+      const toPt = normalizeProgramTypeKey(
+        String(x.programType || '').trim() || resolveWeekProgramType(store, x),
+      );
+      return toPt === fromPt;
+    });
     if (clash) {
       for (const s of store.sessionsForWeek(w.id)) {
         store.upsertSession({ ...s, weekId: clash.id });
@@ -1205,6 +1221,67 @@ function studentKey(first: string, last: string, school: string): string {
   return `${normName(last)}|${normName(first)}|${normName(school)}`;
 }
 
+/** YYYY-MM-DD when the value is a real caseload date; otherwise ''. */
+function caseloadDobKey(raw: string): string {
+  const normalized = normalizeCaseloadDate(String(raw || '').trim());
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : '';
+}
+
+function programIdKey(raw: string): string {
+  return String(raw || '').trim().toLowerCase();
+}
+
+/**
+ * Same child when program id and date of birth both match.
+ * Several files can already share that pair: use the oldest one that has an
+ * HHA patient id, or the oldest file if none do. Does not merge or delete the others.
+ */
+function findStudentByProgramAndDob(students: Student[], programId: string, dob: string): Student | undefined {
+  const pid = programIdKey(programId);
+  const day = caseloadDobKey(dob);
+  if (!pid || !day) return undefined;
+  const hits = students.filter(
+    (s) => programIdKey(s.programId) === pid && caseloadDobKey(s.dob) === day,
+  );
+  if (!hits.length) return undefined;
+  const oldest = (list: Student[]) =>
+    [...list].sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))[0];
+  const withHha = hits.filter((s) => String(s.hhaPatientId || '').trim());
+  return oldest(withHha.length ? withHha : hits);
+}
+
+/**
+ * Incoming first-name cell is the stored single-token first name plus extra words
+ * ("Jeremiah Tharin" against first name "Jeremiah"). Returns those extra words
+ * in the cell's own spelling. A stored first name that already has two words
+ * ("Lorenzo Raymond") is never split.
+ */
+function extraMiddleFromLongerFirst(storedFirst: string, incomingFirst: string): string {
+  const storedTokens = normName(storedFirst).split(' ').filter(Boolean);
+  if (storedTokens.length !== 1) return '';
+  const incomingRaw = String(incomingFirst || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (incomingRaw.length < 2) return '';
+  if (normName(incomingRaw[0]) !== storedTokens[0]) return '';
+  return incomingRaw.slice(1).join(' ');
+}
+
+function rememberCaseloadStudent(
+  studentByKey: Map<string, Student>,
+  studentsById: Map<string, Student>,
+  student: Student,
+  schoolName: string,
+): void {
+  studentsById.set(student.id, student);
+  for (const [key, existing] of studentByKey) {
+    if (existing.id === student.id) studentByKey.set(key, student);
+  }
+  studentByKey.set(studentKey(student.firstName, student.lastName, schoolName), student);
+  studentByKey.set(studentKey(student.firstName, student.lastName, ''), student);
+}
+
 /** Stable identity for caseload upsert (student is matched separately). */
 export function mandateMatchKey(row: {
   discipline?: string;
@@ -1249,11 +1326,18 @@ export function mandateMatchKey(row: {
 
 function findStudentForCaseloadRow(
   studentByKey: Map<string, Student>,
+  studentsById: Map<string, Student>,
   store: MemoryStore,
   firstName: string,
   lastName: string,
   schoolName: string,
+  programId: string,
+  dob: string,
 ): Student | undefined {
+  // Program id + DOB identifies the child even when the first-name cell is longer.
+  // A different DOB falls through to the name matcher below.
+  const byProgramDob = findStudentByProgramAndDob([...studentsById.values()], programId, dob);
+  if (byProgramDob) return byProgramDob;
   const key = studentKey(firstName, lastName, schoolName);
   const hit =
     studentByKey.get(key) ||
@@ -1302,8 +1386,10 @@ export function applyCaseloadImport(
   for (const s of store.data.schools) schoolByName.set(normName(s.name), s);
 
   const studentByKey = new Map<string, Student>();
+  const studentsById = new Map<string, Student>();
   for (const st of store.data.students) {
     const school = store.data.schools.find((s) => s.id === st.schoolId);
+    studentsById.set(st.id, st);
     studentByKey.set(studentKey(st.firstName, st.lastName, school?.name || ''), st);
     studentByKey.set(studentKey(st.firstName, st.lastName, ''), st);
   }
@@ -1384,10 +1470,13 @@ export function applyCaseloadImport(
 
     let student = findStudentForCaseloadRow(
       studentByKey,
+      studentsById,
       store,
       row.firstName,
       row.lastName,
       row.schoolName,
+      row.programId,
+      row.dob,
     );
     const studentExists = Boolean(student);
 
@@ -1404,8 +1493,7 @@ export function applyCaseloadImport(
         grade: row.grade || undefined,
         createdAt: nowIso(),
       };
-      studentByKey.set(key, student);
-      studentByKey.set(studentKey(row.firstName, row.lastName, ''), student);
+      rememberCaseloadStudent(studentByKey, studentsById, student, row.schoolName);
       if (!dryRun) {
         store.upsertStudent(student);
         createdStudents += 1;
@@ -1418,6 +1506,13 @@ export function applyCaseloadImport(
       const beforeDob = student.dob;
       const beforeProgId = student.programId;
       const beforeProgType = student.programType;
+      const beforeMiddle = String(student.middleName || '');
+      const sameLast =
+        normName(student.lastName) !== '' && normName(student.lastName) === normName(row.lastName);
+      const extraMiddle =
+        sameLast && !beforeMiddle.trim()
+          ? extraMiddleFromLongerFirst(student.firstName, row.firstName)
+          : '';
       const next: Student = {
         ...student,
         schoolId: school?.id || student.schoolId,
@@ -1425,16 +1520,17 @@ export function applyCaseloadImport(
         dob: row.dob || student.dob,
         programId: row.programId || student.programId,
         programType: row.programType || student.programType,
+        ...(extraMiddle ? { middleName: extraMiddle } : {}),
       };
       student = next;
-      studentByKey.set(key, student);
-      studentByKey.set(studentKey(row.firstName, row.lastName, ''), student);
+      rememberCaseloadStudent(studentByKey, studentsById, student, row.schoolName);
       const changed =
         next.schoolId !== beforeSchool ||
         next.grade !== beforeGrade ||
         next.dob !== beforeDob ||
         next.programId !== beforeProgId ||
-        next.programType !== beforeProgType;
+        next.programType !== beforeProgType ||
+        String(next.middleName || '') !== beforeMiddle;
       if (changed) updatedStudents += 1;
       if (!dryRun && changed) store.upsertStudent(student);
     }

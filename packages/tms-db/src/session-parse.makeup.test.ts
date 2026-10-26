@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { extractMakeupForDate, resolveMakeupOfSessionId } from './makeup.js';
+import { checkMandate } from './mandate.js';
 import { attendanceFromNotes, parseWeeklySessionText } from './session-parse.js';
-import type { SessionRow } from './types.js';
+import type { Mandate, SessionRow } from './types.js';
 
 function sess(partial: Partial<SessionRow> = {}): SessionRow {
   return {
@@ -297,6 +298,92 @@ No
     expect(rows.filter((r) => /9\/17\/26/.test(r.dateOfService))).toEqual([]);
   });
 
+  it('splits consecutive filled Student Not Available rows (CG Sep 9/17→9/21→9/24)', () => {
+    const text = `
+District/Agency/BOCES: Valley Stream Union Free School District No. 24
+Service: Occupational Therapy
+Service Provider:Donaldson Fortune, Shayena
+Student Name: Christopher Ginda, D.O.B. 12/06/2019
+09/17/2026
+ 0
+Robert W. Carbonaro School
+Student Not Available: 9/17- Received message from Christophers
+father at 1:14pm requesting to reschedule OT scheduled session
+due to an appt. he forgot he had today. OT session rescheduled for
+9/22.
+09/21/2026
+ 0
+Robert W. Carbonaro School
+Student Not Available: 9/22- Received message from Christophers
+father at 1:33 pm requesting to cancel OT scheduled session due to
+Christopher being sick.
+09/24/2026
+ 0
+Robert W. Carbonaro School
+Student Not Available: 9/24- Received message from Christophers
+father at 11:00 am requesting to cancel OT scheduled session due
+to Christopher still being sick.
+Page 1 of 1
+`;
+    const rows = parseWeeklySessionText(text);
+    expect(rows.map((r) => r.dateOfService)).toEqual([
+      '09/17/2026',
+      '09/21/2026',
+      '09/24/2026',
+    ]);
+    expect(rows.every((r) => r.attendance === 'missed')).toBe(true);
+    expect(rows.every((r) => /Student Not Available/i.test(r.cancelReason))).toBe(true);
+    expect(rows[0]?.notes).not.toMatch(/09\/21\/2026/);
+    expect(rows[1]?.notes).toMatch(/being sick/i);
+    expect(rows[2]?.notes).toMatch(/still being sick/i);
+  });
+
+  it('splits a filled Student Not Available note from the next attended DOS (CG 9-7 shape)', () => {
+    // Miss note mentions "Sept. 10th" then the next column DOS is 09/10/2026 with CPT/times.
+    const text = `
+District/Agency/BOCES: Valley Stream Union Free School District No. 24
+Summary of Related Service Session Notes
+Service: Occupational Therapy
+From: 09/07/2026 To: 09/11/2026
+Service Provider:Donaldson Fortune, Shayena
+Student Name: Christopher Ginda, D.O.B. 12/06/2019
+09/08/2026
+ 0
+Robert W. Carbonaro School
+Student Not Available: 9/8/26- Student unavailable per father's
+request to start OT tx session Thursday Sept. 10th
+09/10/2026
+1:1
+97530
+ 2
+ 3:43 pm
+ 4:13 pm
+Robert W. Carbonaro School
+Service Provided: 9/10/26- Christopher was seen for first OT 1:1
+session in the Valley Stream Library for the 2026-2027 school year.
+Provider Signature/Credentials
+Date
+Shayena Donaldson Fortune OTR/L (NPI# 1154846871) (License# 013641)
+Sep 15 2026 9:18PM
+Telehealth:
+No
+`;
+    const rows = parseWeeklySessionText(text);
+    expect(rows).toHaveLength(2);
+    const miss = rows.find((r) => r.dateOfService === '09/08/2026');
+    const attend = rows.find((r) => r.dateOfService === '09/10/2026');
+    expect(miss?.attendance).toBe('missed');
+    expect(miss?.cancelReason).toMatch(/Student Not Available/i);
+    expect(miss?.beginTime).toBe('');
+    expect(attend?.attendance).toBe('attended');
+    expect(attend?.beginTime).toMatch(/3:43/i);
+    expect(attend?.endTime).toMatch(/4:13/i);
+    expect(attend?.cptCodes).toContain('97530');
+    expect(attend?.cptUnits).toBe(2);
+    expect(attend?.signed).toBe(true);
+    expect(attend?.notes).toMatch(/first OT 1:1/i);
+  });
+
   it('keeps a slash-date signature stamp on the session instead of splitting it off', () => {
     const text = `
 Student Name: South, Sebastian
@@ -389,6 +476,51 @@ Provider Signature/Credentials  DateJazel White Glove -Baniqued PT     (NPI# ) S
 
 const JULIAN_MAKEUP_NOTE =
   'Julian was seen for an occupational therapy Make up session that he missed on September 24 as he was sick. He was seen for one on one session that included visual perception, activity of completing 48 piece puzzle and a table top activity with cues 50% of the time. He also participated in involve push-ups of 10 reps times three sets with rest breaks in between.';
+
+const JONATHAN_MMAKEUP_NOTE =
+  'Service Provided: MMAKE-UP for 10/8/26 (Provider absence).No peer was present. Student\'s group mate was taken off this provider\'s caseload. Jonathan had difficulty transitioning to therapy. He walked to the cafeteria door and sat on the floor, unable to follow directions to get up and walk to therapy. The school psychologist helped Jonathan stood up and walked to the therapy room with reinforcement. He completed a step-up/down activity with handheld assistance x 10 reps x 2 sets and bounced on the therapy ball with contact guard assistance. He used a step to pattern to go down the stairs with 1 hand holding onto the rail and alternating pattern to go up with 1 hand holding onto the rail.';
+
+describe('Service Provided "MMAKE-UP for 10/8/26 (Provider absence)"', () => {
+  it('reads the extra-M makeup line as a makeup for 10/8/26, not a provider absence', () => {
+    const ref = { referenceDos: '10/15/2026' };
+    expect(extractMakeupForDate(JONATHAN_MMAKEUP_NOTE, ref)).toBe('10/8/26');
+    expect(extractMakeupForDate('MMAKE-UP for 10/8/26 (Provider absence)', ref)).toBe('10/8/26');
+    expect(extractMakeupForDate('MMAKEUP for 10/8/26', ref)).toBe('10/8/26');
+    expect(attendanceFromNotes(JONATHAN_MMAKEUP_NOTE, '10:00 am', '10:30 am')).toBe('makeup');
+    expect(
+      attendanceFromNotes('MMAKE-UP for 10/8/26 (Provider absence). No peer was present.', '10:00 am', '10:30 am'),
+    ).toBe('makeup');
+
+    const text = `
+District/Agency/BOCES: Example District
+Summary of Related Service Session Notes
+Service: Physical Therapy
+Service Provider: Example, Therapist
+Student Name: Jonathan Smith, D.O.B. 01/02/2018
+10/15/2026
+1:1
+97530
+ 2
+10:00 am
+10:30 am
+Example School
+${JONATHAN_MMAKEUP_NOTE}
+Provider Signature/Credentials
+Date
+Example Therapist PT
+Oct 15 2026 2:00PM
+Telehealth:
+No
+`;
+    const rows = parseWeeklySessionText(text);
+    expect(rows.filter((r) => /10\/8|10\/08/.test(r.dateOfService))).toEqual([]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.attendance).toBe('makeup');
+    expect(rows[0]?.dateOfService).toBe('10/15/2026');
+    expect(rows[0]?.notes).toMatch(/make\s*up\s*for:\s*10\/8\/26/i);
+    expect(rows[0]?.notes).toMatch(/MMAKE-UP for 10\/8\/26/i);
+  });
+});
 
 describe('Service Provided "Make up session" that he missed on September 24', () => {
   it('classifies the Julian occupational therapy note as makeup and keeps the missed date', () => {
@@ -493,5 +625,174 @@ Signed: 10/1/2026 Example Therapist, OTR/L
         '10:30 am',
       ),
     ).toBe('attended');
+  });
+});
+
+const JOSHUA_MAKEUP_FROM =
+  'Service Provided: This is a makeup from 10/8/26. Josh again very interested in playing with squigz toys.';
+const MATTHEW_MAKEUP_SESSION_FROM =
+  "Service Provided: This is a makeup session from 10/6/26. We continue to work on Matthew's endurance when performing exercises.";
+
+function frontlineVisit(opts: {
+  student: string;
+  dob: string;
+  dos: string;
+  begin: string;
+  end: string;
+  note: string;
+}): string {
+  return `
+Student Name: ${opts.student}, D.O.B. ${opts.dob}
+Service: Physical Therapy
+Service Provider: Stein, Bari
+${opts.dos}
+1:1
+97110
+ 2
+${opts.begin}
+${opts.end}
+Alden Terrace School
+${opts.note}
+Provider Signature/Credentials
+Date
+Bari Rachel Stein PT
+Oct 24 2026 8:32AM
+Telehealth:
+No
+`;
+}
+
+function weeklyMandate(): Mandate {
+  return {
+    id: 'm-pt',
+    studentId: 'st1',
+    providerId: 'p1',
+    serviceType: 'PT School',
+    discipline: 'PT',
+    frequencyPerWeek: 2,
+    ratioGroup: false,
+    sourcePdfKey: '',
+    parsedAt: '',
+    startOn: '',
+    endOn: '',
+    createdAt: '',
+  };
+}
+
+describe('Service Provided "makeup from" / "makeup session from"', () => {
+  it('reads Joshua "makeup from 10/8/26" as a makeup for that date', () => {
+    const ref = { referenceDos: '10/21/2026' };
+    expect(extractMakeupForDate(JOSHUA_MAKEUP_FROM, ref)).toBe('10/8/26');
+    expect(attendanceFromNotes(JOSHUA_MAKEUP_FROM, '1:05 pm', '1:35 pm')).toBe('makeup');
+    const rows = parseWeeklySessionText(
+      frontlineVisit({
+        student: 'Joshua Artis',
+        dob: '01/02/2018',
+        dos: '10/21/2026',
+        begin: '1:05 pm',
+        end: '1:35 pm',
+        note: JOSHUA_MAKEUP_FROM,
+      }),
+    );
+    expect(rows.filter((r) => /10\/8/.test(r.dateOfService))).toEqual([]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.attendance).toBe('makeup');
+    expect(rows[0]?.dateOfService).toBe('10/21/2026');
+    expect(rows[0]?.notes).toMatch(/make\s*up\s*for:\s*10\/8\/26/i);
+  });
+
+  it('reads Matthew "makeup session from 10/6/26" as a makeup for that date', () => {
+    const ref = { referenceDos: '10/22/2026' };
+    expect(extractMakeupForDate(MATTHEW_MAKEUP_SESSION_FROM, ref)).toBe('10/6/26');
+    expect(attendanceFromNotes(MATTHEW_MAKEUP_SESSION_FROM, '1:05 pm', '1:35 pm')).toBe('makeup');
+    const rows = parseWeeklySessionText(
+      frontlineVisit({
+        student: 'Matthew Iniguez',
+        dob: '03/04/2017',
+        dos: '10/22/2026',
+        begin: '1:05 pm',
+        end: '1:35 pm',
+        note: MATTHEW_MAKEUP_SESSION_FROM,
+      }),
+    );
+    expect(rows.filter((r) => /10\/6/.test(r.dateOfService))).toEqual([]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.attendance).toBe('makeup');
+    expect(rows[0]?.dateOfService).toBe('10/22/2026');
+    expect(rows[0]?.notes).toMatch(/make\s*up\s*for:\s*10\/6\/26/i);
+  });
+
+  it('does not take a later "from <date>" as the covered miss', () => {
+    const note =
+      'Service Provided: This is a makeup session. He walked from 10/6/26 to the gym.';
+    expect(extractMakeupForDate(note, { referenceDos: '10/22/2026' })).toBe('');
+    expect(attendanceFromNotes(note, '1:05 pm', '1:35 pm')).toBe('makeup');
+  });
+
+  it('links each from-date makeup to the unused miss and keeps Joshua inside a 2/week mandate', () => {
+    const joshuaMiss = sess({
+      id: 'miss-108',
+      attendance: 'missed',
+      dateOfService: '10/08/2026',
+      beginTime: '',
+      endTime: '',
+      notes: 'Provider Absence',
+    });
+    const joshuaMakeup = sess({
+      id: 'mu-1021',
+      attendance: 'makeup',
+      dateOfService: '10/21/2026',
+      beginTime: '1:05 pm',
+      endTime: '1:35 pm',
+      notes: JOSHUA_MAKEUP_FROM,
+    });
+    expect(resolveMakeupOfSessionId(joshuaMakeup, [joshuaMiss, joshuaMakeup], [])).toEqual({
+      makeupOfSessionId: 'miss-108',
+      via: 'miss',
+    });
+
+    const matthewMiss = sess({
+      id: 'miss-106',
+      attendance: 'missed',
+      dateOfService: '10/06/2026',
+      beginTime: '',
+      endTime: '',
+      notes: 'Student Absence',
+    });
+    const matthewMakeup = sess({
+      id: 'mu-1022',
+      attendance: 'makeup',
+      dateOfService: '10/22/2026',
+      beginTime: '1:05 pm',
+      endTime: '1:35 pm',
+      notes: MATTHEW_MAKEUP_SESSION_FROM,
+    });
+    expect(resolveMakeupOfSessionId(matthewMakeup, [matthewMiss, matthewMakeup], [])).toEqual({
+      makeupOfSessionId: 'miss-106',
+      via: 'miss',
+    });
+    expect(resolveMakeupOfSessionId(matthewMakeup, [matthewMakeup], [])).toMatchObject({
+      error: expect.stringMatching(/No unused missed session on 10\/6\/26/i),
+    });
+
+    const week = [
+      sess({ id: 'a', dateOfService: '10/20/2026', beginTime: '11:45 am', endTime: '12:15 pm' }),
+      { ...joshuaMakeup, makeupOfSessionId: 'miss-108' },
+      sess({ id: 'c', dateOfService: '10/22/2026', beginTime: '11:29 am', endTime: '11:59 am' }),
+    ];
+    const linked = checkMandate(weeklyMandate(), week, [joshuaMiss, ...week], {
+      studentLabel: 'Joshua Artis',
+    });
+    expect(linked.over).toBe(false);
+    expect(linked.used).toBe(2);
+
+    const countedAsAttended = checkMandate(
+      weeklyMandate(),
+      week.map((s) => (s.id === 'mu-1021' ? { ...s, attendance: 'attended' as const, makeupOfSessionId: '' } : s)),
+      week,
+      { studentLabel: 'Joshua Artis' },
+    );
+    expect(countedAsAttended.over).toBe(true);
+    expect(countedAsAttended.used).toBe(3);
   });
 });

@@ -88,3 +88,18 @@ export function lookupContractId(programType: string | undefined): number | unde
   if (!key) return undefined;
   return byNormalized.get(key);
 }
+
+/**
+ * Stored program string for a contract-map match.
+ * `Fred S keller school` → `Fred S. Keller School`. Unknown labels stay as entered.
+ */
+export function canonicalContractProgramName(programType: string | undefined): string {
+  const raw = String(programType || '').trim();
+  if (!raw) return '';
+  const key = normalizeContractName(raw);
+  if (!key) return '';
+  for (const name of Object.keys(PROGRAM_CONTRACT_MAP)) {
+    if (normalizeContractName(name) === key) return name;
+  }
+  return raw;
+}

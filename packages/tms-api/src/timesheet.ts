@@ -1,11 +1,16 @@
 import {
   additionalServiceLabel,
+  clockToMinutes,
   isAdditionalServiceType,
+  isPaidAbsenceSession,
+  parseDos,
   sessionListedChildName,
   type SessionRow,
   type Student,
   type WeeklyPeriod,
 } from '@white-glove/tms-db';
+
+export { isPaidAbsenceSession };
 
 /** Letter landscape (pt). */
 export const TIMESHEET_PAGE = { width: 792, height: 612 } as const;
@@ -538,11 +543,59 @@ function assemblePdf(pageStreams: string[]): Uint8Array {
 
 /**
  * Sessions shown on the SignNow / email timesheet PDF.
- * Missed (absent / no-show) stay in TMS for makeup linking but are not signed for pay.
- * Matches HHA transfer: attended + makeup only.
+ * Attended, makeup, and paid absence stay. Unpaid misses stay off (makeup linking only).
+ * Paid absence is listed as Paid absence. HHA receives that visit as attended.
  */
 export function isTimesheetPdfAttendance(attendance: string): boolean {
   return attendance === 'attended' || attendance === 'makeup';
+}
+
+export function includeSessionOnTimesheet(
+  session: Pick<
+    SessionRow,
+    'attendance' | 'additionalServiceType' | 'serviceType' | 'notes' | 'cancelReason'
+  >,
+): boolean {
+  if (isPaidAbsenceSession(session)) return true;
+  return isTimesheetPdfAttendance(session.attendance || '');
+}
+
+function formatTimesheetPay(amount: number | null | undefined): string {
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) return '';
+  return `$${amount.toFixed(2)}`;
+}
+
+type TimesheetSourceRow = {
+  session: SessionRow;
+  student: Student | undefined;
+  payAmount?: number | null;
+};
+
+function timesheetChildSortName(row: TimesheetSourceRow): string {
+  return sessionListedChildName(
+    row.session,
+    row.student ? `${row.student.firstName} ${row.student.lastName}`.trim() : '',
+  )
+    .trim()
+    .toLocaleLowerCase();
+}
+
+/**
+ * Timesheet row order: date of service, then begin time, then child name.
+ * Unparsed dates and clock times sort after parsed ones. Equal keys keep input order.
+ */
+export function compareTimesheetRows(a: TimesheetSourceRow, b: TimesheetSourceRow): number {
+  const da = parseDos(a.session.dateOfService || '');
+  const db = parseDos(b.session.dateOfService || '');
+  const ta = da ? da.getTime() : Number.POSITIVE_INFINITY;
+  const tb = db ? db.getTime() : Number.POSITIVE_INFINITY;
+  if (ta !== tb) return ta < tb ? -1 : 1;
+  const ba = clockToMinutes(a.session.beginTime || '');
+  const bb = clockToMinutes(b.session.beginTime || '');
+  const ma = ba == null ? Number.POSITIVE_INFINITY : ba;
+  const mb = bb == null ? Number.POSITIVE_INFINITY : bb;
+  if (ma !== mb) return ma < mb ? -1 : 1;
+  return timesheetChildSortName(a).localeCompare(timesheetChildSortName(b));
 }
 
 /** Branded White Glove related-service timesheet (landscape letter). */
@@ -563,18 +616,24 @@ export function buildTimesheetPdf(input: {
   rows: Array<{ session: SessionRow; student: Student | undefined; payAmount?: number | null }>;
 }): Uint8Array {
   const dataRows: RowCells[] = input.rows
-    .filter((row) => isTimesheetPdfAttendance(row.session.attendance || ''))
+    .slice()
+    .sort(compareTimesheetRows)
+    .filter((row) => includeSessionOnTimesheet(row.session))
     .map((row) => {
     const name = sessionListedChildName(
       row.session,
       row.student ? `${row.student.firstName} ${row.student.lastName}`.trim() : '',
     );
-    const notes = String(row.session.notes || row.session.location || '').trim();
+    const notesBody = String(row.session.notes || row.session.location || '').trim();
+    const paidAbsence = isPaidAbsenceSession(row.session);
+    const payLabel = paidAbsence ? formatTimesheetPay(row.payAmount) : '';
+    const notes = payLabel ? [payLabel, notesBody].filter(Boolean).join(' · ') : notesBody;
     const cpt = String(row.session.cptLabel || (row.session.cptCodes || []).join(', ') || '').trim();
     const addlType = String(row.session.additionalServiceType || '').trim();
-    const addlLabel = isAdditionalServiceType(addlType)
-      ? additionalServiceLabel(addlType) || row.session.serviceType || addlType
-      : '';
+    const addlLabel =
+      !paidAbsence && isAdditionalServiceType(addlType)
+        ? additionalServiceLabel(addlType) || row.session.serviceType || addlType
+        : '';
     const code =
       cpt ||
       (addlLabel ? `Additional: ${addlLabel}` : '') ||
@@ -585,7 +644,7 @@ export function buildTimesheetPdf(input: {
       dos: row.session.dateOfService || '',
       in: row.session.beginTime || '',
       out: row.session.endTime || '',
-      att: row.session.attendance || '',
+      att: paidAbsence ? 'Paid absence' : row.session.attendance || '',
       code,
       notes,
     };

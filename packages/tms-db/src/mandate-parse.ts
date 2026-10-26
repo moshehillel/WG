@@ -1,3 +1,4 @@
+import { serviceTypeLooksGroup } from '@white-glove/shared';
 import { disciplineFromServiceType, parseFrequencyPerWeek } from './mandate.js';
 import type { Discipline } from './types.js';
 
@@ -56,9 +57,7 @@ export function parseMandatePdfText(text: string): ParsedMandatePdf {
   const programId = field(text, ['program id', 'programid']);
   const programType = field(text, ['program type', 'program']);
   const frequencyPerWeek = parseFrequencyPerWeek(frequencyRaw);
-  const ratioGroup = /\bgroup\b|\b2\s*:\s*1\b|\b3\s*:\s*1\b|\b4\s*:\s*1\b/i.test(
-    `${serviceType} ${text}`,
-  );
+  const ratioGroup = serviceTypeLooksGroup(`${serviceType} ${text}`);
   if (!firstName && !lastName) warnings.push('Could not read child name from the PDF.');
   if (!serviceType) warnings.push('Could not read service type from the PDF.');
   if (frequencyPerWeek == null) warnings.push('Could not read mandate frequency from the PDF.');

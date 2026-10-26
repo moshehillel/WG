@@ -5,6 +5,7 @@ import {
   hasSchoolAddressForPatient,
   isSchoolDay,
   parseOffDaysCsv,
+  parseSchoolCycleDays,
   schoolCalendarMonFriFallbackWarning,
   schoolCalendarSummary,
   schoolDaysBetween,
@@ -64,6 +65,23 @@ describe('school calendar helpers', () => {
       }),
     ).toBe('Sep 2 – Jun 25, 2 off days');
     expect(schoolCalendarSummary(emptySchoolCalendar('s1'))).toBe('');
+    expect(
+      schoolCalendarSummary({
+        schoolId: 's1',
+        yearStart: '2026-09-02',
+        yearEnd: '2027-06-25',
+        offDays: ['2026-09-07'],
+        cycleDays: 10,
+      }),
+    ).toBe('Sep 2 – Jun 25, 1 off day, 10-day cycle');
+  });
+
+  it('parseSchoolCycleDays allowlists 6 and 10', () => {
+    expect(parseSchoolCycleDays(10)).toEqual({ ok: true, cycleDays: 10 });
+    expect(parseSchoolCycleDays('6')).toEqual({ ok: true, cycleDays: 6 });
+    expect(parseSchoolCycleDays('')).toEqual({ ok: true, cycleDays: undefined });
+    expect(parseSchoolCycleDays(5).ok).toBe(false);
+    expect(parseSchoolCycleDays(7).ok).toBe(false);
   });
 
   it('hasConfiguredSchoolCalendar detects empty vs saved calendars', () => {

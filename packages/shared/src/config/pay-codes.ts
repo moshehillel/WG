@@ -47,9 +47,18 @@ export function payRateSuffix(payRate: string | number | undefined): string | un
   return String(parseFloat(n.toFixed(2)));
 }
 
-/** True when Service Type includes a standalone Group token (or ratio like 2:1). */
+/**
+ * True when Service Type is a group visit: the word Group, or ratio N:1 with N >= 2
+ * (2:1, 3:1, 4:1, 5:1, …). 1:1 and a bare discipline are not groups.
+ * Clock times (2:00, 10:15) are not N:1.
+ */
 export function serviceTypeLooksGroup(serviceType: string | undefined): boolean {
-  return /\bgroup\b|\b2\s*:\s*1\b|\b3\s*:\s*1\b|\b4\s*:\s*1\b/i.test(serviceType?.trim() ?? '');
+  const s = serviceType?.trim() ?? '';
+  if (/\bgroup\b/i.test(s)) return true;
+  const ratio = s.match(/\b(\d+)\s*:\s*1\b/);
+  if (!ratio) return false;
+  const n = Number(ratio[1]);
+  return Number.isFinite(n) && n >= 2;
 }
 
 export interface BuildPayCodeNameOptions {

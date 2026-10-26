@@ -1,10 +1,13 @@
 export type Role = 'therapist' | 'admin';
 export type Discipline = 'OT' | 'PT' | 'SLP';
 export type WeekStatus = 'draft' | 'submitted' | 'signed' | 'locked' | 'reopened';
-export type Attendance = 'attended' | 'missed' | 'makeup';
+
+/** Outcome of the school SignNow request on this week. Week `status` stays the edit/lock machine. */
+export type SignatureRequestStatus = 'pending' | 'cancelled' | 'retrieved' | 'completed';
+export type Attendance = 'attended' | 'missed' | 'makeup' | 'paid_absence';
 export type HhaTransferStatus = 'none' | 'pending' | 'sent' | 'confirmed' | 'failed';
 export type DueKind = 'progress' | 'annual' | 'reeval';
-/** Weekly = Freq per calendar week. school_day_cycle = Freq per N school days (e.g. 6). monthly = Freq per calendar month. */
+/** Weekly = Freq per calendar week. school_day_cycle = Freq per N school days (6 or 10). monthly = Freq per calendar month. */
 export type FrequencyKind = 'weekly' | 'school_day_cycle' | 'monthly';
 
 export interface AppUser {
@@ -50,6 +53,11 @@ export interface SchoolCalendar {
   yearEnd: string;
   /** ISO dates when school is closed. */
   offDays: string[];
+  /**
+   * Building cycle length in school days (6 or 10).
+   * Used when a cycle mandate has no period of its own. Omitted → 6.
+   */
+  cycleDays?: number;
 }
 
 export interface Provider {
@@ -63,6 +71,11 @@ export interface Provider {
   payRate45Min: number | null;
   /** $/hour session (also legacy per-hour). */
   payRatePerHour: number | null;
+  /**
+   * Flat $ for one 15-minute group session (PT school group 15).
+   * Optional on rows saved before this field existed; migrate fills null.
+   */
+  payRateGroup15Min?: number | null;
   payRateGroup30Min: number | null;
   payRateGroup42Min: number | null;
   payRateGroup45Min: number | null;
@@ -94,6 +107,8 @@ export interface Student {
   id: string;
   schoolId: string;
   firstName: string;
+  /** Optional. Left blank on records created before this field existed. */
+  middleName?: string;
   lastName: string;
   dob: string;
   programId: string;
@@ -129,7 +144,7 @@ export interface Mandate {
   frequencyKind?: FrequencyKind;
   /** Sessions allowed per period (Freq column). Same as frequencyPerWeek when weekly. */
   sessionsPerPeriod?: number;
-  /** School-day cycle length when frequencyKind is school_day_cycle (typically 6). */
+  /** School-day cycle length when frequencyKind is school_day_cycle (6 or 10). */
   periodSchoolDays?: number;
   ratioGroup: boolean;
   /** Session length in minutes from caseload RS Duration (e.g. 30, 42, 45). */
@@ -179,6 +194,16 @@ export interface WeeklyPeriod {
   providerSignedKey?: string;
   /** ISO timestamp when the provider signed locally. */
   providerSignedAt?: string;
+  /**
+   * School SignNow request outcome. `pending` while the signer link is open.
+   * `cancelled` / `retrieved` after staff end that request (week status returns to draft).
+   * `completed` when SignNow finishes and the week locks.
+   */
+  signatureRequestStatus?: SignatureRequestStatus;
+  /** ISO timestamp of the last signature-request status change. */
+  signatureRequestAt?: string;
+  /** S3 key of the PDF downloaded when staff retrieved an open SignNow request. */
+  retrievedTimesheetKey?: string;
   hhaStatus: HhaTransferStatus;
   /** Joined transfer error text when hhaStatus is failed (for admin Triage UI). */
   hhaError?: string;
@@ -191,7 +216,6 @@ export const ADDITIONAL_SERVICE_TYPES = [
   'consultation',
   'meetings',
   'documentation',
-  'paid_absence',
 ] as const;
 
 export type AdditionalServiceType = (typeof ADDITIONAL_SERVICE_TYPES)[number];
@@ -202,7 +226,6 @@ export const ADDITIONAL_SERVICE_LABELS: Record<AdditionalServiceType, string> = 
   consultation: 'Consultation',
   meetings: 'Meetings',
   documentation: 'Documentation',
-  paid_absence: 'Paid absence',
 };
 
 export function isAdditionalServiceType(value: unknown): value is AdditionalServiceType {
@@ -226,8 +249,13 @@ export interface SessionRow {
   cancelReason: string;
   makeupOfSessionId: string;
   serviceType: string;
-  /** Eval / progress report / consultation / meetings / documentation — empty for PDF caseload visits. */
+  /** Eval / progress report / consultation / meetings / documentation — empty for PDF caseload visits. Paid absence is attendance, not an additional service. */
   additionalServiceType?: AdditionalServiceType | '';
+  /**
+   * District/payer for a no-child additional service. HHA creates a new
+   * "no child" patient on this contract at send time — no caseload child required.
+   */
+  programType?: string;
   location: string;
   notes: string;
   /** CPT procedure codes from Frontline (e.g. 97110). */

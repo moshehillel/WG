@@ -105,6 +105,40 @@ describe('resolveServiceCodeIdFromRows (map before name)', () => {
     ).toBeUndefined();
   });
 
+  it('matches Elmont names that differ only by capitalization', () => {
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT School eval',
+        programType: 'Elmont UFSD Therapy',
+        rows: [{ id: 'eval', name: 'PT School Eval' }],
+      }),
+    ).toBe('eval');
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT additional services 60',
+        programType: 'Elmont UFSD Therapy',
+        rows: [{ id: 'add60', name: 'PT Additional Services 60' }],
+      }),
+    ).toBe('add60');
+  });
+
+  it('does not treat a shorter name as the eval or 60-minute code', () => {
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT School eval',
+        programType: 'Elmont UFSD Therapy',
+        rows: [{ id: 'school', name: 'PT School' }],
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT additional services 60',
+        programType: 'Elmont UFSD Therapy',
+        rows: [{ id: 'add30', name: 'PT Additional Services 30' }],
+      }),
+    ).toBeUndefined();
+  });
+
   it('matches exact PT School Group 30 when present on contract', () => {
     expect(
       resolveServiceCodeIdFromRows({
@@ -149,6 +183,28 @@ describe('resolveServiceCodeIdFromRows (map before name)', () => {
         rows: [{ id: '9', name: 'PT HIP' }], // PS name present, mapped G0151 absent
       }),
     ).toBeUndefined();
+  });
+
+  it('maps Horizon NJ HC Eval onto the contract OT and PT billing names', () => {
+    const rows = [
+      { id: '59129', name: 'OT' },
+      { id: '59131', name: 'PT' },
+      { id: '59128', name: 'ST' },
+    ];
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'OT HC Eval',
+        programType: 'Horizon NJ',
+        rows,
+      }),
+    ).toBe('59129');
+    expect(
+      resolveServiceCodeIdFromRows({
+        serviceType: 'PT HC Eval',
+        programType: 'Horizon NJ',
+        rows,
+      }),
+    ).toBe('59131');
   });
 
   it('maps Americare / Extended HC Eval and CHHA aliases (not flat static IDs)', () => {

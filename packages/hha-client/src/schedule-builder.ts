@@ -64,7 +64,11 @@ export function buildCreateScheduleBody(visit: HhaVisit): string {
 
   const scheduleType =
     visit.scheduleType ?? inferCreateScheduleType(visit.serviceCode);
-  const minutes = visit.durationMinutes ?? 30;
+  // PrimaryBillTo Minutes is the 0–59 remainder. A 60-minute visit must be
+  // Hours=1 Minutes=0. Hours=0 Minutes=60 is HHA ErrorID=-11 (Internal Server Error).
+  const totalMinutes = visit.durationMinutes ?? 30;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
   const payCodeXml = visit.payCodeId
     ? `\n  <PayCodeID>${esc(visit.payCodeId)}</PayCodeID>`
     : '';
@@ -85,7 +89,7 @@ export function buildCreateScheduleBody(visit: HhaVisit): string {
   <PrimaryBillTo>
     <ContractID>${esc(visit.contractId)}</ContractID>
     <ServiceCodeID>${esc(visit.serviceCodeId)}</ServiceCodeID>${authIdXml}
-    <Hours>0</Hours>
+    <Hours>${hours}</Hours>
     <Minutes>${minutes}</Minutes>
   </PrimaryBillTo>
 </ScheduleInfo>`;

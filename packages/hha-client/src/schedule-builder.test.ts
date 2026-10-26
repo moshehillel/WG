@@ -102,6 +102,31 @@ describe('buildCreateScheduleBody', () => {
     expect(xml).toMatch(/<PrimaryBillTo>[\s\S]*<AuthorizationID>998877<\/AuthorizationID>[\s\S]*<\/PrimaryBillTo>/);
   });
 
+  it('splits a 60-minute visit into Hours 1 and Minutes 0', () => {
+    const xml = buildCreateScheduleBody({
+      ...base,
+      visitDate: '2026-09-22',
+      startTime: '2:30 PM',
+      endTime: '3:30 PM',
+      durationMinutes: 60,
+      serviceCode: 'PT additional services 60',
+    });
+    expect(xml).toContain('<Hours>1</Hours>');
+    expect(xml).toContain('<Minutes>0</Minutes>');
+    expect(xml).toContain('<ScheduleStartTime>1430</ScheduleStartTime>');
+    expect(xml).toContain('<ScheduleEndTime>1530</ScheduleEndTime>');
+  });
+
+  it('keeps a 30-minute visit as Hours 0 and Minutes 30', () => {
+    const xml = buildCreateScheduleBody({
+      ...base,
+      visitDate: '2026-09-22',
+      durationMinutes: 30,
+    });
+    expect(xml).toContain('<Hours>0</Hours>');
+    expect(xml).toContain('<Minutes>30</Minutes>');
+  });
+
   it('omits AuthorizationID when unset', () => {
     const xml = buildCreateScheduleBody({
       ...base,

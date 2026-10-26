@@ -98,5 +98,24 @@ describe('parseDemoEchoFromXml', () => {
     expect(demo.addressId).toBe('2966779');
     expect(demo.acceptedServices).toEqual(['PCA', 'RN']);
     expect(demo.mobilityStatusId).toBe('2495');
+    expect(demo.coordinatorId1).toBe('25164');
+  });
+
+  it('does not substitute Abigail Creech or Esty Neuman when the chart has no coordinator', () => {
+    const demo = parseDemoEchoFromXml(
+      958000,
+      `<Patient>
+        <FirstName>ALFREDA</FirstName><LastName>JONES</LastName>
+        <BirthDate>1960-03-25</BirthDate>
+        <AcceptedServices><Discipline>OT</Discipline></AcceptedServices>
+      </Patient>`,
+      `<Addresses><AddressID>2966779</AddressID><Zip5>10459</Zip5></Addresses>`,
+      { coordinatorId: '81103' } as never,
+    );
+    expect(demo.coordinatorId1).toBeUndefined();
+    const xml = buildUpdateAcceptedServicesBody(demo);
+    expect(xml).toContain('<CoordinatorID1 xsi:nil="true" />');
+    expect(xml).not.toContain('81103');
+    expect(xml).not.toContain('68033');
   });
 });

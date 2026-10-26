@@ -4,30 +4,46 @@
  * without circular ESM init.
  */
 /**
+ * makeup / make-up / make up, plus a repeated leading M ("MMAKE-UP for 10/8/26").
+ * m+ake[\s-]?up matches makeup, make-up, make up, and mmake-up.
+ */
+const MAKEUP_TOKEN = 'm+ake[\\s-]?up';
+
+/**
+ * "for" and "from" both introduce the covered miss
+ * ("makeup for 10/8/26", "makeup session from 10/6/26").
+ * Bare "from" later in the note is not a covered date.
+ */
+const MAKEUP_PREP = '(?:for|from)';
+
+/**
  * Covered-miss date prefixes (longest phrases first).
- * Supports: Makeup for (date) | makeup session for (date) |
+ * Supports: Makeup for/from (date) | makeup session for/from (date) |
  * make up / make-up (space or hyphen) as makeup synonyms |
  * makeup for missed session on (date) | missed session on (date) | …
  * Dates may be slash (9/14, 9/14/26) or month-name (sept 14, Sep 14, September 14).
  */
 export const MAKEUP_COVERED_DATE_PREFIX =
   '(?:' +
-  '(?:makeup|make[\\s-]?up)\\s+for\\s+missed(?:\\s+session)?(?:\\s+on)?|' +
+  `(?:${MAKEUP_TOKEN})\\s+${MAKEUP_PREP}\\s+missed(?:\\s+session)?(?:\\s+on)?|` +
   'missed(?:\\s+session)?(?:\\s+on)?|' +
-  'makeup for|' +
-  'make[\\s-]?up for|' +
-  '(?:makeup|make[\\s-]?up)\\s+session(?:\\s+for)?|' +
+  `(?:${MAKEUP_TOKEN})\\s+${MAKEUP_PREP}|` +
+  `(?:${MAKEUP_TOKEN})\\s+session(?:\\s+${MAKEUP_PREP})?|` +
   'original(?:\\s+date|\\s+dos)?|' +
   'for(?:\\s+date)?' +
   ')';
 
-const MAKEUP_WORD_RE = /\bmakeup\b|\bmake[\s-]?up\b/i;
+export const MAKEUP_WORD_RE = new RegExp(`\\b(?:${MAKEUP_TOKEN})\\b`, 'i');
 
 /**
- * "Make up session" / "make-up for" is a makeup. Bare "will make up later"
- * is not, so a later "missed on September 24" must not steal a covered date.
+ * "Make up session" / "make-up for" / "makeup from" / "MMAKE-UP for" is a makeup.
+ * Bare "will make up later" is not, so a later "missed on September 24"
+ * must not steal a covered date.
  */
-const MAKEUP_CLEAR_PHRASE_RE = /\b(?:makeup|make[\s-]?up)\s+(?:session|for)\b/i;
+export const MAKEUP_PHRASE_RE = new RegExp(
+  `\\b(?:${MAKEUP_TOKEN})\\s+(?:session|for|from)\\b`,
+  'i',
+);
 
 const DATE_WITH_YEAR = '(\\d{1,2}/\\d{1,2}/\\d{2,4})';
 const DATE_OPT_YEAR = '(\\d{1,2}/\\d{1,2}(?:/\\d{2,4})?)';
@@ -136,7 +152,7 @@ function monthNameMatchToSlash(
  * ("make up session", "makeup for"). "Will make up later" must not qualify.
  */
 function coveredDatePrefix(notes: string, tight: boolean): string {
-  const bareMissed = MAKEUP_CLEAR_PHRASE_RE.test(notes)
+  const bareMissed = MAKEUP_PHRASE_RE.test(notes)
     ? 'missed(?:\\s+session)?(?:\\s+on)?|'
     : '';
   const tail = tight
@@ -144,11 +160,10 @@ function coveredDatePrefix(notes: string, tight: boolean): string {
     : 'original(?:\\s+date|\\s+dos)?|' + 'for(?:\\s+date)?';
   return (
     '(?:' +
-    '(?:makeup|make[\\s-]?up)\\s+for\\s+missed(?:\\s+session)?(?:\\s+on)?|' +
+    `(?:${MAKEUP_TOKEN})\\s+${MAKEUP_PREP}\\s+missed(?:\\s+session)?(?:\\s+on)?|` +
     bareMissed +
-    'makeup for|' +
-    'make[\\s-]?up for|' +
-    '(?:makeup|make[\\s-]?up)\\s+session(?:\\s+for)?|' +
+    `(?:${MAKEUP_TOKEN})\\s+${MAKEUP_PREP}|` +
+    `(?:${MAKEUP_TOKEN})\\s+session(?:\\s+${MAKEUP_PREP})?|` +
     tail +
     ')'
   );
@@ -173,7 +188,7 @@ export function extractMakeupForDate(
   // 2) Date then "makeup" / "makeup session" — e.g. "Service Provided: 9/9 makeup session".
   const before = n.match(
     new RegExp(
-      `\\b${DATE_OPT_YEAR}\\s+(?:makeup|make[\\s-]?up)(?:\\s+session)?\\b`,
+      `\\b${DATE_OPT_YEAR}\\s+(?:${MAKEUP_TOKEN})(?:\\s+session)?\\b`,
       'i',
     ),
   );
@@ -204,7 +219,7 @@ export function extractMakeupForDate(
   // 5) Month-name date then "makeup" / "makeup session" — e.g. "sept 14 makeup session".
   const beforeMonth = n.match(
     new RegExp(
-      `\\b${MONTH_NAME_DATE}\\s+(?:makeup|make[\\s-]?up)(?:\\s+session)?\\b`,
+      `\\b${MONTH_NAME_DATE}\\s+(?:${MAKEUP_TOKEN})(?:\\s+session)?\\b`,
       'i',
     ),
   );

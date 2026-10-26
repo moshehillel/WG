@@ -173,6 +173,7 @@ export type HhaApiFaultKind =
   | 'service_code_discipline_mismatch'
   | 'timesheet_config_block'
   | 'invalid_schedule_date'
+  | 'hha_create_schedule_internal'
   | 'invalid_patient_id'
   | 'no_active_placements'
   | 'provider_not_found'
@@ -338,6 +339,21 @@ export function parseHhaApiFault(message: string): ParsedHhaApiFault {
       problem:
         cleaned ||
         `HHA CreateSchedule rejected a date value${dateBit} (expected HHA AllXsd / ISO date, not MM/DD/YYYY).`,
+    };
+  }
+
+  // ErrorID=-11 is HHA's generic "unknown", but CreateSchedule often returns it when the
+  // schedule window minutes do not match the billing service-code unit (e.g. PT School 30 + 60 min).
+  if (
+    /ErrorID\s*=\s*-11/i.test(message) ||
+    (/CreateSchedule/i.test(message) && /Internal Server Error/i.test(message))
+  ) {
+    return {
+      kind: 'hha_create_schedule_internal',
+      title: 'Failed — HHA schedule rejected (duration / service mismatch)',
+      problem:
+        cleaned ||
+        'HHA CreateSchedule returned ErrorID=-11 (Internal Server Error). Often the session length does not match the billing service (e.g. 60-minute visit with PT school 30). Match mandate duration to the session, ensure that billing code exists on the contract, then retry.',
     };
   }
 
@@ -749,13 +765,16 @@ export function explainException(ex: PipelineException): ExplainedException {
         };
       }
       if (fault.kind === 'shift_overlap') {
+        const groupMate = /do not cancel the group mate/i.test(String(ex.message || ''));
         return {
           title: fault.title,
           problem: fault.problem,
-          impact:
-            'Visit was not created — HHA will not schedule this caregiver over an existing visit at the same time (same or another patient).',
-          action:
-            'In HHA, find the conflicting visit named in the error, cancel/reschedule it, or change the TMS session time so it no longer overlaps, then re-send.',
+          impact: groupMate
+            ? 'The group mate visit was not created. The other child in the group is already on this caregiver at that time, which is expected. HHA still refused the second patient.'
+            : 'Visit was not created — HHA will not schedule this caregiver over an existing visit at the same time (same or another patient).',
+          action: groupMate
+            ? 'Do not cancel the group mate visit already in HHA. CreateSchedule cannot override overlapping caregiver shifts. Allow overlapping shifts in the HHA office, then re-send.'
+            : 'In HHA, find the conflicting visit named in the error, cancel/reschedule it, or change the TMS session time so it no longer overlaps, then re-send.',
           rowRef,
           reportLabel: report,
           isPreview,
@@ -794,6 +813,18 @@ export function explainException(ex: PipelineException): ExplainedException {
           impact: 'EVV placeholder / schedule was not created — HHA rejected the visit date format.',
           action:
             'Confirm visit/service dates are sent in the HHA-required date format (not MM/DD/YYYY in SOAP AllXsd fields), then re-run.',
+          rowRef,
+          reportLabel: report,
+          isPreview,
+        };
+      }
+      if (fault.kind === 'hha_create_schedule_internal') {
+        return {
+          title: fault.title,
+          problem: fault.problem,
+          impact: 'Visit was not created in HHA.',
+          action:
+            'Match session length to the billing service (e.g. 60-min visit needs PT school 60 on the contract), then retry Send to HHA.',
           rowRef,
           reportLabel: report,
           isPreview,

@@ -1115,6 +1115,16 @@ export const SERVICE_CODE_ALIAS_MAP: readonly ServiceCodeAlias[] = [
     hhaServiceCodeName: "PT Eval 97162",
   },
   {
+    programType: "Horizon NJ",
+    providerSoftCode: "OT HC Eval",
+    hhaServiceCodeName: "OT",
+  },
+  {
+    programType: "Horizon NJ",
+    providerSoftCode: "PT HC Eval",
+    hhaServiceCodeName: "PT",
+  },
+  {
     programType: "Hughes Roger",
     providerSoftCode: "SLP CHHA",
     hhaServiceCodeName: "ST",

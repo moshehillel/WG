@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { envelopeCompleted, isSignNowConfigured } from './esign.js';
+import { envelopeCompleted, isSignNowConfigured, signNowDocumentIsFullySigned } from './esign.js';
 import { PRINCIPAL_DATE_FIELD, PRINCIPAL_SIGN_FIELD, PROVIDER_DATE_FIELD } from './timesheet.js';
 
 describe('esign', () => {
@@ -11,6 +11,29 @@ describe('esign', () => {
       'doc-1',
     );
     expect(envelopeCompleted({ event: 'completed', envelopeId: 'env-1' }).completed).toBe(true);
+  });
+
+  it('treats a fulfilled SignNow invite as complete and a pending invite as open', () => {
+    expect(
+      signNowDocumentIsFullySigned({
+        field_invites: [{ id: 'inv-1', status: 'pending' }],
+      }),
+    ).toBe(false);
+    expect(
+      signNowDocumentIsFullySigned({
+        field_invites: [{ id: 'inv-1', status: 'fulfilled' }],
+      }),
+    ).toBe(true);
+    expect(
+      signNowDocumentIsFullySigned({
+        field_invites: [
+          { id: 'inv-1', status: 'fulfilled' },
+          { id: 'inv-2', status: 'pending' },
+        ],
+      }),
+    ).toBe(false);
+    expect(signNowDocumentIsFullySigned({ signatures: [] })).toBe(false);
+    expect(signNowDocumentIsFullySigned(null)).toBe(false);
   });
 
   it('is not configured without secrets in test env', async () => {

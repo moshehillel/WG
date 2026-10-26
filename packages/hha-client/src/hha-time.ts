@@ -40,6 +40,32 @@ export function psDateToIso(d: string | undefined): string | undefined {
   return `${year}-${mm}-${dd}`;
 }
 
+/**
+ * Minutes from midnight for a schedule clock.
+ * Accepts "1:00 AM", "01:00", "0100", and datetimes that contain HH:MM.
+ */
+export function scheduleClockMinutes(value: string | undefined): number | null {
+  if (!value?.trim()) return null;
+  const raw = value.trim();
+  const compact = raw.match(/^(\d{2})(\d{2})$/);
+  if (compact) {
+    const h = Number(compact[1]);
+    const m = Number(compact[2]);
+    if (h <= 23 && m <= 59) return h * 60 + m;
+  }
+  const twelve = toMinutes12h(raw);
+  if (twelve != null) return twelve;
+  return extractHhaMinutes(raw);
+}
+
+/**
+ * The EVV scaffolding visit is always 1:00–1:30 AM (0100–0130).
+ * A daytime session is a different visit and must not match.
+ */
+export function isEvvPlaceholderSchedule(start: string | undefined, end: string | undefined): boolean {
+  return scheduleClockMinutes(start) === 60 && scheduleClockMinutes(end) === 90;
+}
+
 /** "4:30 PM" → "1630" for CreateSchedule ScheduleStartTime. */
 export function psTimeToHhmm(t: string | undefined): string | undefined {
   if (!t?.trim()) return undefined;
@@ -108,20 +134,49 @@ export function splitProviderName(full: string | undefined): { firstName: string
  * SearchCaregivers name-order attempts for ProviderSoft "Provider Name".
  * PS sheets mix LAST FIRST and FIRST LAST — try both (and last-token-as-surname).
  * Also accepts "Last, First" (TMS transfer / PS) — commas must not stick to name tokens.
+ * Multi-word surnames ("Donaldson Fortune, Shayena") keep the full last name and also
+ * try first/last surname tokens (HHA often stores maiden-only LastName=Donaldson).
  */
 export function caregiverSearchNameOrders(
   providerName: string | undefined,
 ): Array<{ firstName: string; lastName: string }> {
+  const raw = (providerName ?? '').trim();
+  if (!raw) return [];
+
+  const attempts: Array<{ firstName: string; lastName: string }> = [];
+
+  // Honor "Last, First" before strip collapses the comma into spaces — otherwise
+  // "Donaldson Fortune, Shayena" becomes 3 tokens and never searches Last=Donaldson Fortune.
+  const commaIdx = raw.indexOf(',');
+  if (commaIdx > 0) {
+    const last = stripProviderDisciplineSuffixes(raw.slice(0, commaIdx));
+    const first = stripProviderDisciplineSuffixes(raw.slice(commaIdx + 1));
+    if (last && first) {
+      attempts.push({ lastName: last, firstName: first });
+      attempts.push({ firstName: first, lastName: last });
+      const lastParts = last.split(/\s+/).filter(Boolean);
+      if (lastParts.length > 1) {
+        attempts.push({ lastName: lastParts[0]!, firstName: first });
+        attempts.push({ lastName: lastParts[lastParts.length - 1]!, firstName: first });
+        attempts.push({ firstName: first, lastName: lastParts[0]! });
+        attempts.push({ firstName: first, lastName: lastParts[lastParts.length - 1]! });
+      }
+    }
+  }
+
   // Drop PT*/OT/SLP (and trailing *) so "Patel PT*, NEELAMBEN" searches as Patel / NEELAMBEN.
   const parts = stripProviderDisciplineSuffixes(providerName)
     .split(/\s+/)
     .filter(Boolean);
-  if (parts.length === 0) return [];
+  if (parts.length === 0) {
+    return dedupeCaregiverNameAttempts(attempts);
+  }
   if (parts.length === 1) {
-    return [
+    attempts.push(
       { firstName: parts[0]!, lastName: '' },
       { firstName: '', lastName: parts[0]! },
-    ];
+    );
+    return dedupeCaregiverNameAttempts(attempts);
   }
 
   const base: Array<{ firstName: string; lastName: string }> = [
@@ -130,7 +185,6 @@ export function caregiverSearchNameOrders(
     { lastName: parts[parts.length - 1]!, firstName: parts.slice(0, -1).join(' ') },
   ];
 
-  const attempts: Array<{ firstName: string; lastName: string }> = [];
   for (const a of base) {
     attempts.push(a);
     const firstParts = a.firstName.split(/\s+/).filter(Boolean);
@@ -139,6 +193,12 @@ export function caregiverSearchNameOrders(
     }
   }
 
+  return dedupeCaregiverNameAttempts(attempts);
+}
+
+function dedupeCaregiverNameAttempts(
+  attempts: Array<{ firstName: string; lastName: string }>,
+): Array<{ firstName: string; lastName: string }> {
   const seen = new Set<string>();
   const out: Array<{ firstName: string; lastName: string }> = [];
   for (const a of attempts) {

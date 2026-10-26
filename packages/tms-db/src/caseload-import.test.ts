@@ -25,7 +25,7 @@ import {
 } from './caseload-import.js';
 import { checkMandatesForWeek } from './mandate.js';
 import { MemoryStore } from './memory-store.js';
-import type { Mandate, SessionRow } from './types.js';
+import type { Mandate, SessionRow, Student } from './types.js';
 import { nowIso } from './ids.js';
 
 const KU_SAMPLE = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
@@ -76,6 +76,56 @@ function sess(over: Partial<SessionRow> = {}): SessionRow {
   };
 }
 
+function seedPatLee(store: MemoryStore) {
+  store.upsertProvider({
+    id: 'p-pat',
+    userId: '',
+    firstName: 'Pat',
+    lastName: 'Lee',
+    discipline: 'PT',
+    payRatePerHour: null,
+    payRate30Min: null,
+    payRate42Min: null,
+    payRate45Min: null,
+    payRateGroup30Min: null,
+    payRateGroup42Min: null,
+    payRateGroup45Min: null,
+    payRateEval: null,
+    payRateAdditionalHourly: null,
+    hhaCaregiverCode: '',
+    active: true,
+    createdAt: nowIso(),
+  });
+}
+
+const CASELOAD_ID_HEADER =
+  'Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider,Program ID,Program Type,Date of Birth';
+
+function caseloadIdentityCsv(cells: {
+  first: string;
+  last: string;
+  dob: string;
+  programId: string;
+  service?: string;
+}) {
+  const service = cells.service || 'PT';
+  return `${CASELOAD_ID_HEADER}
+Shaw Avenue,${cells.last},${cells.first},K,Approved,10/01/2026,06/30/2027,${service},Individual,1,Weekly,Pull-Out,Pat Lee,${cells.programId},CPSE,${cells.dob}`;
+}
+
+function seedChild(store: MemoryStore, over: Partial<Student> & Pick<Student, 'id' | 'createdAt'>): Student {
+  return store.upsertStudent({
+    schoolId: '',
+    firstName: 'Jeremiah',
+    lastName: 'Brunson',
+    dob: '2022-06-11',
+    programId: '44358',
+    programType: 'CPSE',
+    hhaPatientId: '',
+    ...over,
+  });
+}
+
 describe('caseload CSV parser', () => {
   it('splits quoted commas', () => {
     expect(splitCsvLine('a,"b, c",d')).toEqual(['a', 'b, c', 'd']);
@@ -116,7 +166,19 @@ describe('caseload CSV parser', () => {
   it('formatFreqDisplay', () => {
     expect(formatFreqDisplay('weekly', 1, 0)).toBe('1 / week');
     expect(formatFreqDisplay('school_day_cycle', 2, 6)).toBe('2 / 6 school days');
+    expect(formatFreqDisplay('school_day_cycle', 1, 10)).toBe('1 / 10 school days');
     expect(formatFreqDisplay('monthly', 1, 0)).toBe('1 / month');
+  });
+
+  it('parses a 10 day cycle period', () => {
+    const csv = `Recommended School,Last Name,First Name,Grade,Decision,RS Start,RS End,Related Service,Ratio,Freq,Period,Location,RS Provider
+Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Individual,1,10 day cycle,Push-In,Pat Lee
+`;
+    const parsed = parseCaseloadCsv(csv);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.rows[0]?.frequencyKind).toBe('school_day_cycle');
+    expect(parsed.rows[0]?.periodSchoolDays).toBe(10);
+    expect(parsed.rows[0]?.freqDisplay).toBe('1 / 10 school days');
   });
 
   it('parses Monthly period as frequencyKind monthly', () => {
@@ -1006,6 +1068,239 @@ Shaw Avenue,Haris,Ahmad,3,Approved,09/01/2025,06/30/2026,PT,Individual,1,Weekly,
     expect(student?.programType).toBe('CPSE');
     expect(student?.dob).toBe('2018-01-15');
     expect(applied.rows[0]?.providerMatched).toBe(true);
+  });
+
+  it('attaches a longer first-name cell to the child with the same program id and DOB', () => {
+    const csv = caseloadIdentityCsv({
+      first: 'Jeremiah Tharin',
+      last: 'Brunson',
+      dob: '06/11/2022',
+      programId: '44358',
+      service: 'PT',
+    });
+
+    const blankMiddle = new MemoryStore();
+    seedPatLee(blankMiddle);
+    seedChild(blankMiddle, {
+      id: 'st-jeremiah',
+      createdAt: '2026-09-01T00:00:00.000Z',
+      hhaPatientId: '26025470',
+    });
+    blankMiddle.upsertMandate(
+      mandate({
+        id: 'm-speech',
+        studentId: 'st-jeremiah',
+        providerId: 'p-pat',
+        serviceType: 'ST School',
+        discipline: 'SLP',
+        frequencyPerWeek: 2,
+        sessionsPerPeriod: 2,
+      }),
+    );
+
+    const applied = applyCaseloadImport(blankMiddle, parseCaseloadCsv(csv));
+    expect(applied.createdStudents).toBe(0);
+    expect(blankMiddle.data.students).toHaveLength(1);
+    expect(blankMiddle.data.students[0]).toMatchObject({
+      id: 'st-jeremiah',
+      firstName: 'Jeremiah',
+      lastName: 'Brunson',
+      middleName: 'Tharin',
+      dob: '2022-06-11',
+      programId: '44358',
+      hhaPatientId: '26025470',
+    });
+    const onJeremiah = blankMiddle.data.mandates.filter((m) => m.studentId === 'st-jeremiah');
+    expect(onJeremiah).toHaveLength(2);
+    expect(onJeremiah.some((m) => m.discipline === 'PT')).toBe(true);
+    expect(onJeremiah.some((m) => m.discipline === 'SLP')).toBe(true);
+
+    const alreadyMiddle = new MemoryStore();
+    seedPatLee(alreadyMiddle);
+    seedChild(alreadyMiddle, {
+      id: 'st-jeremiah',
+      createdAt: '2026-09-01T00:00:00.000Z',
+      hhaPatientId: '26025470',
+      middleName: 'Lee',
+    });
+    applyCaseloadImport(alreadyMiddle, parseCaseloadCsv(csv));
+    expect(alreadyMiddle.data.students).toHaveLength(1);
+    expect(alreadyMiddle.data.students[0]).toMatchObject({
+      id: 'st-jeremiah',
+      firstName: 'Jeremiah',
+      middleName: 'Lee',
+      hhaPatientId: '26025470',
+    });
+    expect(alreadyMiddle.data.mandates.every((m) => m.studentId === 'st-jeremiah')).toBe(true);
+  });
+
+  it('does not attach a different date of birth just because the program id matches', () => {
+    const store = new MemoryStore();
+    seedPatLee(store);
+    seedChild(store, {
+      id: 'st-jeremiah',
+      createdAt: '2026-09-01T00:00:00.000Z',
+      hhaPatientId: '26025470',
+    });
+    store.upsertMandate(
+      mandate({
+        id: 'm-speech',
+        studentId: 'st-jeremiah',
+        providerId: 'p-pat',
+        serviceType: 'ST School',
+        discipline: 'SLP',
+      }),
+    );
+
+    const applied = applyCaseloadImport(
+      store,
+      parseCaseloadCsv(
+        caseloadIdentityCsv({
+          first: 'Jeremiah Tharin',
+          last: 'Brunson',
+          dob: '01/02/2020',
+          programId: '44358',
+        }),
+      ),
+    );
+
+    expect(applied.createdStudents).toBe(1);
+    expect(store.data.students).toHaveLength(2);
+    const original = store.data.students.find((s) => s.id === 'st-jeremiah');
+    expect(original).toMatchObject({
+      firstName: 'Jeremiah',
+      lastName: 'Brunson',
+      dob: '2022-06-11',
+      hhaPatientId: '26025470',
+    });
+    expect(original?.middleName || '').toBe('');
+    expect(store.data.mandates.filter((m) => m.studentId === 'st-jeremiah').map((m) => m.discipline)).toEqual([
+      'SLP',
+    ]);
+    const created = store.data.students.find((s) => s.id !== 'st-jeremiah');
+    expect(created).toMatchObject({
+      firstName: 'Jeremiah Tharin',
+      lastName: 'Brunson',
+      dob: '2020-01-02',
+      programId: '44358',
+      hhaPatientId: '',
+    });
+    expect(store.data.mandates.some((m) => m.studentId === created?.id && m.discipline === 'PT')).toBe(true);
+  });
+
+  it('does not split a two-word first name when the import repeats it', () => {
+    const store = new MemoryStore();
+    seedPatLee(store);
+    seedChild(store, {
+      id: 'st-lorenzo',
+      createdAt: '2026-09-01T00:00:00.000Z',
+      firstName: 'Lorenzo Raymond',
+      lastName: 'Cruz',
+      dob: '2019-04-02',
+      programId: '55501',
+      hhaPatientId: '777',
+    });
+
+    applyCaseloadImport(
+      store,
+      parseCaseloadCsv(
+        caseloadIdentityCsv({
+          first: 'Lorenzo Raymond',
+          last: 'Cruz',
+          dob: '04/02/2019',
+          programId: '55501',
+        }),
+      ),
+    );
+
+    expect(store.data.students).toHaveLength(1);
+    expect(store.data.students[0]).toMatchObject({
+      id: 'st-lorenzo',
+      firstName: 'Lorenzo Raymond',
+      lastName: 'Cruz',
+      hhaPatientId: '777',
+    });
+    expect(store.data.students[0]?.middleName || '').toBe('');
+    expect(store.data.mandates.map((m) => m.studentId)).toEqual(['st-lorenzo']);
+  });
+
+  it('updates the oldest file that already has an HHA id when program id and DOB are shared', () => {
+    const store = new MemoryStore();
+    seedPatLee(store);
+    seedChild(store, {
+      id: 'st-oldest-no-hha',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      hhaPatientId: '',
+    });
+    seedChild(store, {
+      id: 'st-oldest-hha',
+      createdAt: '2026-09-01T00:00:00.000Z',
+      hhaPatientId: '111',
+    });
+    seedChild(store, {
+      id: 'st-newer-hha',
+      createdAt: '2026-10-01T00:00:00.000Z',
+      hhaPatientId: '222',
+      firstName: 'Other',
+    });
+
+    const applied = applyCaseloadImport(
+      store,
+      parseCaseloadCsv(
+        caseloadIdentityCsv({
+          first: 'Jeremiah Tharin',
+          last: 'Brunson',
+          dob: '06/11/2022',
+          programId: '44358',
+        }),
+      ),
+    );
+
+    expect(applied.createdStudents).toBe(0);
+    expect(store.data.students.map((s) => s.id)).toEqual([
+      'st-oldest-no-hha',
+      'st-oldest-hha',
+      'st-newer-hha',
+    ]);
+    expect(store.data.students.find((s) => s.id === 'st-oldest-hha')).toMatchObject({
+      firstName: 'Jeremiah',
+      middleName: 'Tharin',
+      hhaPatientId: '111',
+    });
+    expect(store.data.students.find((s) => s.id === 'st-oldest-no-hha')?.hhaPatientId).toBe('');
+    expect(store.data.students.find((s) => s.id === 'st-newer-hha')).toMatchObject({
+      firstName: 'Other',
+      hhaPatientId: '222',
+    });
+    expect(store.data.mandates.map((m) => m.studentId)).toEqual(['st-oldest-hha']);
+
+    const noneLinked = new MemoryStore();
+    seedPatLee(noneLinked);
+    seedChild(noneLinked, {
+      id: 'st-older',
+      createdAt: '2026-08-01T00:00:00.000Z',
+      hhaPatientId: '',
+    });
+    seedChild(noneLinked, {
+      id: 'st-newer',
+      createdAt: '2026-10-01T00:00:00.000Z',
+      hhaPatientId: '',
+    });
+    applyCaseloadImport(
+      noneLinked,
+      parseCaseloadCsv(
+        caseloadIdentityCsv({
+          first: 'Jeremiah Tharin',
+          last: 'Brunson',
+          dob: '06/11/2022',
+          programId: '44358',
+        }),
+      ),
+    );
+    expect(noneLinked.data.students).toHaveLength(2);
+    expect(noneLinked.data.students.find((s) => s.id === 'st-older')?.middleName).toBe('Tharin');
+    expect(noneLinked.data.students.find((s) => s.id === 'st-newer')?.middleName || '').toBe('');
+    expect(noneLinked.data.mandates.map((m) => m.studentId)).toEqual(['st-older']);
   });
 
   it('matches Last, First and First Last provider names', () => {

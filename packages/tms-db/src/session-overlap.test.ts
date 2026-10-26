@@ -12,6 +12,7 @@ import {
   sessionExplicitlyMarkedGroup,
   soloGroupMandateNoteWarning,
 } from './session-overlap.js';
+import { sessionLooksGroup } from './mandate.js';
 import { sessionPayAmount, sessionUsesGroupPayRate, blankProviderPay } from './provider-pay.js';
 import type { Mandate, Provider, SessionRow } from './types.js';
 
@@ -397,6 +398,18 @@ describe('group-mandate seen individually → individual pay', () => {
     expect(sessionUsesGroupPayRate(individualVisit)).toBe(false);
     expect(sessionUsesGroupPayRate(groupVisit)).toBe(false); // solo / no peers → individual
     expect(sessionUsesGroupPayRate(groupVisit, { presentGroupPeerCount: 1 })).toBe(true);
+    const fiveToOne = sess({ serviceType: 'Physical Therapy 5:1' });
+    expect(sessionUsesGroupPayRate(fiveToOne)).toBe(false);
+    expect(sessionUsesGroupPayRate(fiveToOne, { presentGroupPeerCount: 1 })).toBe(true);
+    expect(sessionUsesGroupPayRate(fiveToOne, { presentGroupPeerCount: 3 })).toBe(true);
+    const twelveToOne = sess({ serviceType: 'PT School 12:1' });
+    expect(sessionLooksGroup('Physical Therapy 5:1')).toBe(true);
+    expect(sessionLooksGroup('PT School 12:1')).toBe(true);
+    expect(sessionLooksGroup('Physical Therapy 1000:1')).toBe(true);
+    expect(sessionLooksGroup('Group')).toBe(true);
+    expect(sessionLooksGroup('PT School 1:1')).toBe(false);
+    expect(sessionUsesGroupPayRate(twelveToOne, { presentGroupPeerCount: 1 })).toBe(true);
+    expect(sessionUsesGroupPayRate(sess({ serviceType: 'PT School 1:1' }), { presentGroupPeerCount: 4 })).toBe(false);
     expect(sessionPayAmount(provider, individualVisit, { mandateDurationMinutes: 30 })).toBe(40);
     expect(sessionPayAmount(provider, groupVisit, { mandateDurationMinutes: 30 })).toBe(40);
     expect(
@@ -647,6 +660,11 @@ describe('solo group → individual pay (absent peers)', () => {
     );
     expect(notesMentionNoPeerAvailable('Service Provided: no group available')).toBe(true);
     expect(notesMentionNoPeerAvailable('Service Provided: fine motor only')).toBe(false);
+    expect(
+      notesMentionNoPeerAvailable(
+        'Service Provided: Student walk on balance beams without missing 4 out of 8 feet with external wall support to maintain his balance.',
+      ),
+    ).toBe(false);
   });
 
   it('accepts Elizabeth-style cannot-group / no-one-appropriate wording', () => {
@@ -658,6 +676,76 @@ describe('solo group → individual pay (absent peers)', () => {
     expect(notesMentionNoPeerAvailable('no one appropriate to group him with')).toBe(true);
     expect(notesMentionNoPeerAvailable('not appropriate to group her with peers')).toBe(true);
     expect(notesMentionNoPeerAvailable('Student worked on LE strengthening')).toBe(false);
+  });
+
+  it('accepts Group Mandate- seen individually on a true individual visit', () => {
+    const phrases = [
+      'Group Mandate- seen individually',
+      'Group Mandate - seen individually',
+      'Group Mandate-seen individually',
+      'Group Mandate– seen individually',
+      'Group Mandate — seen individually',
+      'Group Mandate: seen individually',
+      'Group Mandate:seen individually',
+      'group mandate seen individually',
+      'GROUP MANDATE-  SEEN INDIVIDUALLY',
+      'Group  Mandate -  seen individually',
+    ];
+    for (const phrase of phrases) {
+      expect(notesMentionNoPeerAvailable(`Service Provided: ${phrase}`), phrase).toBe(true);
+    }
+    expect(notesMentionNoPeerAvailable('Service Provided: seen individually')).toBe(false);
+    expect(notesMentionNoPeerAvailable('Service Provided: group mandate only')).toBe(false);
+
+    const mandates = [
+      mandate({ id: 'm-grp', studentId: 'st1', ratioGroup: true, serviceType: 'PT School Group' }),
+    ];
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: Group Mandate- seen individually',
+        serviceType: 'PT School 1:1',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+      }),
+    ).toBeNull();
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'group mandate seen individually',
+        serviceType: 'Physical Therapy',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+      }),
+    ).toBeNull();
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: LE strengthening',
+        serviceType: 'PT School 1:1',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+      }),
+    ).toMatch(/Group-mandate child seen individually/);
+    // Explicit group ratio does not need this phrase.
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: group game',
+        serviceType: 'PT School 2:1',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+      }),
+    ).toBeNull();
+    expect(
+      soloGroupMandateNoteWarning({
+        notes: 'Service Provided: group game',
+        serviceType: 'PT School 3:1',
+        studentId: 'st1',
+        attendance: 'attended',
+        mandates,
+      }),
+    ).toBeNull();
   });
 });
 

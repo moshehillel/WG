@@ -17,6 +17,7 @@ export {
 } from './update-accepted-services.js';
 export {
   activePlacements,
+  backdatePlacementStart,
   findReusableContractPlacement,
   isPlacementOverlapFault,
   normalizePlacementDate,
@@ -84,6 +85,8 @@ export {
   psDateTimeIso,
   psDateTimeSpace,
   psTimeToHhmm,
+  scheduleClockMinutes,
+  isEvvPlaceholderSchedule,
   sessionDurationMinutes,
   splitProviderName,
   caregiverSearchNameOrders,

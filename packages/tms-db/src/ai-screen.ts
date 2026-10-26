@@ -20,7 +20,7 @@ export function screenServiceNote(input: {
     blockFlags.push('Attended session is missing time in / time out.');
   }
   // Miss link vs makeup-auth is enforced in validateMakeup; AI only checks the note word.
-  if (input.attendance === 'makeup' && !/\bmakeup\b|\bmake[\s-]?up\b/i.test(notes)) {
+  if (input.attendance === 'makeup' && !/\bm+ake[\s-]?up\b/i.test(notes)) {
     blockFlags.push('Makeup notes must include the word makeup.');
   }
   if (/lorem ipsum|asdf|test test/i.test(notes)) {

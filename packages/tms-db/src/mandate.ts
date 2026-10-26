@@ -1,5 +1,6 @@
 import { buildSchoolBillingServiceName } from '@white-glove/shared';
 import { isoDate, parseDos } from './ids.js';
+import { sessionBillingKind, sessionDurationMinutes } from './provider-pay.js';
 import {
   hasConfiguredSchoolCalendar,
   isSchoolDay,
@@ -85,10 +86,16 @@ export function cycleAllowedSessions(mandate: Mandate | undefined): number {
   return Number(mandate.sessionsPerPeriod) || 0;
 }
 
-export function cyclePeriodSchoolDays(mandate: Mandate | undefined): number {
+export function cyclePeriodSchoolDays(
+  mandate: Mandate | undefined,
+  calendar?: SchoolCalendar | null,
+): number {
   if (!mandate || mandateFrequencyKind(mandate) !== 'school_day_cycle') return 0;
   const n = Number(mandate.periodSchoolDays);
-  return Number.isFinite(n) && n > 0 ? n : 6;
+  if (Number.isFinite(n) && n > 0) return n;
+  const fromSchool = Number(calendar?.cycleDays);
+  if (Number.isFinite(fromSchool) && fromSchool > 0) return fromSchool;
+  return 6;
 }
 
 function dosToIso(dos: string): string {
@@ -155,30 +162,40 @@ export function maxSessionsInSchoolDayCycle(
 
 export function sessionLooksGroup(serviceType: string): boolean | null {
   const s = String(serviceType || '');
-  if (/\bgroup\b|\b2\s*:\s*1\b|\b3\s*:\s*1\b|\b4\s*:\s*1\b/i.test(s)) return true;
-  if (/\bindividual\b|\b1\s*:\s*1\b/i.test(s)) return false;
+  if (/\bgroup\b/i.test(s)) return true;
+  // Any N:1 with N≥2 is a group (2:1, 3:1, 5:1…). Clock times (8:40, 9:10) are not N:1.
+  const ratio = s.match(/\b(\d+)\s*:\s*1\b/);
+  if (ratio) {
+    const n = Number(ratio[1]);
+    if (Number.isFinite(n) && n >= 2) return true;
+    if (n === 1) return false;
+  }
+  if (/\bindividual\b/i.test(s)) return false;
   return null;
 }
 
 /**
  * True when notes clearly say no peer/partner was available (or clear synonym).
  * Solo-group Frontline rows often arrive as 1:1 with this note.
- * Also matches "group mate is absent" / "partner absent" (peer missing, student attended).
+ * Also matches "group mate is absent" / "partner absent" (peer missing, student attended),
+ * and "Group Mandate- seen individually" (hyphen, en dash, em dash, colon, or spaces).
+ * The person and absent/missing must be adjacent (optional "was"/"is"). A clinical
+ * sentence such as "Student walk on balance beams without missing" is not a peer absence.
  */
 export function notesMentionNoPeerAvailable(notes: string): boolean {
   const n = String(notes || '');
   if (!n.trim()) return false;
-  // peer | partner | classmate | groupmate / "group mate" (optional plural)
+  // peer | partner | classmate | groupmate / "group mate" / "group member" (optional plural)
   const who =
-    'peers?|partners?|classmates?|groupmates?|group\\s*mates?|group\\s*partners?';
+    'peers?|partners?|classmates?|groupmates?|group\\s*mates?|group\\s*partners?|group\\s*members?';
   const otherWho =
-    'student|child|peer|partner|member|participant|group\\s*mate|group\\s*partner|classmate';
+    'student|child|peer|partner|member|participant|group\\s*mate|group\\s*partner|group\\s*member|classmate';
   if (
     new RegExp(
       `\\bno\\s+(?:other\\s+)?(?:${who})\\b` +
         `|\\b(?:${who})\\s+(?:were\\s+|was\\s+|are\\s+|is\\s+)?(?:not\\s+|un)?available\\b` +
         `|\\bno\\s+other\\s+(?:${otherWho})s?\\b` +
-        `|\\b(?:other\\s+)?(?:${otherWho})s?.{0,32}(?:absent|unavailable|missing)\\b` +
+        `|\\b(?:other\\s+)?(?:${otherWho})s?\\s+(?:(?:was|were|is|are)\\s+)?(?:absent|unavailable|missing)\\b` +
         `|\\b(?:his|her|their|the)\\s+(?:${who})\\s+(?:is|was|are|were)\\s+absent\\b` +
         // Therapists often write "Group not available" for solo-group (no peer).
         `|\\bgroups?\\s+(?:was\\s+|were\\s+|is\\s+|are\\s+)?(?:not\\s+)?(?:un)?available\\b` +
@@ -186,7 +203,9 @@ export function notesMentionNoPeerAvailable(notes: string): boolean {
         // Elizabeth-style: "can not be seen in a group" / "no one appropriate to group…"
         `|\\bcan(?:\\s*not|not)\\s+be\\s+seen\\s+in\\s+(?:a\\s+)?group\\b` +
         `|\\bno\\s+one\\s+appropriate\\s+to\\s+group\\b` +
-        `|\\bnot\\s+appropriate\\s+to\\s+group\\b`,
+        `|\\bnot\\s+appropriate\\s+to\\s+group\\b` +
+        // "Group Mandate- seen individually" (hyphen, en dash, em dash, colon, or just spaces).
+        `|\\bgroup\\s+mandate\\s*[-\\u2013\\u2014:]?\\s*seen\\s+individually\\b`,
       'i',
     ).test(n)
   ) {
@@ -204,7 +223,7 @@ export function sessionMandateNoteContext(session: Pick<SessionRow, 'attendance'
   const notes = String(session.notes || '');
   if (
     session.attendance === 'makeup' ||
-    /\b(?:makeup|make[\s-]?up)\s+session\b|\bmake[\s-]?up\s+for\b/i.test(notes)
+    /\bm+ake[\s-]?up\s+(?:session|for)\b/i.test(notes)
   ) {
     bits.push('makeup session');
   }
@@ -294,6 +313,60 @@ export function mandateDurationMinutesForSession(
 }
 
 /**
+ * Edelia: a school visit shorter than the mandate (15 min on a 30-min mandate)
+ * is never allowed. The rate and the service code stay on the mandate.
+ * Additional services are exempt — those rates follow the clock.
+ */
+export function sessionShorterThanMandateError(
+  session: SessionRow,
+  mandates: Mandate[],
+): string | null {
+  if (
+    session.attendance !== 'attended' &&
+    session.attendance !== 'makeup' &&
+    session.attendance !== 'paid_absence'
+  ) {
+    return null;
+  }
+  if (sessionBillingKind(session) !== 'school') return null;
+  const clock = sessionDurationMinutes(session.beginTime, session.endTime);
+  const mandateMinutes = mandateDurationMinutesForSession(session, mandates);
+  if (clock == null || mandateMinutes == null || clock >= mandateMinutes) return null;
+  return (
+    `Session is ${clock} min but the mandate is ${mandateMinutes} min. ` +
+    `Sessions shorter than the mandate are not allowed. ` +
+    `The rate and service code stay on the ${mandateMinutes}-minute mandate. ` +
+    `Change the times to ${mandateMinutes} min.`
+  );
+}
+
+/**
+ * Among same-class candidates, prefer the mandate whose RS Duration is closest
+ * to the session clock. Avoids billing a 60-min Frontline visit as PT school 30
+ * (HHA CreateSchedule ErrorID=-11 when PrimaryBillTo minutes ≠ service-code unit).
+ */
+function preferClosestDurationMandate(
+  candidates: Mandate[],
+  session: SessionRow,
+): Mandate | undefined {
+  if (!candidates.length) return undefined;
+  if (candidates.length === 1) return candidates[0];
+  const clock = sessionDurationMinutes(session.beginTime, session.endTime);
+  if (clock == null) return candidates[0];
+  let best = candidates[0]!;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const m of candidates) {
+    const md = Number(m.durationMinutes);
+    const score = Number.isFinite(md) ? Math.abs(clock - md) : Number.POSITIVE_INFINITY;
+    if (score < bestScore) {
+      best = m;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/**
  * Assign each session to at most one mandate for the student (prefer exact ratio match).
  * Unmatched sessions are returned separately.
  */
@@ -313,49 +386,103 @@ export function assignSessionsToMandates(
     }
     const sessGroup = sessionLooksGroup(s.serviceType);
     const soloGroupViaNote = sessionIsSoloGroupViaNote(s);
-    let preferred = candidates[0];
+    let preferred = preferClosestDurationMandate(candidates, s) || candidates[0]!;
     if (s.attendance === 'makeup' && !s.makeupOfSessionId) {
       // Unlinked makeups: Makeup auth pool first, then Makeup-Weekly; miss-linked do not.
       preferred =
-        candidates.find((m) => isMakeupAuthMandate(m)) ||
-        candidates.find((m) => isMakeupWeeklyMandate(m)) ||
+        preferClosestDurationMandate(
+          candidates.filter((m) => isMakeupAuthMandate(m)),
+          s,
+        ) ||
+        preferClosestDurationMandate(
+          candidates.filter((m) => isMakeupWeeklyMandate(m)),
+          s,
+        ) ||
         (soloGroupViaNote
-          ? candidates.find((m) => m.ratioGroup)
+          ? preferClosestDurationMandate(
+              candidates.filter((m) => m.ratioGroup),
+              s,
+            )
           : undefined) ||
-        candidates.find((m) => Boolean(m.ratioGroup) === Boolean(sessGroup)) ||
-        candidates[0];
+        preferClosestDurationMandate(
+          candidates.filter((m) => Boolean(m.ratioGroup) === Boolean(sessGroup)),
+          s,
+        ) ||
+        preferClosestDurationMandate(candidates, s) ||
+        candidates[0]!;
     } else if (s.attendance === 'makeup' && s.makeupOfSessionId) {
       preferred =
         (soloGroupViaNote
-          ? candidates.find((m) => !isMakeupKindMandate(m) && m.ratioGroup)
+          ? preferClosestDurationMandate(
+              candidates.filter((m) => !isMakeupKindMandate(m) && m.ratioGroup),
+              s,
+            )
           : undefined) ||
-        candidates.find((m) => !isMakeupKindMandate(m) && Boolean(m.ratioGroup) === Boolean(sessGroup)) ||
-        candidates.find((m) => !isMakeupKindMandate(m)) ||
-        candidates[0];
+        preferClosestDurationMandate(
+          candidates.filter(
+            (m) => !isMakeupKindMandate(m) && Boolean(m.ratioGroup) === Boolean(sessGroup),
+          ),
+          s,
+        ) ||
+        preferClosestDurationMandate(
+          candidates.filter((m) => !isMakeupKindMandate(m)),
+          s,
+        ) ||
+        preferClosestDurationMandate(candidates, s) ||
+        candidates[0]!;
     } else if (soloGroupViaNote) {
       // Solo group / no-partner note → group mandate frequency (not individual).
       preferred =
-        candidates.find((m) => !isMakeupKindMandate(m) && m.ratioGroup) ||
-        candidates.find((m) => !isMakeupKindMandate(m)) ||
-        candidates[0];
+        preferClosestDurationMandate(
+          candidates.filter((m) => !isMakeupKindMandate(m) && m.ratioGroup),
+          s,
+        ) ||
+        preferClosestDurationMandate(
+          candidates.filter((m) => !isMakeupKindMandate(m)),
+          s,
+        ) ||
+        preferClosestDurationMandate(candidates, s) ||
+        candidates[0]!;
     } else if (sessGroup === false) {
       // True individual / 1:1 without no-partner note → individual mandate first.
       // Never force these onto a group mandate when both exist.
+      // Prefer RS Duration closest to clock (60-min visit → PT school 60, not 30).
       preferred =
-        candidates.find((m) => !isMakeupKindMandate(m) && !m.ratioGroup) ||
-        candidates.find((m) => !isMakeupKindMandate(m)) ||
-        candidates[0];
+        preferClosestDurationMandate(
+          candidates.filter((m) => !isMakeupKindMandate(m) && !m.ratioGroup),
+          s,
+        ) ||
+        preferClosestDurationMandate(
+          candidates.filter((m) => !isMakeupKindMandate(m)),
+          s,
+        ) ||
+        preferClosestDurationMandate(candidates, s) ||
+        candidates[0]!;
     } else if (sessGroup === true) {
       preferred =
-        candidates.find((m) => !isMakeupKindMandate(m) && m.ratioGroup) ||
-        candidates.find((m) => !isMakeupKindMandate(m)) ||
-        candidates[0];
+        preferClosestDurationMandate(
+          candidates.filter((m) => !isMakeupKindMandate(m) && m.ratioGroup),
+          s,
+        ) ||
+        preferClosestDurationMandate(
+          candidates.filter((m) => !isMakeupKindMandate(m)),
+          s,
+        ) ||
+        preferClosestDurationMandate(candidates, s) ||
+        candidates[0]!;
     } else if (candidates.length > 1) {
       // No ratio signal — prefer individual when both exist so group slots aren't double-spent.
       preferred =
-        candidates.find((m) => !isMakeupKindMandate(m) && !m.ratioGroup) ||
-        candidates.find((m) => !isMakeupKindMandate(m)) ||
-        candidates[0];
+        preferClosestDurationMandate(
+          candidates.filter((m) => !isMakeupKindMandate(m) && !m.ratioGroup),
+          s,
+        ) ||
+        preferClosestDurationMandate(
+          candidates.filter((m) => !isMakeupKindMandate(m)),
+          s,
+        ) ||
+        preferClosestDurationMandate(candidates, s) ||
+        candidates[0]!;
     }
     byMandateId.get(preferred.id)!.push(s);
   }
@@ -394,11 +521,21 @@ export function isAdditionalServiceSession(session: SessionRow): boolean {
   return Boolean(session.additionalServiceType);
 }
 
-/** Additional service saved with no student. Not an HHA patient visit. */
+/** Additional service saved with no student. HHA gets a new "no child" patient per row. */
 export function additionalServiceWithoutChild(
   session: Pick<SessionRow, 'studentId' | 'additionalServiceType'>,
 ): boolean {
   return Boolean(session.additionalServiceType) && !String(session.studentId || '').trim();
+}
+
+/** Placeholder created only so an additional service can be scheduled in HHA. */
+export function isNoChildPlaceholderName(
+  student: { firstName?: string; lastName?: string } | null | undefined,
+): boolean {
+  return (
+    String(student?.firstName || '').trim().toLowerCase() === 'no' &&
+    String(student?.lastName || '').trim().toLowerCase() === 'child'
+  );
 }
 
 /** Child column for lists and the timesheet. Additional services with no student show "No child". */
@@ -662,7 +799,7 @@ export function checkMandate(
     }
     // school_day_cycle: enforce densest sliding school-day window (Mon–Fri / calendar).
     const allowed = cycleAllowedSessions(mandate);
-    const days = cyclePeriodSchoolDays(mandate);
+    const days = cyclePeriodSchoolDays(mandate, opts.calendar);
     if (allowed <= 0) {
       return {
         used,
@@ -747,7 +884,66 @@ export type MandateWeekCheckOpts = {
    * (weekly 0-of-N, monthly / cycle shortfall, and calendar fallback).
    */
   includeStudentIds?: readonly string[];
+  /**
+   * When set, yellow under-mandate warnings only come from these providers'
+   * mandates (this timesheet's caseload, including same-name alias ids).
+   * Over-mandate errors are unchanged.
+   */
+  caseloadProviderIds?: readonly string[];
+  /** Monday YYYY-MM-DD of the week being viewed. Used for discharge. */
+  weekStart?: string;
+  /**
+   * Today YYYY-MM-DD. A mandate with endOn on or before this date is discharged
+   * for a week that contains this date (same <= rule as the mandate screen).
+   */
+  asOf?: string;
 };
+
+function canonicalIsoDay(value: string): string {
+  const dt = parseDos(value);
+  return dt ? isoDate(dt) : '';
+}
+
+function isoDayPlus(iso: string, days: number): string {
+  const dt = parseDos(iso);
+  if (!dt) return '';
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return isoDate(dt);
+}
+
+/**
+ * True when endOn is set and the mandate is already over for the week being viewed.
+ * Ended on or before that Monday, or — when today falls in the week — endOn <= today.
+ */
+export function mandateDischargedForWeek(
+  mandate: { endOn?: string },
+  weekStart: string,
+  asOf = '',
+): boolean {
+  const end = canonicalIsoDay(String(mandate.endOn || ''));
+  if (!end) return false;
+  const start = canonicalIsoDay(weekStart);
+  const today = canonicalIsoDay(asOf);
+  if (start && end <= start) return true;
+  if (start && today && start <= today) {
+    const weekEnd = isoDayPlus(start, 6);
+    if (weekEnd && today <= weekEnd && end <= today) return true;
+  }
+  if (!start && today && end <= today) return true;
+  return false;
+}
+
+/** Yellow under-mandate only: active caseload mandate for the week being viewed. */
+function underMandateWarningApplies(mandate: Mandate, opts?: MandateWeekCheckOpts): boolean {
+  const ids = (opts?.caseloadProviderIds || [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+  if (ids.length && !ids.includes(String(mandate.providerId || '').trim())) return false;
+  const weekStart = String(opts?.weekStart || '').trim();
+  const asOf = String(opts?.asOf || '').trim();
+  if ((weekStart || asOf) && mandateDischargedForWeek(mandate, weekStart, asOf)) return false;
+  return true;
+}
 
 function resolveCalendarForStudent(
   studentId: string,
@@ -781,6 +977,8 @@ function resolveSchoolNameForStudent(
  * against sessions assigned to that mandate — second rows are not dropped.
  * No mandate on file → error (import blocked).
  * Weekly yellow is fewer submitted sessions than the mandate (attended and missed both count; notes do not).
+ * When caseloadProviderIds / weekStart are set, that yellow is skipped for another
+ * provider's mandate and for a discharged mandate (endOn on or before the week, or endOn <= today inside the week).
  * Monthly / cycle shortfall remains a warning. Makeup-auth under-use does not warn.
  * school_day_cycle → densest school-day window over-check (not a silent skip).
  * Pass calendarByStudentId (or calendar) so off-days / year bounds apply.
@@ -822,6 +1020,12 @@ export function checkMandatesForWeek(
         warnings.push(schoolCalendarMonFriFallbackWarning(schoolName));
       }
     }
+    for (const s of rows) {
+      const shortErr = sessionShorterThanMandateError(s, mandates);
+      if (!shortErr) continue;
+      const who = studentLabel ? `${studentLabel}: ` : '';
+      errors.push(`${s.dateOfService} ${who}${shortErr}`);
+    }
     if (!studentMandates.length) {
       // No sessions and no mandate → nothing to flag (avoid "no mandate" for empty include list).
       if (!rows.length) continue;
@@ -842,13 +1046,16 @@ export function checkMandatesForWeek(
         .slice(-1)[0] || '';
 
     if (studentMandates.length === 1) {
-      const result = checkMandate(studentMandates[0], rows, allSessions, {
+      const mandate = studentMandates[0]!;
+      const result = checkMandate(mandate, rows, allSessions, {
         studentLabel,
         calendar,
         monthAnchorDos,
       });
       if (result.over || result.missingMandate) errors.push(result.message);
-      else if (result.under && result.message) warnings.push(result.message);
+      else if (result.under && result.message && underMandateWarningApplies(mandate, opts)) {
+        warnings.push(result.message);
+      }
       continue;
     }
 
@@ -877,6 +1084,7 @@ export function checkMandatesForWeek(
     }
     const hasGroupUnder = mandateResults.some(
       ({ mandate, result }) =>
+        underMandateWarningApplies(mandate, opts) &&
         !isMakeupKindMandate(mandate) &&
         mandate.ratioGroup &&
         result.under &&
@@ -899,7 +1107,7 @@ export function checkMandatesForWeek(
             ' If this session covers the group mandate, the note must say no partner available (or group partner absent / makeup session).';
         }
         errors.push(msg);
-      } else if (result.under && result.message) {
+      } else if (result.under && result.message && underMandateWarningApplies(mandate, opts)) {
         warnings.push(result.message);
       }
     }

@@ -80,6 +80,10 @@ export class HttpHhaClient implements HhaClient {
     return this.request('POST', '/patients/upsert', patient);
   }
 
+  createPatient(patient: HhaPatient): Promise<UpsertResult> {
+    return this.request('POST', '/patients/create', patient);
+  }
+
   upsertContract(contract: HhaContract): Promise<UpsertResult> {
     return this.request('POST', '/contracts/upsert', contract);
   }
@@ -145,6 +149,10 @@ export class HttpHhaClient implements HhaClient {
 
   async approveVisit(visitId: string): Promise<void> {
     await this.request('POST', `/visits/${encodeURIComponent(visitId)}/approve`);
+  }
+
+  async removeEvvPlaceholderVisits(): Promise<{ deletedVisitIds: string[] }> {
+    throw new Error('removeEvvPlaceholderVisits is only implemented for the HHA SOAP client');
   }
 
   async updateClosedCase(update: ClosedCaseUpdate): Promise<void> {

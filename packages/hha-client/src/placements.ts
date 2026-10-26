@@ -124,6 +124,26 @@ export function findReusableContractPlacement(
   return { kind: 'none' };
 }
 
+/**
+ * Start date to send as UpdatePatientContract StartDate when a reused placement
+ * begins after the visit. HHA then rejects CreateSchedule with
+ * "no any active contract" (ErrorID=-310) even though the contract exists.
+ * Returns the visit date, which is earlier than the current start.
+ * Undefined when the placement already covers the visit, is discharged before
+ * it, or either date cannot be normalized.
+ */
+export function backdatePlacementStart(
+  placement: PatientPlacement,
+  visitDate: string,
+): string | undefined {
+  const visit = normalizePlacementDate(visitDate);
+  const current = normalizePlacementDate(placement.startDate);
+  if (!visit || !current || current <= visit) return undefined;
+  const end = normalizePlacementDate(placement.dischargeDate);
+  if (end && end < visit) return undefined;
+  return visit;
+}
+
 /** HHA ErrorID=-74 placement-overlap text (ErrorID is overloaded — match message). */
 export function isPlacementOverlapFault(
   errorId: string | undefined,

@@ -16,9 +16,9 @@ Source of truth for the live bot: `packages/tms-api/src/luna-knowledge.ts`.
 
 ## CreateSchedule overlap (ErrorID=-310)
 
-**Means:** HHA already has a visit overlapping this time (“Overlapping shifts are not allowed” / shift overlapping).
+**Means:** HHA already has this caregiver booked at this time. A real group (same therapist, same clock, 2:1 / group service) is supposed to share that time — each child still needs their own visit. CreateSchedule has no overlap exception, so the second child fails. CreateLinkedSchedule is for payer-linked contracts, not group mates.
 
-**Do:** Cancel/move the HHA visit or change the TMS time, then retry. Not every `-310` is an overlap.
+**Do:** If the message says this is a group, do not cancel the group mate. Allow overlapping caregiver shifts in HHA, then retry. If it is not a group, cancel or move the other visit, or change the TMS time, then retry. Not every `-310` is an overlap.
 
 ## ConfirmVisits / GetVisitInfo Invalid VisitID (ErrorID=-415)
 

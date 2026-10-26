@@ -1021,6 +1021,9 @@ input:focus, select:focus, textarea:focus {
   align-items: start;
 }
 .row > label { margin-top: 0.35rem; margin-bottom: 0.35rem; }
+.ratio-entry { display: flex; gap: 0.4rem; align-items: center; }
+.ratio-entry select { flex: 1; min-width: 0; width: auto; }
+.ratio-entry input[type="number"] { width: 7.5rem; flex: 0 0 auto; }
 
 .off-days-list { list-style: none; padding: 0; margin: 0.5rem 0 1rem; }
 .off-days-list li {
@@ -1298,6 +1301,28 @@ th:last-child { border-top-right-radius: 7px; }
 .table-wrap th:last-child,
 .card > table th:first-child,
 .card > table th:last-child { border-radius: 0; }
+th.col-sort {
+  cursor: pointer;
+  user-select: none;
+}
+th.col-sort:hover { background: #1b5694; }
+th.col-sort:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -3px;
+}
+th.col-sort[aria-sort="none"]::after {
+  content: "↕";
+  margin-left: 0.35em;
+  opacity: 0.5;
+  font-size: 0.85em;
+}
+th.col-sort[aria-sort="ascending"]::after { content: "▲"; margin-left: 0.35em; }
+th.col-sort[aria-sort="descending"]::after { content: "▼"; margin-left: 0.35em; }
+th.col-sort[aria-sort="ascending"],
+th.col-sort[aria-sort="descending"] {
+  background: #0e345c;
+  box-shadow: inset 0 -3px 0 #7dd3fc;
+}
 td {
   border-bottom: 1px solid var(--line-soft);
   padding: 0.48rem 0.62rem;

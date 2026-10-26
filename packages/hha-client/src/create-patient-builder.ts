@@ -141,6 +141,7 @@ export function buildCreatePatientBody(
   const { zip5, zip4 } = parseZipCode(patient.zipCode);
   const phone = patient.homePhone ? formatPhone(patient.homePhone) : '';
   const discipline = mapServiceToDiscipline(patient.serviceCode);
+  const coordinatorId = resolveCreatePatientCoordinatorId(defaults.coordinatorId);
   const gender = patient.gender?.trim() || defaults.defaultGender;
   const zip4Xml = zip4 !== undefined ? `\n      <Zip4>${zip4}</Zip4>` : '';
   const acceptedServicesXml = discipline
@@ -156,7 +157,7 @@ export function buildCreatePatientBody(
   <LastName>${esc(patient.lastName)}</LastName>
   <BirthDate>${esc(birthDate)}</BirthDate>
   <Gender>${esc(gender)}</Gender>
-  <CoordinatorID1>${defaults.coordinatorId}</CoordinatorID1>
+  <CoordinatorID1>${coordinatorId}</CoordinatorID1>
   <ServiceRequestStartDate>${esc(serviceRequestStartDate)}</ServiceRequestStartDate>
   <AdmissionID>${esc(admissionId)}</AdmissionID>
   <MedicaidNumber>${esc(formatMedicaidNumber(patient.caseId ?? patient.externalId))}</MedicaidNumber>
@@ -194,12 +195,24 @@ export function buildCreatePatientBody(
 </PatientInfo>`;
 }
 
+/**
+ * Billu Markowitz. CreatePatient uses this coordinator only.
+ * Abigail Creech (81103) and Esty Neuman (68033) are not CreatePatient coordinators.
+ * A missing env value, or any other id, still resolves here.
+ */
+export const CREATE_PATIENT_COORDINATOR_ID = 84898;
+
+/** CreatePatient coordinator. Always Billu Markowitz (84898). */
+export function resolveCreatePatientCoordinatorId(_raw?: number): number {
+  return CREATE_PATIENT_COORDINATOR_ID;
+}
+
 export function createPatientDefaultsFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): CreatePatientDefaults {
   return {
     officeId: Number(env.HHA_OFFICE_ID || 1025),
-    coordinatorId: Number(env.HHA_COORDINATOR_ID || 81103),
+    coordinatorId: resolveCreatePatientCoordinatorId(),
     sourceOfAdmission: Number(env.HHA_SOURCE_OF_ADMISSION || 9300),
     branchId: Number(env.HHA_BRANCH_ID || 10073742),
     teamId: Number(env.HHA_TEAM_ID || 2036),

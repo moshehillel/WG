@@ -1180,6 +1180,129 @@ describe('transferLockedWeek Program Id', () => {
     void sessionA;
   });
 
+  it.each([
+    ['Physical Therapy 5:1', 5],
+    ['PT School 12:1', 12],
+    ['Physical Therapy 1000:1', 1000],
+  ] as const)('%s with a peer bills the group service and group pay', async (taggedService, groupSize) => {
+    // Neelamben Patel 10/16/2026 2:00: "PT School 4:1" was sent as PT school group 30.
+    // "Physical Therapy 5:1" used to miss the group regex and go out as PT school 30,
+    // which HHA then rejected as a caregiver overlap. Any N:1 with N >= 2 uses that same group code.
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 70,
+      payRate30Min: 70,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: 34,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const studentA = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Shakai',
+      lastName: 'Hill',
+      dob: '',
+      programId: '922524323',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '888',
+      createdAt: nowIso(),
+    });
+    const studentB = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Amir',
+      lastName: 'Fox',
+      dob: '',
+      programId: '111057610',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '777',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-10-12',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    for (const student of [studentA, studentB]) {
+      store.upsertSession({
+        id: newId(),
+        weekId: week.id,
+        studentId: student.id,
+        dateOfService: '10/16/2026',
+        beginTime: '2:00 pm',
+        endTime: '2:30 pm',
+        attendance: 'attended',
+        cancelReason: '',
+        makeupOfSessionId: '',
+        serviceType: taggedService,
+        location: 'School',
+        notes: 'group',
+        aiFlags: [],
+      });
+      store.upsertMandate({
+        id: newId(),
+        studentId: student.id,
+        providerId: provider.id,
+        serviceType: 'Physical Therapy',
+        discipline: 'PT',
+        frequencyPerWeek: 2,
+        ratioGroup: true,
+        groupSize,
+        durationMinutes: 30,
+        billingServiceName: 'PT school group 30',
+        sourcePdfKey: 'caseload-csv',
+        parsedAt: nowIso(),
+        startOn: '2026-09-02',
+        endOn: '2027-06-25',
+        createdAt: nowIso(),
+      });
+    }
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('PT SCHOOL 30', 'sc-pt-30');
+    hha.serviceCodesByName.set('PT SCHOOL GROUP 30', 'sc-pt-grp-30');
+    hha.payCodes.set('PT $70', 'pay-pt-70');
+    hha.payCodes.set('PT GROUP $34', 'pay-pt-grp-34');
+    hha.payCodes.set('AM PT $34', 'pay-am-pt-34');
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.ok).toBe(true);
+    const visits = [...hha.visits.values()];
+    expect(visits).toHaveLength(2);
+    for (const visit of visits) {
+      expect(visit.serviceCode).toBe('PT school group 30');
+      expect(visit.payRate).toBe('34');
+      expect(visit.scheduleType).toBe('Skilled');
+      expect(visit.startTime).toBe('2:00 pm');
+      expect(visit.endTime).toBe('2:30 pm');
+    }
+  });
+
   it('blocks a 15-minute group clock on a 30-minute mandate', async () => {
     // Fatimah Dawan / Valley Stream Thirty, week of 2026-09-28:
     // Delilah attended + Lucas makeup, both 1:45–2:00 (15 min), mandate PT school group 30.
@@ -1370,7 +1493,7 @@ describe('transferLockedWeek Program Id', () => {
       aiFlags: [],
     });
     const hha = new MockHhaClient();
-    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES', 'sc-slp-addl');
+    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES 30', 'sc-slp-addl');
     hha.payCodes.set('ST $88', 'pay-st-88');
     hha.payCodes.set('ST $44', 'pay-st-44');
     const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
@@ -1378,7 +1501,7 @@ describe('transferLockedWeek Program Id', () => {
     expect(result.ok).toBe(true);
     const visit = [...hha.visits.values()][0];
     expect(visit?.payRate).toBe('44');
-    expect(visit?.serviceCode).toBe('SLP additional services');
+    expect(visit?.serviceCode).toBe('SLP additional services 30');
     expect(hha.calls.filter((c) => c === 'resolvePayCodeId')).toHaveLength(1);
   });
 
@@ -1485,9 +1608,8 @@ describe('transferLockedWeek Program Id', () => {
       aiFlags: [],
     });
     const hha = new MockHhaClient();
-    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES', 'sc-slp-addl');
-    hha.payCodes.set('ST $44', 'pay-st-44');
-    hha.payCodes.set('ST $88', 'pay-st-88');
+    hha.serviceCodesByName.set('SLP SCHOOL 30', 'sc-slp-30');
+    hha.payCodes.set('ST $52.5', 'pay-st-52');
     const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
@@ -1497,9 +1619,9 @@ describe('transferLockedWeek Program Id', () => {
     const visit = [...hha.visits.values()][0];
     expect(hha.visits.size).toBe(1);
     expect(visit?.patientId).toBe('555');
-    expect(visit?.payRate).toBe('44');
-    expect(visit?.payCodeId).toBe('pay-st-44');
-    expect(visit?.serviceCode).toBe('SLP additional services');
+    expect(visit?.payRate).toBe('52.5');
+    expect(visit?.payCodeId).toBe('pay-st-52');
+    expect(visit?.serviceCode).toBe('SLP school 30');
     expect(visit?.startTime).toBe('2:00 PM');
     expect(visit?.endTime).toBe('2:30 PM');
     expect(store.transferForSession(paid.id)?.status).toBe('confirmed');
@@ -1573,8 +1695,8 @@ describe('transferLockedWeek Program Id', () => {
       aiFlags: [],
     });
     const hha = new MockHhaClient();
-    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES', 'sc-slp-addl');
-    hha.payCodes.set('SLP $44', 'pay-slp-44');
+    hha.serviceCodesByName.set('SLP SCHOOL 30', 'sc-slp-30');
+    hha.payCodes.set('SLP $52.5', 'pay-slp-52');
     const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
@@ -1582,8 +1704,8 @@ describe('transferLockedWeek Program Id', () => {
     expect(hha.calls.filter((c) => c === 'createPatient')).toHaveLength(1);
     expect(hha.calls.filter((c) => c.startsWith('discharge'))).toEqual([]);
     const visit = [...hha.visits.values()][0];
-    expect(visit?.serviceCode).toBe('SLP additional services');
-    expect(visit?.payRate).toBe('44');
+    expect(visit?.serviceCode).toBe('SLP school 30');
+    expect(visit?.payRate).toBe('52.5');
     expect(visit?.contractId).toBe('72817');
     const created = [...hha.patients.values()].find((p) => p.id === visit?.patientId);
     expect(created?.firstName).toBe('no');
@@ -2439,7 +2561,7 @@ describe('transferLockedWeek Program Id', () => {
       externalId: 'OTHER-CONTRACT',
     });
     hha.calls.length = 0;
-    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES', 'sc-slp-addl');
+    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES 30', 'sc-slp-addl');
     hha.payCodes.set('SLP $27.5', 'pay-slp-275');
 
     const result = await transferLockedWeek({
@@ -2461,7 +2583,7 @@ describe('transferLockedWeek Program Id', () => {
     expect(new Set(patientIds).size).toBe(2);
     expect(patientIds).not.toContain(otherContractPatient.id);
     expect(visits.every((v) => v.contractId === '72817')).toBe(true);
-    expect(visits.every((v) => v.serviceCode === 'SLP additional services')).toBe(true);
+    expect(visits.every((v) => v.serviceCode === 'SLP additional services 30')).toBe(true);
     expect(visits.every((v) => v.payRate === '27.5')).toBe(true);
 
     for (const id of sessionIds) {
@@ -2542,7 +2664,7 @@ describe('transferLockedWeek Program Id', () => {
       false,
     );
     const hha = new MockHhaClient();
-    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES', 'sc-slp-addl');
+    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES 30', 'sc-slp-addl');
     hha.payCodes.set('SLP $27.5', 'pay-slp-275');
 
     const result = await transferLockedWeek({
@@ -2640,7 +2762,7 @@ describe('transferLockedWeek Program Id', () => {
       aiFlags: [],
     });
     const hha = new MockHhaClient();
-    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES', 'sc-slp-addl');
+    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES 30', 'sc-slp-addl');
     hha.payCodes.set('SLP $27.5', 'pay-slp-275');
     const result = await transferLockedWeek({
       store,
@@ -2759,7 +2881,7 @@ describe('transferLockedWeek Program Id', () => {
       createdAt: nowIso(),
     });
     const hha = new MockHhaClient();
-    hha.serviceCodesByName.set('OT ADDITIONAL SERVICES', 'sc-ot-addl');
+    hha.serviceCodesByName.set('OT ADDITIONAL SERVICES 60', 'sc-ot-addl');
     hha.payCodes.set('OT $55', 'pay-ot-55');
 
     const patientIds: string[] = [];
@@ -2800,7 +2922,7 @@ describe('transferLockedWeek Program Id', () => {
       const visit = [...hha.visits.values()].at(-1);
       patientIds.push(String(visit?.patientId));
       expect(visit?.contractId).toBe(programType.startsWith('Fred') ? '72817' : '68715');
-      expect(visit?.serviceCode).toBe('OT additional services');
+      expect(visit?.serviceCode).toBe('OT additional services 60');
     }
     expect(new Set(patientIds).size).toBe(2);
   });
@@ -2893,7 +3015,7 @@ describe('transferLockedWeek Program Id', () => {
     });
 
     const hha = new MockHhaClient();
-    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES', 'sc-slp-addl');
+    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES 30', 'sc-slp-addl');
     hha.payCodes.set('SLP $27.5', 'pay-slp-275');
 
     const result = await transferLockedWeek({

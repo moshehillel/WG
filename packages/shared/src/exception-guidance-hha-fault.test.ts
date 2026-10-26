@@ -73,6 +73,14 @@ describe('parseHhaApiFault (ErrorID=-74 overload)', () => {
     expect(fault.kind).toBe('timesheet_config_block');
     expect(fault.title).toMatch(/timesheet configuration/i);
   });
+
+  it('maps CreateSchedule ErrorID=-11 to duration / service mismatch guidance', () => {
+    const fault = parseHhaApiFault(
+      'HHA CreateSchedule failed: Internal Server Error (ErrorID=-11)',
+    );
+    expect(fault.kind).toBe('hha_create_schedule_internal');
+    expect(fault.title).toMatch(/duration|service mismatch/i);
+  });
 });
 
 describe('formatRejectedServiceCodeTitle', () => {

@@ -55,7 +55,14 @@ describe('pay-codes', () => {
   it('detects group tokens', () => {
     expect(serviceTypeLooksGroup('PT School Group')).toBe(true);
     expect(serviceTypeLooksGroup('OT 2:1')).toBe(true);
+    expect(serviceTypeLooksGroup('Physical Therapy 4:1')).toBe(true);
+    expect(serviceTypeLooksGroup('Physical Therapy 5:1')).toBe(true);
+    expect(serviceTypeLooksGroup('PT School 6:1')).toBe(true);
+    expect(serviceTypeLooksGroup('PT School 12:1')).toBe(true);
+    expect(serviceTypeLooksGroup('Physical Therapy 1000:1')).toBe(true);
+    expect(serviceTypeLooksGroup('PT School 1:1')).toBe(false);
     expect(serviceTypeLooksGroup('PT School')).toBe(false);
+    expect(serviceTypeLooksGroup('2:00 pm')).toBe(false);
   });
 
   it('picks first catalog pay code for a discipline (placeholder fallback)', () => {

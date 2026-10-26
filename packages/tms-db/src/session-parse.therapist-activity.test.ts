@@ -88,6 +88,42 @@ Astacio, Wiglishai
     expect(rows[0]?.signed).toBe(false);
   });
 
+  it('maps Therapist Activity Student Absent (Meriwether-style) to Frontline Student Absence', () => {
+    const missedSample = `
+Therapist Activity Printed: 10/2/2026 12:24:36 PM Page 2 of 6 Astacio, Wiglishai
+Date / Time Setting Child ICD/CPT Codes Notes
+09/29/26 In: 11:00 AM Out: 11:30 AM Preschool MERIWETHER, LA'MYIA CBRS2627W0089999(ST-I)
+Student Absent
+Notes Entered: 10/2/2026 12:00:00 PM
+`;
+    const rows = parseTherapistActivityText(missedSample);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.studentName).toMatch(/MERIWETHER/i);
+    expect(rows[0]?.attendance).toBe('missed');
+    expect(rows[0]?.cancelReason).toBe('Student Absence');
+    expect(rows[0]?.beginTime).toBe('');
+    expect(rows[0]?.endTime).toBe('');
+  });
+
+  it('keeps signed CPT sessions attended when notes casually say missed/absent', () => {
+    const attendedSample = `
+Therapist Activity Printed: 10/2/2026 12:24:36 PM Page 3 of 6 Astacio, Wiglishai
+09/29/26 In: 01:30 PM Out: 02:00 PM Preschool SIEUNARINE, LIAM CBRS2627W0089552(ST-I)
+F80.2 92507x1
+Liam transitioned well. He missed a turn once then re-engaged with barn houses and animal figurines.
+Notes Entered: 10/2/2026
+Signed: 10/2/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+Cosigned: 10/2/2026 Wiglishai Astacio, M.S., CCC-SLP, TSSLD
+Meets Medicaid Requirements: Yes
+`;
+    const rows = parseTherapistActivityText(attendedSample);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.studentName).toMatch(/SIEUNARINE/i);
+    expect(rows[0]?.attendance).toBe('attended');
+    expect(rows[0]?.beginTime).toMatch(/01:30/i);
+    expect(rows[0]?.cptUnits).toBeGreaterThan(0);
+  });
+
   it('handles fragmented Tj-style tokens after normalize', () => {
     const fragmented = `
 Therapist Activity Printed: 8/14/2026
@@ -230,5 +266,28 @@ Page 1 of 1 Astacio, Wiglishai
       findStudentForActivityName(students, 'CROSSLAND LIPSCOMB J, TYRIQUE')?.lastName,
     ).toBe('Crossland-Lipscomb');
     expect(findStudentForActivityName(students, 'JR, MICHAEL')).toBeUndefined();
+  });
+
+  it('matches a timesheet name that includes the stored middle name', () => {
+    const suhail = { id: 'muhammad', firstName: 'Muhammad', middleName: 'Ali', lastName: 'Suhail' };
+    const noMiddle = { id: 'no-middle', firstName: 'Muhammad', middleName: '', lastName: 'Suhail' };
+    const otherMiddle = { id: 'other', firstName: 'Muhammad', middleName: 'Omar', lastName: 'Khan' };
+    const compoundFirst = { id: 'compound', firstName: 'Muhammad Ali', lastName: 'Suhail' };
+
+    expect(findStudentForActivityName([suhail], 'Muhammad Ali Suhail')).toBe(suhail);
+    expect(findStudentForActivityName([suhail], 'SUHAIL, MUHAMMAD ALI')).toBe(suhail);
+    expect(findStudentForActivityName([noMiddle, suhail], 'Muhammad Ali Suhail')).toBe(suhail);
+    expect(findStudentForActivityName([otherMiddle, suhail], 'Suhail, Muhammad Ali')).toBe(suhail);
+
+    expect(findStudentForActivityName([suhail], 'Muhammad Bob Suhail')).toBeUndefined();
+    expect(findStudentForActivityName([suhail], 'Suhail, Muhammad Bob')).toBeUndefined();
+    expect(findStudentForActivityName([suhail], 'Muhammad Ali Bob Suhail')).toBeUndefined();
+    expect(findStudentForActivityName([noMiddle], 'Muhammad Ali Suhail')).toBeUndefined();
+    expect(findStudentForActivityName([noMiddle], 'Suhail, Muhammad Ali')).toBeUndefined();
+    expect(findStudentForActivityName([otherMiddle], 'Muhammad Ali Suhail')).toBeUndefined();
+    expect(findStudentForActivityName([suhail, compoundFirst], 'Muhammad Ali Suhail')).toBeUndefined();
+
+    expect(findStudentForActivityName([suhail], 'Muhammad Suhail')).toBe(suhail);
+    expect(findStudentForActivityName([suhail], 'Suhail, Muhammad')).toBe(suhail);
   });
 });

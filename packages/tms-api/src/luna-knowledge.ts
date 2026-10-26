@@ -68,7 +68,11 @@ export const LUNA_ERROR_CATALOG = `ERROR CATALOG (match on keywords / ErrorID; e
 
 • Group-mandate solo needs no-peer note (#38 / locker)
   Means: Child has a group mandate but was seen individually/alone — note must say no peer/partner was available (or clear equivalent). Dual individual+group mandate: a normal 1:1 individual visit does not need the note; group-tagged with zero present peers still does.
-  Do: Add a clear “no peer available” / “no partner available” phrase to the clinical note, then save.
+  Do: Add a clear “no peer available” / “no partner available” / “Group Mandate- seen individually” phrase to the clinical note, then save.
+
+• Session shorter than the mandate
+  Means: The visit clock is shorter than the mandate (for example 15 minutes on a 30-minute mandate). That is not allowed. The rate and the service code stay on the mandate, never on the minutes. Additional services are the exception and still pay by the clock.
+  Do: Change the session times to the mandate length, then save. A group-mandate child who was seen individually still uses the individual code and individual rate at that mandate length.
 
 • Service type is required
   Means: Session Service type is blank; needed for entry and HHA pay-code naming.

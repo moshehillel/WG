@@ -546,6 +546,172 @@ describe('TMS API weekly loop', () => {
     expect(rows.some((r) => r.additionalServiceType === 'documentation')).toBe(true);
   });
 
+  it('saves Fred S. Keller on a no-child documentation edit without a caseload no-child', async () => {
+    const { store, provider } = storeWithTherapist();
+    const week = store.upsertWeek({
+      id: 'wk-doc-keller',
+      providerId: provider.id,
+      weekStart: '2026-10-05',
+      programType: '',
+      schoolId: '',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+      hhaError: '',
+    });
+    store.upsertSession({
+      id: 'doc-930',
+      weekId: week.id,
+      studentId: '',
+      dateOfService: '10/06/2026',
+      beginTime: '8:30 am',
+      endTime: '9:00 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'Documentation',
+      additionalServiceType: 'documentation',
+      location: '',
+      notes: 'Documentation',
+      aiFlags: [],
+    });
+    expect(store.data.students.some((s) => s.firstName === 'no' && s.lastName === 'child')).toBe(
+      false,
+    );
+
+    const saved = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: adminH,
+      query: {},
+      body: {
+        id: 'doc-930',
+        weekId: week.id,
+        studentId: '',
+        dateOfService: '10/06/2026',
+        attendance: 'attended',
+        beginTime: '8:30 am',
+        endTime: '9:00 am',
+        serviceType: 'ST Individual',
+        additionalServiceType: 'documentation',
+        programType: 'Fred S keller school',
+        notes: 'Documentation',
+      },
+    });
+    expect(saved.status).toBe(200);
+    const session = (saved.body as { session: { studentId: string; programType?: string } }).session;
+    expect(session.studentId).toBe('');
+    expect(session.programType).toBe('Fred S. Keller School');
+    expect(store.data.sessions.find((s) => s.id === 'doc-930')?.programType).toBe(
+      'Fred S. Keller School',
+    );
+    expect(store.data.weeks.find((w) => w.id === week.id)?.programType).toBe('Fred S. Keller School');
+    expect(store.data.students.some((s) => s.firstName === 'no' && s.lastName === 'child')).toBe(
+      false,
+    );
+
+    const detail = await handleTmsRequest(store, {
+      method: 'GET',
+      path: `/admin/providers/${provider.id}`,
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    const rows = (
+      detail.body as { sessions: Array<{ id: string; programType?: string; district?: string }> }
+    ).sessions;
+    const row = rows.find((s) => s.id === 'doc-930');
+    expect(row?.programType).toBe('Fred S. Keller School');
+    expect(row?.district).toBe('Fred S. Keller School');
+  });
+
+  it('stamps Fred S. Keller onto a locked blank no-child documentation week', async () => {
+    const { store, provider } = storeWithTherapist();
+    const schoolId = store.data.schools[0]?.id || '';
+    const orphan = store.upsertWeek({
+      id: 'wk-orphan-keller',
+      providerId: provider.id,
+      weekStart: '2026-09-14',
+      programType: '',
+      schoolId,
+      status: 'locked',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'failed',
+      hhaError: '',
+    });
+    store.upsertWeek({
+      id: 'wk-kids-keller',
+      providerId: provider.id,
+      weekStart: '2026-09-14',
+      programType: 'Fred S keller school',
+      schoolId,
+      status: 'locked',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'confirmed',
+      hhaError: '',
+    });
+    store.upsertSession({
+      id: 'doc-916',
+      weekId: orphan.id,
+      studentId: '',
+      dateOfService: '09/16/2026',
+      beginTime: '8:30 am',
+      endTime: '9:00 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'Documentation',
+      additionalServiceType: 'documentation',
+      location: '',
+      notes: 'Documentation',
+      aiFlags: [],
+    });
+
+    const saved = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: adminH,
+      query: {},
+      body: {
+        id: 'doc-916',
+        weekId: orphan.id,
+        studentId: '',
+        dateOfService: '09/16/2026',
+        attendance: 'attended',
+        beginTime: '8:30 am',
+        endTime: '9:00 am',
+        serviceType: 'ST Individual',
+        additionalServiceType: 'documentation',
+        programType: 'Fred S keller school',
+        notes: 'Documentation',
+      },
+    });
+    expect(saved.status).toBe(200);
+    const session = (saved.body as { session: { programType?: string } }).session;
+    expect(session.programType).toBe('Fred S. Keller School');
+    expect(store.data.sessions.find((s) => s.id === 'doc-916')?.programType).toBe(
+      'Fred S. Keller School',
+    );
+    expect(store.data.weeks.find((w) => w.id === orphan.id)?.programType).toBe(
+      'Fred S. Keller School',
+    );
+    expect(store.data.weeks.find((w) => w.id === 'wk-kids-keller')?.programType).toBe(
+      'Fred S keller school',
+    );
+  });
+
   it('merges Elmont UFSD drafts into one and leaves the locked Therapy sheet', async () => {
     const { store, provider } = storeWithTherapist();
     const school = store.data.schools[0]!;
@@ -1211,6 +1377,126 @@ describe('TMS API weekly loop', () => {
     );
   });
 
+  it('week under-mandate warnings skip discharged mandates and other providers', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.data.schools[0]!;
+    const weekStart = '2026-10-12';
+    const addStudent = (id: string, firstName: string, lastName: string) =>
+      store.upsertStudent({
+        id,
+        schoolId: school.id,
+        firstName,
+        lastName,
+        dob: '',
+        programId: '',
+        programType: 'Westbury',
+        hhaPatientId: '',
+        createdAt: nowIso(),
+      });
+    addStudent('st-abigail', 'Abigail', 'Masih');
+    addStudent('st-ekam', 'Ekam', 'Kapoor');
+    addStudent('st-camron', 'Camron', 'King');
+    const other = store.upsertProvider({
+      id: 'p-other',
+      userId: '',
+      firstName: 'Other',
+      lastName: 'Therapist',
+      discipline: 'OT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const base = {
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '2026-09-01',
+      createdAt: nowIso(),
+      frequencyPerWeek: 2,
+      sessionsPerPeriod: 2,
+    };
+    store.upsertMandate({
+      ...base,
+      id: 'm-ab-ind',
+      studentId: 'st-abigail',
+      providerId: provider.id,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      ratioGroup: false,
+      endOn: '2027-06-30',
+    });
+    store.upsertMandate({
+      ...base,
+      id: 'm-ab-grp',
+      studentId: 'st-abigail',
+      providerId: provider.id,
+      serviceType: 'OT School Group',
+      discipline: 'OT',
+      ratioGroup: true,
+      groupSize: 2,
+      endOn: '2026-10-01',
+    });
+    store.upsertMandate({
+      ...base,
+      id: 'm-ekam',
+      studentId: 'st-ekam',
+      providerId: other.id,
+      serviceType: 'OT School',
+      discipline: 'OT',
+      ratioGroup: false,
+      endOn: '2027-06-30',
+    });
+    store.upsertMandate({
+      ...base,
+      id: 'm-cam',
+      studentId: 'st-camron',
+      providerId: provider.id,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      ratioGroup: false,
+      endOn: '',
+    });
+    store.upsertWeek({
+      id: 'w-scope',
+      providerId: provider.id,
+      weekStart,
+      status: 'draft',
+      schoolId: school.id,
+      signerName: 'Principal Smith',
+      signerEmail: 'bmarkowitz@whiteglovecare.net',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+      hhaError: '',
+    });
+    const res = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/week',
+      headers: adminH,
+      query: { weekStart, providerId: provider.id },
+      body: {},
+    });
+    expect(res.status).toBe(200);
+    const under = ((res.body as { warnings: string[] }).warnings || [])
+      .filter((w) => /Under mandate/i.test(w))
+      .sort();
+    expect(under).toEqual(
+      [
+        'Under mandate for Abigail Masih (PT individual): 0 of 2 this week.',
+        'Under mandate for Camron King: 0 of 2 this week.',
+      ].sort(),
+    );
+  });
+
   it('rejects unauthenticated requests when dev headers are disabled', async () => {
     const saved = process.env.TMS_ALLOW_DEV_HEADERS;
     delete process.env.TMS_ALLOW_DEV_HEADERS;
@@ -1333,10 +1619,12 @@ describe('TMS API weekly loop', () => {
       id: newId(),
       studentId: student.id,
       providerId: provider.id,
-      serviceType: 'PT School',
+      serviceType: 'Physical Therapy',
       discipline: 'PT',
       frequencyPerWeek: 2,
       ratioGroup: false,
+      durationMinutes: 30,
+      billingServiceName: 'PT school 30',
       sourcePdfKey: '',
       parsedAt: '',
       startOn: '',
@@ -1388,17 +1676,35 @@ describe('TMS API weekly loop', () => {
       notesPostedPct: number;
       belowMandate: boolean;
       mandateExpected: number;
+      mandateLabel: string;
     }> }).rows;
     expect(rows).toHaveLength(1);
     expect(rows[0]?.childName).toMatch(/Aiden/);
     expect(rows[0]?.providerName).toBe('Pat Lee');
     expect(rows[0]?.programType).toBe('Baldwin UFSD');
+    expect(rows[0]?.mandateLabel).toBe('PT school 30');
     expect(rows[0]?.mandateExpected).toBe(2);
     expect(rows[0]?.sessionsProvided).toBe(1);
     expect(rows[0]?.sessionsDeliveredPct).toBe(50);
     expect(rows[0]?.notesPostedPct).toBe(50);
     expect(rows[0]?.progressPct).toBe(50);
     expect(rows[0]?.belowMandate).toBe(true);
+
+    const xlsx = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/week-progress.xlsx',
+      headers: adminH,
+      query: { from: '2026-08-31', to: '2026-08-31' },
+      body: {},
+    });
+    expect(xlsx.status).toBe(200);
+    const wb = XLSX.read(xlsx.body as Buffer, { type: 'buffer' });
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]!]!, {
+      header: 1,
+    }) as unknown[][];
+    expect(aoa[0]?.[3]).toBe('Service type');
+    expect(aoa[1]?.[3]).toBe('PT school 30');
+    expect(aoa[0]).not.toContain('Mandate');
   });
 
   it('admin internal notes report filters by date and provider', async () => {
@@ -2060,6 +2366,7 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
         payRate30Min: 45,
         payRate42Min: 60,
         payRate45Min: 66,
+        payRateGroup15Min: 22,
         payRateGroup30Min: 30,
         payRateGroup42Min: 40,
         payRateGroup45Min: 44,
@@ -2074,12 +2381,16 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
       provider: {
         payRatePerHour: number;
         payRate30Min: number;
+        payRateGroup15Min: number;
+        payRateGroup30Min: number;
         payRateEval: number;
         payRateAdditionalHourly: number;
       };
     }).provider;
     expect(patchedProvider.payRatePerHour).toBe(88);
     expect(patchedProvider.payRate30Min).toBe(45);
+    expect(patchedProvider.payRateGroup15Min).toBe(22);
+    expect(patchedProvider.payRateGroup30Min).toBe(30);
     expect(patchedProvider.payRateEval).toBe(95);
     expect(patchedProvider.payRateAdditionalHourly).toBe(55);
 
@@ -2388,6 +2699,37 @@ Shaw Avenue,Diaz,Elmer,4,Approved,09/01/2025,06/30/2026,OT,Small Group,2,6 day c
     expect(saved.status).toBe(200);
     const calendar = (saved.body as { calendar: { offDays: string[] } }).calendar;
     expect(calendar.offDays).toEqual(['2025-11-27', '2025-12-25']);
+
+    const cycleSaved = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/schools/${school.id}/calendar`,
+      headers: adminH,
+      query: {},
+      body: {
+        yearStart: '2025-09-02',
+        yearEnd: '2026-06-25',
+        offDays: ['2025-11-27', '2025-12-25'],
+        cycleDays: 10,
+      },
+    });
+    expect(cycleSaved.status).toBe(200);
+    expect((cycleSaved.body as { calendar: { cycleDays?: number } }).calendar.cycleDays).toBe(10);
+
+    const cycleRejected = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/schools/${school.id}/calendar`,
+      headers: adminH,
+      query: {},
+      body: {
+        yearStart: '2025-09-02',
+        yearEnd: '2026-06-25',
+        offDays: ['2025-11-27'],
+        cycleDays: 7,
+      },
+    });
+    expect(cycleRejected.status).toBe(400);
+    expect((cycleRejected.body as { error: string }).error).toMatch(/6 or 10/);
+    expect(store.schoolCalendarForSchool(school.id)?.cycleDays).toBe(10);
 
     const detailAfter = await handleTmsRequest(store, {
       method: 'GET',
@@ -3554,7 +3896,7 @@ describe('TMS upload-sessions errors', () => {
       },
     });
     const studentId = (parsed.body as { student: { id: string } }).student.id;
-    const weekStart = '2026-08-31';
+    const weekStart = '2026-10-19';
     const ensured = await handleTmsRequest(store, {
       method: 'POST',
       path: '/week/ensure',
@@ -3572,7 +3914,7 @@ describe('TMS upload-sessions errors', () => {
       body: {
         weekId,
         studentId,
-        dateOfService: '08/31/2026',
+        dateOfService: '10/19/2026',
         attendance: 'missed',
         notes: 'Student Absence',
         serviceType: 'PT School',
@@ -3589,7 +3931,7 @@ describe('TMS upload-sessions errors', () => {
       body: {
         weekId,
         studentId,
-        dateOfService: '09/01/2026',
+        dateOfService: '10/20/2026',
         attendance: 'attended',
         beginTime: '9:00 am',
         endTime: '9:30 am',
@@ -3607,7 +3949,7 @@ describe('TMS upload-sessions errors', () => {
       body: {
         weekId,
         studentId,
-        dateOfService: '09/02/2026',
+        dateOfService: '10/21/2026',
         attendance: 'attended',
         beginTime: '9:00 am',
         endTime: '9:30 am',
@@ -3625,12 +3967,12 @@ describe('TMS upload-sessions errors', () => {
       body: {
         weekId,
         studentId,
-        dateOfService: '09/03/2026',
+        dateOfService: '10/22/2026',
         attendance: 'makeup',
         makeupOfSessionId: missedId,
         beginTime: '9:00 am',
         endTime: '9:30 am',
-        notes: 'Makeup for missed session on 08/31/2026',
+        notes: 'Makeup for missed session on 10/19/2026',
         serviceType: 'PT School',
       },
     });
@@ -3644,18 +3986,18 @@ describe('TMS upload-sessions errors', () => {
       body: {
         weekId,
         studentId,
-        dateOfService: '09/04/2026',
-        attendance: 'attended',
-        additionalServiceType: 'paid_absence',
+        dateOfService: '10/23/2026',
+        attendance: 'paid_absence',
         beginTime: '9:00 am',
         endTime: '9:30 am',
-        notes: 'Paid absence â€” school closed',
+        notes: 'Paid absence — school closed',
+        serviceType: 'PT School',
       },
     });
     expect(paid.status).toBe(200);
-    expect((paid.body as { session: { additionalServiceType: string } }).session.additionalServiceType).toBe(
-      'paid_absence',
-    );
+    const paidSession = (paid.body as { session: { attendance: string; additionalServiceType?: string } }).session;
+    expect(paidSession.attendance).toBe('paid_absence');
+    expect(paidSession.additionalServiceType || '').toBe('');
 
     const auth = await handleTmsRequest(store, {
       method: 'POST',
@@ -3673,6 +4015,68 @@ describe('TMS upload-sessions errors', () => {
     });
     expect(auth.status).toBe(201);
     expect((auth.body as { mandate: { mandateKind: string } }).mandate.mandateKind).toBe('makeup_auth');
+  });
+
+  it('keeps clock times on a paid absence', async () => {
+    const { store, provider } = storeWithTherapist();
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: store.data.schools[0]!.id,
+      firstName: 'Aiden',
+      lastName: 'Odne',
+      dob: '2019-07-12',
+      programId: '1',
+      programType: 'Westbury',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      frequencyKind: 'weekly',
+      sessionsPerPeriod: 2,
+      durationMinutes: 30,
+      ratioGroup: false,
+      sourcePdfKey: 'csv',
+      parsedAt: nowIso(),
+      startOn: '2026-09-01',
+      endOn: '2027-06-25',
+      createdAt: nowIso(),
+    });
+    const ensured = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/ensure',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-10-12' },
+    });
+    const weekId = (ensured.body as { week: { id: string } }).week.id;
+    const paid = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        weekId,
+        studentId: student.id,
+        dateOfService: '10/13/2026',
+        attendance: 'paid_absence',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Paid absence',
+        serviceType: 'PT School',
+      },
+    });
+    expect(paid.status).toBe(200);
+    const saved = (paid.body as { session: { beginTime: string; endTime: string; attendance: string } })
+      .session;
+    expect(saved.attendance).toBe('paid_absence');
+    expect(saved.beginTime).toBe('9:00 am');
+    expect(saved.endTime).toBe('9:30 am');
   });
 
   it('PDF makeup upload links to unused miss on note date and rejects when none exists', async () => {
@@ -5807,5 +6211,486 @@ describe('service type required on entry', () => {
     expect(body.saved).toHaveLength(0);
     expect(body.failed.some((f) => /Service type is required/i.test(f.error))).toBe(true);
     expect(store.data.sessions).toHaveLength(0);
+  });
+});
+
+describe('archive bundle download', () => {
+  it('refuses another therapist archive and a request with no files', async () => {
+    const { store, provider } = storeWithTherapist();
+    store.upsertArchive({
+      id: 'other-arch',
+      kind: 'upload',
+      sourceType: 'frontline',
+      userId: 'someone-else',
+      providerId: 'other-provider',
+      schoolId: '',
+      weekId: '',
+      weekStart: '2026-09-14',
+      filename: 'other.pdf',
+      s3Key: 'tms/archive/uploads/other/other.pdf',
+      status: 'imported',
+      createdAt: '2026-09-22T14:18:00.000Z',
+    });
+    const denied = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/archive/bundle',
+      headers: thH,
+      query: {},
+      body: { ids: ['other-arch'], mode: 'zip' },
+    });
+    expect(denied.status).toBe(403);
+
+    const ownId = 'own-arch';
+    store.upsertArchive({
+      id: ownId,
+      kind: 'timesheet',
+      sourceType: 'timesheet',
+      userId: '',
+      providerId: provider.id,
+      schoolId: '',
+      weekId: '',
+      weekStart: '2026-09-14',
+      filename: 'timesheet-2026-09-14-signed.pdf',
+      s3Key: 'tms/signed/missing.pdf',
+      status: 'locked',
+      createdAt: '2026-09-23T15:32:00.000Z',
+    });
+    const missing = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/archive/bundle',
+      headers: adminH,
+      query: {},
+      body: { ids: [ownId], mode: 'pdf' },
+    });
+    expect(missing.status).toBe(404);
+    expect((missing.body as { error: string }).error).toMatch(/missing from storage/i);
+
+    const empty = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/archive/bundle',
+      headers: adminH,
+      query: {},
+      body: { ids: [], mode: 'zip' },
+    });
+    expect(empty.status).toBe(400);
+  });
+});
+
+describe('child middle name', () => {
+  it('saves middle name on the child record and shows it in the children list', async () => {
+    const { store } = storeWithTherapist();
+    const school = store.data.schools[0];
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Lorenzo',
+      lastName: 'Negron',
+      dob: '2023-04-15',
+      programId: '936162',
+      programType: 'Fred S. Keller School',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    const saved = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/students/${student.id}`,
+      headers: adminH,
+      query: {},
+      body: { middleName: 'Raymond' },
+    });
+    expect(saved.status).toBe(200);
+    expect((saved.body as { student: { middleName: string; firstName: string } }).student.middleName).toBe(
+      'Raymond',
+    );
+    expect(store.data.students.find((s) => s.id === student.id)?.firstName).toBe('Lorenzo');
+
+    const list = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/students',
+      headers: adminH,
+      query: {},
+      body: undefined,
+    });
+    const row = (list.body as { students: Array<{ id: string; name: string; middleName: string }> }).students.find(
+      (s) => s.id === student.id,
+    );
+    expect(row?.middleName).toBe('Raymond');
+    expect(row?.name).toBe('Lorenzo Raymond Negron');
+  });
+});
+
+describe('revoke week signature', () => {
+  function signedWeek(store: MemoryStore, providerId: string, hhaStatus: 'none' | 'confirmed' = 'none') {
+    const school = store.data.schools[0]!;
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: school.id,
+      firstName: 'Aiden',
+      lastName: 'Odne',
+      dob: '2019-07-12',
+      programId: '1012074',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId,
+      serviceType: 'PT School',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      ratioGroup: false,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '2026-09-01',
+      endOn: '2027-06-30',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId,
+      weekStart: '2026-10-19',
+      schoolId: school.id,
+      programType: 'Baldwin UFSD',
+      status: 'locked',
+      signerName: 'Principal Smith',
+      signerEmail: 'principal@school.test',
+      timesheetKey: 'tms/timesheets/signed.pdf',
+      signedKey: 'tms/signed/signed.pdf',
+      envelopeId: 'env-signed-1',
+      providerSignedKey: 'tms/provider-signed/signed.pdf',
+      providerSignedAt: '2026-10-20T15:00:00.000Z',
+      hhaStatus,
+    });
+    const session = store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '10/19/2026',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      location: '',
+      notes: 'Service Provided: balance work in gym',
+      aiFlags: [],
+    });
+    return { school, student, week, session };
+  }
+
+  it('lets a provider revoke their own signed week, then edit and sign again', async () => {
+    const { store, provider } = storeWithTherapist();
+    const { week, session } = signedWeek(store, provider.id);
+    const beforeIds = store.sessionsForWeek(week.id).map((s) => s.id);
+
+    const revoked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/weeks/${week.id}/reopen`,
+      headers: thH,
+      query: {},
+      body: {},
+    });
+    expect(revoked.status).toBe(200);
+    const next = store.data.weeks.find((w) => w.id === week.id)!;
+    expect(next.status).toBe('reopened');
+    expect(next.envelopeId).toBe('');
+    expect(next.signedKey).toBe('');
+    expect(next.timesheetKey).toBe('');
+    expect(next.providerSignedKey).toBe('');
+    expect(next.providerSignedAt).toBe('');
+    expect(next.signerName).toBe('Principal Smith');
+    expect(next.signerEmail).toBe('principal@school.test');
+    expect(next.hhaStatus).toBe('none');
+    expect(store.sessionsForWeek(week.id).map((s) => s.id)).toEqual(beforeIds);
+
+    const tooOld = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        id: session.id,
+        weekId: week.id,
+        studentId: session.studentId,
+        dateOfService: '08/01/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: balance work in gym',
+        serviceType: 'PT School',
+      },
+    });
+    expect(tooOld.status).toBe(400);
+    expect((tooOld.body as { error: string }).error).toMatch(/older than 14 days/i);
+
+    const edited = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/sessions',
+      headers: thH,
+      query: {},
+      body: {
+        id: session.id,
+        weekId: week.id,
+        studentId: session.studentId,
+        dateOfService: '10/19/2026',
+        attendance: 'attended',
+        beginTime: '9:00 am',
+        endTime: '9:30 am',
+        notes: 'Service Provided: balance work in gym after revoke',
+        serviceType: 'PT School',
+      },
+    });
+    expect(edited.status).toBe(200);
+    expect(store.data.sessions.find((s) => s.id === session.id)?.notes).toMatch(/after revoke/);
+
+    const signed = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/weeks/${week.id}/provider-sign`,
+      headers: thH,
+      query: {},
+      body: { signatureName: 'Pat Lee' },
+    });
+    expect(signed.status).toBe(200);
+    expect(store.data.weeks.find((w) => w.id === week.id)?.providerSignedKey).toBeTruthy();
+    expect(store.data.weeks.find((w) => w.id === week.id)?.status).toBe('reopened');
+  });
+
+  it('forbids a provider from revoking someone else’s week', async () => {
+    const { store, provider } = storeWithTherapist();
+    const { week } = signedWeek(store, provider.id);
+    const otherUser = store.upsertUser({
+      id: newId(),
+      cognitoSub: 'dev-other@whiteglove.local',
+      email: 'other@whiteglove.local',
+      role: 'therapist',
+      displayName: 'Other',
+      providerId: '',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const other = store.upsertProvider({
+      id: newId(),
+      userId: otherUser.id,
+      firstName: 'Other',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 72,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-2',
+      active: true,
+      createdAt: nowIso(),
+    });
+    store.upsertUser({ ...otherUser, providerId: other.id });
+
+    const denied = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/weeks/${week.id}/reopen`,
+      headers: { 'x-tms-role': 'therapist', 'x-tms-email': 'other@whiteglove.local' },
+      query: {},
+      body: {},
+    });
+    expect(denied.status).toBe(403);
+    expect((denied.body as { error: string }).error).toMatch(/own week/i);
+    expect(store.data.weeks.find((w) => w.id === week.id)?.status).toBe('locked');
+    expect(store.data.weeks.find((w) => w.id === week.id)?.envelopeId).toBe('env-signed-1');
+  });
+
+  it('lets an admin revoke any provider week', async () => {
+    const { store, provider } = storeWithTherapist();
+    const { week, session } = signedWeek(store, provider.id);
+    const revoked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/weeks/${week.id}/reopen`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(revoked.status).toBe(200);
+    expect((revoked.body as { message: string }).message).toMatch(/signature revoked/i);
+    const next = store.data.weeks.find((w) => w.id === week.id)!;
+    expect(next.status).toBe('reopened');
+    expect(next.signedKey).toBe('');
+    expect(next.envelopeId).toBe('');
+    expect(store.data.sessions.find((s) => s.id === session.id)?.weekId).toBe(week.id);
+  });
+
+  it('leaves HHA visits in place when a confirmed week signature is revoked', async () => {
+    const { store, provider } = storeWithTherapist();
+    const { week, session } = signedWeek(store, provider.id, 'confirmed');
+    store.upsertTransfer({
+      id: newId(),
+      sessionId: session.id,
+      weekId: week.id,
+      status: 'confirmed',
+      hhaVisitId: '1337400693',
+      lastError: '',
+      payloadHash: 'hash-1',
+      updatedAt: nowIso(),
+    });
+    const visitsBefore = JSON.stringify(store.data.hhaTransfers);
+
+    const revoked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/admin/weeks/${week.id}/reopen`,
+      headers: thH,
+      query: {},
+      body: {},
+    });
+    expect(revoked.status).toBe(200);
+    const next = store.data.weeks.find((w) => w.id === week.id)!;
+    expect(next.status).toBe('reopened');
+    expect(next.hhaStatus).toBe('confirmed');
+    expect(JSON.stringify(store.data.hhaTransfers)).toBe(visitsBefore);
+    expect(store.transferForSession(session.id)?.hhaVisitId).toBe('1337400693');
+    expect(store.transferForSession(session.id)?.status).toBe('confirmed');
+    expect(store.data.sessions.find((s) => s.id === session.id)?.notes).toMatch(/balance work/);
+  });
+});
+
+describe('signature request cancel and retrieve', () => {
+  function openRequestWeek(
+    store: MemoryStore,
+    providerId: string,
+    over: Partial<ReturnType<MemoryStore['upsertWeek']>> = {},
+  ) {
+    const school = store.data.schools[0]!;
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId,
+      weekStart: '2026-10-19',
+      schoolId: school.id,
+      programType: 'Baldwin UFSD',
+      status: 'submitted',
+      signerName: 'Principal Smith',
+      signerEmail: 'principal@school.test',
+      timesheetKey: 'tms/timesheets/keep.pdf',
+      signedKey: '',
+      envelopeId: 'email:pending-req',
+      providerSignedKey: 'tms/provider-signed/keep.pdf',
+      signatureRequestStatus: 'pending',
+      hhaStatus: 'none',
+      ...over,
+    });
+    store.upsertArchive({
+      id: newId(),
+      kind: 'timesheet',
+      sourceType: 'timesheet',
+      userId: 'therapist',
+      providerId,
+      schoolId: school.id,
+      weekId: week.id,
+      weekStart: week.weekStart,
+      filename: 'timesheet-2026-10-19.pdf',
+      s3Key: 'tms/timesheets/keep.pdf',
+      status: 'submitted',
+      createdAt: nowIso(),
+    });
+    return week;
+  }
+
+  it('cancels an open request, keeps the timesheet PDF, and no-ops a second cancel', async () => {
+    const { store, provider } = storeWithTherapist();
+    const week = openRequestWeek(store, provider.id);
+    const visitsBefore = JSON.stringify(store.data.hhaTransfers);
+
+    const cancelled = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/weeks/${week.id}/cancel-signature`,
+      headers: thH,
+      query: {},
+      body: {},
+    });
+    expect(cancelled.status).toBe(200);
+    const next = store.data.weeks.find((w) => w.id === week.id)!;
+    expect(next.status).toBe('draft');
+    expect(next.signatureRequestStatus).toBe('cancelled');
+    expect(next.envelopeId).toBe('');
+    expect(next.timesheetKey).toBe('tms/timesheets/keep.pdf');
+    expect(next.providerSignedKey).toBe('tms/provider-signed/keep.pdf');
+    expect(next.hhaStatus).toBe('none');
+    expect(JSON.stringify(store.data.hhaTransfers)).toBe(visitsBefore);
+    const archive = store.data.archives.find((a) => a.weekId === week.id)!;
+    expect(archive.status).toBe('cancelled');
+    expect(archive.s3Key).toBe('tms/timesheets/keep.pdf');
+
+    const again = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/weeks/${week.id}/cancel-approval`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(again.status).toBe(200);
+    expect((again.body as { noop?: boolean }).noop).toBe(true);
+    expect(store.data.weeks.find((w) => w.id === week.id)?.status).toBe('draft');
+    expect(store.data.weeks.find((w) => w.id === week.id)?.signatureRequestStatus).toBe('cancelled');
+  });
+
+  it('retrieves an open request back to an editable week', async () => {
+    const { store, provider } = storeWithTherapist();
+    const week = openRequestWeek(store, provider.id);
+    const retrieved = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/weeks/${week.id}/retrieve-signature`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(retrieved.status).toBe(200);
+    const next = store.data.weeks.find((w) => w.id === week.id)!;
+    expect(next.status).toBe('draft');
+    expect(next.signatureRequestStatus).toBe('retrieved');
+    expect(next.timesheetKey).toBe('tms/timesheets/keep.pdf');
+    expect(next.envelopeId).toBe('');
+    expect(store.data.archives.find((a) => a.weekId === week.id)?.status).toBe('retrieved');
+    expect(store.data.archives.find((a) => a.weekId === week.id)?.s3Key).toBe('tms/timesheets/keep.pdf');
+  });
+
+  it('refuses to cancel a completed signature and refuses a week with no open request', async () => {
+    const { store, provider } = storeWithTherapist();
+    const signed = openRequestWeek(store, provider.id, {
+      status: 'locked',
+      signatureRequestStatus: 'completed',
+      envelopeId: 'doc-already-signed',
+      signedKey: 'tms/signed/done.pdf',
+    });
+    const refused = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/weeks/${signed.id}/cancel-signature`,
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    expect(refused.status).toBe(409);
+    expect(String((refused.body as { error?: string }).error || '')).toMatch(/already signed/i);
+    const still = store.data.weeks.find((w) => w.id === signed.id)!;
+    expect(still.status).toBe('locked');
+    expect(still.envelopeId).toBe('doc-already-signed');
+    expect(still.signedKey).toBe('tms/signed/done.pdf');
+
+    const draft = openRequestWeek(store, provider.id, {
+      status: 'draft',
+      signatureRequestStatus: undefined,
+      envelopeId: '',
+    });
+    const none = await handleTmsRequest(store, {
+      method: 'POST',
+      path: `/weeks/${draft.id}/retrieve-signature`,
+      headers: thH,
+      query: {},
+      body: {},
+    });
+    expect(none.status).toBe(409);
+    expect(store.data.weeks.find((w) => w.id === draft.id)?.status).toBe('draft');
   });
 });

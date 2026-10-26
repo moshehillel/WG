@@ -36,6 +36,9 @@ const state = {
   providerSessionFrom: '',
   providerSessionTo: '',
   providerSessionDistrict: '',
+  /** Provider detail → Sessions stays hidden until Search (empty range must not list every row). */
+  providerSessionsSearched: false,
+  providerSessionDateError: '',
   sessionNotesDistrict: '',
   therapistPane: sessionStorage.getItem('tmsTherapistPane') || 'current',
   /** When set on Draft tab, open that week’s editor (send timesheet) instead of the draft list. */
@@ -240,6 +243,12 @@ const I18N = {
     'therapist.openWeek': 'Open',
     'therapist.signTimesheet': 'Sign timesheet',
     'therapist.sendTimesheet': 'Send timesheet',
+    'therapist.retrieveSignature': 'Retrieve signature request',
+    'therapist.retrieveSignatureConfirm':
+      'Retrieve this signature request? The signing link is closed and the current timesheet comes back for review. The week can be edited and sent again.',
+    'therapist.noOpenSignature': 'No open signature request.',
+    'therapist.signatureAlreadyDone':
+      'This timesheet is already signed. A completed signature cannot be retrieved.',
     'therapist.processedBlurb':
       'Sessions successfully synced to HHA (paid). Filter by week if needed. Draft weeks stay under Draft; new uploads stay under Add new sessions.',
     'therapist.processedEmpty': 'No HHA-confirmed (paid) sessions for this program yet.',
@@ -398,6 +407,12 @@ const I18N = {
     'therapist.backToDrafts': 'Volver a borradores',
     'therapist.openWeek': 'Abrir',
     'therapist.sendTimesheet': 'Enviar hoja de tiempo',
+    'therapist.retrieveSignature': 'Recuperar solicitud de firma',
+    'therapist.retrieveSignatureConfirm':
+      '¿Recuperar esta solicitud de firma? El enlace de firma se cierra y la hoja actual vuelve para revisarla. La semana se puede editar y enviar de nuevo.',
+    'therapist.noOpenSignature': 'No hay una solicitud de firma abierta.',
+    'therapist.signatureAlreadyDone':
+      'Esta hoja ya está firmada. Una firma completada no se puede recuperar.',
     'common.save': 'Guardar',
     'common.cancel': 'Cancelar',
     'common.error': 'Algo salió mal.',
@@ -582,12 +597,124 @@ async function downloadReportXlsx(path, filename) {
     throw new Error(data.error || `Unable to export ${filename}`);
   }
   const blob = await res.blob();
+  downloadBlob(blob, filename);
+}
+
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** CRC-32 (ISO 3309) for uncompressed ZIP entries. */
+function crc32Bytes(data) {
+  let c = ~0;
+  for (let i = 0; i < data.length; i += 1) {
+    c ^= data[i];
+    for (let k = 0; k < 8; k += 1) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return ~c >>> 0;
+}
+
+function zipU16(n) {
+  return [n & 255, (n >>> 8) & 255];
+}
+
+function zipU32(n) {
+  return [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+}
+
+/**
+ * ZIP of already-compressed PDFs (STORE method). No extra library.
+ * files: [{ name, data: Uint8Array }]
+ */
+function zipStoreFiles(files) {
+  const encoder = new TextEncoder();
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const file of files) {
+    const nameBytes = encoder.encode(file.name);
+    const data = file.data instanceof Uint8Array ? file.data : new Uint8Array(file.data);
+    const crc = crc32Bytes(data);
+    const local = new Uint8Array([
+      ...zipU32(0x04034b50),
+      ...zipU16(20),
+      ...zipU16(0x0800),
+      ...zipU16(0),
+      ...zipU16(0),
+      ...zipU16(0),
+      ...zipU32(crc),
+      ...zipU32(data.length),
+      ...zipU32(data.length),
+      ...zipU16(nameBytes.length),
+      ...zipU16(0),
+    ]);
+    locals.push(local, nameBytes, data);
+    centrals.push(
+      new Uint8Array([
+        ...zipU32(0x02014b50),
+        ...zipU16(20),
+        ...zipU16(20),
+        ...zipU16(0x0800),
+        ...zipU16(0),
+        ...zipU16(0),
+        ...zipU16(0),
+        ...zipU32(crc),
+        ...zipU32(data.length),
+        ...zipU32(data.length),
+        ...zipU16(nameBytes.length),
+        ...zipU16(0),
+        ...zipU16(0),
+        ...zipU16(0),
+        ...zipU16(0),
+        ...zipU32(0),
+        ...zipU32(offset),
+      ]),
+      nameBytes,
+    );
+    offset += local.length + nameBytes.length + data.length;
+  }
+  let cdSize = 0;
+  for (const part of centrals) cdSize += part.length;
+  const end = new Uint8Array([
+    ...zipU32(0x06054b50),
+    ...zipU16(0),
+    ...zipU16(0),
+    ...zipU16(files.length),
+    ...zipU16(files.length),
+    ...zipU32(cdSize),
+    ...zipU32(offset),
+    ...zipU16(0),
+  ]);
+  return new Blob([...locals, ...centrals, end], { type: 'application/zip' });
+}
+
+function safeTimesheetFilePart(value) {
+  const cleaned = String(value || '')
+    .replace(/[^\w.\- ]+/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .slice(0, 60);
+  return cleaned || 'timesheet';
+}
+
+function uniqueDownloadName(name, used) {
+  if (!used.has(name)) {
+    used.add(name);
+    return name;
+  }
+  const dot = name.lastIndexOf('.');
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  let n = 2;
+  while (used.has(`${base}-${n}${ext}`)) n += 1;
+  const next = `${base}-${n}${ext}`;
+  used.add(next);
+  return next;
 }
 
 function headers(opts = {}) {
@@ -669,7 +796,8 @@ async function api(method, path, body, opts = {}) {
     ct.includes('msword') ||
     ct.includes('officedocument') ||
     ct.includes('ms-excel') ||
-    ct.includes('spreadsheetml');
+    ct.includes('spreadsheetml') ||
+    ct.includes('zip');
   const data = isBinary ? await res.blob() : await res.json().catch(() => ({}));
   if (!res.ok && !(res.status === 207)) {
     const { errors, warnings, summary } = issueListFromPayload(data);
@@ -921,7 +1049,268 @@ function timesheetSendBlockReason({ week, sessions, locked, errors, signerEmail,
 }
 
 function view(html) {
-  document.getElementById('view').innerHTML = html;
+  const el = document.getElementById('view');
+  el.innerHTML = html;
+  armSortableTables(el);
+  bindTableSort();
+}
+
+/** Client-side sort of the rows currently painted in a table. Does not refetch. */
+let tableSortLock = 0;
+
+function normalizeSortText(text) {
+  return String(text ?? '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function isEmptySortText(text) {
+  const t = normalizeSortText(text);
+  return !t || t === '—' || t === '–' || t === '-' || t === '−';
+}
+
+function utcSortStamp(year, month, day, hh = 0, mi = 0, ss = 0) {
+  if (month < 1 || month > 12 || day < 1 || hh < 0 || hh > 23 || mi > 59 || ss > 59) return null;
+  const t = Date.UTC(year, month - 1, day, hh, mi, ss);
+  const d = new Date(t);
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) return null;
+  return t;
+}
+
+function percentValue(text) {
+  const t = normalizeSortText(text);
+  if (!t.includes('%')) return null;
+  const matches = t.match(/-?\d+(?:\.\d+)?\s*%/g);
+  if (!matches) return null;
+  const n = matches[matches.length - 1].match(/-?\d+(?:\.\d+)?/);
+  return n ? parseFloat(n[0]) : null;
+}
+
+function dateValue(text) {
+  const t = normalizeSortText(text);
+  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?(.*)$/);
+  if (m && (m[7] === '' || /^[\s·→|]/.test(m[7]) || /^\s*[–—-]/.test(m[7]))) {
+    const stamp = utcSortStamp(
+      +m[1],
+      +m[2],
+      +m[3],
+      m[4] != null ? +m[4] : 0,
+      m[5] != null ? +m[5] : 0,
+      m[6] != null ? +m[6] : 0,
+    );
+    if (stamp != null) return stamp;
+  }
+  m = t.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?)?(.*)$/i);
+  if (m && (m[8] === '' || /^[\s·→|]/.test(m[8]) || /^\s*[–—-]/.test(m[8]))) {
+    const year = m[3].length === 2 ? (Number(m[3]) >= 70 ? 1900 : 2000) + Number(m[3]) : +m[3];
+    let hh = m[4] != null ? +m[4] : 0;
+    const ap = (m[7] || '').toLowerCase();
+    if (ap === 'pm' && hh < 12) hh += 12;
+    if (ap === 'am' && hh === 12) hh = 0;
+    const stamp = utcSortStamp(year, +m[1], +m[2], hh, m[5] != null ? +m[5] : 0, m[6] != null ? +m[6] : 0);
+    if (stamp != null) return stamp;
+  }
+  m = t.match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (m) return utcSortStamp(2000, +m[1], +m[2]);
+  return null;
+}
+
+function numberValue(text) {
+  const t = normalizeSortText(text).replace(/,/g, '');
+  if (/^-?\d+(?:\.\d+)?$/.test(t)) return parseFloat(t);
+  const unit = t.match(/^(-?\d+(?:\.\d+)?)\s*(?:min|mins|minutes)$/i);
+  if (unit) return parseFloat(unit[1]);
+  return null;
+}
+
+function timeValue(text) {
+  const t = normalizeSortText(text);
+  const m = t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?(?:\s*[–—-]\s*\d{1,2}:\d{2}(?::\d{2})?\s*(am|pm)?)?$/i);
+  if (!m) return null;
+  let hh = +m[1];
+  const mi = +m[2];
+  const ss = m[3] != null ? +m[3] : 0;
+  const ap = (m[4] || '').toLowerCase();
+  if (mi > 59 || ss > 59) return null;
+  if (ap) {
+    if (hh < 1 || hh > 12) return null;
+    if (ap === 'pm' && hh < 12) hh += 12;
+    if (ap === 'am' && hh === 12) hh = 0;
+  } else if (hh > 23) {
+    return null;
+  }
+  return hh * 3600 + mi * 60 + ss;
+}
+
+function columnSortMode(texts) {
+  const filled = texts.map(normalizeSortText).filter((t) => !isEmptySortText(t));
+  if (!filled.length) return 'text';
+  if (filled.every((t) => percentValue(t) != null)) return 'pct';
+  if (filled.every((t) => dateValue(t) != null)) return 'date';
+  if (filled.every((t) => numberValue(t) != null)) return 'num';
+  if (filled.every((t) => timeValue(t) != null)) return 'time';
+  return 'text';
+}
+
+function compareSortText(a, b, mode) {
+  const at = normalizeSortText(a);
+  const bt = normalizeSortText(b);
+  const ae = isEmptySortText(at);
+  const be = isEmptySortText(bt);
+  if (ae && be) return 0;
+  if (ae) return 1;
+  if (be) return -1;
+  if (mode === 'pct') return percentValue(at) - percentValue(bt);
+  if (mode === 'date') return dateValue(at) - dateValue(bt);
+  if (mode === 'num') return numberValue(at) - numberValue(bt);
+  if (mode === 'time') return timeValue(at) - timeValue(bt);
+  return at.localeCompare(bt, undefined, { sensitivity: 'base', numeric: true });
+}
+
+function directedSortCompare(a, b, mode, dir) {
+  const ae = isEmptySortText(a);
+  const be = isEmptySortText(b);
+  const c = compareSortText(a, b, mode);
+  if (ae || be) return c;
+  return dir === 'descending' ? -c : c;
+}
+
+function cellForColumn(tr, colIndex) {
+  let i = 0;
+  for (const el of tr.children) {
+    const span = el.colSpan || 1;
+    if (colIndex >= i && colIndex < i + span) return el;
+    i += span;
+  }
+  return null;
+}
+
+function isPlaceholderRow(tr) {
+  const cells = [...tr.children].filter((el) => el.tagName === 'TD');
+  return cells.length === 1 && cells[0].colSpan > 1;
+}
+
+function isSortableHeader(th) {
+  if (!th || th.tagName !== 'TH') return false;
+  if (th.classList.contains('bulk-col')) return false;
+  if (th.querySelector('input, button, a, select, textarea')) return false;
+  return !isEmptySortText(th.textContent);
+}
+
+function armSortableTables(root) {
+  if (!root) return;
+  root.querySelectorAll('table').forEach((table) => {
+    const header = [...table.querySelectorAll('tr')].find((tr) =>
+      [...tr.children].some((el) => el.tagName === 'TH'),
+    );
+    if (!header) return;
+    let any = false;
+    for (const th of header.children) {
+      if (!isSortableHeader(th)) continue;
+      any = true;
+      th.classList.add('col-sort');
+      if (!th.hasAttribute('aria-sort')) th.setAttribute('aria-sort', 'none');
+      if (!th.hasAttribute('tabindex')) th.tabIndex = 0;
+      if (!th.getAttribute('title')) th.title = 'Sort by this column';
+    }
+    if (any) table.classList.add('is-sortable');
+  });
+}
+
+function headerColumnIndex(th) {
+  let i = 0;
+  for (const el of th.parentElement.children) {
+    if (el === th) return i;
+    i += el.colSpan || 1;
+  }
+  return -1;
+}
+
+function sortTableByHeader(th) {
+  const table = th.closest('table');
+  const headerRow = th.parentElement;
+  if (!table || !headerRow) return;
+  const colIndex = headerColumnIndex(th);
+  if (colIndex < 0) return;
+  const dir = th.getAttribute('aria-sort') === 'ascending' ? 'descending' : 'ascending';
+  table.querySelectorAll('th[aria-sort]').forEach((h) => {
+    if (h !== th) h.setAttribute('aria-sort', 'none');
+  });
+  th.setAttribute('aria-sort', dir);
+  th.title = dir === 'ascending'
+    ? 'Sorted ascending. Click to sort descending.'
+    : 'Sorted descending. Click to sort ascending.';
+
+  const byParent = new Map();
+  for (const tr of table.querySelectorAll('tr')) {
+    if (tr === headerRow) continue;
+    if (![...tr.children].some((el) => el.tagName === 'TD')) continue;
+    const parent = tr.parentElement;
+    if (!byParent.has(parent)) byParent.set(parent, []);
+    byParent.get(parent).push(tr);
+  }
+
+  tableSortLock += 1;
+  try {
+    for (const [parent, rows] of byParent) {
+      const placeholders = rows.filter(isPlaceholderRow);
+      const data = rows.filter((tr) => !isPlaceholderRow(tr));
+      const texts = data.map((tr) => {
+        const cell = cellForColumn(tr, colIndex);
+        return cell ? cell.textContent : '';
+      });
+      const mode = columnSortMode(texts);
+      const sorted = data
+        .map((tr, i) => ({ tr, i, text: texts[i] }))
+        .sort((a, b) => directedSortCompare(a.text, b.text, mode, dir) || a.i - b.i)
+        .map((x) => x.tr);
+      for (const tr of sorted) parent.appendChild(tr);
+      for (const tr of placeholders) parent.appendChild(tr);
+    }
+  } finally {
+    queueMicrotask(() => {
+      tableSortLock = Math.max(0, tableSortLock - 1);
+    });
+  }
+}
+
+function bindTableSort() {
+  if (document.body.dataset.colSortBound) return;
+  document.body.dataset.colSortBound = '1';
+  document.addEventListener('click', (e) => {
+    const th = e.target.closest && e.target.closest('th.col-sort');
+    if (!th || !th.closest('#view')) return;
+    if (e.target.closest('input, button, a, select, textarea, label')) return;
+    sortTableByHeader(th);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const th = e.target && e.target.closest && e.target.closest('th.col-sort');
+    if (!th || !th.closest('#view')) return;
+    e.preventDefault();
+    sortTableByHeader(th);
+  });
+  const viewEl = document.getElementById('view');
+  if (!viewEl || typeof MutationObserver !== 'function') return;
+  const obs = new MutationObserver((records) => {
+    if (tableSortLock) return;
+    const tables = new Set();
+    for (const rec of records) {
+      const target = rec.target;
+      if (!target || target.nodeType !== 1) continue;
+      if (target.tagName !== 'TBODY' && target.tagName !== 'TABLE' && target.tagName !== 'THEAD') continue;
+      const touchesRows = [...rec.addedNodes, ...rec.removedNodes].some(
+        (n) => n.nodeType === 1 && (n.tagName === 'TR' || n.tagName === 'TBODY'),
+      );
+      if (!touchesRows) continue;
+      const table = target.closest('table') || (target.tagName === 'TABLE' ? target : null);
+      if (table) tables.add(table);
+    }
+    tables.forEach((table) => {
+      table.querySelectorAll('th[aria-sort]').forEach((h) => {
+        if (h.getAttribute('aria-sort') !== 'none') h.setAttribute('aria-sort', 'none');
+      });
+    });
+  });
+  obs.observe(viewEl, { subtree: true, childList: true });
 }
 
 function esc(s) {
@@ -948,10 +1337,14 @@ function bulkTdEmpty() {
   return `<td class="bulk-col"></td>`;
 }
 
-/** Hidden until ≥1 row checked. */
-function bulkBar(group) {
+/** Hidden until ≥1 row checked. extraHtml is trusted markup (action buttons). */
+function bulkBar(group, extraHtml = '', opts = {}) {
+  const remove = opts.omitDelete
+    ? ''
+    : `<button type="button" class="btn" data-bulk-delete="${esc(group)}">Delete selected</button>`;
   return `<div class="bulk-bar" data-bulk-bar="${esc(group)}" hidden>
-    <button type="button" class="btn" data-bulk-delete="${esc(group)}">Delete selected</button>
+    ${extraHtml}
+    ${remove}
     <span class="muted" data-bulk-count="${esc(group)}"></span>
   </div>`;
 }
@@ -967,13 +1360,12 @@ function syncBulkBar(group) {
   if (bar) bar.hidden = n < 1;
   const count = document.querySelector(`[data-bulk-count="${group}"]`);
   if (count) count.textContent = n ? `${n} selected` : '';
-  const all = document.querySelector(`input[data-bulk-all="${group}"]`);
-  if (all) {
-    const boxes = [...document.querySelectorAll(`input[data-bulk-group="${group}"]`)];
-    const checked = boxes.filter((b) => b.checked).length;
+  const boxes = [...document.querySelectorAll(`input[data-bulk-group="${group}"]`)];
+  const checked = boxes.filter((b) => b.checked).length;
+  document.querySelectorAll(`input[data-bulk-all="${group}"]`).forEach((all) => {
     all.checked = boxes.length > 0 && checked === boxes.length;
     all.indeterminate = checked > 0 && checked < boxes.length;
-  }
+  });
 }
 
 function confirmBulkDelete(n, noun) {
@@ -1046,6 +1438,7 @@ function readPayRatesFromIds(ids) {
     payRate42Min: num(ids.min42),
     payRate45Min: num(ids.min45),
     payRatePerHour: num(ids.hour),
+    payRateGroup15Min: num(ids.g15),
     payRateGroup30Min: num(ids.g30),
     payRateGroup42Min: num(ids.g42),
     payRateGroup45Min: num(ids.g45),
@@ -1067,11 +1460,14 @@ function payRatesFieldset(p, prefix) {
           <label>Hourly session <input id="${prefix}Hour" type="number" step="0.01" min="0" value="${v('payRatePerHour')}" /></label>
         </div>
         <div class="row">
+          <label>Group 15 min (PT school group 15) <input id="${prefix}G15" type="number" step="0.01" min="0" value="${v('payRateGroup15Min')}" /></label>
           <label>Group 30 min <input id="${prefix}G30" type="number" step="0.01" min="0" value="${v('payRateGroup30Min')}" /></label>
-          <label>Group 42 min <input id="${prefix}G42" type="number" step="0.01" min="0" value="${v('payRateGroup42Min')}" /></label>
         </div>
         <div class="row">
+          <label>Group 42 min <input id="${prefix}G42" type="number" step="0.01" min="0" value="${v('payRateGroup42Min')}" /></label>
           <label>Group 45 min <input id="${prefix}G45" type="number" step="0.01" min="0" value="${v('payRateGroup45Min')}" /></label>
+        </div>
+        <div class="row">
           <label>Eval <input id="${prefix}Eval" type="number" step="0.01" min="0" value="${v('payRateEval')}" /></label>
         </div>
         <div class="row">
@@ -1086,13 +1482,19 @@ const ADDITIONAL_SERVICE_LABELS = {
   consultation: 'Consultation',
   meetings: 'Meetings',
   documentation: 'Documentation',
-  paid_absence: 'Paid absence',
 };
 
 function additionalServiceOptions(selected) {
-  return ['eval', 'progress_report', 'consultation', 'meetings', 'documentation', 'paid_absence']
+  return ['eval', 'progress_report', 'consultation', 'meetings', 'documentation']
     .map((v) => `<option value="${v}"${selected === v ? ' selected' : ''}>${esc(ADDITIONAL_SERVICE_LABELS[v])}</option>`)
     .join('');
+}
+
+function attendanceLabel(sessionOrValue) {
+  const session = sessionOrValue && typeof sessionOrValue === 'object' ? sessionOrValue : null;
+  const value = session ? session.attendance : sessionOrValue;
+  if (value === 'paid_absence' || session?.additionalServiceType === 'paid_absence') return 'paid absence';
+  return value || '—';
 }
 
 function additionalServiceLabel(value) {
@@ -1100,24 +1502,127 @@ function additionalServiceLabel(value) {
   return ADDITIONAL_SERVICE_LABELS[value] || String(value);
 }
 
-/** Frontline / HHA ratios used app-wide (sessionLooksGroup / group pay). */
-const SESSION_RATIO_OPTIONS = ['1:1', '2:1', '3:1', '4:1'];
+/**
+ * Program stored on the other timesheet for this Monday and school.
+ * A locked no-child documentation sheet can be blank while the children's
+ * sheet for that week already has Fred S. Keller School.
+ */
+function siblingProgramLabel(weeks, session) {
+  const list = Array.isArray(weeks) ? weeks : [];
+  const week = list.find((w) => w && w.id === session?.weekId);
+  if (!week) return '';
+  const schoolId = String(week.schoolId || '').trim();
+  const start = String(week.weekStart || session?.weekStart || '').trim();
+  const labels = new Map();
+  for (const w of list) {
+    if (!w || w.id === week.id) continue;
+    if (String(w.weekStart || '') !== start) continue;
+    const otherSchool = String(w.schoolId || '').trim();
+    if (schoolId && otherSchool && otherSchool !== schoolId) continue;
+    const pt = String(w.programType || w.district || '').trim();
+    if (!pt) continue;
+    const key = pt.toLowerCase().replace(/\./g, '').replace(/\s+/g, ' ').replace(/ therapy$/, '').trim();
+    const prev = labels.get(key);
+    if (!prev || pt.length > prev.length) labels.set(key, pt);
+  }
+  if (labels.size !== 1) return '';
+  return [...labels.values()][0] || '';
+}
+
+/** Period-insensitive program match so "Fred S keller school" selects "Fred S. Keller School". */
+function programNamesMatch(a, b) {
+  const norm = (v) => String(v || '').trim().toLowerCase().replace(/\./g, '').replace(/\s+/g, ' ');
+  const left = norm(a);
+  const right = norm(b);
+  return Boolean(left) && left === right;
+}
+
+function applyProgramSelect(programEl, stored) {
+  if (!programEl) return;
+  const pt = String(stored || '').trim();
+  if (!pt) {
+    programEl.value = '';
+    return;
+  }
+  const match = [...programEl.options].find((o) => programNamesMatch(pt, o.value));
+  if (match) {
+    programEl.value = match.value;
+    return;
+  }
+  const opt = document.createElement('option');
+  opt.value = pt;
+  opt.textContent = pt;
+  programEl.appendChild(opt);
+  programEl.value = pt;
+}
+
+/** Shortcuts in the ratio menu. Any other whole number N:1 is still a real ratio. */
+const SESSION_RATIO_PRESETS = ['1:1', '2:1', '3:1', '4:1'];
+
+function normalizeRatioToken(raw) {
+  const m = String(raw || '').trim().match(/^(\d+)\s*:\s*1$/i);
+  if (!m) return '';
+  const n = Number(m[1]);
+  if (!Number.isInteger(n) || n < 1) return '';
+  return `${n}:1`;
+}
 
 function sessionRatioOptions(selected) {
-  const sel = SESSION_RATIO_OPTIONS.includes(selected) ? selected : '1:1';
-  return SESSION_RATIO_OPTIONS.map(
-    (v) => `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(v)}</option>`,
-  ).join('');
+  const token = normalizeRatioToken(selected);
+  const extra = token && !SESSION_RATIO_PRESETS.includes(token) ? [token] : [];
+  const options = [...SESSION_RATIO_PRESETS, ...extra];
+  const chosen = token && options.includes(token) ? token : '1:1';
+  return `${options
+    .map((v) => `<option value="${esc(v)}"${v === chosen ? ' selected' : ''}>${esc(v)}</option>`)
+    .join('')}<option value="other">Other…</option>`;
+}
+
+function syncRatioOtherField(selectEl) {
+  const other = document.getElementById('pManRatioOther');
+  if (!other) return;
+  const show = Boolean(selectEl) && selectEl.value === 'other' && !selectEl.disabled;
+  other.hidden = !show;
+  other.disabled = !show;
+  if (!show) other.value = '';
+}
+
+/** Keep a stored N:1 selected. Ratios above the shortcuts are added, not rewritten to 1:1. */
+function setSessionRatio(selectEl, raw) {
+  if (!selectEl) return;
+  const token = normalizeRatioToken(raw) || '1:1';
+  if (![...selectEl.options].some((o) => o.value === token)) {
+    const opt = document.createElement('option');
+    opt.value = token;
+    opt.textContent = token;
+    const otherOpt = [...selectEl.options].find((o) => o.value === 'other');
+    if (otherOpt) selectEl.insertBefore(opt, otherOpt);
+    else selectEl.appendChild(opt);
+  }
+  selectEl.value = token;
+  syncRatioOtherField(selectEl);
+}
+
+function readSessionRatio(selectEl) {
+  const chosen = selectEl?.value || '1:1';
+  if (chosen !== 'other') return normalizeRatioToken(chosen) || '1:1';
+  const n = Number(String(document.getElementById('pManRatioOther')?.value || '').trim());
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error('Enter the other ratio as a whole number (1 is individual; 2 or more is a group).');
+  }
+  return `${n}:1`;
 }
 
 function extractSessionRatio(serviceType) {
-  const m = String(serviceType || '').match(/\b([1-4]\s*:\s*1)\b/i);
-  return m ? String(m[1]).replace(/\s+/g, '') : '';
+  const m = String(serviceType || '').match(/\b(\d+)\s*:\s*1\b/i);
+  if (!m) return '';
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 1) return '';
+  return `${n}:1`;
 }
 
 function stripSessionRatio(serviceType) {
   return String(serviceType || '')
-    .replace(/\b[1-4]\s*:\s*1\b/gi, '')
+    .replace(/\b\d+\s*:\s*1\b/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -1133,6 +1638,9 @@ function serviceTypeWithRatioUi(serviceType, ratio) {
 
 /** Admin/therapist table cell: badge for additional services, else serviceType. */
 function sessionServiceCellHtml(s) {
+  if (s?.additionalServiceType === 'paid_absence' || s?.attendance === 'paid_absence') {
+    return esc(String(s?.serviceType || '').trim() || '—');
+  }
   const addl = additionalServiceLabel(s?.additionalServiceType);
   if (addl) {
     return `<span class="pill-warn" title="Additional service">Additional: ${esc(addl)}</span>`;
@@ -1214,11 +1722,28 @@ function formatIsoDateLabel(iso) {
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 
+const SCHOOL_CYCLE_LENGTHS = [6, 10];
+
+function schoolCycleLengthOptions(selected) {
+  const n = Number(selected);
+  const cur = SCHOOL_CYCLE_LENGTHS.includes(n) ? n : 6;
+  return SCHOOL_CYCLE_LENGTHS.map((days) =>
+    `<option value="${days}"${days === cur ? ' selected' : ''}>${days}-day cycle (days 1–${days})</option>`,
+  ).join('');
+}
+
+function formatCycleLengthLabel(days) {
+  const n = Number(days);
+  if (!SCHOOL_CYCLE_LENGTHS.includes(n)) return '';
+  return `${n}-day cycle (days 1–${n})`;
+}
+
 function formatCalendarSummary(calendar) {
   if (!calendar?.yearStart || !calendar?.yearEnd) return '';
   const n = (calendar.offDays || []).length;
   const offLabel = n === 1 ? '1 off day' : `${n} off days`;
-  return `${formatIsoDateLabel(calendar.yearStart)} – ${formatIsoDateLabel(calendar.yearEnd)}, ${offLabel}`;
+  const cycle = formatCycleLengthLabel(calendar.cycleDays);
+  return `${formatIsoDateLabel(calendar.yearStart)} – ${formatIsoDateLabel(calendar.yearEnd)}, ${offLabel}${cycle ? `, ${cycle}` : ''}`;
 }
 
 function schoolHasAddress(school) {
@@ -1313,6 +1838,7 @@ function renderCalendarSavedHtml(calendar, schoolName) {
     <h3>Saved calendar${name}</h3>
     <p><strong>First day:</strong> ${esc(calendar.yearStart ? formatIsoDateLabel(calendar.yearStart) : '—')} ${calendar.yearStart ? `<span class="muted">(${esc(calendar.yearStart)})</span>` : ''}</p>
     <p><strong>Last day:</strong> ${esc(calendar.yearEnd ? formatIsoDateLabel(calendar.yearEnd) : '—')} ${calendar.yearEnd ? `<span class="muted">(${esc(calendar.yearEnd)})</span>` : ''}</p>
+    ${formatCycleLengthLabel(calendar.cycleDays) ? `<p><strong>Cycle length:</strong> ${esc(formatCycleLengthLabel(calendar.cycleDays))}</p>` : ''}
     <p><strong>Off days (${offs.length}):</strong></p>
     ${offList}
   </div>`;
@@ -1369,16 +1895,23 @@ function mandateFreqLabel(m) {
   return `${n} / week`;
 }
 
-/** Type dropdown: Weekly / 6-Day / Monthly / Makeup auth / Makeup- Weekly. */
+/** Type dropdown: Weekly / 6-Day / 10-Day / Monthly / Makeup auth / Makeup- Weekly. */
 function mandateTypeOptions(selected) {
-  const cur = String(selected || 'weekly');
-  return [
+  const raw = String(selected || 'weekly');
+  const cur = raw === 'school_day_cycle' ? 'cycle_6' : raw;
+  const rows = [
     ['weekly', 'Weekly'],
-    ['school_day_cycle', '6-Day Cycle'],
+    ['cycle_6', '6-Day Cycle'],
+    ['cycle_10', '10-Day Cycle'],
     ['monthly', 'Monthly'],
     ['makeup_auth', 'Makeup auth'],
     ['makeup_weekly', 'Makeup- Weekly'],
-  ]
+  ];
+  if (/^cycle_\d+$/.test(cur) && !rows.some(([v]) => v === cur)) {
+    const n = Number(cur.slice('cycle_'.length));
+    rows.splice(3, 0, [cur, Number.isFinite(n) && n > 0 ? `${n}-Day Cycle` : cur]);
+  }
+  return rows
     .map(([v, label]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${label}</option>`)
     .join('');
 }
@@ -1417,19 +1950,31 @@ function resolveMandateDiscipline(explicit, serviceType) {
   return disciplineFromServiceTypeUi(serviceType);
 }
 
-/** Map Type select → mandateKind + frequencyKind. */
+/** Map Type select → mandateKind + frequencyKind + cycle length. */
 function parseMandateTypeValue(typeVal) {
   const v = String(typeVal || 'weekly');
-  if (v === 'makeup_auth') return { mandateKind: 'makeup_auth', frequencyKind: 'weekly' };
-  if (v === 'makeup_weekly') return { mandateKind: 'makeup_weekly', frequencyKind: 'weekly' };
-  if (v === 'school_day_cycle' || v === 'monthly') return { mandateKind: 'regular', frequencyKind: v };
-  return { mandateKind: 'regular', frequencyKind: 'weekly' };
+  if (v === 'makeup_auth') return { mandateKind: 'makeup_auth', frequencyKind: 'weekly', periodSchoolDays: undefined };
+  if (v === 'makeup_weekly') return { mandateKind: 'makeup_weekly', frequencyKind: 'weekly', periodSchoolDays: undefined };
+  const cycle = v.match(/^cycle_(\d+)$/);
+  if (cycle || v === 'school_day_cycle') {
+    const days = cycle ? Number(cycle[1]) : 6;
+    return {
+      mandateKind: 'regular',
+      frequencyKind: 'school_day_cycle',
+      periodSchoolDays: Number.isFinite(days) && days > 0 ? days : 6,
+    };
+  }
+  if (v === 'monthly') return { mandateKind: 'regular', frequencyKind: 'monthly', periodSchoolDays: undefined };
+  return { mandateKind: 'regular', frequencyKind: 'weekly', periodSchoolDays: undefined };
 }
 
 function mandateTypeValueFromMandate(m) {
   if (m?.mandateKind === 'makeup_weekly') return 'makeup_weekly';
   if (m?.mandateKind === 'makeup_auth') return 'makeup_auth';
-  if (m?.frequencyKind === 'school_day_cycle') return 'school_day_cycle';
+  if (m?.frequencyKind === 'school_day_cycle') {
+    const days = Number(m.periodSchoolDays);
+    return `cycle_${Number.isFinite(days) && days > 0 ? days : 6}`;
+  }
   if (m?.frequencyKind === 'monthly') return 'monthly';
   return 'weekly';
 }
@@ -1460,7 +2005,7 @@ function collectMandateEditorPayload() {
   const freq = Number(document.getElementById('emFreq').value);
   const durationRaw = document.getElementById('emDuration').value;
   const groupSizeRaw = document.getElementById('emGroupSize').value;
-  const { mandateKind, frequencyKind } = parseMandateTypeValue(document.getElementById('emKind').value);
+  const { mandateKind, frequencyKind, periodSchoolDays } = parseMandateTypeValue(document.getElementById('emKind').value);
   const ratioGroup = document.getElementById('emRatio').value === 'group';
   const groupSize = groupSizeRaw === '' ? (ratioGroup ? 2 : 1) : Number(groupSizeRaw);
   const serviceTypeRaw = document.getElementById('emService').value;
@@ -1497,7 +2042,7 @@ function collectMandateEditorPayload() {
     frequencyKind,
     frequencyPerWeek: freq,
     sessionsPerPeriod: freq,
-    periodSchoolDays: frequencyKind === 'school_day_cycle' ? 6 : undefined,
+    periodSchoolDays: frequencyKind === 'school_day_cycle' ? (periodSchoolDays || 6) : undefined,
     startOn: document.getElementById('emStart').value,
     endOn: document.getElementById('emEnd').value,
   };
@@ -1687,7 +2232,11 @@ function mandateLooksGroupUi(m) {
   const n = m?.groupSize;
   if (n != null && n !== '' && Number.isFinite(Number(n)) && Number(n) > 1) return true;
   const blob = `${m?.serviceType || ''} ${m?.ratioLabel || ''}`;
-  return /\bgroup\b|\b2\s*:\s*1\b|\b3\s*:\s*1\b|\b4\s*:\s*1\b/i.test(blob);
+  if (/\bgroup\b/i.test(blob)) return true;
+  const ratio = blob.match(/\b(\d+)\s*:\s*1\b/);
+  if (!ratio) return false;
+  const ratioN = Number(ratio[1]);
+  return Number.isFinite(ratioN) && ratioN >= 2;
 }
 
 function mandateGroupSizeLabel(m) {
@@ -1726,7 +2275,7 @@ function bindOpenProviderLinks() {
 
 function sessionExtraLabel(s) {
   const bits = [];
-  const addl = additionalServiceLabel(s?.additionalServiceType);
+  const addl = s?.additionalServiceType === 'paid_absence' ? '' : additionalServiceLabel(s?.additionalServiceType);
   if (addl) bits.push(addl);
   else if (s?.serviceType) bits.push(String(s.serviceType));
   if (s?.location) bits.push(String(s.location));
@@ -2155,8 +2704,8 @@ function weekApprovalLabel(status) {
   if (status === 'reopened') {
     return {
       key: 'reopened',
-      title: 'Revision required',
-      detail: 'An administrator reopened this week. Revise it and resubmit the timesheet.',
+      title: 'Unsigned',
+      detail: 'The signature on this week was revoked. Revise the sessions and sign the timesheet again.',
       box: 'warn-box',
     };
   }
@@ -2657,9 +3206,12 @@ async function therapistHome(statusFlash) {
           </select>
         </label>
         <label id="pManRatioWrap">Ratio
-          <select id="pManRatio">
-            ${sessionRatioOptions('1:1')}
-          </select>
+          <span class="ratio-entry">
+            <select id="pManRatio">
+              ${sessionRatioOptions('1:1')}
+            </select>
+            <input id="pManRatioOther" type="number" min="1" step="1" inputmode="numeric" placeholder="e.g. 12" hidden aria-label="Other ratio, children per provider" />
+          </span>
         </label>
       </div>
       <div class="row">
@@ -2668,6 +3220,7 @@ async function therapistHome(statusFlash) {
             <option value="attended">attended</option>
             <option value="missed">missed</option>
             <option value="makeup">makeup</option>
+            <option value="paid_absence">paid absence</option>
           </select>
         </label>
       </div>
@@ -2687,7 +3240,7 @@ async function therapistHome(statusFlash) {
       <p class="muted" id="pManMakeupEmpty" hidden></p>
       <label>Notes <textarea id="pManNotes" rows="3"></textarea></label>
       <p class="muted" id="pManMakeupNotesHint" hidden>${esc(MAKEUP_NOTES_HINT)}</p>
-      <p class="muted">If a group-mandate child is seen individually (1:1 or no group ratio), the note must say no peer/partner was available. A group visit (2:1 or Group) does not need that phrase when the other child’s note will be entered separately.</p>
+      <p class="muted">If a group-mandate child is seen individually (1:1 or no group ratio), the note must say no peer/partner was available, or “Group Mandate- seen individually”. A group visit (any N:1 where N is 2 or more, or the word Group) does not need that phrase when the other child’s note will be entered separately. Other… accepts any whole number, including a very large group.</p>
       <label>Custom note file (optional Word/PDF — not parsed) <input id="pManFile" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" /></label>
       <div class="row">
         <button type="button" class="btn-primary big" id="pManSave">Submit session</button>
@@ -2707,12 +3260,12 @@ async function therapistHome(statusFlash) {
     ? ''
     : processed
       ? `<div class="warn-box">${pane === 'current'
-        ? 'This week is signed and locked, so sessions in the list above cannot be edited or removed. Upload and manual entry still file each date of service onto its own week (the 14-day locker still applies). Ask an admin to reopen this week to change those sessions.'
-        : 'This week is signed and locked. Sessions cannot be edited, removed, or added. Ask an admin to reopen the week if a change is required.'}</div>`
+        ? 'This week is signed and locked, so sessions in the list above cannot be edited or removed. Revoke the signature to edit them. Upload and manual entry still file each date of service onto its own week (the 14-day locker still applies).'
+        : 'This week is signed and locked. Sessions cannot be edited, removed, or added until the signature is revoked. The 14-day locker, mandate duration, and note lockers still apply after that.'}</div>`
       : pending
         ? `<div class="warn-box">${pane === 'current'
-          ? 'Approval is pending for this week, so sessions in the list above are locked. Upload and manual entry still file each date of service onto its own week. Cancel the approval request to edit this week.'
-          : 'Approval is pending. Sessions are locked until you cancel the approval request (returns the week to draft) or the timesheet is signed.'}</div>`
+          ? 'Approval is pending for this week, so sessions in the list above are locked. Upload and manual entry still file each date of service onto its own week. Cancel or retrieve the signature request to edit this week.'
+          : 'Approval is pending. Sessions are locked until you cancel or retrieve the signature request (returns the week to unsigned) or the timesheet is signed.'}</div>`
         : '';
   const draftEntryCards = isDraftPane && canImport ? entryCards : '';
   const timesheetHtml = !isWeekWorkspace
@@ -2750,11 +3303,13 @@ async function therapistHome(statusFlash) {
       </div>
       ${isArchivePane ? `
       <h2>My uploads &amp; timesheets</h2>
-      <p class="muted">Successfully imported session-note PDFs and timesheets you generated. Open a row to preview the PDF, or delete a saved report you no longer need.</p>
+      <p class="muted">Successfully imported session-note PDFs and timesheets you generated. Select rows to download them as one zip, or merge the PDFs into a single file. Both follow week, then the time each file was saved.</p>
+      ${archiveExportBar('my-archive')}
       <h3 class="sec">My uploads</h3>
       <div class="table-wrap"><table>
-        <tr><th>Uploaded</th><th>Type</th><th>Week</th><th>File</th><th></th></tr>
+        <tr>${bulkTh('my-archive')}<th>Uploaded</th><th>Type</th><th>Week</th><th>File</th><th></th></tr>
         ${archiveUploads.map((a) => `<tr>
+          ${a.hasFile ? bulkTd('my-archive', a.id, ` data-week-start="${esc(a.weekStart || '')}" data-created-at="${esc(a.createdAt || '')}"`) : bulkTdEmpty()}
           <td>${esc(formatArchiveWhen(a.createdAt))}</td>
           <td>${esc(archiveSourceLabel(a.sourceType))}</td>
           <td>${esc(a.weekStart || '—')}</td>
@@ -2763,12 +3318,13 @@ async function therapistHome(statusFlash) {
             ${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : ''}
             <button type="button" class="btn" data-delete-archive="${esc(a.id)}">Delete</button>
           </td>
-        </tr>`).join('') || '<tr><td colspan="5">No uploaded reports archived yet.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="6">No uploaded reports archived yet.</td></tr>'}
       </table></div>
       <h3 class="sec">My timesheets</h3>
       <div class="table-wrap"><table>
-        <tr><th>Generated</th><th>Week</th><th>Status</th><th>File</th><th></th></tr>
+        <tr>${bulkTh('my-archive')}<th>Generated</th><th>Week</th><th>Status</th><th>File</th><th></th></tr>
         ${archiveTimesheets.map((a) => `<tr>
+          ${a.hasFile ? bulkTd('my-archive', a.id, ` data-week-start="${esc(a.weekStart || '')}" data-created-at="${esc(a.createdAt || '')}"`) : bulkTdEmpty()}
           <td>${esc(formatArchiveWhen(a.createdAt))}</td>
           <td>${esc(a.weekStart || '—')}</td>
           <td>${esc(a.status || '—')}</td>
@@ -2777,7 +3333,7 @@ async function therapistHome(statusFlash) {
             ${a.hasFile ? `<button type="button" class="btn" data-open-archive="${esc(a.id)}">Open</button>` : ''}
             <button type="button" class="btn" data-delete-archive="${esc(a.id)}">Delete</button>
           </td>
-        </tr>`).join('') || '<tr><td colspan="5">No timesheets archived yet.</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="6">No timesheets archived yet.</td></tr>'}
       </table></div>
       ` : isPriorPane ? `
       <h2>Processed sessions</h2>
@@ -2789,6 +3345,16 @@ async function therapistHome(statusFlash) {
         const rows = filterWs
           ? processedSessions.filter((s) => s.weekStart === filterWs)
           : processedSessions;
+        const revokeWeeks = [];
+        const seenRevoke = new Set();
+        for (const s of rows) {
+          const id = String(s.weekId || '').trim();
+          const st = String(s.weekStatus || '');
+          if (!id || seenRevoke.has(id)) continue;
+          if (st !== 'signed' && st !== 'locked') continue;
+          seenRevoke.add(id);
+          revokeWeeks.push(s);
+        }
         return `
       <div class="row">
         <label>${esc(t('therapist.pendingWeekFilter'))}
@@ -2798,6 +3364,7 @@ async function therapistHome(statusFlash) {
           </select>
         </label>
       </div>
+      ${revokeWeeks.length ? `<div class="row">${revokeWeeks.map((s) => `<button type="button" class="btn" data-revoke-signature="${esc(s.weekId)}" data-revoke-week-start="${esc(s.weekStart || '')}">Revoke signature${s.weekStart ? ` · week of ${esc(s.weekStart)}` : ''}</button>`).join('')}</div>` : ''}
       <div class="table-wrap"><table>
         <tr><th>Session date</th><th>Child</th><th>Attended status</th><th>Start/End time</th><th>Week</th></tr>
         ${rows.map((s) => {
@@ -2805,7 +3372,7 @@ async function therapistHome(statusFlash) {
           return `<tr>
           <td>${esc(s.dateOfService || '—')}</td>
           <td>${esc(sessionChildLabel(s))}</td>
-          <td>${esc(s.attendance || '—')}</td>
+          <td>${esc(attendanceLabel(s))}</td>
           <td>${esc(time)}</td>
           <td>${esc(s.weekStart || '—')}</td>
         </tr>`;
@@ -2847,7 +3414,7 @@ async function therapistHome(statusFlash) {
           <td>${esc(s.weekStart || '—')}</td>
           <td>${esc(s.dateOfService || '—')}</td>
           <td>${esc(sessionChildLabel(s))}</td>
-          <td>${esc(s.attendance || '—')}</td>
+          <td>${esc(attendanceLabel(s))}</td>
           <td>${esc(time)}</td>
         </tr>`;
         }).join('')}
@@ -2874,8 +3441,9 @@ async function therapistHome(statusFlash) {
       <div class="row">
         ${programTypes.length > 1 ? `<button type="button" class="btn" id="changeSchool">${esc(t('therapist.changeProgram'))}</button>` : ''}
         <button class="btn" id="refreshHome">${esc(t('therapist.reload'))}</button>
-        ${pending ? `<button type="button" class="btn" id="cancelApproval">Cancel approval request</button>` : ''}
+        <button type="button" class="btn" id="retrieveSignature" ${pending ? '' : 'disabled'} title="${esc(pending ? t('therapist.retrieveSignature') : processed ? t('therapist.signatureAlreadyDone') : t('therapist.noOpenSignature'))}">${esc(t('therapist.retrieveSignature'))}</button>
         ${pending ? `<button type="button" class="btn" id="resendInvite">Resend e-sign email</button>` : ''}
+        ${processed ? `<button type="button" class="btn" id="revokeSignature">Revoke signature</button>` : ''}
       </div>
       `}
       ${isWeekWorkspace && errors.length ? `<div class="err-box status-banner" id="weekErrorsBox" data-week-issue="errors"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss errors">×</button><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
@@ -2919,7 +3487,7 @@ async function therapistHome(statusFlash) {
                 ${canEditRow ? `<button type="button" class="icon-btn" data-edit-session="${esc(s.id)}" title="Edit" aria-label="Edit">${pencilIcon()}</button>` : ''}
                 ${canRemove ? `<button type="button" class="btn" data-remove-session="${esc(s.id)}">Remove</button>` : ''}
               </td>`;
-          return `<tr class="${rowClass}" data-session-json="${esc(JSON.stringify(payload))}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${sessionServiceCellHtml(s)}</td><td>${esc(cpt)}</td><td>${esc(time)}</td><td>${esc(s.attendance)}</td><td>${esc(s.notes || '')}</td>${actions}</tr>`;
+          return `<tr class="${rowClass}" data-session-json="${esc(JSON.stringify(payload))}"><td>${esc(s.dateOfService)}</td><td>${esc(name)}</td><td>${sessionServiceCellHtml(s)}</td><td>${esc(cpt)}</td><td>${esc(time)}</td><td>${esc(attendanceLabel(s))}</td><td>${esc(s.notes || '')}</td>${actions}</tr>`;
         }).join('') || `<tr><td colspan="8">No sessions recorded yet.</td></tr>`}
       </table>
     </div>` : ''}
@@ -3121,16 +3689,63 @@ async function therapistHome(statusFlash) {
     clearTransientErrors();
     await showProgramPicker(programTypes, { allowKeep: true });
   });
-  document.getElementById('cancelApproval')?.addEventListener('click', async () => {
-    if (!state.weekId) return;
-    if (!confirm('Cancel the pending approval request? This voids the SignNow / email signing request (if any) and returns the week to draft.')) return;
+  const retrieveSignatureFromUi = async () => {
+    const btn = document.getElementById('retrieveSignature');
+    if (!state.weekId || btn?.disabled) return;
+    if (!confirm(t('therapist.retrieveSignatureConfirm'))) return;
     try {
       clearTransientErrors();
-      const out = await api('POST', `/weeks/${state.weekId}/cancel-approval`);
-      await therapistHome({ success: [out.message || 'Approval cancelled. Week is draft again.'] });
+      if (btn) btn.disabled = true;
+      const out = await api('POST', `/weeks/${state.weekId}/retrieve-signature`);
+      const msg = out.message || 'Signature request retrieved. This week can be edited and sent again.';
+      showActionToast(msg, 'success');
+      if (out.archiveId) {
+        await openArchivePdf(out.archiveId);
+      }
+      state.therapistPane = 'draft';
+      state.draftFocusWeekStart = state.weekStart || '';
+      sessionStorage.setItem('tmsTherapistPane', 'draft');
+      if (state.weekStart) sessionStorage.setItem('tmsDraftFocusWeek', state.weekStart);
+      await therapistHome({ success: [msg] });
     } catch (err) {
       setStatus(err.message, 'error');
+      showActionToast(err.message || 'Could not update the signature request.', 'error');
+      if (btn) btn.disabled = false;
     }
+  };
+  document.getElementById('retrieveSignature')?.addEventListener('click', () => {
+    void retrieveSignatureFromUi();
+  });
+  const revokeSignatureFromUi = async (weekId, weekStart) => {
+    if (!weekId) return;
+    if (!confirm('Revoke the signature on this week? Sessions stay. The week returns to unsigned so you can edit it and sign again. Visits already sent to HHA are not changed.')) return;
+    try {
+      clearTransientErrors();
+      const out = await api('POST', `/admin/weeks/${weekId}/reopen`, {});
+      const start = String(weekStart || state.weekStart || '').trim();
+      state.therapistPane = 'draft';
+      state.draftFocusWeekStart = start;
+      if (start) state.weekStart = start;
+      sessionStorage.setItem('tmsTherapistPane', 'draft');
+      if (start) sessionStorage.setItem('tmsDraftFocusWeek', start);
+      await therapistHome({
+        success: [out.message || 'Signature revoked. This week is unsigned and can be edited and signed again.'],
+      });
+    } catch (err) {
+      setStatus(err.message, 'error');
+      showActionToast(err.message || 'Could not revoke the signature.', 'error');
+    }
+  };
+  document.getElementById('revokeSignature')?.addEventListener('click', () => {
+    void revokeSignatureFromUi(state.weekId, state.weekStart);
+  });
+  document.querySelectorAll('[data-revoke-signature]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      void revokeSignatureFromUi(
+        btn.getAttribute('data-revoke-signature') || '',
+        btn.getAttribute('data-revoke-week-start') || '',
+      );
+    });
   });
   document.getElementById('resendInvite')?.addEventListener('click', async () => {
     if (!state.weekId) return;
@@ -3214,6 +3829,7 @@ async function therapistHome(statusFlash) {
       if (id) openArchivePdf(id);
     };
   });
+  if (isArchivePane) wireArchiveExport('my-archive');
   document.querySelectorAll('[data-delete-archive]').forEach((btn) => {
     btn.onclick = async () => {
       const id = btn.getAttribute('data-delete-archive');
@@ -3247,10 +3863,14 @@ async function therapistHome(statusFlash) {
     if (wrap) wrap.hidden = isAddl;
     if (sel) {
       sel.disabled = isAddl;
-      if (isAddl) sel.value = '1:1';
+      if (isAddl) setSessionRatio(sel, '1:1');
+      else syncRatioOtherField(sel);
     }
   };
   document.getElementById('pManAddlType')?.addEventListener('change', syncTherapistRatio);
+  document.getElementById('pManRatio')?.addEventListener('change', () => {
+    syncRatioOtherField(document.getElementById('pManRatio'));
+  });
   syncTherapistRatio();
   bindAdminMakeupNotes();
 
@@ -3275,8 +3895,7 @@ async function therapistHome(statusFlash) {
     document.getElementById('pManDos').value = '';
     document.getElementById('pManService').value = '';
     document.getElementById('pManAddlType').value = '';
-    const ratioEl = document.getElementById('pManRatio');
-    if (ratioEl) ratioEl.value = '1:1';
+    setSessionRatio(document.getElementById('pManRatio'), '1:1');
     syncTherapistRatio();
     document.getElementById('pManAtt').value = 'attended';
     document.getElementById('pManBegin').value = '';
@@ -3317,11 +3936,11 @@ async function therapistHome(statusFlash) {
       const rawSvc = String(raw.serviceType || '');
       const extractedRatio = extractSessionRatio(rawSvc);
       document.getElementById('pManService').value = stripSessionRatio(rawSvc) || rawSvc;
-      document.getElementById('pManAddlType').value = raw.additionalServiceType || '';
-      const ratioEl = document.getElementById('pManRatio');
-      if (ratioEl) ratioEl.value = SESSION_RATIO_OPTIONS.includes(extractedRatio) ? extractedRatio : '1:1';
+      const legacyPaid = raw.additionalServiceType === 'paid_absence' || raw.attendance === 'paid_absence';
+      document.getElementById('pManAddlType').value = legacyPaid ? '' : (raw.additionalServiceType || '');
+      setSessionRatio(document.getElementById('pManRatio'), extractedRatio);
       syncTherapistRatio();
-      document.getElementById('pManAtt').value = raw.attendance || 'attended';
+      document.getElementById('pManAtt').value = legacyPaid ? 'paid_absence' : (raw.attendance || 'attended');
       document.getElementById('pManBegin').value = raw.beginTime || '';
       document.getElementById('pManEnd').value = raw.endTime || '';
       document.getElementById('pManCpt').value = raw.cptLabel || '';
@@ -3444,12 +4063,12 @@ async function therapistHome(statusFlash) {
       const makeupOfEl = document.getElementById('pManMakeupOf');
       const notesEl = document.getElementById('pManNotes');
       const cancelReason = document.getElementById('pManCancel')?.value?.trim() || '';
-      const additionalServiceTypeEarly = document.getElementById('pManAddlType')?.value || '';
+      const additionalServiceTypeEarly = attendance === 'paid_absence' ? '' : (document.getElementById('pManAddlType')?.value || '');
       const serviceTypeBase = document.getElementById('pManService')?.value?.trim() || '';
-      const ratioSel = document.getElementById('pManRatio')?.value || '1:1';
+      const ratioSel = readSessionRatio(document.getElementById('pManRatio'));
       const serviceTypeEarly = additionalServiceTypeEarly
         ? serviceTypeBase
-        : serviceTypeWithRatioUi(serviceTypeBase, ratioSel || '1:1');
+        : serviceTypeWithRatioUi(serviceTypeBase, ratioSel);
       if (!providerId) throw new Error('Your provider profile is not linked yet. Contact the office for assistance.');
       if (!studentId && !additionalServiceTypeEarly) throw new Error('Select a child.');
       if (!dateOfService) throw new Error('Enter the date of service.');
@@ -3676,6 +4295,9 @@ function hhaStatusCell(w) {
   if (ratio && (status === 'confirmed' || status === 'pending' || status === 'sent')) {
     return `<span title="HHA transfers attended/makeup only; Sessions column includes misses">${esc(status)} ${esc(ratio)}</span>`;
   }
+  if (status === 'none' && eligible > 0) {
+    return `<span title="Send to HHA has not recorded a result for this week yet">none · 0/${esc(String(eligible))} eligible</span>`;
+  }
   return esc(status);
 }
 
@@ -3804,7 +4426,7 @@ function splitTriageChunks(text) {
   const raw = String(text || '').replace(/\r\n/g, '\n').trim();
   if (!raw) return [];
   const marks = [];
-  const marker = / · (?=\d{4}-\d{2}-\d{2}\b)/g;
+  const marker = / · (?=(?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})\b)/g;
   let m;
   while ((m = marker.exec(raw))) marks.push(m.index);
   if (!marks.length) {
@@ -3823,7 +4445,7 @@ function splitTriageChunks(text) {
 
 function parseTriageChunk(chunk) {
   const m = chunk.match(
-    /^(.+?) · (\d{4}-\d{2}-\d{2}(?:\s+\d{1,2}:\d{2}(?:\s*[ap]m)?(?:\s*[–-]\s*\d{1,2}:\d{2}(?:\s*[ap]m)?)?)?)\s*:\s*([\s\S]*)$/i,
+    /^(.+?) · ((?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})(?:\s+\d{1,2}:\d{2}(?:\s*[ap]m)?(?:\s*[–-]\s*\d{1,2}:\d{2}(?:\s*[ap]m)?)?)?(?: · .+?)?): ([\s\S]*)$/i,
   );
   if (m) return { who: `${m[1].trim()} · ${m[2].trim()}`, detail: m[3].trim() };
   return { who: '', detail: chunk.trim() };
@@ -3869,6 +4491,48 @@ function enableHhaWeekButtons(weekId) {
     btn.removeAttribute('aria-busy');
     if (btn.dataset.hhaLabel) btn.textContent = btn.dataset.hhaLabel;
   }
+}
+
+function hhaResultStillRunning(out, err) {
+  if (err) {
+    const status = Number(err.status || 0);
+    const msg = String(err.message || '');
+    if (status === 502 || status === 503 || status === 504) return true;
+    if (/already running/i.test(msg)) return true;
+    if (/timed out|Unable to reach the server|Failed to fetch|NetworkError|Load failed/i.test(msg)) return true;
+    return false;
+  }
+  const errors = Array.isArray(out?.errors) ? out.errors : [];
+  return errors.some((e) => /already running/i.test(String(e)));
+}
+
+function weekHhaStatusFromDom(weekId) {
+  const row = document.querySelector(`[data-week-row="${CSS.escape(String(weekId || ''))}"]`);
+  return row?.querySelector('[data-hha-status]')?.getAttribute('data-hha-status') || '';
+}
+
+/** Proxy often drops a long Send before Lambda finishes. Keep reading the week until triage appears. */
+async function pollWeekHhaAfterSend(weekId) {
+  const deadline = Date.now() + 120000;
+  setStatus('HHA transfer is still running. This page will update when it finishes.', 'warn');
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 4000));
+    try {
+      await adminDash();
+    } catch {
+      /* keep waiting; the next poll retries the list */
+    }
+    const status = weekHhaStatusFromDom(weekId);
+    if (status && status !== 'none') {
+      if (status === 'failed') {
+        setStatus('HHA finished with errors. Open the HHA column for triage.', 'err');
+      } else {
+        setStatus(`HHA status: ${status}.`, 'ok');
+      }
+      return;
+    }
+  }
+  setStatus('HHA transfer is still running. Refresh this page in a minute to see the result.', 'warn');
 }
 
 /** One in-flight transfer per week. Button stays disabled until that request finishes. */
@@ -3926,11 +4590,21 @@ function showTriageDetail(errorText, weekId) {
       try {
         const out = await sendWeekToHha(id);
         if (!out) return;
+        if (hhaResultStillRunning(out)) {
+          backdrop.remove();
+          await pollWeekHhaAfterSend(id);
+          return;
+        }
         backdrop.remove();
         setStatus('Sent to HHA.', 'ok');
         await adminDash();
       } catch (err) {
         enableHhaWeekButtons(id);
+        if (hhaResultStillRunning(null, err)) {
+          backdrop.remove();
+          await pollWeekHhaAfterSend(id);
+          return;
+        }
         setStatus(err.message || 'HHA transfer failed.', 'err');
       }
     }
@@ -3994,9 +4668,10 @@ async function adminDash() {
     parts.push(`<button type="button" class="btn" data-remove-week="${esc(w.id)}" data-week-status="${esc(status)}">Remove</button>`);
     if (status === 'submitted') {
       parts.push(`<span class="muted">Awaiting SignNow</span>`);
+      parts.push(`<button type="button" class="btn" data-retrieve-signature="${esc(w.id)}">Retrieve signature request</button>`);
     }
     if (canReopen) {
-      parts.push(`<button type="button" class="btn" data-reopen="${esc(w.id)}">Reopen</button>`);
+      parts.push(`<button type="button" class="btn" data-reopen="${esc(w.id)}">Revoke signature</button>`);
     }
     if (canHha) {
       const failed = String(w.hhaStatus || '') === 'failed';
@@ -4074,6 +4749,7 @@ async function adminDash() {
     <div class="card">
       <h2>Weeks</h2>
       <p class="muted">${esc(weeksFilterBlurb)}${esc(weeksExtraBlurb)}. Date snaps to Monday. Name matches provider or a child on that week. District and HHA filters apply to the loaded list.</p>
+      <p class="muted">Select weeks to download each timesheet as a zip (files ordered by week start, then provider) or merge them into one PDF. Merged rows use the timesheet order: date of service, then start time.</p>
       <div class="row">
         <label>Week start (Monday)
           <span class="week-start-controls">
@@ -4092,19 +4768,23 @@ async function adminDash() {
         </label>
         <button type="button" class="btn-primary" id="adminWeeksApply">Apply</button>
       </div>
-      ${bulkBar('weeks')}
+      ${bulkBar(
+        'weeks',
+        `<button type="button" class="btn-primary" id="adminWeeksDownload">Download timesheets</button>
+         <button type="button" class="btn" id="adminWeeksMerge" title="One PDF. Rows sorted by date of service, then start time.">Merge into one PDF</button>`,
+      )}
       <div class="table-wrap">
       <table>
         <tr>${bulkTh('weeks')}<th>Week</th><th>Provider</th><th>District</th><th>Sessions</th><th>Status</th><th>Signer</th><th>HHA</th><th></th></tr>
         ${weeks.map((w) => `<tr data-week-row="${esc(w.id)}" class="${weekHasHhaErrors(w) ? 'hha-failed-row' : ''}">
-          ${bulkTd('weeks', w.id)}
+          ${bulkTd('weeks', w.id, ` data-week-start="${esc(w.weekStart || '')}" data-provider-name="${esc(w.providerName || '')}"`)}
           <td>${esc(w.weekStart)}</td>
           <td>${esc(w.providerName || '—')}</td>
           <td>${esc(weekDistrictLabel(w) || '—')}</td>
           <td>${esc(w.sessionCount)}</td>
           <td>${esc(w.status)}</td>
           <td>${esc(w.signerName || w.signerEmail || '—')}</td>
-          <td>${hhaStatusCell(w)}</td>
+          <td data-hha-status="${esc(String(w.hhaStatus || 'none'))}">${hhaStatusCell(w)}</td>
           <td class="week-actions">${weekActions(w)}</td>
         </tr>`).join('') || `<tr><td colspan="9">No weeks match these filters.</td></tr>`}
       </table>
@@ -4242,9 +4922,140 @@ async function adminDash() {
     deleteOne: (id) => api('DELETE', `/admin/weeks/${id}`),
     refresh: () => adminDash(),
   });
+  const selectedAdminWeeks = () =>
+    selectedBulkEls('weeks')
+      .map((el) => ({
+        id: el.getAttribute('data-bulk-id') || '',
+        weekStart: el.getAttribute('data-week-start') || '',
+        providerName: el.getAttribute('data-provider-name') || '',
+      }))
+      .filter((w) => w.id)
+      .sort((a, b) => {
+        const byDate = String(a.weekStart).localeCompare(String(b.weekStart));
+        if (byDate) return byDate;
+        return String(a.providerName).localeCompare(String(b.providerName), undefined, { sensitivity: 'base' });
+      });
+  let weeksExportBusy = false;
+  const setWeeksExportBusy = (busy, label) => {
+    weeksExportBusy = busy;
+    const downloadBtn = document.getElementById('adminWeeksDownload');
+    const mergeBtn = document.getElementById('adminWeeksMerge');
+    if (downloadBtn) {
+      downloadBtn.disabled = busy;
+      downloadBtn.textContent = busy && label === 'download' ? 'Downloading…' : 'Download timesheets';
+    }
+    if (mergeBtn) {
+      mergeBtn.disabled = busy;
+      mergeBtn.textContent = busy && label === 'merge' ? 'Merging…' : 'Merge into one PDF';
+    }
+  };
+  document.getElementById('adminWeeksDownload')?.addEventListener('click', async () => {
+    if (weeksExportBusy) return;
+    const weeks = selectedAdminWeeks();
+    if (!weeks.length) {
+      setStatus('Select at least one week.', 'err');
+      return;
+    }
+    if (weeks.length > 40) {
+      setStatus('Download up to 40 timesheets at a time.', 'err');
+      return;
+    }
+    setWeeksExportBusy(true, 'download');
+    setStatus(`Downloading ${weeks.length} timesheet${weeks.length === 1 ? '' : 's'}…`, 'ok');
+    try {
+      const used = new Set();
+      const files = [];
+      const errors = [];
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < weeks.length) {
+          const week = weeks[cursor];
+          cursor += 1;
+          try {
+            const blob = await api('GET', `/weeks/${encodeURIComponent(week.id)}/timesheet`);
+            if (!(blob instanceof Blob)) throw new Error('Timesheet download did not return a PDF.');
+            const data = new Uint8Array(await blob.arrayBuffer());
+            if (!data.length) throw new Error('Timesheet PDF was empty.');
+            const name = uniqueDownloadName(
+              `timesheet-${safeTimesheetFilePart(week.weekStart)}-${safeTimesheetFilePart(week.providerName)}.pdf`,
+              used,
+            );
+            files.push({ name, data, weekStart: week.weekStart, providerName: week.providerName });
+          } catch (err) {
+            const who = [week.providerName, week.weekStart].filter(Boolean).join(' · ') || week.id;
+            errors.push(`${who}: ${err.message || 'download failed'}`);
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, weeks.length) }, () => worker()));
+      files.sort((a, b) => {
+        const byDate = String(a.weekStart).localeCompare(String(b.weekStart));
+        if (byDate) return byDate;
+        return String(a.providerName).localeCompare(String(b.providerName), undefined, { sensitivity: 'base' });
+      });
+      if (!files.length) {
+        setStatus(errors[0] || 'Unable to download timesheets.', 'err');
+        return;
+      }
+      const starts = files.map((f) => f.weekStart).filter(Boolean);
+      const span = starts.length && starts[0] !== starts[starts.length - 1]
+        ? `${starts[0]}-to-${starts[starts.length - 1]}`
+        : starts[0] || 'selected';
+      downloadBlob(zipStoreFiles(files), `timesheets-${span}.zip`);
+      if (errors.length) {
+        setStatus(
+          `Downloaded ${files.length} timesheet${files.length === 1 ? '' : 's'}. ${errors.length} could not be downloaded: ${errors[0]}`,
+          'warn',
+        );
+      } else {
+        setStatus(
+          `Downloaded ${files.length} timesheet${files.length === 1 ? '' : 's'} in a zip, ordered by week start.`,
+          'ok',
+        );
+      }
+    } catch (err) {
+      setStatus(err.message || 'Unable to download timesheets.', 'err');
+    } finally {
+      setWeeksExportBusy(false);
+    }
+  });
+  document.getElementById('adminWeeksMerge')?.addEventListener('click', async () => {
+    if (weeksExportBusy) return;
+    const weeks = selectedAdminWeeks();
+    if (!weeks.length) {
+      setStatus('Select at least one week.', 'err');
+      return;
+    }
+    if (weeks.length > 40) {
+      setStatus('Merge up to 40 weeks at a time.', 'err');
+      return;
+    }
+    setWeeksExportBusy(true, 'merge');
+    setStatus('Building one timesheet, sorted by date of service then start time…', 'ok');
+    try {
+      const blob = await api('POST', '/admin/weeks/timesheets/merge', {
+        weekIds: weeks.map((w) => w.id),
+      });
+      if (!(blob instanceof Blob)) throw new Error('Merge did not return a PDF.');
+      const starts = weeks.map((w) => w.weekStart).filter(Boolean);
+      const span = starts.length && starts[0] !== starts[starts.length - 1]
+        ? `${starts[0]}-to-${starts[starts.length - 1]}`
+        : starts[0] || 'selected';
+      downloadBlob(blob, `timesheet-merged-${span}.pdf`);
+      setStatus(
+        `Merged ${weeks.length} week${weeks.length === 1 ? '' : 's'} into one PDF, ordered by date of service then start time.`,
+        'ok',
+      );
+    } catch (err) {
+      setStatus(err.message || 'Unable to merge timesheets.', 'err');
+    } finally {
+      setWeeksExportBusy(false);
+    }
+  });
   document.getElementById('view').onclick = async (e) => {
     const viewTs = e.target.closest('[data-view-timesheet]');
     const triage = e.target.closest('[data-triage-week]');
+    const retrieveSig = e.target.closest('[data-retrieve-signature]');
     const reopen = e.target.closest('[data-reopen]');
     const hha = e.target.closest('[data-hha]');
     const removeWeek = e.target.closest('[data-remove-week]');
@@ -4266,9 +5077,23 @@ async function adminDash() {
         );
         return;
       }
+      if (retrieveSig) {
+        const weekId = retrieveSig.getAttribute('data-retrieve-signature') || '';
+        if (!weekId) return;
+        const ok = confirm(
+          'Retrieve this signature request? The signing link is closed and the current timesheet comes back for review. The week can be edited and sent again.',
+        );
+        if (!ok) return;
+        const out = await api('POST', `/weeks/${weekId}/retrieve-signature`);
+        if (out.archiveId) await openArchivePdf(out.archiveId);
+        setStatus(out.message || 'Signature request retrieved.', 'ok');
+        await adminDash();
+        return;
+      }
       if (reopen) {
+        if (!confirm('Revoke the signature on this week? Sessions stay. The week returns to unsigned so it can be edited and signed again. Visits already sent to HHA are not changed.')) return;
         await api('POST', `/admin/weeks/${reopen.getAttribute('data-reopen')}/reopen`, {});
-        setStatus('Week reopened for revision.', 'ok');
+        setStatus('Signature revoked. The week is unsigned and can be signed again.', 'ok');
         await adminDash();
         return;
       }
@@ -4279,6 +5104,10 @@ async function adminDash() {
         try {
           const out = await sendWeekToHha(id);
           if (!out) return;
+          if (hhaResultStillRunning(out)) {
+            await pollWeekHhaAfterSend(id);
+            return;
+          }
           setStatus({
             success: [`HHA transfer completed: ${out.transferred}.`],
             error: out.ok ? [] : out.errors?.length ? out.errors : ['HHA transfer completed with errors.'],
@@ -4287,6 +5116,10 @@ async function adminDash() {
           await adminDash();
         } catch (err) {
           enableHhaWeekButtons(id);
+          if (hhaResultStillRunning(null, err)) {
+            await pollWeekHhaAfterSend(id);
+            return;
+          }
           setStatus(err.message, 'err');
         }
         return;
@@ -4334,14 +5167,14 @@ async function adminChildren() {
       <h2>Children</h2>
       <p class="muted">All students on the caseload. Open a record to edit details, review mandates and sessions, or remove.</p>
       <label>Search
-        <input id="childSearch" type="search" placeholder="First, last, school, program type, ID, grade…" autocomplete="off" />
+        <input id="childSearch" type="search" placeholder="First, middle, last, school, program type, ID, grade…" autocomplete="off" />
       </label>
       ${bulkBar('children')}
       <table>
         <tr>${bulkTh('children')}<th>Name</th><th>School</th><th>Grade</th><th>Program</th><th>Mandates</th><th>Sessions</th><th></th></tr>
         <tbody id="childrenBody">
         ${students.map((s) => `<tr data-child-row
-          data-search="${esc([s.firstName, s.lastName, s.name, s.schoolName, s.grade, s.programId, s.programType, s.id].filter(Boolean).join(' ').toLowerCase())}">
+          data-search="${esc([s.firstName, s.middleName, s.lastName, s.name, s.schoolName, s.grade, s.programId, s.programType, s.id].filter(Boolean).join(' ').toLowerCase())}">
           ${bulkTd('children', s.id)}
           <td>${childNameLink(s.id, s.name)}</td>
           <td>${esc(s.schoolName)}</td>
@@ -4436,7 +5269,7 @@ async function adminChildDetail(studentId, opts = {}) {
   view(`
     <div class="card">
       <button type="button" class="btn" id="backChildren">${backLabel}</button>
-      <h2>${esc(`${s.firstName || ''} ${s.lastName || ''}`.trim() || 'Child')}</h2>
+      <h2>${esc([s.firstName, s.middleName, s.lastName].filter(Boolean).join(' ') || 'Child')}</h2>
       <p class="muted"><strong>School:</strong> ${esc(schoolName)}</p>
       ${calendarLine}
       <p class="muted"><strong>Provider(s) on mandates:</strong> ${
@@ -4458,6 +5291,9 @@ async function adminChildDetail(studentId, opts = {}) {
         <div class="row">
           <label>First name <input id="cFirst" value="${esc(s.firstName || '')}" /></label>
           <label>Last name <input id="cLast" value="${esc(s.lastName || '')}" /></label>
+        </div>
+        <div class="row">
+          <label>Middle name <input id="cMiddle" value="${esc(s.middleName || '')}" /></label>
         </div>
         <div class="row">
           <label>School
@@ -4551,7 +5387,7 @@ async function adminChildDetail(studentId, opts = {}) {
             <td>${esc(x.weekStart || '—')}</td>
             <td>${esc(x.weekStatus || '—')}</td>
             <td>${sessionServiceCellHtml(x)}</td>
-            <td>${esc(x.attendance)}</td>
+            <td>${esc(attendanceLabel(x))}</td>
             <td>${esc(x.notes || '')}</td>
             <td><button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button></td>
           </tr>`;
@@ -4678,6 +5514,7 @@ async function adminChildDetail(studentId, opts = {}) {
     try {
       await api('POST', `/admin/students/${studentId}`, {
         firstName: document.getElementById('cFirst').value,
+        middleName: document.getElementById('cMiddle').value,
         lastName: document.getElementById('cLast').value,
         schoolId: document.getElementById('cSchool').value,
         grade: document.getElementById('cGrade').value,
@@ -4836,16 +5673,24 @@ async function adminProviderDetail(providerId) {
   const sessFrom = state.providerSessionFrom || '';
   const sessTo = state.providerSessionTo || '';
   const sessDistrict = state.providerSessionDistrict || '';
+  const sessDateError = state.providerSessionDateError || '';
+  // One missing bound stays open-ended (existing sessionDosInRange). Both empty is not a search.
+  const sessHasDate = Boolean(sessFrom || sessTo);
+  const showSessionRows = state.providerSessionsSearched === true && sessHasDate;
   // Prefer API districtOptions (sessions + caseload programType fallback); merge session labels.
+  const sessionProgramLabel = (x) =>
+    String(x.programType || x.district || '').trim() || siblingProgramLabel(weeks, x);
   const districtOptions = [...new Set([
     ...(Array.isArray(detail.districtOptions) ? detail.districtOptions : []),
-    ...sessions.map((x) => String(x.district || '').trim()).filter(Boolean),
+    ...sessions.map((x) => sessionProgramLabel(x)).filter(Boolean),
   ])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-  const filteredSessions = sessions.filter((x) => {
-    if (!sessionDosInRange(x.dateOfService, sessFrom, sessTo)) return false;
-    if (sessDistrict && String(x.district || '').trim() !== sessDistrict) return false;
-    return true;
-  });
+  const filteredSessions = showSessionRows
+    ? sessions.filter((x) => {
+      if (!sessionDosInRange(x.dateOfService, sessFrom, sessTo)) return false;
+      if (sessDistrict && sessionProgramLabel(x) !== sessDistrict) return false;
+      return true;
+    })
+    : [];
   // Program-type picker (not school buildings). API timesheetProgramOptions collapses
   // same-signer buildings; FE fallback keys only by program type / district label.
   const timesheetSchools = (() => {
@@ -4960,21 +5805,22 @@ async function adminProviderDetail(providerId) {
 
       <div class="detail-pane"${provTab === 'sessions' ? '' : ' hidden'}>
         <h3>Sessions</h3>
-        <p class="muted">All sessions for this provider (newest first). Filter by date of service or district as needed. Sessions from different program types (district/payer) land on separate timesheets for the same week; buildings inside one program share one sheet.</p>
+        <p class="muted">Search by date of service to show sessions (newest first). A start date alone includes that day forward; an end date alone includes that day and earlier. District is optional. Sessions from different program types (district/payer) land on separate timesheets for the same week; buildings inside one program share one sheet.</p>
         <div class="row">
-          <label>From <input id="pSessFrom" type="date" value="${esc(sessFrom)}" /></label>
-          <label>To <input id="pSessTo" type="date" value="${esc(sessTo)}" /></label>
+          <label>Start date <input id="pSessFrom" type="date" value="${esc(sessFrom)}" /></label>
+          <label>End date <input id="pSessTo" type="date" value="${esc(sessTo)}" /></label>
           <label>District
             <select id="pSessDistrict">
               <option value="">All districts</option>
               ${districtOptions.map((d) => `<option value="${esc(d)}"${d === sessDistrict ? ' selected' : ''}>${esc(d)}</option>`).join('')}
             </select>
           </label>
-          <button type="button" class="btn" id="pSessFilter">Filter</button>
+          <button type="button" class="btn" id="pSessFilter">Search</button>
           <button type="button" class="btn" id="pSessClear">Clear</button>
         </div>
-        ${bulkBar('prov-sessions')}
-        <table>
+        ${sessDateError ? `<p class="muted" id="pSessHint">${esc(sessDateError)}</p>` : (!showSessionRows ? '<p class="muted" id="pSessHint">Search by date to show sessions.</p>' : '')}
+        ${showSessionRows ? `${bulkBar('prov-sessions')}
+        <table id="pSessTable">
           <tr>${bulkTh('prov-sessions')}<th>Date</th><th>Time</th><th>Child</th><th>School</th><th>District</th><th>Week</th><th>Status</th><th>Service</th><th>Attendance</th><th>Notes</th><th></th></tr>
           ${filteredSessions.map((x) => {
             const hard = Boolean(x.aiBlock);
@@ -4993,7 +5839,7 @@ async function adminProviderDetail(providerId) {
               cancelReason: x.cancelReason || '',
               serviceType: x.serviceType || '',
               additionalServiceType: x.additionalServiceType || '',
-              programType: x.programType || x.district || '',
+              programType: sessionProgramLabel(x),
               cptLabel: x.cptLabel || '',
               notes: x.notes || '',
               makeupOfSessionId: x.makeupOfSessionId || '',
@@ -5005,19 +5851,19 @@ async function adminProviderDetail(providerId) {
             <td>${esc(time)}</td>
             <td>${childNameLink(x.studentId, sessionChildLabel(x))}</td>
             <td>${esc(x.schoolName || '—')}</td>
-            <td>${esc(x.district || '—')}</td>
+            <td>${esc(sessionProgramLabel(x) || '—')}</td>
             <td>${esc(x.weekStart || '—')}</td>
             <td>${esc(x.weekStatus || '—')}</td>
             <td>${sessionServiceCellHtml(x)}</td>
-            <td>${esc(x.attendance)}</td>
+            <td>${esc(attendanceLabel(x))}</td>
             <td>${esc(x.notes || '')}${flags.length ? `<div class="muted">${esc(flags.join('; '))}</div>` : ''}</td>
             <td class="row-actions">
               <button type="button" class="btn" data-edit-session="${esc(x.id)}">Edit</button>
               <button type="button" class="btn" data-del-session="${esc(x.id)}">Delete</button>
             </td>
           </tr>`;
-          }).join('') || '<tr><td colspan="11">No sessions in this date range.</td></tr>'}
-        </table>
+          }).join('') || '<tr><td colspan="12">No sessions in this date range.</td></tr>'}
+        </table>` : ''}
 
         <h3 style="margin-top:1.25rem" id="pManHeading">Manual session + custom note</h3>
         <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note (linked to this provider / week). Optional additional-service type (Eval, Documentation, etc.) shows in the Service column above.</p>
@@ -5040,9 +5886,12 @@ async function adminProviderDetail(providerId) {
             </select>
           </label>
           <label id="pManRatioWrap">Ratio
-            <select id="pManRatio">
-              ${sessionRatioOptions('1:1')}
-            </select>
+            <span class="ratio-entry">
+              <select id="pManRatio">
+                ${sessionRatioOptions('1:1')}
+              </select>
+              <input id="pManRatioOther" type="number" min="1" step="1" inputmode="numeric" placeholder="e.g. 12" hidden aria-label="Other ratio, children per provider" />
+            </span>
           </label>
         </div>
         <div class="row">
@@ -5051,6 +5900,7 @@ async function adminProviderDetail(providerId) {
               <option value="attended">attended</option>
               <option value="missed">missed</option>
               <option value="makeup">makeup</option>
+              <option value="paid_absence">paid absence</option>
             </select>
           </label>
         </div>
@@ -5196,15 +6046,27 @@ async function adminProviderDetail(providerId) {
     onSaved: refreshProvider,
   });
   document.getElementById('pSessFilter')?.addEventListener('click', () => {
-    state.providerSessionFrom = document.getElementById('pSessFrom')?.value || '';
-    state.providerSessionTo = document.getElementById('pSessTo')?.value || '';
+    const from = document.getElementById('pSessFrom')?.value || '';
+    const to = document.getElementById('pSessTo')?.value || '';
+    state.providerSessionFrom = from;
+    state.providerSessionTo = to;
     state.providerSessionDistrict = document.getElementById('pSessDistrict')?.value || '';
+    if (!from && !to) {
+      state.providerSessionsSearched = false;
+      state.providerSessionDateError = 'Enter a start date or an end date.';
+      refreshProvider();
+      return;
+    }
+    state.providerSessionDateError = '';
+    state.providerSessionsSearched = true;
     refreshProvider();
   });
   document.getElementById('pSessClear')?.addEventListener('click', () => {
     state.providerSessionFrom = '';
     state.providerSessionTo = '';
     state.providerSessionDistrict = '';
+    state.providerSessionsSearched = false;
+    state.providerSessionDateError = '';
     refreshProvider();
   });
   document.querySelectorAll('[data-del-session]').forEach((btn) => {
@@ -5235,6 +6097,7 @@ async function adminProviderDetail(providerId) {
         min42: 'pRate42',
         min45: 'pRate45',
         hour: 'pRateHour',
+        g15: 'pRateG15',
         g30: 'pRateG30',
         g42: 'pRateG42',
         g45: 'pRateG45',
@@ -5327,10 +6190,14 @@ async function adminProviderDetail(providerId) {
     if (wrap) wrap.hidden = isAddl;
     if (sel) {
       sel.disabled = isAddl;
-      if (isAddl) sel.value = '1:1';
+      if (isAddl) setSessionRatio(sel, '1:1');
+      else syncRatioOtherField(sel);
     }
   };
   document.getElementById('pManAddlType')?.addEventListener('change', syncManualRatioVisibility);
+  document.getElementById('pManRatio')?.addEventListener('change', () => {
+    syncRatioOtherField(document.getElementById('pManRatio'));
+  });
   syncManualRatioVisibility();
   document.getElementById('pManCancelEdit')?.addEventListener('click', () => {
     clearManualSessionEdit();
@@ -5338,8 +6205,7 @@ async function adminProviderDetail(providerId) {
     document.getElementById('pManDos').value = '';
     document.getElementById('pManService').value = '';
     document.getElementById('pManAddlType').value = '';
-    const ratioEl = document.getElementById('pManRatio');
-    if (ratioEl) ratioEl.value = '1:1';
+    setSessionRatio(document.getElementById('pManRatio'), '1:1');
     syncManualRatioVisibility();
     document.getElementById('pManAtt').value = 'attended';
     document.getElementById('pManProgram').value = '';
@@ -5379,19 +6245,12 @@ async function adminProviderDetail(providerId) {
       const rawSvc = String(raw.serviceType || '');
       const extractedRatio = extractSessionRatio(rawSvc);
       document.getElementById('pManService').value = stripSessionRatio(rawSvc) || rawSvc;
-      document.getElementById('pManAddlType').value = raw.additionalServiceType || '';
-      const ratioEl = document.getElementById('pManRatio');
-      if (ratioEl) {
-        ratioEl.value = SESSION_RATIO_OPTIONS.includes(extractedRatio) ? extractedRatio : '1:1';
-      }
+      const legacyPaid = raw.additionalServiceType === 'paid_absence' || raw.attendance === 'paid_absence';
+      document.getElementById('pManAddlType').value = legacyPaid ? '' : (raw.additionalServiceType || '');
+      setSessionRatio(document.getElementById('pManRatio'), extractedRatio);
       syncManualRatioVisibility();
-      document.getElementById('pManAtt').value = raw.attendance || 'attended';
-      const programEl = document.getElementById('pManProgram');
-      if (programEl) {
-        const pt = String(raw.programType || '').trim();
-        const hasProg = pt && [...programEl.options].some((o) => o.value === pt);
-        programEl.value = hasProg ? pt : '';
-      }
+      document.getElementById('pManAtt').value = legacyPaid ? 'paid_absence' : (raw.attendance || 'attended');
+      applyProgramSelect(document.getElementById('pManProgram'), raw.programType || '');
       document.getElementById('pManBegin').value = raw.beginTime || '';
       document.getElementById('pManEnd').value = raw.endTime || '';
       document.getElementById('pManCpt').value = raw.cptLabel || '';
@@ -5428,14 +6287,22 @@ async function adminProviderDetail(providerId) {
       const makeupOfEl = document.getElementById('pManMakeupOf');
       const notesEl = document.getElementById('pManNotes');
       const cancelReason = document.getElementById('pManCancel')?.value?.trim() || '';
-      const programType = document.getElementById('pManProgram')?.value?.trim() || '';
-      const additionalServiceTypeEarly = document.getElementById('pManAddlType')?.value || '';
+      const programEl = document.getElementById('pManProgram');
+      let programType = programEl?.value?.trim() || '';
+      if (!programType && programEl?.selectedOptions?.[0]) {
+        const label = programEl.selectedOptions[0].textContent?.trim() || '';
+        if (label && !/^auto \(from child\)$/i.test(label)) programType = label;
+      }
+      const additionalServiceTypeEarly = attendance === 'paid_absence' ? '' : (document.getElementById('pManAddlType')?.value || '');
       const serviceTypeBase = document.getElementById('pManService')?.value?.trim() || '';
-      const ratioSel = document.getElementById('pManRatio')?.value || '1:1';
+      const ratioSel = readSessionRatio(document.getElementById('pManRatio'));
       const serviceTypeEarly = additionalServiceTypeEarly
         ? serviceTypeBase
-        : serviceTypeWithRatioUi(serviceTypeBase, ratioSel || '1:1');
+        : serviceTypeWithRatioUi(serviceTypeBase, ratioSel);
       if (!studentId && !additionalServiceTypeEarly) throw new Error('Select a child.');
+      if (!studentId && additionalServiceTypeEarly && !programType) {
+        throw new Error('Select a program type. No child documentation is billed on that school contract.');
+      }
       if (!dateOfService) throw new Error('Enter the date of service.');
       if (!additionalServiceTypeEarly && !serviceTypeBase) {
         throw new Error('Service type is required.');
@@ -5497,6 +6364,7 @@ async function adminProviderDetail(providerId) {
         makeupOfSessionId: attendance === 'makeup' ? (makeupOfEl?.value || '') : '',
         cptLabel: document.getElementById('pManCpt')?.value?.trim() || '',
         notes,
+        programType,
       };
       if (serviceType) payload.serviceType = serviceType;
       if (additionalServiceType) payload.additionalServiceType = additionalServiceType;
@@ -5857,7 +6725,7 @@ async function adminSchoolDetail(schoolId) {
     </div>
     <div class="card" id="schoolCalendarSection">
       <h3>School calendar</h3>
-      <p class="muted">School year dates and closed days (holidays and breaks). Used for school-day mandate tracking.</p>
+      <p class="muted">School year dates and closed days (holidays and breaks). Used for school-day mandate tracking. Cycle length is the rotation at this school: 6-day (days 1–6) or 10-day (days 1–10).</p>
       ${
         calFallbackWarn
           ? `<div class="warn-box cal-fallback-banner" id="calFallbackBanner"><strong>${esc(calFallbackWarn)}</strong><p>Cycle mandates currently use Mon–Fri until first day, last day, and off days are set.</p></div>`
@@ -5867,6 +6735,11 @@ async function adminSchoolDetail(schoolId) {
       <div class="row">
         <label>First day (YYYY-MM-DD) <input id="calYearStart" type="date" value="${esc(cal?.yearStart || '')}" /></label>
         <label>Last day (YYYY-MM-DD) <input id="calYearEnd" type="date" value="${esc(cal?.yearEnd || '')}" /></label>
+      </div>
+      <div class="row">
+        <label>Cycle length
+          <select id="calCycleDays">${schoolCycleLengthOptions(cal?.cycleDays)}</select>
+        </label>
       </div>
       <div class="row">
         <label>Add off day <input id="calOffDayPick" type="date" /></label>
@@ -6005,6 +6878,7 @@ async function adminSchoolDetail(schoolId) {
         yearStart: document.getElementById('calYearStart').value,
         yearEnd: document.getElementById('calYearEnd').value,
         offDays,
+        cycleDays: Number(document.getElementById('calCycleDays').value),
       });
       setStatus('School calendar saved.', 'ok');
       await adminSchoolDetail(schoolId);
@@ -6236,6 +7110,7 @@ async function adminProviders() {
           min42: 't42',
           min45: 't45',
           hour: 'tHour',
+          g15: 'tG15',
           g30: 'tG30',
           g42: 'tG42',
           g45: 'tG45',
@@ -6649,7 +7524,7 @@ async function adminMandates() {
       <h2>Import caseload</h2>
       <p class="muted">Use the KU export <strong>Related Service by serviceschool (WG)</strong> (Listing Results sheet) as CSV or Excel (.xls / .xlsx). Import saves immediately.</p>
       <p class="muted" style="margin-top:0.35rem">Columns: CR Recommended School, Student Last/First Name, CR Expected Grade, CR Decision/Status, Related Service, RS Start/End, RS Ratio, RS Frequency, RS Period, <strong>RS Duration</strong>, RS Location, RS Provider. Optional when present: Group Size, Program ID, Program Type, Date of Birth. (Older short headers still work.)</p>
-      <p class="muted" style="margin-top:0.35rem">Frequency: <em>Weekly</em> = sessions per week; <em>Monthly</em> = sessions per calendar month; <em>6 day cycle</em> = N sessions per 6 school days. Providers must already exist in TMS and match “Last, First” or “First Last”. Agency labels such as “White Glove” or “White, Glove” are invalid — use the therapist name. Unmatched RS Provider rows are skipped (no empty-provider mandates).</p>
+      <p class="muted" style="margin-top:0.35rem">Frequency: <em>Weekly</em> = sessions per week; <em>Monthly</em> = sessions per calendar month; <em>6 day cycle</em> or <em>10 day cycle</em> = N sessions per that many school days. Providers must already exist in TMS and match “Last, First” or “First Last”. Agency labels such as “White Glove” or “White, Glove” are invalid — use the therapist name. Unmatched RS Provider rows are skipped (no empty-provider mandates).</p>
       <input id="caseloadFile" type="file" accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
       <div class="row" style="margin-top:0.6rem">
         <button class="btn-primary" id="caseloadImportBtn">Import caseload</button>
@@ -6744,7 +7619,7 @@ async function adminMandates() {
       </div>
       <div id="addMandateForm" hidden>
         <h2>Add mandate manually</h2>
-        <p class="muted"><strong>Type</strong> is <strong>Weekly</strong>, <strong>6-Day Cycle</strong>, <strong>Monthly</strong>, <strong>Makeup auth</strong>, or <strong>Makeup- Weekly</strong>. Makeup auth uses a remaining session pool; Makeup- Weekly uses a weekly makeup frequency (same Freq / count as Weekly). Unlinked makeups use Makeup auth or Makeup- Weekly; miss-linked makeups do not. Choose a <strong>Discipline</strong> (OT / PT / SLP) for every mandate, including makeup types.</p>
+        <p class="muted"><strong>Type</strong> is <strong>Weekly</strong>, <strong>6-Day Cycle</strong>, <strong>10-Day Cycle</strong>, <strong>Monthly</strong>, <strong>Makeup auth</strong>, or <strong>Makeup- Weekly</strong>. Makeup auth uses a remaining session pool; Makeup- Weekly uses a weekly makeup frequency (same Freq / count as Weekly). Unlinked makeups use Makeup auth or Makeup- Weekly; miss-linked makeups do not. Choose a <strong>Discipline</strong> (OT / PT / SLP) for every mandate, including makeup types.</p>
         <div class="row">
           <label>Student
             <select id="manStudent">${studentOptions(students)}</select>
@@ -6871,7 +7746,7 @@ async function adminMandates() {
   document.getElementById('manSave').onclick = async () => {
     try {
       const studentId = document.getElementById('manStudent').value;
-      const { mandateKind, frequencyKind } = parseMandateTypeValue(document.getElementById('manKind').value);
+      const { mandateKind, frequencyKind, periodSchoolDays } = parseMandateTypeValue(document.getElementById('manKind').value);
       const freq = Number(document.getElementById('manFreq').value);
       const durationRaw = document.getElementById('manDuration').value;
       const groupSizeRaw = document.getElementById('manGroupSize').value;
@@ -6909,7 +7784,7 @@ async function adminMandates() {
         frequencyKind,
         frequencyPerWeek: freq,
         sessionsPerPeriod: freq,
-        periodSchoolDays: frequencyKind === 'school_day_cycle' ? 6 : undefined,
+        periodSchoolDays: frequencyKind === 'school_day_cycle' ? (periodSchoolDays || 6) : undefined,
         startOn: document.getElementById('manStart').value,
         endOn: document.getElementById('manEnd').value,
       });
@@ -7054,7 +7929,7 @@ async function adminReportWeekProgress() {
           <th>Child</th>
           <th>Provider</th>
           <th>Program type</th>
-          <th>Mandate</th>
+          <th>Service type</th>
           <th>Week</th>
           <th>Sessions delivered %</th>
           <th>Notes posted %</th>
@@ -7281,6 +8156,94 @@ async function adminReportDueDates() {
   }
 }
 
+function bindArchiveChecks(group) {
+  document.querySelectorAll(`input[data-bulk-all="${group}"]`).forEach((all) => {
+    all.onchange = () => {
+      document.querySelectorAll(`input[data-bulk-group="${group}"]`).forEach((cb) => {
+        cb.checked = all.checked;
+      });
+      syncBulkBar(group);
+    };
+  });
+  document.querySelectorAll(`input[data-bulk-group="${group}"]`).forEach((cb) => {
+    cb.addEventListener('change', () => syncBulkBar(group));
+  });
+  syncBulkBar(group);
+}
+
+async function downloadSelectedArchives(group, mode) {
+  const ids = selectedBulkEls(group)
+    .map((el) => el.getAttribute('data-bulk-id') || '')
+    .filter(Boolean);
+  if (!ids.length) {
+    setStatus('Select at least one file.', 'err');
+    return;
+  }
+  if (ids.length > 40) {
+    setStatus('Select up to 40 files at a time.', 'err');
+    return;
+  }
+  const days = selectedBulkEls(group)
+    .map((el) => String(el.getAttribute('data-week-start') || el.getAttribute('data-created-at') || '').slice(0, 10))
+    .filter(Boolean)
+    .sort();
+  const span = !days.length ? 'selected' : days[0] === days[days.length - 1] ? days[0] : `${days[0]}-to-${days[days.length - 1]}`;
+  const downloadBtn = document.querySelector(`[data-archive-download="${group}"]`);
+  const mergeBtn = document.querySelector(`[data-archive-merge="${group}"]`);
+  const prevDownload = downloadBtn?.textContent;
+  const prevMerge = mergeBtn?.textContent;
+  if (downloadBtn) downloadBtn.disabled = true;
+  if (mergeBtn) mergeBtn.disabled = true;
+  if (mode === 'pdf' && mergeBtn) mergeBtn.textContent = 'Merging…';
+  if (mode === 'zip' && downloadBtn) downloadBtn.textContent = 'Downloading…';
+  setStatus(
+    mode === 'pdf'
+      ? 'Building one PDF, oldest week first…'
+      : `Preparing ${ids.length} file${ids.length === 1 ? '' : 's'}, oldest week first…`,
+    '',
+  );
+  try {
+    const blob = await api('POST', '/archive/bundle', { ids, mode }, { timeoutMs: 120000 });
+    if (!(blob instanceof Blob)) throw new Error('Download did not return a file.');
+    const filename = mode === 'pdf' ? `archive-${span}.pdf` : `archive-${span}.zip`;
+    downloadBlob(blob, filename);
+    setStatus(
+      mode === 'pdf'
+        ? `Downloaded one PDF with ${ids.length} file${ids.length === 1 ? '' : 's'}, ordered by week.`
+        : `Downloaded ${ids.length} file${ids.length === 1 ? '' : 's'} in a zip, ordered by week.`,
+      'ok',
+    );
+  } catch (e) {
+    setStatus(e.message || 'Unable to download the selected files.', 'err');
+  } finally {
+    if (downloadBtn) {
+      downloadBtn.disabled = false;
+      downloadBtn.textContent = prevDownload || 'Download selected';
+    }
+    if (mergeBtn) {
+      mergeBtn.disabled = false;
+      mergeBtn.textContent = prevMerge || 'Merge into one PDF';
+    }
+  }
+}
+
+function wireArchiveExport(group) {
+  bindArchiveChecks(group);
+  const downloadBtn = document.querySelector(`[data-archive-download="${group}"]`);
+  const mergeBtn = document.querySelector(`[data-archive-merge="${group}"]`);
+  if (downloadBtn) downloadBtn.onclick = () => downloadSelectedArchives(group, 'zip');
+  if (mergeBtn) mergeBtn.onclick = () => downloadSelectedArchives(group, 'pdf');
+}
+
+function archiveExportBar(group) {
+  return bulkBar(
+    group,
+    `<button type="button" class="btn-primary" data-archive-download="${esc(group)}">Download selected</button>
+     <button type="button" class="btn" data-archive-merge="${esc(group)}" title="One PDF. Pages follow week, then the time each file was saved.">Merge into one PDF</button>`,
+    { omitDelete: true },
+  );
+}
+
 function formatArchiveWhen(iso) {
   const s = String(iso || '').trim();
   if (!s) return '—';
@@ -7426,7 +8389,7 @@ async function adminReportArchive() {
     <div class="card">
       <button type="button" class="btn" id="backReports">← Reports</button>
       <h2>Uploads &amp; timesheets archive</h2>
-      <p class="muted">All uploaded session PDFs and generated timesheets. Filter by type, provider, or date.</p>
+      <p class="muted">All uploaded session PDFs and generated timesheets. Filter by type, provider, or date. Select rows to download them as one zip, or merge the PDFs into a single file. Both follow week, then the time each file was saved.</p>
       <div class="row">
         <label>Type
           <select id="archKind">
@@ -7450,8 +8413,10 @@ async function adminReportArchive() {
         <label>To <input id="archTo" type="date" value="${esc(to)}" /></label>
         <button type="button" class="btn-primary" id="archLoad">Load</button>
       </div>
+      ${archiveExportBar('report-archive')}
       <div class="table-wrap"><table>
         <tr>
+          ${bulkTh('report-archive')}
           <th>When</th>
           <th>Kind</th>
           <th>Type</th>
@@ -7461,7 +8426,7 @@ async function adminReportArchive() {
           <th>File</th>
           <th></th>
         </tr>
-        <tbody id="archBody"><tr><td colspan="8">Loading…</td></tr></tbody>
+        <tbody id="archBody"><tr><td colspan="9">Loading…</td></tr></tbody>
       </table></div>
     </div>
   `);
@@ -7479,7 +8444,7 @@ async function adminReportArchive() {
     if (providerId) q.set('providerId', providerId);
     if (nextFrom) q.set('from', nextFrom);
     if (nextTo) q.set('to', nextTo);
-    if (tbody) tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
+    if (tbody) tbody.innerHTML = '<tr><td colspan="9">Loading…</td></tr>';
     try {
       const out = await api('GET', `/admin/archive?${q.toString()}`);
       const items = Array.isArray(out.items) ? out.items : [];
@@ -7488,6 +8453,7 @@ async function adminReportArchive() {
           items
             .map(
               (a) => `<tr>
+            ${a.hasFile ? bulkTd('report-archive', a.id, ` data-week-start="${esc(a.weekStart || '')}" data-created-at="${esc(a.createdAt || '')}"`) : bulkTdEmpty()}
             <td>${esc(formatArchiveWhen(a.createdAt))}</td>
             <td>${esc(a.kind || '—')}</td>
             <td>${esc(archiveSourceLabel(a.sourceType))}</td>
@@ -7501,11 +8467,12 @@ async function adminReportArchive() {
             </td>
           </tr>`,
             )
-            .join('') || '<tr><td colspan="8">No archive items match these filters.</td></tr>';
+            .join('') || '<tr><td colspan="9">No archive items match these filters.</td></tr>';
       }
       document.querySelectorAll('[data-open-archive]').forEach((btn) => {
         btn.onclick = () => openArchivePdf(btn.getAttribute('data-open-archive'));
       });
+      bindArchiveChecks('report-archive');
       document.querySelectorAll('[data-delete-archive]').forEach((btn) => {
         btn.onclick = async () => {
           const id = btn.getAttribute('data-delete-archive');
@@ -7523,12 +8490,16 @@ async function adminReportArchive() {
       setStatus('', '');
     } catch (e) {
       if (tbody) {
-        tbody.innerHTML = `<tr><td colspan="8">${esc(e.message || 'Unable to load archive.')}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="9">${esc(e.message || 'Unable to load archive.')}</td></tr>`;
       }
       setStatus(e.message || 'Unable to load archive.', 'err');
     }
   };
   document.getElementById('archLoad')?.addEventListener('click', () => load());
+  const archDownload = document.querySelector('[data-archive-download="report-archive"]');
+  const archMerge = document.querySelector('[data-archive-merge="report-archive"]');
+  if (archDownload) archDownload.onclick = () => downloadSelectedArchives('report-archive', 'zip');
+  if (archMerge) archMerge.onclick = () => downloadSelectedArchives('report-archive', 'pdf');
   await load();
 }
 
@@ -7755,7 +8726,7 @@ async function adminReportSessionNotes() {
             <td>${esc(r.schoolName || '—')}</td>
             <td>${esc(r.district || '—')}</td>
             <td>${esc(r.dateOfService || '—')}</td>
-            <td>${esc(r.attendance || '—')}</td>
+            <td>${esc(attendanceLabel(r.attendance || ''))}</td>
             <td>${esc(r.beginTime || '—')}</td>
             <td>${esc(r.endTime || '—')}</td>
           </tr>`,
@@ -7841,7 +8812,7 @@ function hhaTransferRowsHtml(rows) {
         <td>${esc(r.schoolName || '—')}</td>
         <td>${esc(r.dateOfService || '—')}</td>
         <td>${esc(r.time || '—')}</td>
-        <td>${esc(r.attendance || '—')}</td>
+        <td>${esc(attendanceLabel(r.attendance || ''))}</td>
         <td>${esc(r.service || '—')}</td>
         <td>${esc(r.hhaStatus || '—')}</td>
       </tr>`,

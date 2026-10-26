@@ -5,16 +5,20 @@ import {
 } from './caseload-import.js';
 import { dueDateStatus } from './due-dates.js';
 import {
-  additionalServiceWithoutChild,
+  isNoChildPlaceholderName,
   assignSessionsToMandates,
   cycleAllowedSessions,
+  isMakeupKindMandate,
+  mandateDischargedForWeek,
   mandateFrequencyKind,
   monthlyAllowedSessions,
+  schoolBillingServiceNameForMandate,
   sessionListedChildName,
   sessionSlotLabel,
   weeklyAllowedSessions,
 } from './mandate.js';
 import { isoDate, parseDos } from './ids.js';
+import { isHhaTransferSession } from './provider-pay.js';
 import { schoolCalendarSummary, hasConfiguredSchoolCalendar, schoolCalendarMonFriFallbackWarning, schoolSetupIncomplete } from './school-calendar.js';
 import type { HhaTransfer, HhaTransferStatus, Mandate, SessionRow, Student } from './types.js';
 import { DEFAULT_ADMIN_NOTE_TAGS, additionalServiceLabel } from './types.js';
@@ -26,25 +30,56 @@ import {
 } from './week-school.js';
 
 /**
- * Prefix HHA transfer / triage lines: `Child · YYYY-MM-DD HH:MM–HH:MM: <error>`.
- * Idempotent when the message is already labeled.
+ * `Child · date begin–end · service: message`.
+ * Date stays as stored (YYYY-MM-DD or M/D/YYYY). Service is the session’s
+ * service type (or additional-service name) when that field is set.
+ * An older label is rebuilt so a stored failure picks up the service
+ * without another HHA send.
  */
+const HHA_VISIT_LABEL_RE =
+  /^(.+?) · ((?:\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4}|unknown date)(?:\s+\d{1,2}:\d{2}(?:\s*[ap]m)?(?:\s*[–-]\s*\d{1,2}:\d{2}(?:\s*[ap]m)?)?)?)(?: · (.+?))?: ([\s\S]+)$/i;
+
+function hhaTransferVisitService(
+  session?: Pick<SessionRow, 'serviceType' | 'additionalServiceType'> | null,
+): string {
+  if (!session) return '';
+  const extra = additionalServiceLabel(session.additionalServiceType);
+  if (extra) return extra;
+  return String(session.serviceType || '').trim();
+}
+
 export function labelHhaTransferError(
   message: string,
   opts: {
     childName?: string | null;
-    session?: Pick<SessionRow, 'dateOfService' | 'beginTime' | 'endTime'> | null;
+    session?: Pick<
+      SessionRow,
+      'dateOfService' | 'beginTime' | 'endTime' | 'serviceType' | 'additionalServiceType'
+    > | null;
   },
 ): string {
   const msg = String(message || '').trim();
   if (!msg) return msg;
-  // Already labeled (re-roll or catch after prior label).
-  if (/^.+ · .+: /.test(msg)) return msg;
-  const child = String(opts.childName || '').trim() || 'Unknown child';
-  const slot = opts.session ? sessionSlotLabel(opts.session as SessionRow) : '';
-  const prefix = slot ? `${child} · ${slot}` : child;
-  if (msg.startsWith(`${prefix}:`)) return msg;
-  return `${prefix}: ${msg}`;
+  const existing = msg.match(HHA_VISIT_LABEL_RE);
+  let body = msg;
+  let priorChild = '';
+  let priorSlot = '';
+  let priorService = '';
+  if (existing) {
+    priorChild = existing[1].trim();
+    priorSlot = existing[2].trim();
+    priorService = (existing[3] || '').trim();
+    body = existing[4].trim();
+  } else if (/^Unknown child:\s+/.test(msg)) {
+    priorChild = 'Unknown child';
+    body = msg.replace(/^Unknown child:\s+/, '');
+  }
+  const child = String(opts.childName || '').trim() || priorChild || 'Unknown child';
+  const slot = opts.session ? sessionSlotLabel(opts.session as SessionRow) : priorSlot;
+  const fromSession = opts.session ? hhaTransferVisitService(opts.session) : '';
+  const service = fromSession || priorService;
+  const prefix = [child, slot, service].filter(Boolean).join(' · ');
+  return `${prefix}: ${body}`;
 }
 
 /**
@@ -189,7 +224,7 @@ export function buildTimesheetProgramOptions(
   );
 }
 
-/** Per-week HHA transfer rollup (attended/makeup only — misses are not HHA-eligible). */
+/** Per-week HHA transfer rollup (attended, makeup, and payable missed paid absences). */
 export type WeekHhaRollup = {
   sessionCount: number;
   eligible: number;
@@ -201,15 +236,14 @@ export type WeekHhaRollup = {
 };
 
 /**
- * HHA only transfers attended/makeup sessions. Week status must reflect those rows,
- * not the Sessions column (which includes misses).
+ * HHA transfers attended, makeup, and paid absences stored as missed.
+ * Unpaid misses stay off. Week status must reflect the rows that are sent,
+ * not the Sessions column (which includes unpaid misses).
  */
 export function weekHhaRollup(store: MemoryStore, weekId: string): WeekHhaRollup {
   const sessions = store.sessionsForWeek(weekId);
-  // No-child additional services are not patient visits and must not block week confirmation.
-  const eligibleSessions = sessions.filter(
-    (s) => isDeliveredSession(s) && !additionalServiceWithoutChild(s),
-  );
+  // No-child additional services and paid absences are HHA visits and count toward confirmation.
+  const eligibleSessions = sessions.filter((s) => isHhaTransferSession(s));
   let confirmed = 0;
   let failed = 0;
   let pending = 0;
@@ -247,11 +281,16 @@ function isDeliveredSession(s: SessionRow): boolean {
   return s.attendance === 'attended' || s.attendance === 'makeup';
 }
 
-function mandateLabel(m: Mandate | undefined): string {
+/**
+ * Weekly progress service column: HHA school billing name
+ * (`PT school 30`, `PT school group 30`), not the Related Service label
+ * (`Physical Therapy` / `Occupational Therapy`).
+ */
+function weekProgressServiceLabel(m: Mandate | undefined): string {
   if (!m) return 'Unassigned';
-  const svc = (m.serviceType || m.discipline || 'Mandate').trim();
-  const ratio = m.ratioGroup ? ' group' : ' individual';
-  return `${svc}${m.serviceType ? '' : ratio}`.trim() || 'Mandate';
+  const stored = String(m.billingServiceName || '').trim();
+  if (stored) return stored;
+  return schoolBillingServiceNameForMandate(m) || '—';
 }
 
 /** Expected session count for progress % (weekly / cycle / monthly mandate frequency). */
@@ -329,17 +368,28 @@ export function missingNotes(
 }
 
 /**
- * Admin weekly progress: child + mandate + week.
+ * Admin weekly progress: child + school billing service + week.
+ * - Service column is the HHA billing name (`PT school 30` / `PT school group 30`).
+ * - Makeup authorizations (makeup auth and makeup-weekly) are omitted.
+ *   Miss-linked makeup visits stay on the regular service row. Unlinked makeups
+ *   that exist only on a makeup-authorization row are left out with that row.
+ * - Discharged mandates are omitted. Same endOn rule as the child Mandates tab
+ *   (endOn on or before today = Discharged), applied to the report week via
+ *   mandateDischargedForWeek: endOn on or before that Monday, or endOn <= today
+ *   when today falls in the week. A historical week still includes a mandate
+ *   discharged after that week. A mandate already ended before the week is out
+ *   even if sessions were logged on it.
  * - Sessions delivered % = attended+makeup vs mandate frequency (missed excluded).
  * - Notes posted % = sessions with any note (missed + attended + makeup) vs mandate.
  * - belowMandate / yellow when delivered count is under the mandate.
  */
 export function weekProgressReport(
   store: MemoryStore,
-  opts: { from?: string; to?: string } = {},
+  opts: { from?: string; to?: string; asOf?: string } = {},
 ) {
   const from = String(opts.from || '').trim();
   const to = String(opts.to || '').trim();
+  const asOf = String(opts.asOf || '').trim() || easternDateYmd(new Date());
   const weeks = store.data.weeks
     .filter((w) => {
       if (from && w.weekStart < from) return false;
@@ -421,7 +471,7 @@ export function weekProgressReport(
           schoolName,
           programType,
           mandateId: mandate?.id || '',
-          mandateLabel: mandateLabel(mandate),
+          mandateLabel: weekProgressServiceLabel(mandate),
           providerName: provider
             ? `${provider.firstName} ${provider.lastName}`.trim() || '—'
             : '—',
@@ -443,16 +493,20 @@ export function weekProgressReport(
         });
       };
 
-      if (!mandates.length) {
-        pushRow(undefined, sessions);
+      const progressMandates = mandates.filter(
+        (m) => !isMakeupKindMandate(m) && !mandateDischargedForWeek(m, week.weekStart, asOf),
+      );
+      if (!progressMandates.length) {
+        // No caseload mandate → unassigned. Makeup-auth-only and discharged-only children are omitted.
+        if (!mandates.length) pushRow(undefined, sessions);
         continue;
       }
-      if (mandates.length === 1) {
-        pushRow(mandates[0], sessions);
+      if (progressMandates.length === 1 && mandates.length === 1) {
+        pushRow(progressMandates[0], sessions);
         continue;
       }
       const { byMandateId, unmatched } = assignSessionsToMandates(mandates, sessions);
-      for (const mandate of mandates) {
+      for (const mandate of progressMandates) {
         const assigned = byMandateId.get(mandate.id) ?? [];
         if (!assigned.length) continue;
         pushRow(mandate, assigned);
@@ -581,6 +635,7 @@ export function adminWeeksList(
       district: programType || school?.district || '',
       signerName: w.signerName,
       signerEmail: w.signerEmail,
+      signatureRequestStatus: w.signatureRequestStatus || '',
       hhaStatus,
       hhaError: enriched.hhaError,
       hhaConfirmed: rollup.confirmed,
@@ -995,7 +1050,9 @@ export function hhaTransfersReport(
         )
       : '';
     const district =
-      districtLabelForStudent(student, school) || String(week?.programType || '').trim();
+      districtLabelForStudent(student, school) ||
+      String(session?.programType || '').trim() ||
+      String(week?.programType || '').trim();
 
     rows.push({
       sessionId,
@@ -1116,8 +1173,8 @@ export function dashboard(store: MemoryStore) {
   const weeks = store.data.weeks || [];
   const count = (status: string) => weeks.filter((w) => w.status === status).length;
   // HHA counts only signed/locked weeks — same universe as weekHhaRollup eligible
-  // (attended/makeup). Never count orphan confirmed transfers on draft weeks, or
-  // confirmed can exceed eligible on the admin banner.
+  // (attended, makeup, and payable missed paid absences). Never count orphan
+  // confirmed transfers on draft weeks, or confirmed can exceed eligible on the admin banner.
   let hhaEligible = 0;
   let hhaConfirmed = 0;
   let hhaFailed = 0;
@@ -1151,14 +1208,16 @@ export function dashboard(store: MemoryStore) {
 
 export function adminStudentsList(store: MemoryStore) {
   return store.data.students
+    .filter((s) => !isNoChildPlaceholderName(s))
     .map((s) => {
       const school = store.data.schools.find((sc) => sc.id === s.schoolId);
       const mandates = store.mandatesForStudent(s.id);
       return {
         id: s.id,
         firstName: s.firstName,
+        middleName: s.middleName || '',
         lastName: s.lastName,
-        name: `${s.firstName} ${s.lastName}`.trim() || '—',
+        name: [s.firstName, s.middleName, s.lastName].map((part) => String(part || '').trim()).filter(Boolean).join(' ') || '—',
         schoolId: s.schoolId,
         schoolName: school?.name || '—',
         grade: s.grade || '',
@@ -1188,11 +1247,14 @@ export function adminStudentDetail(store: MemoryStore, studentId: string) {
   const student = store.data.students.find((s) => s.id === studentId);
   if (!student) return null;
   const school = store.data.schools.find((s) => s.id === student.schoolId);
+  const schoolCalendar = store.schoolCalendarForSchool(student.schoolId);
   const mandates = store.mandatesForStudent(student.id).map((m) => {
     const provider = resolveMandateProvider(store, m.providerId);
     const kind = mandateFrequencyKind(m);
     const sessionsPerPeriod = m.sessionsPerPeriod ?? m.frequencyPerWeek ?? 0;
-    const periodSchoolDays = m.periodSchoolDays ?? (kind === 'school_day_cycle' ? 6 : 0);
+    const periodSchoolDays =
+      m.periodSchoolDays ??
+      (kind === 'school_day_cycle' ? Number(schoolCalendar?.cycleDays) || 6 : 0);
     return {
       ...m,
       // Link/display the canonical (linked) profile when duplicates share a name.
@@ -1233,7 +1295,6 @@ export function adminStudentDetail(store: MemoryStore, studentId: string) {
   const files = store.filesForStudent(student.id);
   const notes = store.notesForStudent(student.id);
   const extraTags = [...new Set(notes.flatMap((n) => n.tags || []))];
-  const schoolCalendar = store.schoolCalendarForSchool(student.schoolId);
   return {
     student,
     school: school || null,
@@ -1381,7 +1442,10 @@ export function adminProviderDetail(store: MemoryStore, providerId: string) {
         weekStatus: w?.status || '',
         schoolId: student?.schoolId || w?.schoolId || '',
         schoolName: school?.name || '',
-        district: districtLabelForStudent(student, school),
+        district:
+          districtLabelForStudent(student, school) ||
+          String(s.programType || '').trim() ||
+          String(w?.programType || '').trim(),
         studentName: sessionListedChildName(
           s,
           student ? `${student.firstName} ${student.lastName}`.trim() : '',

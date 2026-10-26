@@ -1028,6 +1028,146 @@ export async function resendSignEnvelopeInvite(
   }
 }
 
+const SIGNNOW_COMPLETE_STATUSES = new Set(['fulfilled', 'completed', 'complete', 'signed']);
+const SIGNNOW_OPEN_STATUSES = new Set([
+  'pending',
+  'created',
+  'sent',
+  'waiting',
+  'in_progress',
+  'viewed',
+]);
+
+function signNowInviteRows(doc: Record<string, unknown>): Array<Record<string, unknown>> {
+  const buckets = [doc.field_invites, doc.requests, doc.free_form_invites, doc.invites];
+  const rows: Array<Record<string, unknown>> = [];
+  for (const bucket of buckets) {
+    if (!Array.isArray(bucket)) continue;
+    for (const raw of bucket) {
+      if (raw && typeof raw === 'object') rows.push(raw as Record<string, unknown>);
+    }
+  }
+  return rows;
+}
+
+/**
+ * True only with positive evidence the signer already finished.
+ * A pending invite, or a document we cannot read, is not complete.
+ */
+export function signNowDocumentIsFullySigned(doc: Record<string, unknown> | null | undefined): boolean {
+  if (!doc || typeof doc !== 'object') return false;
+  const statuses = signNowInviteRows(doc).map((row) => String(row.status || '').trim().toLowerCase());
+  if (statuses.some((status) => SIGNNOW_OPEN_STATUSES.has(status))) return false;
+  if (statuses.some((status) => SIGNNOW_COMPLETE_STATUSES.has(status))) return true;
+  const top = String(doc.status || doc.document_status || '')
+    .trim()
+    .toLowerCase();
+  return SIGNNOW_COMPLETE_STATUSES.has(top);
+}
+
+export type OpenSignRequestEnd =
+  | { ok: true; skipped: boolean; pdf: Uint8Array | null }
+  | { ok: false; alreadyComplete: boolean; error: string };
+
+function inviteAlreadyGone(status: number, body: string): boolean {
+  if (status === 404) return true;
+  return /no (field )?invite|not found|already cancel/i.test(body);
+}
+
+function bodySaysAlreadySigned(body: string): boolean {
+  return /fulfil|complet|already signed|document is signed/i.test(body);
+}
+
+/**
+ * End an open SignNow invite.
+ * Cancel discards the request. Retrieve downloads the current PDF first, then
+ * ends the invite. A fully signed document is left untouched.
+ * Email stubs and unconfigured SignNow skip the remote call.
+ */
+export async function endOpenSignRequest(
+  envelopeId: string,
+  opts: { mode: 'cancel' | 'retrieve'; reason: string },
+): Promise<OpenSignRequestEnd> {
+  const id = String(envelopeId || '').trim();
+  if (!id || id.startsWith('email:')) return { ok: true, skipped: true, pdf: null };
+
+  const creds = await resolveCreds();
+  const configured = Boolean(
+    creds.apiKey || (creds.basicToken && creds.username && creds.password),
+  );
+  if (!configured) return { ok: true, skipped: true, pdf: null };
+
+  const alreadySigned =
+    'This timesheet is already signed. The signature request can no longer be cancelled or retrieved.';
+
+  try {
+    const bearer = await getAccessToken(creds);
+    let doc: Record<string, unknown>;
+    try {
+      doc = await getDocumentJson(creds, bearer, id);
+    } catch (err) {
+      if (err instanceof SignNowApiError && err.status === 404) {
+        return { ok: true, skipped: true, pdf: null };
+      }
+      const detail = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        alreadyComplete: false,
+        error: `Could not check the SignNow document, so the signature request was not changed. ${detail}`,
+      };
+    }
+    if (signNowDocumentIsFullySigned(doc)) {
+      return { ok: false, alreadyComplete: true, error: alreadySigned };
+    }
+
+    let pdf: Uint8Array | null = null;
+    if (opts.mode === 'retrieve') {
+      pdf = await downloadPdfBytes(creds, bearer, id);
+      if (!pdf?.length) {
+        return {
+          ok: false,
+          alreadyComplete: false,
+          error:
+            'Could not download the timesheet from SignNow. The signature request is still open.',
+        };
+      }
+    }
+
+    const reason = opts.reason || 'Timesheet signature request ended in TMS';
+    const inviteIds = await listFreeformInviteIds(creds, bearer, id);
+    let cancelled = false;
+    for (const inviteId of inviteIds) {
+      if (await cancelFreeformInvite(creds, bearer, inviteId, reason)) cancelled = true;
+    }
+    if (!cancelled && inviteIds.length === 0) {
+      cancelled = await cancelFreeformInvite(creds, bearer, id, reason);
+    }
+    const fieldRes = await signNowFetch(creds, `/document/${encodeURIComponent(id)}/fieldinvitecancel`, {
+      method: 'PUT',
+      bearer,
+    });
+    if (fieldRes.ok || cancelled) return { ok: true, skipped: false, pdf };
+    const fieldBody = await readErrorBody(fieldRes);
+    if (bodySaysAlreadySigned(fieldBody)) {
+      return { ok: false, alreadyComplete: true, error: alreadySigned };
+    }
+    if (inviteAlreadyGone(fieldRes.status, fieldBody)) {
+      return { ok: true, skipped: false, pdf };
+    }
+    return {
+      ok: false,
+      alreadyComplete: false,
+      error: `Could not end the SignNow signature request (${fieldRes.status}). ${fieldBody}`.trim(),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      alreadyComplete: false,
+      error: err instanceof Error ? err.message : 'Could not end the SignNow signature request.',
+    };
+  }
+}
+
 /** Void a pending e-sign envelope (SignNow freeform cancel, or no-op for email stubs). */
 export async function voidSignEnvelope(
   envelopeId: string,

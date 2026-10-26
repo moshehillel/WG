@@ -21,7 +21,7 @@ export function unusedMissedForStudent(
   );
 }
 
-const MAKEUP_RE = /\bmakeup\b|\bmake[\s-]?up\b/i;
+const MAKEUP_RE = /\bm+ake[\s-]?up\b/i;
 
 export function notesContainMakeupWord(notes: string): boolean {
   return MAKEUP_RE.test(String(notes || ''));
