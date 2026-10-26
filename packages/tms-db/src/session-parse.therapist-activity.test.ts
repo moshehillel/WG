@@ -289,5 +289,6 @@ Page 1 of 1 Astacio, Wiglishai
 
     expect(findStudentForActivityName([suhail], 'Muhammad Suhail')).toBe(suhail);
     expect(findStudentForActivityName([suhail], 'Suhail, Muhammad')).toBe(suhail);
+    expect(findStudentForActivityName([compoundFirst], 'Suhail, Muhammad Ali')).toBe(compoundFirst);
   });
 });

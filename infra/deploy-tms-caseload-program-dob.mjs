@@ -48,10 +48,18 @@ if (!caseloadSrc.includes('Jeremiah Tharin')) {
   throw new Error('caseload-import.ts missing Jeremiah Tharin first-name note — abort');
 }
 
-console.log('building shared + tms-db + hha-client…');
+console.log('building shared + tms-db…');
 sh('npm run build -w @white-glove/shared');
 sh('npm run build -w @white-glove/tms-db');
-sh('npm run build -w @white-glove/hha-client');
+// Full hha-client tsc fails on local-only ENT modules that are not in this repo.
+// The SOAP visit retry is already emitted in dist and is what esbuild bundles.
+const soapDist = fs.readFileSync(
+  path.join(repoRoot, 'packages/hha-client/dist/soap-adapter.js'),
+  'utf8',
+);
+if (!soapDist.includes('VISIT_ID_READ_RETRY_MS = [5_000, 10_000, 15_000]')) {
+  throw new Error('hha-client dist missing 5s/10s/15s visit read waits — abort');
+}
 
 const distCaseload = fs.readFileSync(
   path.join(repoRoot, 'packages/tms-db/dist/caseload-import.js'),
