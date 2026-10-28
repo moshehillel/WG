@@ -300,16 +300,39 @@ export function preferredMandateForSession(
   return undefined;
 }
 
-/** Mandate RS Duration minutes for pay / school-billing bucket selection. */
+function durationMinutesOf(mandate: Mandate | undefined): number | null {
+  const d = mandate?.durationMinutes;
+  if (d == null) return null;
+  const n = typeof d === 'number' ? d : Number(d);
+  return Number.isFinite(n) ? n : null;
+}
+
+function sameDisciplineMandate(session: SessionRow, mandate: Mandate): boolean {
+  const sessDisc = disciplineFromServiceType(session.serviceType);
+  if (mandate.discipline && sessDisc && mandate.discipline !== sessDisc) return false;
+  return true;
+}
+
+/**
+ * Mandate RS Duration minutes for pay / school-billing bucket selection.
+ * A Frontline group tag (2:1) on an individual mandate does not match for
+ * frequency, so preferredMandateForSession is empty. Pay still uses that
+ * mandate's minutes — otherwise a filled 30-minute rate is skipped and the
+ * blank hourly field becomes "No HHA pay code rate".
+ */
 export function mandateDurationMinutesForSession(
   session: SessionRow,
   mandates: Mandate[],
 ): number | null {
-  const m = preferredMandateForSession(session, mandates);
-  const d = m?.durationMinutes;
-  if (d == null) return null;
-  const n = typeof d === 'number' ? d : Number(d);
-  return Number.isFinite(n) ? n : null;
+  const preferred = preferredMandateForSession(session, mandates);
+  if (preferred) return durationMinutesOf(preferred);
+
+  const studentMandates = mandates.filter(
+    (m) => m.studentId === session.studentId && sameDisciplineMandate(session, m),
+  );
+  const regular = studentMandates.filter((m) => !isMakeupKindMandate(m));
+  const pool = regular.length ? regular : studentMandates;
+  return durationMinutesOf(preferClosestDurationMandate(pool, session));
 }
 
 /**

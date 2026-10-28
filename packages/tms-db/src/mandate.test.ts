@@ -12,6 +12,7 @@ import {
   mandateDischargedForWeek,
   maxSessionsInSchoolDayCycle,
   parseFrequencyPerWeek,
+  mandateDurationMinutesForSession,
   preferredMandateForSession,
   schoolDayWindowStart,
 } from './mandate.js';
@@ -3121,5 +3122,24 @@ describe('preferredMandateForSession duration match', () => {
     });
     expect(preferredMandateForSession(s, [m30, m60])?.id).toBe('m60');
     expect(preferredMandateForSession(s, [m60, m30])?.id).toBe('m60');
+  });
+
+  it('keeps the 30-minute mandate length when a 2:1 visit does not match an individual mandate', () => {
+    const individual = mandate({
+      id: 'ind30',
+      durationMinutes: 30,
+      billingServiceName: 'PT school 30',
+      ratioGroup: false,
+      groupSize: 1,
+    });
+    const groupVisit = sess({
+      id: 'grp',
+      beginTime: '9:35 am',
+      endTime: '10:05 am',
+      serviceType: 'Physical Therapy 2:1',
+    });
+    expect(preferredMandateForSession(groupVisit, [individual])).toBeUndefined();
+    expect(mandateDurationMinutesForSession(groupVisit, [individual])).toBe(30);
+    expect(sessionShorterThanMandateError(groupVisit, [individual])).toBeNull();
   });
 });
