@@ -178,6 +178,70 @@ describe('resolveHhaPatientId', () => {
     expect(hha.calls).not.toContain('upsertPatient');
   });
 
+  it('links the chart whose first name is TMS first plus middle and does not create or reuse the program id', async () => {
+    const hha = new MockHhaClient();
+    hha.patients.set('26789997', {
+      id: '26789997',
+      firstName: 'Muhammad Ali',
+      lastName: 'Suhail',
+      dateOfBirth: '2017-09-15',
+      caseId: '593023365',
+      externalId: '593023365',
+    });
+    const seen: string[] = [];
+    const load = hha.getPatientDemographicsFields.bind(hha);
+    hha.getPatientDemographicsFields = async (patientId: string) => {
+      seen.push(patientId);
+      return load(patientId);
+    };
+    const id = await resolveHhaPatientId({
+      hha,
+      student: {
+        firstName: 'Muhammad',
+        middleName: 'Ali',
+        lastName: 'Suhail',
+        dob: '2017-09-15',
+        programId: '593023365',
+        hhaPatientId: '593023365',
+      },
+    });
+    expect(id).toBe('26789997');
+    expect(seen).toEqual(['26789997']);
+    expect(hha.calls).toContain('findPatient');
+    expect(hha.calls).not.toContain('createPatient');
+    expect(hha.calls).not.toContain('upsertPatient');
+  });
+
+  it('does not link that chart when the middle name, last name, or date of birth differs', async () => {
+    const chart = {
+      id: '26789997',
+      firstName: 'Muhammad Ali',
+      lastName: 'Suhail',
+      dateOfBirth: '2017-09-15',
+      caseId: '593023365',
+      externalId: '593023365',
+    };
+    const base = {
+      firstName: 'Muhammad',
+      middleName: 'Ali',
+      lastName: 'Suhail',
+      dob: '2017-09-15',
+      programId: '593023365',
+      hhaPatientId: '593023365',
+    };
+    for (const student of [
+      { ...base, middleName: 'Omar' },
+      { ...base, lastName: 'Khan' },
+      { ...base, dob: '2018-01-01' },
+    ]) {
+      const hha = new MockHhaClient();
+      hha.patients.set('26789997', { ...chart });
+      await expect(resolveHhaPatientId({ hha, student })).rejects.toThrow(/CreatePatient FAILED/);
+      expect(hha.calls).not.toContain('createPatient');
+      expect(hha.patients.get('26789997')?.firstName).toBe('Muhammad Ali');
+    }
+  });
+
   it('creates the real child when the MR hit is a different child', async () => {
     const hha = new MockHhaClient();
     const elijah = await hha.upsertPatient({

@@ -20,6 +20,48 @@ describe('patientIdentityMatches', () => {
     ).toBe(true);
   });
 
+  it('matches an HHA first name that is TMS first plus middle, and not a different child', () => {
+    const suhail = {
+      firstName: 'Muhammad',
+      middleName: 'Ali',
+      lastName: 'Suhail',
+      dob: '2017-09-15',
+    };
+    expect(
+      patientIdentityMatches(suhail, {
+        firstName: 'Muhammad Ali',
+        lastName: 'Suhail',
+        dateOfBirth: '2017-09-15',
+      }),
+    ).toBe(true);
+    expect(
+      patientIdentityMatches(
+        { ...suhail, middleName: 'Omar' },
+        { firstName: 'Muhammad Ali', lastName: 'Suhail', dateOfBirth: '2017-09-15' },
+      ),
+    ).toBe(false);
+    expect(
+      patientIdentityMatches(
+        { firstName: 'Muhammad', lastName: 'Suhail', dob: '2017-09-15' },
+        { firstName: 'Muhammad Ali', lastName: 'Suhail', dateOfBirth: '2017-09-15' },
+      ),
+    ).toBe(false);
+    expect(
+      patientIdentityMatches(suhail, {
+        firstName: 'Muhammad Ali',
+        lastName: 'Khan',
+        dateOfBirth: '2017-09-15',
+      }),
+    ).toBe(false);
+    expect(
+      patientIdentityMatches(suhail, {
+        firstName: 'Muhammad Ali',
+        lastName: 'Suhail',
+        dateOfBirth: '2018-01-01',
+      }),
+    ).toBe(false);
+  });
+
   it('rejects a different child even when one name contains the other', () => {
     expect(
       patientIdentityMatches(max, {

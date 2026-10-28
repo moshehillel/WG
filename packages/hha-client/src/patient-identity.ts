@@ -9,6 +9,8 @@ export type PatientIdentityChart = {
 
 export type PatientIdentityStudent = {
   firstName?: string;
+  /** When set, an HHA first name of "first + middle" is this same child. */
+  middleName?: string;
   lastName?: string;
   dob?: string;
   dateOfBirth?: string;
@@ -32,7 +34,22 @@ export function patientDobKey(value: string | undefined): string | undefined {
 }
 
 /**
+ * Chart first name is TMS first and TMS middle joined, as HHA sometimes stores both
+ * in FirstName (Muhammad + Ali → "Muhammad Ali"). Not a prefix or substring match.
+ */
+function chartFirstIsStudentFirstPlusMiddle(
+  student: PatientIdentityStudent,
+  chartFirst: string,
+): boolean {
+  const middle = patientNameKey(student.middleName);
+  if (!middle) return false;
+  const combined = patientNameKey(`${student.firstName ?? ''} ${student.middleName ?? ''}`);
+  return combined === chartFirst;
+}
+
+/**
  * True only when first name, last name, and date of birth are the same child.
+ * First name is equal, or the chart first name is TMS first plus TMS middle.
  * A missing name or DOB on either side is not a match.
  */
 export function patientIdentityMatches(
@@ -44,7 +61,9 @@ export function patientIdentityMatches(
   const chartFirst = patientNameKey(chart.firstName);
   const chartLast = patientNameKey(chart.lastName);
   if (!studentFirst || !studentLast || !chartFirst || !chartLast) return false;
-  if (studentFirst !== chartFirst || studentLast !== chartLast) return false;
+  const firstOk =
+    studentFirst === chartFirst || chartFirstIsStudentFirstPlusMiddle(student, chartFirst);
+  if (!firstOk || studentLast !== chartLast) return false;
   const studentDob = patientDobKey(student.dob ?? student.dateOfBirth);
   const chartDob = patientDobKey(chart.dateOfBirth);
   if (!studentDob || !chartDob) return false;

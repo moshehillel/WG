@@ -72,6 +72,8 @@ export type SchoolAddressForPatient = {
 
 type StudentForHha = {
   firstName: string;
+  /** Passed through so a chart FirstName of "first + middle" can match this child. */
+  middleName?: string;
   lastName: string;
   dob?: string;
   programId?: string;
