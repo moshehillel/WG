@@ -2,6 +2,7 @@
 
 **Owner:** Moshe (Advanced Automations) · **Client:** White Glove Care  
 **Monorepo:** `https://github.com/moshehillel/WG.git` (local: `custom-projects/White-glove`)  
+**Branch:** `main` only (pipeline + TMS together)  
 **AWS account:** `065194293782` · **Region:** `us-east-1` · **Stack:** `WhiteGloveStack`
 
 This repo is **TMS + ProviderSoft→HHA pipeline** only: TMS portal/API, HHA SOAP/ENT client, Luna, processors, ProviderSoft bot, and infra.
