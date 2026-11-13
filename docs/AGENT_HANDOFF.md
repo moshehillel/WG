@@ -4,7 +4,9 @@
 **Monorepo:** `https://github.com/moshehillel/WG.git` (local: `custom-projects/White-glove`)  
 **AWS account:** `065194293782` · **Region:** `us-east-1` · **Stack:** `WhiteGloveStack`
 
-This repo holds **all** White Glove automation: ProviderSoft→HHA pipeline, TMS (therapist timesheets), HHA SOAP/ENT client, Luna help, SESIS/bids scaffolding, and infra.
+This repo is **TMS + ProviderSoft→HHA pipeline** only: TMS portal/API, HHA SOAP/ENT client, Luna, processors, ProviderSoft bot, and infra.
+
+**Not this repo:** SESIS / bidding / staffing → `custom-projects/Staffing` · https://github.com/moshehillel/WGStaffing.git
 
 ---
 
@@ -16,7 +18,6 @@ This repo holds **all** White Glove automation: ProviderSoft→HHA pipeline, TMS
 | **Pipeline** | ProviderSoft report download → parse → HHA sync (opened / closed / sessions) via Step Functions | EventBridge + Lambdas; MFA dashboard for HHA ENT cookies |
 | **HHA client** | SOAP + ENT GraphQL to HHAeXchange (CreatePatient, CreateSchedule, ConfirmVisits, UpdatePatientDemographics, …) | Used by TMS transfer + processors |
 | **Luna** | In-TMS chatbot for upload/HHA errors (Bedrock + knowledge catalog) | Inside TMS UI |
-| **SESIS / Bids** | Separate SESIS staffing/bids path (`packages/sesis-bot`, `apps/sesis-web`, `infra/bids-api`) | Related White Glove ops; not the school TMS core |
 
 **Reports bucket (S3):** `whiteglovestack-reportsbucket4e7c5994-rkpew9rinthi` under `tms/` for TMS artifacts.  
 **TMS state:** DynamoDB single-table + S3.  
@@ -34,10 +35,10 @@ This repo holds **all** White Glove automation: ProviderSoft→HHA pipeline, TMS
 | `@white-glove/providersoft-bot` | ProviderSoft report download (Playwright / HTTP) — Lambda container image |
 | `@white-glove/tms-db` | MemoryStore model, mandate rules, session PDF parse, reports, pay helpers |
 | `@white-glove/tms-api` | Cognito-backed HTTP API: weeks, upload, timesheet, HHA transfer, Luna, admin reports |
-| `@white-glove/sesis-bot` | SESIS automation client |
 | `apps/tms-web` | Static SPA (vanilla JS) — deploy with **global** `netlify` from `apps/tms-web` only |
-| `apps/sesis-web` | SESIS UI SPA |
-| `infra/` | CDK (`WhiteGloveStack`, optional Bids stack) + many `deploy-tms-*.mjs` / `deploy-*.mjs` hotfixes |
+| `infra/` | CDK (`WhiteGloveStack`) + many `deploy-tms-*.mjs` / `deploy-*.mjs` hotfixes |
+
+Ignore any leftover `sesis-*` / `bids-api` folders if present — product home is **WGStaffing**, not this monorepo.
 
 ---
 
