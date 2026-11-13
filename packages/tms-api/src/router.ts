@@ -6923,12 +6923,18 @@ export async function handleTmsRequest(
     const week = store.data.weeks.find((w) => w.id === path.split('/')[2]);
     if (!week) return json(404, { error: 'Week not found.' });
     if (!deps.hha) return json(503, { error: 'HHA client is not configured.' });
+    const rawIds = obj(req).sessionIds;
+    const sessionIds = Array.isArray(rawIds)
+      ? rawIds.map((id) => String(id || '').trim()).filter(Boolean)
+      : undefined;
     const result = await transferLockedWeek({
       store,
       week: store.data.weeks.find((w) => w.id === week.id)!,
       hha: deps.hha,
       actorId: ctx.user.id,
       afterSession: deps.persistNow,
+      // Targeted retry: only these sessions; already-confirmed / VisitID skips still apply.
+      ...(sessionIds?.length ? { sessionIds } : {}),
     });
     return json(result.ok ? 200 : 207, result);
   }

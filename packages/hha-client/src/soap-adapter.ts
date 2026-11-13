@@ -486,8 +486,10 @@ export class SoapHhaClientAdapter implements HhaClient {
       locationId: String(defaults.locationId),
     });
 
-    const afterUpper = new Set(afterEcho.acceptedServices.map((d) => d.toUpperCase()));
-    const stillMissing = missing.filter((d) => !afterUpper.has(d.toUpperCase()));
+    const afterUpper = new Set(
+      afterEcho.acceptedServices.map((d) => d.trim().toUpperCase()).filter(Boolean),
+    );
+    const stillMissing = missing.filter((d) => !afterUpper.has(d.trim().toUpperCase()));
     if (stillMissing.length) {
       throw new Error(
         `UpdatePatientDemographics reported success but AcceptedServices still missing [${stillMissing.join(', ')}] ` +
@@ -1356,9 +1358,9 @@ export class SoapHhaClientAdapter implements HhaClient {
 
   async resolveDisciplineId(serviceType: string | undefined): Promise<string | undefined> {
     await this.loadDisciplineCache();
-    const token = extractDisciplineFromServiceType(serviceType);
+    const token = extractDisciplineFromServiceType(serviceType)?.trim();
     if (token) {
-      // ProviderSoft SLP/SP → HHA discipline ST. AcceptedServices "SP" is -411.
+      // ProviderSoft SLP / mistaken SP → HHA GetDisciplines ST (AcceptedServices rejects SP).
       const hhaName = token === 'SLP' || token === 'SP' ? 'ST' : token;
       const match = matchByName(hhaName, this.disciplineCache ?? []);
       if (match) return match.id;

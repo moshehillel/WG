@@ -828,6 +828,11 @@ export async function transferLockedWeek(options: {
   actorId: string;
   /** Flush after each session write so a dropped HTTP response still shows triage. */
   afterSession?: () => Promise<void>;
+  /**
+   * When set, only these sessions are sent. Already-confirmed visits are
+   * always skipped so a targeted retry cannot double-send them.
+   */
+  sessionIds?: string[];
 }): Promise<{ ok: boolean; transferred: number; errors: string[] }> {
   const { store, week, hha } = options;
   const checkpoint = async () => {
@@ -863,11 +868,14 @@ export async function transferLockedWeek(options: {
   ) {
     workingWeek = store.upsertWeek({ ...workingWeek, programType: liveProgram });
   }
+  const allow = new Set((options.sessionIds ?? []).map((id) => id.trim()).filter(Boolean));
+  const limitToSessions = allow.size > 0;
   const provider = store.data.providers.find((p) => p.id === workingWeek.providerId);
   const sessions = store.sessionsForWeek(workingWeek.id).filter((s) => isHhaTransferSession(s));
   const errors: string[] = [];
   let transferred = 0;
   for (const session of sessions) {
+    if (limitToSessions && !allow.has(session.id)) continue;
     const existing = store.transferForSession(session.id);
     // Already entered in HHA by hand. No VisitID — do not CreateSchedule or ConfirmVisits.
     if (existing?.status === 'manual') {
