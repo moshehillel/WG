@@ -1,6 +1,13 @@
 import type { HhaClient } from '@white-glove/hha-client';
 import { AmbiguousPatientNameError, mapServiceToDiscipline } from '@white-glove/hha-client';
-import type { OpenedCaseRow, PipelineException, ProcessorResult, ProcessorSuccessRow } from '@white-glove/shared';
+import { resolveCaseCoordinators, resolveTherapyAssignment } from '@white-glove/shared';
+import type {
+  OpenedCaseRow,
+  PipelineException,
+  ProcessorResult,
+  ProcessorSuccessRow,
+  TherapyAssignmentIds,
+} from '@white-glove/shared';
 import {
   buildHhaRowException,
   buildRowException,
@@ -39,6 +46,57 @@ function missingFieldMessage(reportKind: string, rowId: string | undefined, fiel
   const id = rowId ? `row=${rowId}` : 'row=(unknown)';
   const list = fields.length ? fields.join(', ') : '(unknown)';
   return `[${reportKind}] ${id} FAILED — missing required field(s): ${list}. No HHA write attempted.`;
+}
+
+function caseKey(row: OpenedCaseRow): string {
+  return row.caseId?.trim() ?? '';
+}
+
+/**
+ * Primary row first, then the other chart rows, then historical therapists
+ * whose last names resolve. A missing last name on a chart row fails the case.
+ */
+function buildCaseCoordinatorPlans(options: {
+  reportKind: OpenedReportKind;
+  orderedChartRows: OpenedCaseRow[];
+  siblingChartRows: OpenedCaseRow[];
+  historicalRows: OpenedCaseRow[];
+}): Map<string, ReturnType<typeof resolveCaseCoordinators>> {
+  const groups = new Map<string, Array<string | undefined>>();
+  const add = (row: OpenedCaseRow) => {
+    const key = caseKey(row);
+    if (!key) return;
+    const list = groups.get(key) ?? [];
+    list.push(row.providerName);
+    groups.set(key, list);
+  };
+  for (const row of options.orderedChartRows) add(row);
+  for (const row of options.siblingChartRows) add(row);
+  if (options.reportKind === 'opened_cases') {
+    for (const row of options.historicalRows) {
+      const key = caseKey(row);
+      if (!key || !groups.has(key)) continue;
+      if (!resolveTherapyAssignment(row.providerName).ok) continue;
+      add(row);
+    }
+  }
+  const plans = new Map<string, ReturnType<typeof resolveCaseCoordinators>>();
+  for (const [key, names] of groups) plans.set(key, resolveCaseCoordinators(names));
+  return plans;
+}
+
+function assignmentForChartWrite(
+  resolved: Extract<ReturnType<typeof resolveCaseCoordinators>, { ok: true }>,
+  reportKind: OpenedReportKind,
+): TherapyAssignmentIds {
+  return {
+    teamId: resolved.teamId,
+    coordinatorId: resolved.coordinatorId,
+    ...(resolved.coordinatorId2 ? { coordinatorId2: resolved.coordinatorId2 } : {}),
+    ...(reportKind === 'new_services'
+      ? { preserveExistingCoordinator1: true }
+      : { clearCoordinator2: resolved.coordinatorId2 == null }),
+  };
 }
 
 function openedRowId(row: OpenedCaseRow): string {
@@ -88,10 +146,12 @@ export async function processOpenedCases(options: {
   // extra intake-aligned lines to new_services; skip historical periods.
   let kept = afterEi;
   let followUpNewServices: OpenedCaseRow[] = [];
+  let historicalRows: OpenedCaseRow[] = [];
   if (reportKind === 'opened_cases' && !options.skipGluckPartition) {
     const part = partitionGluckOpenRows(afterEi);
     kept = part.primaries;
     followUpNewServices = part.asNewServices;
+    historicalRows = part.skippedHistorical;
     for (const row of part.skippedHistorical) {
       skipped += 1;
       exceptions.push(
@@ -111,6 +171,13 @@ export async function processOpenedCases(options: {
       );
     }
   }
+
+  const coordinatorPlans = buildCaseCoordinatorPlans({
+    reportKind,
+    orderedChartRows: kept,
+    siblingChartRows: reportKind === 'opened_cases' ? followUpNewServices : [],
+    historicalRows,
+  });
 
   for (let i = 0; i < kept.length; i++) {
     const budget = consumeTimeBudgetStop(shouldYield, kept.length - i, i, reportKind, exceptions);
@@ -225,6 +292,28 @@ export async function processOpenedCases(options: {
       continue;
     }
 
+    const assignmentResult =
+      coordinatorPlans.get(enriched.caseId) ?? resolveCaseCoordinators([enriched.providerName]);
+    if (!assignmentResult.ok) {
+      failed += 1;
+      exceptions.push(
+        buildRowException({
+          code: 'missing_field',
+          message: `[${reportKind}] row=${enriched.caseId} FAILED — missing provider last name. Coordinator is not assigned. No HHA write attempted.`,
+          reportKind,
+          rowId: enriched.caseId,
+          details: {
+            missing: ['provider last name'],
+            providerName: enriched.providerName,
+            ...enrichedParty,
+            ...(dryRun ? { preview: true } : {}),
+          },
+        }),
+      );
+      continue;
+    }
+    const assignment = assignmentForChartWrite(assignmentResult, reportKind);
+
     if (dryRun) {
       const previewIssues = await previewOpenedCaseWithHha(enriched, hha);
       if (previewIssues.length) {
@@ -292,12 +381,14 @@ export async function processOpenedCases(options: {
       }
 
       step = 'upsertPatient';
-      const patient = await hha.upsertPatient(openedCaseToHhaPatient(enriched));
+      const patient = await hha.upsertPatient({
+        ...openedCaseToHhaPatient(enriched),
+        coordinatorId: assignment.coordinatorId,
+        ...(assignment.coordinatorId2 ? { coordinatorId2: assignment.coordinatorId2 } : {}),
+      });
       const discipline = mapServiceToDiscipline(enriched.serviceCode);
-      if (discipline) {
-        step = 'ensureAcceptedServices';
-        await hha.ensureAcceptedServices(patient.id, [discipline]);
-      }
+      step = 'ensureAcceptedServices';
+      await hha.ensureAcceptedServices(patient.id, discipline ? [discipline] : [], assignment);
       step = 'upsertContract';
       const contract = await hha.upsertContract({
         patientId: patient.id,

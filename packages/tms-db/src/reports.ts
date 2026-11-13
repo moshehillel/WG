@@ -236,12 +236,74 @@ export type WeekHhaRollup = {
 };
 
 /**
+ * One pass over sessions and transfers so dashboard / week list do not
+ * rescan the full arrays once per week and once per eligible session.
+ * Best-transfer rank matches MemoryStore.transferForSession (lower wins;
+ * equal rank keeps the earlier row).
+ */
+type HhaLookups = {
+  sessionsByWeek: Map<string, SessionRow[]>;
+  sessionById: Map<string, SessionRow>;
+  studentById: Map<string, Student>;
+  transferBySession: Map<string, HhaTransfer>;
+  transfersByWeek: Map<string, HhaTransfer[]>;
+  settledSessionIds: Set<string>;
+};
+
+function transferRank(status: string | undefined): number {
+  if (status === 'confirmed' || status === 'manual') return 0;
+  if (status === 'pending' || status === 'sent') return 1;
+  if (status === 'failed') return 2;
+  return 3;
+}
+
+function buildHhaLookups(store: MemoryStore): HhaLookups {
+  const sessionsByWeek = new Map<string, SessionRow[]>();
+  const sessionById = new Map<string, SessionRow>();
+  for (const s of store.data.sessions || []) {
+    sessionById.set(s.id, s);
+    const list = sessionsByWeek.get(s.weekId);
+    if (list) list.push(s);
+    else sessionsByWeek.set(s.weekId, [s]);
+  }
+  const studentById = new Map<string, Student>();
+  for (const st of store.data.students || []) studentById.set(st.id, st);
+  const transferBySession = new Map<string, HhaTransfer>();
+  const transfersByWeek = new Map<string, HhaTransfer[]>();
+  const settledSessionIds = new Set<string>();
+  for (const t of store.data.hhaTransfers || []) {
+    const prev = transferBySession.get(t.sessionId);
+    if (!prev || transferRank(t.status) < transferRank(prev.status)) {
+      transferBySession.set(t.sessionId, t);
+    }
+    const weekRows = transfersByWeek.get(t.weekId);
+    if (weekRows) weekRows.push(t);
+    else transfersByWeek.set(t.weekId, [t]);
+    if (isSettledHhaTransfer(t)) settledSessionIds.add(t.sessionId);
+  }
+  return {
+    sessionsByWeek,
+    sessionById,
+    studentById,
+    transferBySession,
+    transfersByWeek,
+    settledSessionIds,
+  };
+}
+
+/**
  * HHA transfers attended, makeup, and paid absences stored as missed.
  * Unpaid misses stay off. Week status must reflect the rows that are sent,
  * not the Sessions column (which includes unpaid misses).
  */
-export function weekHhaRollup(store: MemoryStore, weekId: string): WeekHhaRollup {
-  const sessions = store.sessionsForWeek(weekId);
+export function weekHhaRollup(
+  store: MemoryStore,
+  weekId: string,
+  lookups?: HhaLookups,
+): WeekHhaRollup {
+  const sessions = lookups
+    ? lookups.sessionsByWeek.get(weekId) || []
+    : store.sessionsForWeek(weekId);
   // No-child additional services and paid absences are HHA visits and count toward confirmation.
   const eligibleSessions = sessions.filter((s) => isHhaTransferSession(s));
   let confirmed = 0;
@@ -249,7 +311,7 @@ export function weekHhaRollup(store: MemoryStore, weekId: string): WeekHhaRollup
   let pending = 0;
   let unset = 0;
   for (const s of eligibleSessions) {
-    const t = store.transferForSession(s.id);
+    const t = lookups ? lookups.transferBySession.get(s.id) : store.transferForSession(s.id);
     const st = t?.status;
     // `manual` is already in HHA without a TMS VisitID. Count it done so the week
     // can leave failed triage, but the session row stays `manual` (not a TMS create).
@@ -278,9 +340,18 @@ export function sessionHasPostedNote(notes: string | undefined): boolean {
   return String(notes || '').trim().length > 0;
 }
 
-/** Attended + makeup count as delivered; missed does not. */
+/** Attended + makeup count as delivered; missed / paid absence do not. */
 function isDeliveredSession(s: SessionRow): boolean {
   return s.attendance === 'attended' || s.attendance === 'makeup';
+}
+
+/** Same pool as weekly yellow under-mandate: attended, missed, paid absence. */
+function isSubmittedTowardWeeklyProgress(s: SessionRow): boolean {
+  return (
+    s.attendance === 'attended' ||
+    s.attendance === 'missed' ||
+    s.attendance === 'paid_absence'
+  );
 }
 
 /**
@@ -381,9 +452,12 @@ export function missingNotes(
  *   when today falls in the week. A historical week still includes a mandate
  *   discharged after that week. A mandate already ended before the week is out
  *   even if sessions were logged on it.
+ * - Every active caseload mandate is listed for each week in range, even with no
+ *   sessions (0 delivered, 0%). A mandate that starts after the week is left out.
  * - Sessions delivered % = attended+makeup vs mandate frequency (missed excluded).
  * - Notes posted % = sessions with any note (missed + attended + makeup) vs mandate.
- * - belowMandate / yellow when delivered count is under the mandate.
+ * - belowMandate / yellow when submitted count is under the mandate — same rule as
+ *   weekly yellow warnings: attended, missed, and paid absence all count; makeup does not.
  */
 export function weekProgressReport(
   store: MemoryStore,
@@ -427,6 +501,9 @@ export function weekProgressReport(
     milestoneNotes: boolean;
   }> = [];
 
+  /** Every mandate that got a row for a Monday, so the zero-fill pass skips it. */
+  const coveredMandateKeys = new Set<string>();
+
   for (const week of weeks) {
     const weekSessions = store.sessionsForWeek(week.id);
     if (!weekSessions.length) continue;
@@ -454,8 +531,11 @@ export function weekProgressReport(
         assigned: SessionRow[],
       ) => {
         const delivered = assigned.filter(isDeliveredSession);
-        const missed = assigned.filter((s) => s.attendance === 'missed');
+        const missed = assigned.filter(
+          (s) => s.attendance === 'missed' || s.attendance === 'paid_absence',
+        );
         const sessionsProvided = delivered.length;
+        const sessionsSubmitted = assigned.filter(isSubmittedTowardWeeklyProgress).length;
         // Missed + attended + makeup all count once a note/reason text is present.
         const notesPosted = assigned.filter((s) => sessionHasPostedNote(s.notes)).length;
         const notesFollowUp = assigned.filter((s) => !sessionHasPostedNote(s.notes)).length;
@@ -463,10 +543,12 @@ export function weekProgressReport(
         const mandateExpected = mandateExpectedSessions(mandate);
         const sessionsDeliveredPct = pctOfMandate(sessionsProvided, mandateExpected);
         const notesPostedPct = pctOfMandate(notesPosted, mandateExpected);
-        const belowMandate = mandateExpected > 0 && sessionsProvided < mandateExpected;
+        // Matches timesheet yellow: a logged miss fills the slot; therapy delivery % stays separate.
+        const belowMandate = mandateExpected > 0 && sessionsSubmitted < mandateExpected;
         const provider = mandate
           ? store.data.providers.find((p) => p.id === mandate.providerId)
           : undefined;
+        if (mandate) coveredMandateKeys.add(`${week.weekStart}|${mandate.id}`);
         rows.push({
           studentId,
           childName,
@@ -517,6 +599,64 @@ export function weekProgressReport(
     }
   }
 
+  // Every active caseload mandate shows for each report week, even with no sessions (0%).
+  const reportWeekStarts = new Set(weeks.map((w) => w.weekStart));
+  const fromDt = from ? parseDos(from) : null;
+  const toDt = to ? parseDos(to) : null;
+  if (fromDt && toDt) {
+    const cursor = new Date(fromDt.getTime());
+    while (cursor.getUTCDay() !== 1) cursor.setUTCDate(cursor.getUTCDate() + 1);
+    for (let i = 0; i < 104 && cursor.getTime() <= toDt.getTime(); i += 1) {
+      reportWeekStarts.add(isoDate(cursor));
+      cursor.setUTCDate(cursor.getUTCDate() + 7);
+    }
+  }
+  for (const weekStart of reportWeekStarts) {
+    const weekEnd = weekEndFromStart(weekStart);
+    for (const mandate of store.data.mandates) {
+      if (isMakeupKindMandate(mandate)) continue;
+      if (mandateDischargedForWeek(mandate, weekStart, asOf)) continue;
+      const startOn = parseDos(String(mandate.startOn || ''));
+      if (startOn && isoDate(startOn) > weekEnd) continue;
+      if (coveredMandateKeys.has(`${weekStart}|${mandate.id}`)) continue;
+      const student = store.data.students.find((st) => st.id === mandate.studentId);
+      if (!student || isNoChildPlaceholderName(student)) continue;
+      const school = store.data.schools.find((sc) => sc.id === student.schoolId);
+      const provider = store.data.providers.find((p) => p.id === mandate.providerId);
+      const providerWeek = store.data.weeks.find(
+        (w) => w.providerId === mandate.providerId && w.weekStart === weekStart,
+      );
+      const mandateExpected = mandateExpectedSessions(mandate);
+      coveredMandateKeys.add(`${weekStart}|${mandate.id}`);
+      rows.push({
+        studentId: student.id,
+        childName: `${student.firstName} ${student.lastName}`.trim() || student.id,
+        schoolName: school?.name || '—',
+        programType: String(student.programType || '').trim() || '—',
+        mandateId: mandate.id,
+        mandateLabel: weekProgressServiceLabel(mandate),
+        providerName: provider
+          ? `${provider.firstName} ${provider.lastName}`.trim() || '—'
+          : '—',
+        weekId: providerWeek?.id || '',
+        weekStart,
+        weekEnd,
+        weekLabel: `${weekStart} → ${weekEnd}`,
+        mandateExpected,
+        sessionsProvided: 0,
+        sessionsDeliveredPct: 0,
+        notesPosted: 0,
+        notesPostedPct: 0,
+        sessionsMissed: 0,
+        notesFollowUp: 0,
+        progressPct: 0,
+        belowMandate: mandateExpected > 0,
+        milestoneProvided: false,
+        milestoneNotes: false,
+      });
+    }
+  }
+
   rows.sort(
     (a, b) =>
       a.weekStart.localeCompare(b.weekStart) ||
@@ -559,11 +699,21 @@ export function weekHhaFailures(store: MemoryStore, weekId: string): HhaFailureR
 }
 
 /** Live triage text: only currently-failed transfers (ignore stale week.hhaError after -401 heal). */
-export function weekHhaErrorFromTransfers(store: MemoryStore, weekId: string): string {
-  const rows = store.data.hhaTransfers || [];
-  const settledSessions = new Set(
-    rows.filter((t) => isSettledHhaTransfer(t)).map((t) => t.sessionId),
-  );
+export function weekHhaErrorFromTransfers(
+  store: MemoryStore,
+  weekId: string,
+  lookups?: HhaLookups,
+): string {
+  const rows = lookups
+    ? lookups.transfersByWeek.get(weekId) || []
+    : store.data.hhaTransfers || [];
+  const settledSessions = lookups
+    ? lookups.settledSessionIds
+    : new Set(
+        (store.data.hhaTransfers || [])
+          .filter((t) => isSettledHhaTransfer(t))
+          .map((t) => t.sessionId),
+      );
   const transferErrors = rows
     .filter(
       (t) =>
@@ -574,9 +724,13 @@ export function weekHhaErrorFromTransfers(store: MemoryStore, weekId: string): s
     )
     .map((t) => {
       const raw = String(t.lastError).trim();
-      const session = (store.data.sessions || []).find((s) => s.id === t.sessionId);
+      const session = lookups
+        ? lookups.sessionById.get(t.sessionId)
+        : (store.data.sessions || []).find((s) => s.id === t.sessionId);
       const student = session
-        ? (store.data.students || []).find((s) => s.id === session.studentId)
+        ? lookups
+          ? lookups.studentById.get(session.studentId)
+          : (store.data.students || []).find((s) => s.id === session.studentId)
         : undefined;
       const childName = student
         ? `${student.firstName} ${student.lastName}`.trim()
@@ -589,16 +743,21 @@ export function weekHhaErrorFromTransfers(store: MemoryStore, weekId: string): s
 export function enrichWeekHhaError<T extends { id: string; hhaStatus: string; hhaError?: string }>(
   store: MemoryStore,
   w: T,
+  lookups?: HhaLookups,
 ): T & { hhaError: string } {
-  const allTransfers = store.data.hhaTransfers || [];
-  const settledSessions = new Set(
-    allTransfers.filter((t) => isSettledHhaTransfer(t)).map((t) => t.sessionId),
-  );
-  const weekTransfers = allTransfers.filter((t) => t.weekId === w.id);
+  const allTransfers = lookups ? undefined : store.data.hhaTransfers || [];
+  const settledSessions = lookups
+    ? lookups.settledSessionIds
+    : new Set(
+        (allTransfers || []).filter((t) => isSettledHhaTransfer(t)).map((t) => t.sessionId),
+      );
+  const weekTransfers = lookups
+    ? lookups.transfersByWeek.get(w.id) || []
+    : (allTransfers || []).filter((t) => t.weekId === w.id);
   const activeFailed = weekTransfers.filter(
     (t) => t.status === 'failed' && !settledSessions.has(t.sessionId),
   );
-  const fromTransfers = weekHhaErrorFromTransfers(store, w.id);
+  const fromTransfers = weekHhaErrorFromTransfers(store, w.id, lookups);
   if (fromTransfers) return { ...w, hhaError: fromTransfers };
   // Transfers exist and none are still-failed → suppress stale week.hhaError (healed -401 or superseded -310).
   if (weekTransfers.length > 0 && activeFailed.length === 0) {
@@ -621,10 +780,13 @@ export function adminWeeksList(
   if (wantStart) {
     weeks = weeks.filter((w) => String(w.weekStart || '').trim() === wantStart);
   }
+  const lookups = buildHhaLookups(store);
+  const providerById = new Map((store.data.providers || []).map((p) => [p.id, p]));
+  const schoolById = new Map((store.data.schools || []).map((s) => [s.id, s]));
   const rows = weeks.map((w) => {
-    const provider = (store.data.providers || []).find((p) => p.id === w.providerId);
-    const enriched = enrichWeekHhaError(store, w);
-    const rollup = weekHhaRollup(store, w.id);
+    const provider = providerById.get(w.providerId);
+    const enriched = enrichWeekHhaError(store, w, lookups);
+    const rollup = weekHhaRollup(store, w.id, lookups);
     // Prefer live transfer rollup so a week is never "confirmed" while failures remain.
     const hhaStatus: HhaTransferStatus =
       rollup.status !== 'none'
@@ -635,10 +797,10 @@ export function adminWeeksList(
     const schoolId =
       String(w.schoolId || '').trim() ||
       (() => {
-        const sessions = store.sessionsForWeek(w.id);
+        const sessions = lookups.sessionsByWeek.get(w.id) || [];
         const counts = new Map<string, number>();
         for (const s of sessions) {
-          const student = store.data.students.find((st) => st.id === s.studentId);
+          const student = lookups.studentById.get(s.studentId);
           const sid = String(student?.schoolId || '').trim();
           if (!sid) continue;
           counts.set(sid, (counts.get(sid) || 0) + 1);
@@ -653,9 +815,7 @@ export function adminWeeksList(
         }
         return best;
       })();
-    const school = schoolId
-      ? store.data.schools.find((s) => s.id === schoolId)
-      : undefined;
+    const school = schoolId ? schoolById.get(schoolId) : undefined;
     // District/payer = caseload programType (stamped or inferred); school.district is often blank.
     const programType =
       resolveWeekProgramType(store, w) || String(school?.district || '').trim();
@@ -686,12 +846,19 @@ export function adminWeeksList(
       sessionCount: rollup.sessionCount,
     };
   });
-  if (!nameQ) return rows;
-  return rows.filter((row) => {
+  // Provider status Drafts: hide empty draft/reopened weeks left by failed imports.
+  // Weeks with imported sessions stay (including later HHA failures). Submitted/signed stay.
+  const withSessionsOrNonDraft = rows.filter((row) => {
+    const draft = row.status === 'draft' || row.status === 'reopened';
+    if (!draft) return true;
+    return row.sessionCount > 0;
+  });
+  if (!nameQ) return withSessionsOrNonDraft;
+  return withSessionsOrNonDraft.filter((row) => {
     if (String(row.providerName || '').toLowerCase().includes(nameQ)) return true;
-    const sessions = store.sessionsForWeek(row.id);
+    const sessions = lookups.sessionsByWeek.get(row.id) || [];
     for (const s of sessions) {
-      const student = store.data.students.find((st) => st.id === s.studentId);
+      const student = lookups.studentById.get(s.studentId);
       if (!student) continue;
       const full = `${student.firstName || ''} ${student.lastName || ''}`.trim().toLowerCase();
       if (full.includes(nameQ)) return true;
@@ -710,82 +877,133 @@ function mandateProviderIdsForStudent(store: MemoryStore, studentId: string): st
   return [...ids];
 }
 
+/**
+ * Mandates-tab active rule, with no report week: endOn set and on or before
+ * asOf is discharged (`mandateDischargedForWeek` with an empty week start).
+ * No end date, or an end date after asOf, is still active.
+ */
+function studentHasActiveMandate(store: MemoryStore, studentId: string, asOf: string): boolean {
+  return store.data.mandates.some(
+    (m) => m.studentId === studentId && !mandateDischargedForWeek(m, '', asOf),
+  );
+}
+
+/** Calendar key so 10/01/2026 sorts after 09/30/2026. */
+function dosSortKey(dos: string): string {
+  const dt = parseDos(dos);
+  return dt ? isoDate(dt) : '';
+}
+
+function providerDisplayName(store: MemoryStore, providerId: string): string {
+  const provider = providerId
+    ? store.data.providers.find((p) => p.id === providerId)
+    : undefined;
+  if (!provider) return '—';
+  return `${provider.firstName} ${provider.lastName}`.trim() || '—';
+}
+
+/**
+ * No Last DOS yet. One provider stays named. Several providers share this one
+ * row as a single combined name — there is no discipline column to split on.
+ */
+function blankLastDosProvider(store: MemoryStore, studentId: string): {
+  providerId: string;
+  providerName: string;
+} {
+  const ids = mandateProviderIdsForStudent(store, studentId);
+  if (ids.length === 1) {
+    const providerId = ids[0] || '';
+    return { providerId, providerName: providerDisplayName(store, providerId) };
+  }
+  if (ids.length > 1) {
+    const names = [
+      ...new Set(
+        ids
+          .map((id) => providerDisplayName(store, id))
+          .filter((name) => name && name !== '—'),
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+    return { providerId: '', providerName: names.join(', ') || '—' };
+  }
+  return { providerId: '', providerName: '—' };
+}
+
+function studentTouchesProvider(
+  store: MemoryStore,
+  studentId: string,
+  providerId: string,
+  from: string,
+  to: string,
+): boolean {
+  if (mandateProviderIdsForStudent(store, studentId).includes(providerId)) return true;
+  for (const s of store.data.sessions) {
+    if (s.studentId !== studentId) continue;
+    if (s.attendance === 'missed') continue;
+    if (!dosInRange(s.dateOfService, from, to)) continue;
+    if (sessionProviderId(store, s) === providerId) return true;
+  }
+  return false;
+}
+
 export function lastServiceByStudent(
   store: MemoryStore,
-  opts: { from?: string; to?: string; providerId?: string } = {},
+  opts: { from?: string; to?: string; providerId?: string; asOf?: string } = {},
 ) {
   const from = String(opts.from || '').trim();
   const to = String(opts.to || '').trim();
   const providerId = String(opts.providerId || '').trim();
-  /** studentId|providerId → last DOS (provider from session week or mandate). */
-  const map = new Map<string, { studentId: string; providerId: string; lastDos: string }>();
+  /** This report has no as-of date selector. Active means active as of today. */
+  const asOf = String(opts.asOf || '').trim() || easternDateYmd(new Date());
+  /**
+   * One row per child. Last DOS is the latest attended or makeup date across
+   * every mandate, including a discharged mandate. The child is listed only
+   * when at least one mandate is still active.
+   */
+  const map = new Map<string, { studentId: string; providerId: string; lastDos: string; lastKey: string }>();
 
   for (const s of store.data.sessions) {
     if (s.attendance === 'missed') continue;
-    if (!String(s.studentId || '').trim()) continue;
+    const studentId = String(s.studentId || '').trim();
+    if (!studentId) continue;
     if (!dosInRange(s.dateOfService, from, to)) continue;
-    const week = store.data.weeks.find((w) => w.id === s.weekId);
-    let resolvedProviderId = String(week?.providerId || '').trim();
-    if (!resolvedProviderId) {
-      const mandate = store.data.mandates.find(
-        (m) => m.studentId === s.studentId && m.providerId,
-      );
-      resolvedProviderId = String(mandate?.providerId || '').trim();
-    }
-    if (providerId && resolvedProviderId !== providerId) continue;
-    const key = `${s.studentId}|${resolvedProviderId || '_'}`;
-    const prev = map.get(key);
-    if (!prev || s.dateOfService > prev.lastDos) {
-      map.set(key, {
-        studentId: s.studentId,
+    const resolvedProviderId = sessionProviderId(store, s);
+    const lastKey = dosSortKey(s.dateOfService);
+    const prev = map.get(studentId);
+    if (!prev || (lastKey && lastKey > prev.lastKey)) {
+      map.set(studentId, {
+        studentId,
         providerId: resolvedProviderId,
         lastDos: s.dateOfService,
+        lastKey,
       });
     }
   }
 
-  // Every TMS child appears. Never serviced (no attended/makeup) keeps a blank last DOS.
-  const servedStudentIds = new Set([...map.values()].map((row) => row.studentId));
   for (const student of store.data.students) {
-    const assigned = mandateProviderIdsForStudent(store, student.id);
-    if (providerId) {
-      const key = `${student.id}|${providerId}`;
-      if (map.has(key) || !assigned.includes(providerId)) continue;
-      map.set(key, { studentId: student.id, providerId, lastDos: '' });
-      continue;
-    }
-    if (assigned.length === 0) {
-      if (servedStudentIds.has(student.id)) continue;
-      map.set(`${student.id}|_`, {
-        studentId: student.id,
-        providerId: '',
-        lastDos: '',
-      });
-      continue;
-    }
-    for (const pid of assigned) {
-      const key = `${student.id}|${pid}`;
-      if (map.has(key)) continue;
-      map.set(key, { studentId: student.id, providerId: pid, lastDos: '' });
-    }
+    if (!studentHasActiveMandate(store, student.id, asOf)) continue;
+    if (map.has(student.id)) continue;
+    map.set(student.id, { studentId: student.id, providerId: '', lastDos: '', lastKey: '' });
   }
 
   return [...map.values()]
+    .filter((row) => studentHasActiveMandate(store, row.studentId, asOf))
+    .filter(
+      (row) =>
+        !providerId || studentTouchesProvider(store, row.studentId, providerId, from, to),
+    )
     .map((row) => {
       const student = store.data.students.find((st) => st.id === row.studentId);
       const school = student
         ? store.data.schools.find((sc) => sc.id === student.schoolId)
         : undefined;
-      const provider = row.providerId
-        ? store.data.providers.find((p) => p.id === row.providerId)
-        : undefined;
+      const provider = row.lastDos
+        ? { providerId: row.providerId, providerName: providerDisplayName(store, row.providerId) }
+        : blankLastDosProvider(store, row.studentId);
       return {
         studentId: row.studentId,
         name: student ? `${student.firstName} ${student.lastName}` : row.studentId,
-        providerId: row.providerId,
-        providerName: provider
-          ? `${provider.firstName} ${provider.lastName}`.trim() || '—'
-          : '—',
+        providerId: provider.providerId,
+        providerName: provider.providerName,
         schoolId: student?.schoolId || '',
         schoolName: school?.name || '—',
         lastDos: row.lastDos,
@@ -794,8 +1012,8 @@ export function lastServiceByStudent(
     .sort(
       (a, b) =>
         a.name.localeCompare(b.name) ||
-        a.providerName.localeCompare(b.providerName) ||
-        a.lastDos.localeCompare(b.lastDos),
+        dosSortKey(a.lastDos).localeCompare(dosSortKey(b.lastDos)) ||
+        a.providerName.localeCompare(b.providerName),
     );
 }
 
@@ -1192,22 +1410,127 @@ export function adminInternalNotesReport(
     });
 }
 
-export function dueDateReport(store: MemoryStore, today = new Date(), opts: { from?: string; to?: string } = {}) {
+function dueNameBlob(value: string): string {
+  return ` ${String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()} `;
+}
+
+/** Children at this school whose "Last First" or "First Last" appears in the due-date notes. */
+function studentsNamedInDueNotes(store: MemoryStore, schoolId: string, notes: string): Student[] {
+  const blob = dueNameBlob(notes);
+  if (blob.trim().length < 3) return [];
+  const hits: Student[] = [];
+  for (const student of store.data.students) {
+    if (student.schoolId !== schoolId) continue;
+    const first = dueNameBlob(student.firstName).trim();
+    const last = dueNameBlob(student.lastName).trim();
+    if (first.length < 2 || last.length < 2) continue;
+    if (blob.includes(` ${last} ${first} `) || blob.includes(` ${first} ${last} `)) hits.push(student);
+  }
+  return hits;
+}
+
+function dueStudentDisplayName(student: Student): string {
+  return [student.firstName, student.middleName, student.lastName]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+function activeMandateProviderNames(store: MemoryStore, studentId: string, asOf: string): string {
+  const names: string[] = [];
+  for (const m of store.mandatesForStudent(studentId)) {
+    if (mandateDischargedForWeek(m, '', asOf)) continue;
+    const provider = resolveMandateProvider(store, m.providerId);
+    const name = provider ? `${provider.firstName} ${provider.lastName}`.trim() : '';
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names.join(', ');
+}
+
+/** District / payer for a school-level due date (most common child programType, else school.district). */
+function districtForSchoolDue(store: MemoryStore, schoolId: string): string {
+  const school = store.data.schools.find((s) => s.id === schoolId);
+  const counts = new Map<string, { label: string; n: number }>();
+  for (const s of store.data.students) {
+    if (s.schoolId !== schoolId || isNoChildPlaceholderName(s)) continue;
+    const label = String(s.programType || '').trim();
+    if (!label) continue;
+    const key = label.toLocaleLowerCase();
+    const cur = counts.get(key);
+    if (cur) cur.n += 1;
+    else counts.set(key, { label, n: 1 });
+  }
+  let best: { label: string; n: number } | undefined;
+  for (const c of counts.values()) if (!best || c.n > best.n) best = c;
+  return best?.label || String(school?.district || '').trim();
+}
+
+export function dueDateReport(
+  store: MemoryStore,
+  today = new Date(),
+  opts: {
+    from?: string;
+    to?: string;
+    /** Report view: hide due dates already marked complete. */
+    excludeCompleted?: boolean;
+    /** Report view: a school-wide due date lists each child at the school, never "school-wide". */
+    expandSchoolWide?: boolean;
+  } = {},
+) {
   const from = String(opts.from || '').trim();
   const to = String(opts.to || '').trim();
-  return store.data.dueDates
-    .filter((row) => {
-      if (from && row.dueOn < from) return false;
-      if (to && row.dueOn > to) return false;
-      return true;
-    })
-    .map((row) => {
+  const asOf = easternDateYmd(today);
+  const rows = store.data.dueDates.filter((row) => {
+    if (from && row.dueOn < from) return false;
+    if (to && row.dueOn > to) return false;
+    if (opts.excludeCompleted && row.completedAt) return false;
+    return true;
+  });
+  const expanded = rows.flatMap((row) => {
     const school = store.data.schools.find((s) => s.id === row.schoolId);
-    return {
+    const schoolName = school?.name || row.schoolId;
+    const status = dueDateStatus(row, today);
+    const studentId = String(row.studentId || '').trim();
+    const linked = studentId ? store.data.students.find((s) => s.id === studentId) : undefined;
+    const named = linked ? [] : studentsNamedInDueNotes(store, row.schoolId, row.notes || '');
+    let students = linked ? [linked] : named;
+    if (!students.length && opts.expandSchoolWide) {
+      students = store.data.students.filter(
+        (s) => s.schoolId === row.schoolId && !isNoChildPlaceholderName(s),
+      );
+    }
+    if (!students.length) {
+      return [
+        {
+          ...row,
+          status,
+          schoolName,
+          districtName: districtForSchoolDue(store, row.schoolId),
+          studentName: '',
+          providerName: '',
+        },
+      ];
+    }
+    return students.map((student) => ({
       ...row,
-      status: dueDateStatus(row, today),
-      schoolName: school?.name || row.schoolId,
-    };
+      status,
+      schoolName,
+      districtName: districtLabelForStudent(student, school),
+      studentId: student.id,
+      studentName: dueStudentDisplayName(student),
+      providerName: activeMandateProviderNames(store, student.id, asOf),
+    }));
+  });
+  return expanded.sort((a, b) => {
+    const d = String(a.dueOn || '').localeCompare(String(b.dueOn || ''));
+    if (d) return d;
+    const s = String(a.schoolName || '').localeCompare(String(b.schoolName || ''));
+    if (s) return s;
+    return String(a.studentName || '').localeCompare(String(b.studentName || ''));
   });
 }
 
@@ -1221,9 +1544,10 @@ export function dashboard(store: MemoryStore) {
   let hhaConfirmed = 0;
   let hhaFailed = 0;
   let hhaPending = 0;
+  const lookups = buildHhaLookups(store);
   for (const w of weeks) {
     if (w.status !== 'signed' && w.status !== 'locked') continue;
-    const rollup = weekHhaRollup(store, w.id);
+    const rollup = weekHhaRollup(store, w.id, lookups);
     hhaEligible += rollup.eligible;
     hhaConfirmed += rollup.confirmed;
     hhaFailed += rollup.failed;
@@ -1248,12 +1572,44 @@ export function dashboard(store: MemoryStore) {
   };
 }
 
+function mandateListLine(m: Mandate): { duration: string; frequency: string } {
+  const minutes = m.durationMinutes;
+  const duration =
+    minutes == null || Number.isNaN(Number(minutes)) || String(minutes) === ''
+      ? '—'
+      : `${minutes} min`;
+  const kind = mandateFrequencyKind(m);
+  const sessions = m.sessionsPerPeriod ?? m.frequencyPerWeek ?? 0;
+  const frequency = formatFreqDisplay(kind, sessions, m.periodSchoolDays || 0);
+  const discipline = String(m.discipline || '').trim();
+  return {
+    duration: discipline ? `${discipline} · ${duration}` : duration,
+    frequency: discipline ? `${discipline} · ${frequency}` : frequency,
+  };
+}
+
 export function adminStudentsList(store: MemoryStore) {
+  const schoolById = new Map(store.data.schools.map((sc) => [sc.id, sc]));
+  const sessionCountByStudent = new Map<string, number>();
+  for (const session of store.data.sessions) {
+    const id = String(session.studentId || '').trim();
+    if (!id) continue;
+    sessionCountByStudent.set(id, (sessionCountByStudent.get(id) || 0) + 1);
+  }
+  const mandatesByStudent = new Map<string, Mandate[]>();
+  for (const mandate of store.data.mandates) {
+    const id = String(mandate.studentId || '').trim();
+    if (!id) continue;
+    const list = mandatesByStudent.get(id);
+    if (list) list.push(mandate);
+    else mandatesByStudent.set(id, [mandate]);
+  }
   return store.data.students
     .filter((s) => !isNoChildPlaceholderName(s))
     .map((s) => {
-      const school = store.data.schools.find((sc) => sc.id === s.schoolId);
-      const mandates = store.mandatesForStudent(s.id);
+      const school = schoolById.get(s.schoolId);
+      const mandates = mandatesByStudent.get(s.id) || [];
+      const lines = mandates.map(mandateListLine);
       return {
         id: s.id,
         firstName: s.firstName,
@@ -1267,7 +1623,9 @@ export function adminStudentsList(store: MemoryStore) {
         programId: s.programId || '',
         programType: s.programType || '',
         mandateCount: mandates.length,
-        sessionCount: store.data.sessions.filter((x) => x.studentId === s.id).length,
+        sessionCount: sessionCountByStudent.get(s.id) || 0,
+        durations: lines.map((line) => line.duration),
+        frequencies: lines.map((line) => line.frequency),
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -1330,9 +1688,10 @@ export function adminStudentDetail(store: MemoryStore, studentId: string) {
       };
     });
   const weekIds = [...new Set(sessions.map((s) => s.weekId))];
+  const lookups = buildHhaLookups(store);
   const weeks = store.data.weeks
     .filter((w) => weekIds.includes(w.id))
-    .map((w) => enrichWeekHhaError(store, w));
+    .map((w) => enrichWeekHhaError(store, w, lookups));
   const dueDates = dueDateReport(store).filter((d) => d.schoolId === student.schoolId);
   const files = store.filesForStudent(student.id);
   const notes = store.notesForStudent(student.id);
@@ -1377,6 +1736,18 @@ export function adminSchoolDetail(store: MemoryStore, schoolId: string) {
     setupIncompleteMessage: setup.message,
     dueDates,
     studentCount: students.length,
+    /** Children at this school (for per-child progress-report due dates). */
+    students: students
+      .filter((s) => !isNoChildPlaceholderName(s))
+      .map((s) => ({
+        id: s.id,
+        name:
+          [s.firstName, s.middleName, s.lastName]
+            .map((part) => String(part || '').trim())
+            .filter(Boolean)
+            .join(' ') || '—',
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
 

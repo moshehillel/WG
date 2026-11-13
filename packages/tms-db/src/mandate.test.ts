@@ -15,11 +15,15 @@ import {
   mandateDurationMinutesForSession,
   preferredMandateForSession,
   schoolDayWindowStart,
+  normalizeDisciplineLabel,
+  sessionProviderDisciplineMismatchError,
 } from './mandate.js';
+import { manualSessionNeedsSignature, manualSignatureError } from './manual-signature.js';
 import { parseMandatePdfText } from './mandate-parse.js';
 import { unusedMissedForStudent, validateMakeup, resolveMakeupOfSessionId } from './makeup.js';
 import { MemoryStore } from './memory-store.js';
 import {
+  adminStudentsList,
   adminWeeksList,
   dashboard,
   hhaTransfersReport,
@@ -120,6 +124,33 @@ describe('mandate math', () => {
     expect(week.errors.some((e) => /Delilah/.test(e) && /shorter than the mandate/.test(e))).toBe(
       true,
     );
+    // Admin locker ON: the short-session error is skipped. Default (opts missing / false) still blocks.
+    const allowed = checkMandatesForWeek([m], [short], [short], { st1: 'Delilah' }, { allowShortSession: true });
+    expect(allowed.errors.some((e) => /shorter than the mandate/.test(e))).toBe(false);
+    const off = checkMandatesForWeek([m], [short], [short], { st1: 'Delilah' }, { allowShortSession: false });
+    expect(off.errors.some((e) => /shorter than the mandate/.test(e))).toBe(true);
+  });
+
+  it('additional services never exceed a mandate, in any week, month or cycle check', () => {
+    const weekly = mandate({ frequencyPerWeek: 1 });
+    const regular = sess({ id: 'reg' });
+    const addl = [
+      sess({ id: 'a1', dateOfService: '09/02/2026', additionalServiceType: 'eval', serviceType: 'Eval' }),
+      sess({ id: 'a2', dateOfService: '09/03/2026', additionalServiceType: 'progress_report', serviceType: 'Progress report' }),
+      sess({ id: 'a3', dateOfService: '09/04/2026', additionalServiceType: 'meetings', serviceType: 'Meetings' }),
+    ];
+    const all = [regular, ...addl];
+    const out = checkMandatesForWeek([weekly], all, all, { st1: 'Aiden' });
+    expect(out.errors).toEqual([]);
+    // An additional service for a child with no mandate at all is not a "no mandate" block either.
+    const noMandate = checkMandatesForWeek([], addl, addl, { st1: 'Aiden' });
+    expect(noMandate.errors).toEqual([]);
+    // Monthly mandate: additional services do not fill the month.
+    const monthly = mandate({ frequencyKind: 'monthly', sessionsPerPeriod: 1, frequencyPerWeek: 0 });
+    expect(checkMandatesForWeek([monthly], all, all, { st1: 'Aiden' }).errors).toEqual([]);
+    // Two regular sessions on a 1x/week mandate still exceed, so the check itself is live.
+    const twoRegular = [regular, sess({ id: 'reg2', dateOfService: '09/02/2026', beginTime: '10:00 am', endTime: '10:30 am' })];
+    expect(checkMandatesForWeek([weekly], twoRegular, twoRegular, { st1: 'Aiden' }).errors.length).toBe(1);
   });
 
   it('alerts under mandate', () => {
@@ -1524,6 +1555,86 @@ describe('due dates and dashboard', () => {
     expect(weeks[0]?.hhaStatus).toBe('confirmed');
   });
 
+  it('dashboard and week list keep the best HHA transfer when a session has duplicate rows', () => {
+    const store = new MemoryStore();
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p',
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'failed',
+      hhaError: 'stale week error',
+    });
+    const session = (id: string): SessionRow => ({
+      id,
+      weekId: 'w',
+      studentId: 'st',
+      dateOfService: '2026-09-01',
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT',
+      location: '',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.upsertSession(session('s-ok'));
+    store.upsertSession(session('s-bad'));
+    // upsertTransfer keeps one row per session. Duplicate entity ids are a Dynamo leftover.
+    store.data.hhaTransfers = [
+      {
+        id: 't-fail-first',
+        sessionId: 's-ok',
+        weekId: 'w',
+        status: 'failed',
+        hhaVisitId: '',
+        lastError: 'temporary',
+        payloadHash: '',
+        updatedAt: '',
+      },
+      {
+        id: 't-ok',
+        sessionId: 's-ok',
+        weekId: 'w',
+        status: 'confirmed',
+        hhaVisitId: '55',
+        lastError: '',
+        payloadHash: '',
+        updatedAt: '',
+      },
+      {
+        id: 't-bad',
+        sessionId: 's-bad',
+        weekId: 'w',
+        status: 'failed',
+        hhaVisitId: '',
+        lastError: 'still failed',
+        payloadHash: '',
+        updatedAt: '',
+      },
+    ];
+    const d = dashboard(store);
+    expect(d.hha.eligible).toBe(2);
+    expect(d.hha.confirmed).toBe(1);
+    expect(d.hha.failed).toBe(1);
+    const row = adminWeeksList(store).find((w) => w.id === 'w');
+    expect(row?.hhaStatus).toBe('failed');
+    expect(row?.hhaConfirmed).toBe(1);
+    expect(row?.hhaFailed).toBe(1);
+    expect(row?.hhaEligible).toBe(2);
+    expect(row?.sessionCount).toBe(2);
+    expect(row?.hhaError).toContain('still failed');
+    expect(row?.hhaError).not.toContain('temporary');
+    expect(row?.hhaError).not.toContain('stale week error');
+  });
+
   it('admin weeks HHA status stays failed when any eligible transfer failed', () => {
     const store = new MemoryStore();
     store.upsertWeek({
@@ -1665,6 +1776,7 @@ describe('due dates and dashboard', () => {
       hhaPatientId: '',
       createdAt: '',
     });
+    store.upsertMandate(mandate({ id: 'm-st', studentId: 'st', providerId: 'p1', endOn: '' }));
     store.upsertWeek({
       id: 'w',
       providerId: 'p1',
@@ -1944,7 +2056,9 @@ describe('due dates and dashboard', () => {
       hhaPatientId: '',
       createdAt: '',
     });
-    store.upsertMandate(mandate({ id: 'm-never', studentId: 'never', providerId: 'p1' }));
+    store.upsertMandate(mandate({ id: 'm-seen', studentId: 'seen', providerId: 'p1', endOn: '' }));
+    store.upsertMandate(mandate({ id: 'm-never', studentId: 'never', providerId: 'p1', endOn: '' }));
+    store.upsertMandate(mandate({ id: 'm-miss', studentId: 'missed-only', providerId: '', endOn: '' }));
     store.upsertWeek({
       id: 'w',
       providerId: 'p1',
@@ -1990,6 +2104,295 @@ describe('due dates and dashboard', () => {
     );
     expect(lastServiceByStudent(store).some((r) => !String(r.studentId || '').trim())).toBe(false);
     expect(lastServiceByStudent(store)).toHaveLength(3);
+  });
+
+  it('last service includes only students with an active mandate', () => {
+    const asOf = '2026-10-29';
+    const store = new MemoryStore();
+    store.upsertSchool({
+      id: 'sch',
+      name: 'Forest',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: '',
+    });
+    store.upsertProvider({
+      id: 'p1',
+      userId: '',
+      firstName: 'Fatimah',
+      lastName: 'Dawan',
+      discipline: 'PT',
+      payRatePerHour: null,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    });
+    const addStudent = (id: string, firstName: string) => {
+      store.upsertStudent({
+        id,
+        schoolId: 'sch',
+        firstName,
+        lastName: 'Child',
+        dob: '',
+        programId: '',
+        programType: '',
+        hhaPatientId: '',
+        createdAt: '',
+      });
+    };
+    addStudent('active', 'Ada');
+    addStudent('open-end', 'Bea');
+    addStudent('future', 'Cam');
+    addStudent('no-session', 'Dee');
+    addStudent('ended-today', 'Eve');
+    addStudent('ended-before', 'Fay');
+    addStudent('mixed', 'Gia');
+    store.upsertMandate(mandate({ id: 'm-active', studentId: 'active', providerId: 'p1', endOn: '' }));
+    store.upsertMandate(mandate({ id: 'm-open', studentId: 'open-end', providerId: 'p1', endOn: '' }));
+    store.upsertMandate(
+      mandate({ id: 'm-future', studentId: 'future', providerId: 'p1', endOn: '2026-10-30' }),
+    );
+    store.upsertMandate(mandate({ id: 'm-none', studentId: 'no-session', providerId: 'p1', endOn: '' }));
+    store.upsertMandate(
+      mandate({ id: 'm-today', studentId: 'ended-today', providerId: 'p1', endOn: '2026-10-29' }),
+    );
+    store.upsertMandate(
+      mandate({ id: 'm-before', studentId: 'ended-before', providerId: 'p1', endOn: '2026-10-01' }),
+    );
+    store.upsertMandate(
+      mandate({ id: 'm-mixed-off', studentId: 'mixed', providerId: 'p1', endOn: '2026-10-01' }),
+    );
+    store.upsertMandate(
+      mandate({ id: 'm-mixed-on', studentId: 'mixed', providerId: 'p1', endOn: '' }),
+    );
+    store.upsertWeek({
+      id: 'w',
+      providerId: 'p1',
+      weekStart: '2026-08-31',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession(sess({ id: 's-active', weekId: 'w', studentId: 'active', dateOfService: '09/02/2026' }));
+    store.upsertSession(sess({ id: 's-today', weekId: 'w', studentId: 'ended-today', dateOfService: '09/03/2026' }));
+    store.upsertSession(sess({ id: 's-before', weekId: 'w', studentId: 'ended-before', dateOfService: '09/04/2026' }));
+    store.upsertSession(sess({ id: 's-mixed', weekId: 'w', studentId: 'mixed', dateOfService: '09/08/2026' }));
+
+    const rows = lastServiceByStudent(store, { asOf });
+    const byId = new Map(rows.map((r) => [r.studentId, r]));
+    expect(byId.get('active')).toEqual(
+      expect.objectContaining({ name: 'Ada Child', lastDos: '09/02/2026', providerName: 'Fatimah Dawan' }),
+    );
+    expect(byId.has('open-end')).toBe(true);
+    expect(byId.get('future')?.lastDos).toBe('');
+    expect(byId.get('no-session')).toEqual(
+      expect.objectContaining({ name: 'Dee Child', lastDos: '', providerName: 'Fatimah Dawan' }),
+    );
+    expect(byId.has('ended-today')).toBe(false);
+    expect(byId.has('ended-before')).toBe(false);
+    expect(byId.get('mixed')).toEqual(
+      expect.objectContaining({ name: 'Gia Child', lastDos: '09/08/2026' }),
+    );
+    expect(rows.map((r) => r.studentId).sort()).toEqual(
+      ['active', 'future', 'mixed', 'no-session', 'open-end'].sort(),
+    );
+  });
+
+  it('last service is one row per child and keeps the later mandate date', () => {
+    const asOf = '2026-10-29';
+    const store = new MemoryStore();
+    store.upsertSchool({
+      id: 'sch',
+      name: 'Forest',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: '',
+    });
+    const addProvider = (id: string, firstName: string, lastName: string, discipline: 'PT' | 'OT') => {
+      store.upsertProvider({
+        id,
+        userId: '',
+        firstName,
+        lastName,
+        discipline,
+        payRatePerHour: null,
+        payRate30Min: null,
+        payRate42Min: null,
+        payRate45Min: null,
+        payRateGroup30Min: null,
+        payRateGroup42Min: null,
+        payRateGroup45Min: null,
+        payRateEval: null,
+        payRateAdditionalHourly: null,
+        hhaCaregiverCode: '',
+        active: true,
+        createdAt: '',
+      });
+    };
+    addProvider('p1', 'Fatimah', 'Dawan', 'PT');
+    addProvider('p2', 'Owen', 'Shah', 'OT');
+    const addStudent = (id: string, firstName: string) => {
+      store.upsertStudent({
+        id,
+        schoolId: 'sch',
+        firstName,
+        lastName: 'Child',
+        dob: '',
+        programId: '',
+        programType: '',
+        hhaPatientId: '',
+        createdAt: '',
+      });
+    };
+    addStudent('two', 'Ada');
+    addStudent('from-discharged', 'Bea');
+    addStudent('no-session', 'Cam');
+    addStudent('discharged-only', 'Dee');
+    store.upsertMandate(
+      mandate({ id: 'm-two-pt', studentId: 'two', providerId: 'p1', discipline: 'PT', endOn: '' }),
+    );
+    store.upsertMandate(
+      mandate({ id: 'm-two-ot', studentId: 'two', providerId: 'p2', discipline: 'OT', endOn: '' }),
+    );
+    store.upsertMandate(
+      mandate({ id: 'm-bea-on', studentId: 'from-discharged', providerId: 'p1', discipline: 'PT', endOn: '' }),
+    );
+    store.upsertMandate(
+      mandate({
+        id: 'm-bea-off',
+        studentId: 'from-discharged',
+        providerId: 'p2',
+        discipline: 'OT',
+        endOn: '2026-10-01',
+      }),
+    );
+    store.upsertMandate(
+      mandate({ id: 'm-cam-pt', studentId: 'no-session', providerId: 'p1', discipline: 'PT', endOn: '' }),
+    );
+    store.upsertMandate(
+      mandate({ id: 'm-cam-ot', studentId: 'no-session', providerId: 'p2', discipline: 'OT', endOn: '2026-11-01' }),
+    );
+    store.upsertMandate(
+      mandate({
+        id: 'm-dee-pt',
+        studentId: 'discharged-only',
+        providerId: 'p1',
+        discipline: 'PT',
+        endOn: '2026-10-29',
+      }),
+    );
+    store.upsertMandate(
+      mandate({
+        id: 'm-dee-ot',
+        studentId: 'discharged-only',
+        providerId: 'p2',
+        discipline: 'OT',
+        endOn: '2026-09-01',
+      }),
+    );
+    store.upsertWeek({
+      id: 'w1',
+      providerId: 'p1',
+      weekStart: '2026-09-28',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertWeek({
+      id: 'w2',
+      providerId: 'p2',
+      weekStart: '2026-09-28',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession(sess({ id: 's-two-early', weekId: 'w1', studentId: 'two', dateOfService: '09/30/2026' }));
+    store.upsertSession(sess({ id: 's-two-late', weekId: 'w2', studentId: 'two', dateOfService: '10/01/2026' }));
+    store.upsertSession(
+      sess({ id: 's-bea-early', weekId: 'w1', studentId: 'from-discharged', dateOfService: '09/02/2026' }),
+    );
+    store.upsertSession(
+      sess({ id: 's-bea-late', weekId: 'w2', studentId: 'from-discharged', dateOfService: '10/15/2026' }),
+    );
+    store.upsertSession(
+      sess({ id: 's-dee', weekId: 'w2', studentId: 'discharged-only', dateOfService: '10/20/2026' }),
+    );
+
+    const rows = lastServiceByStudent(store, { asOf });
+    const forTwo = rows.filter((r) => r.studentId === 'two');
+    expect(forTwo).toHaveLength(1);
+    expect(forTwo[0]).toEqual(
+      expect.objectContaining({
+        name: 'Ada Child',
+        lastDos: '10/01/2026',
+        providerName: 'Owen Shah',
+        schoolName: 'Forest',
+      }),
+    );
+    expect(rows.filter((r) => r.studentId === 'from-discharged')).toEqual([
+      expect.objectContaining({ name: 'Bea Child', lastDos: '10/15/2026', providerName: 'Owen Shah' }),
+    ]);
+    expect(rows.filter((r) => r.studentId === 'no-session')).toEqual([
+      expect.objectContaining({
+        name: 'Cam Child',
+        lastDos: '',
+        providerName: 'Fatimah Dawan, Owen Shah',
+      }),
+    ]);
+    expect(rows.some((r) => r.studentId === 'discharged-only')).toBe(false);
+    expect(lastServiceByStudent(store, { asOf, providerId: 'p1' }).filter((r) => r.studentId === 'two')).toEqual([
+      expect.objectContaining({ lastDos: '10/01/2026' }),
+    ]);
+  });
+
+  it('children list shows duration and frequency for every mandate', () => {
+    const store = new MemoryStore();
+    store.upsertStudent({
+      id: 'st',
+      schoolId: '',
+      firstName: 'Ada',
+      lastName: 'Child',
+      dob: '',
+      programId: '',
+      programType: '',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertMandate(mandate({ id: 'm1', studentId: 'st', discipline: 'PT', durationMinutes: 30, frequencyPerWeek: 2 }));
+    store.upsertMandate(
+      mandate({
+        id: 'm2',
+        studentId: 'st',
+        discipline: 'OT',
+        durationMinutes: 45,
+        frequencyPerWeek: 1,
+      }),
+    );
+    const row = adminStudentsList(store).find((s) => s.id === 'st');
+    expect(row?.durations).toEqual(['PT · 30 min', 'OT · 45 min']);
+    expect(row?.frequencies).toEqual(['PT · 2 / week', 'OT · 1 / week']);
   });
 
   it('enriches missing notes with name, date, weekId', () => {
@@ -2130,7 +2533,86 @@ describe('due dates and dashboard', () => {
     expect(filtered[0]?.district).toBe('Westbury UFSD');
     expect(adminWeeksList(store, { weekStart: '2026-09-07', name: 'Ada' })).toHaveLength(1);
     expect(adminWeeksList(store, { weekStart: '2026-09-07', name: 'Nobody' })).toHaveLength(0);
-    expect(adminWeeksList(store)).toHaveLength(2);
+    // Empty draft w2 (failed-import leftover) is hidden from Provider status Drafts.
+    expect(adminWeeksList(store)).toHaveLength(1);
+    expect(adminWeeksList(store)[0]?.id).toBe('w1');
+  });
+
+  it('admin weeks list hides empty draft weeks but keeps drafts with sessions', () => {
+    const store = new MemoryStore();
+    store.upsertProvider({
+      id: 'p',
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'PT',
+      payRatePerHour: 72,
+      payRate30Min: null,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: '',
+      active: true,
+      createdAt: '',
+    });
+    store.upsertStudent({
+      id: 'st',
+      schoolId: '',
+      firstName: 'Ada',
+      lastName: 'Lee',
+      dob: '',
+      programId: '',
+      programType: 'Westbury UFSD',
+      hhaPatientId: '',
+      createdAt: '',
+    });
+    store.upsertWeek({
+      id: 'empty-failed-import',
+      providerId: 'p',
+      weekStart: '2026-09-07',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertWeek({
+      id: 'draft-with-sessions',
+      providerId: 'p',
+      weekStart: '2026-08-31',
+      status: 'draft',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertWeek({
+      id: 'hha-failed-with-sessions',
+      providerId: 'p',
+      weekStart: '2026-08-24',
+      status: 'locked',
+      signerName: '',
+      signerEmail: '',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'failed',
+    });
+    store.upsertSession(sess({ id: 's-draft', weekId: 'draft-with-sessions', studentId: 'st' }));
+    store.upsertSession(sess({ id: 's-hha', weekId: 'hha-failed-with-sessions', studentId: 'st' }));
+    const rows = adminWeeksList(store);
+    expect(rows.map((r) => r.id).sort()).toEqual(
+      ['draft-with-sessions', 'hha-failed-with-sessions'].sort(),
+    );
+    expect(rows.find((r) => r.id === 'empty-failed-import')).toBeUndefined();
   });
 
   it('admin weeks list survives missing hhaTransfers and merges transfer errors', () => {
@@ -2497,7 +2979,8 @@ describe('due dates and dashboard', () => {
     expect(half[0]?.sessionsDeliveredPct).toBe(50);
     expect(half[0]?.notesPostedPct).toBe(0);
     expect(half[0]?.progressPct).toBe(50);
-    expect(half[0]?.belowMandate).toBe(true);
+    // 1 attended + 1 missed fills a 2× week — below mandate is false even with 50% delivered.
+    expect(half[0]?.belowMandate).toBe(false);
     expect(half[0]?.childName).toMatch(/Aiden/);
     expect(half[0]?.mandateLabel).toBe('PT school 30');
     expect(half[0]?.providerName).toBe('Pat Lee');
@@ -2523,14 +3006,19 @@ describe('due dates and dashboard', () => {
       }),
     );
     const mixed = weekProgressReport(store, { from: '2026-08-31', to: '2026-08-31' });
-    // Mandate 2×: one delivered + one miss with note → delivered 50%, notes posted 100%.
+    // Mandate 2×: one delivered + one miss with note → delivered 50%, notes posted 100%, not below.
     expect(mixed[0]?.sessionsProvided).toBe(1);
     expect(mixed[0]?.sessionsDeliveredPct).toBe(50);
     expect(mixed[0]?.notesPosted).toBe(2);
     expect(mixed[0]?.notesPostedPct).toBe(100);
-    expect(mixed[0]?.belowMandate).toBe(true);
+    expect(mixed[0]?.belowMandate).toBe(false);
     expect(mixed[0]?.progressPct).toBe(50);
-    expect(weekProgressReport(store, { from: '2026-09-07', to: '2026-09-07' })).toHaveLength(0);
+    // A week with no sessions still lists the active child, at 0%.
+    const nextWeek = weekProgressReport(store, { from: '2026-09-07', to: '2026-09-07' });
+    expect(nextWeek).toHaveLength(1);
+    expect(nextWeek[0]?.weekStart).toBe('2026-09-07');
+    expect(nextWeek[0]?.sessionsProvided).toBe(0);
+    expect(nextWeek[0]?.sessionsDeliveredPct).toBe(0);
 
     // Session notes report filters by dateOfService (sess default 09/01/2026 → 2026-09-01).
     const notes = sessionNotesReport(store, { from: '2026-09-01', to: '2026-09-01' });
@@ -3012,6 +3500,62 @@ describe('week progress discharged mandates', () => {
     });
     expect(rows.map((r) => r.mandateLabel).sort()).toEqual(['PT school 30', 'PT school group 30']);
   });
+
+  it('lists an active child with no sessions at 0%', () => {
+    const store = storeWithElizabeth();
+    addMandates(store, { individual: '', group: '' });
+    const rows = weekProgressReport(store, {
+      from: CURRENT_WEEK,
+      to: CURRENT_WEEK,
+      asOf: AS_OF,
+    });
+    expect(rows.map((r) => r.mandateLabel).sort()).toEqual(['PT school 30', 'PT school group 30']);
+    for (const r of rows) {
+      expect(r.childName).toBe('Elizabeth Klicpera');
+      expect(r.sessionsProvided).toBe(0);
+      expect(r.sessionsDeliveredPct).toBe(0);
+      expect(r.notesPostedPct).toBe(0);
+      expect(r.weekStart).toBe(CURRENT_WEEK);
+    }
+  });
+
+  it('lists the mandate with no sessions beside one that has sessions', () => {
+    const store = storeWithElizabeth();
+    addMandates(store, { individual: '', group: '' });
+    store.upsertSession(
+      sess({
+        id: 'only-ind',
+        weekId: 'w-now',
+        studentId: 'st-eliz',
+        dateOfService: '10/13/2026',
+        attendance: 'attended',
+        serviceType: 'Physical Therapy',
+        notes: 'individual',
+      }),
+    );
+    const rows = weekProgressReport(store, {
+      from: CURRENT_WEEK,
+      to: CURRENT_WEEK,
+      asOf: AS_OF,
+    });
+    const byLabel = Object.fromEntries(rows.map((r) => [r.mandateLabel, r]));
+    expect(byLabel['PT school 30']?.sessionsProvided).toBe(1);
+    expect(byLabel['PT school group 30']?.sessionsProvided).toBe(0);
+    expect(byLabel['PT school group 30']?.sessionsDeliveredPct).toBe(0);
+  });
+
+  it('still hides a discharged mandate and a mandate that starts after the week', () => {
+    const store = storeWithElizabeth();
+    addMandates(store, { individual: '2026-10-01', group: '' });
+    const grp = store.data.mandates.find((m) => m.id === 'm-grp')!;
+    store.upsertMandate({ ...grp, startOn: '2026-12-01' });
+    const rows = weekProgressReport(store, {
+      from: CURRENT_WEEK,
+      to: CURRENT_WEEK,
+      asOf: AS_OF,
+    });
+    expect(rows).toHaveLength(0);
+  });
 });
 
 describe('week start', () => {
@@ -3141,5 +3685,33 @@ describe('preferredMandateForSession duration match', () => {
     expect(preferredMandateForSession(groupVisit, [individual])).toBeUndefined();
     expect(mandateDurationMinutesForSession(groupVisit, [individual])).toBe(30);
     expect(sessionShorterThanMandateError(groupVisit, [individual])).toBeNull();
+  });
+});
+
+describe('discipline match and manual signature helpers', () => {
+  it('normalizes PT / OT / SLP labels', () => {
+    expect(normalizeDisciplineLabel('PT School')).toBe('PT');
+    expect(normalizeDisciplineLabel('ST Individual')).toBe('SLP');
+    expect(normalizeDisciplineLabel('Speech Group')).toBe('SLP');
+    expect(normalizeDisciplineLabel('COTA')).toBe('OT');
+    expect(normalizeDisciplineLabel('Eval')).toBe('');
+  });
+
+  it('flags a regular session whose discipline differs from the provider, skips additional services', () => {
+    const s = sess({ serviceType: 'OT School' });
+    expect(sessionProviderDisciplineMismatchError(s, { discipline: 'PT' }, [])).toMatch(/Discipline mismatch/);
+    expect(sessionProviderDisciplineMismatchError(s, { discipline: 'OT' }, [])).toBeNull();
+    expect(sessionProviderDisciplineMismatchError(s, undefined, [])).toBeNull();
+    const add = sess({ serviceType: 'Eval', additionalServiceType: 'eval' });
+    expect(sessionProviderDisciplineMismatchError(add, { discipline: 'PT' }, [])).toBeNull();
+  });
+
+  it('manual signature needs the provider first and last name', () => {
+    const p = { firstName: 'Pat', lastName: 'Lee' };
+    expect(manualSignatureError('', p)).toMatch(/required/);
+    expect(manualSignatureError('Sam Jones', p)).toMatch(/provider's name/);
+    expect(manualSignatureError('Pat Lee, PT', p)).toBeNull();
+    expect(manualSessionNeedsSignature({ attendance: 'attended' })).toBe(true);
+    expect(manualSessionNeedsSignature({ attendance: 'missed' })).toBe(false);
   });
 });

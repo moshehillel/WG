@@ -4,6 +4,7 @@ import type {
   HhaContract,
   HhaPatient,
   HhaVisit,
+  TherapyAssignmentIds,
 } from '@white-glove/shared';
 import type { ClosedCaseUpdate, HhaClient, UpsertResult } from './types.js';
 import type {
@@ -70,9 +71,11 @@ export class HttpHhaClient implements HhaClient {
   ensureAcceptedServices(
     patientId: string,
     disciplines: string[],
+    assignment?: TherapyAssignmentIds,
   ): Promise<import('./types.js').EnsureAcceptedServicesResult> {
     return this.request('POST', `/patients/${encodeURIComponent(patientId)}/accepted-services`, {
       disciplines,
+      assignment,
     });
   }
 

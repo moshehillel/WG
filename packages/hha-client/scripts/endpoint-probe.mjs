@@ -537,7 +537,8 @@ async function main() {
   }
 
   // --- Optional real writes ---
-  if (DO_WRITES && goodPatientId && coordinatorId) {
+  const writeCoordinatorId = Number(process.env.HHA_COORDINATOR_ID);
+  if (DO_WRITES && goodPatientId && writeCoordinatorId > 0) {
     console.log('\n--- Real write attempts (HHA_PROBE_WRITES=true) ---');
     const create = await call(
       'CreatePatient',
@@ -547,7 +548,7 @@ async function main() {
   <LastName>Probe${Date.now().toString().slice(-6)}</LastName>
   <BirthDate>1990-01-15</BirthDate>
   <Gender>Male</Gender>
-  <CoordinatorID1>${coordinatorId}</CoordinatorID1>
+  <CoordinatorID1>${writeCoordinatorId}</CoordinatorID1>
   <AdmissionID>WGPROBE${Date.now().toString().slice(-8)}</AdmissionID>
   <AllowDuplicate>1</AllowDuplicate>
   <Addresses>
@@ -563,7 +564,7 @@ async function main() {
     record('CreatePatient[real]', 'create patient', create);
   } else if (DO_WRITES) {
     console.log(
-      `\nSKIP real CreatePatient — need patient/coordinator (patient=${goodPatientId}, coordinator=${coordinatorId})`,
+      `\nSKIP real CreatePatient — set HHA_COORDINATOR_ID explicitly (patient=${goodPatientId})`,
     );
   }
 

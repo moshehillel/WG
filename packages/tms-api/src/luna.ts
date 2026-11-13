@@ -1,5 +1,6 @@
 import type { AppUser } from '@white-glove/tms-db';
 import { lunaKnowledgePrompt } from './luna-knowledge.js';
+import { BILLU_TICKET_EMAIL, RETIRED_TICKET_EMAILS } from './block-reports.js';
 import type { Mailer } from './mail.js';
 
 export type LunaChatMessage = { role: 'user' | 'assistant' | 'system'; content: string };
@@ -11,10 +12,20 @@ export type LunaChatResult = {
 };
 
 const DEFAULT_MODEL = 'gpt-4o-mini';
-const DEFAULT_SUPPORT_EMAIL = 'moshe@advancedautomations.net';
+const DEFAULT_SUPPORT_EMAIL = 'bmarkowitz@whiteglovecare.net';
+
+/** One short reply for jokes, homework, general knowledge, roleplay, or chatting. */
+export const LUNA_OFF_TOPIC_REPLY = 'I can only help with White Glove TMS.';
+
+/** Chat replies stay an error explanation, not an essay. */
+export const LUNA_CHAT_MAX_TOKENS = 400;
 
 const SYSTEM_PROMPT_CORE = `You are Luna, the White Glove Therapy TMS support assistant.
-You help therapists and admins with the White Glove Therapy Management System (timesheets, mandates, caseloads, schools, reports, sign-in, PDF uploads, HHA transfer / triage).
+You help therapists and admins with the White Glove Therapy Management System only.
+
+Scope — answer only these White Glove TMS topics: uploads, blocked sessions, mandates, signatures, CPT, makeup, timesheets, HHA errors, and how to use this app.
+If the user asks anything else (jokes, homework, general knowledge, roleplay, or just chatting), do not answer the question and do not continue that topic.
+Reply with exactly this sentence and stop: "${LUNA_OFF_TOPIC_REPLY}"
 
 Rules:
 - Be concise, warm, and practical.
@@ -23,7 +34,7 @@ Rules:
 - Do not claim you fixed backend/infrastructure issues yourself.
 - Never tell anyone to change HHA_USE_PRODUCTION, AWS secrets, or Netlify env.
 - When opening a support ticket, set action to "handoff" and write a clear one-paragraph summary for the support engineer that includes the pasted error text and user context. Otherwise set action to "ask".
-- Never discuss or assist with religion, Christianity, gossip, romance/love stories, reproduction, sex, adultery, or intimate topics. If asked, reply briefly that you can only help with TMS support.
+- Never discuss or assist with religion, Christianity, gossip, romance/love stories, reproduction, sex, adultery, or intimate topics. If asked, reply with exactly: "${LUNA_OFF_TOPIC_REPLY}"
 
 Respond with JSON only (no markdown fences):
 {"reply":"message shown to the user","action":"ask"|"handoff","summary":"blank unless handoff"}`;
@@ -34,7 +45,12 @@ export function buildLunaSystemPrompt(): string {
 }
 
 export function lunaSupportEmail(): string {
-  return (process.env.LUNA_SUPPORT_EMAIL || DEFAULT_SUPPORT_EMAIL).trim() || DEFAULT_SUPPORT_EMAIL;
+  const fromEnv = (process.env.LUNA_SUPPORT_EMAIL || '').trim().toLowerCase();
+  const retired = new Set(RETIRED_TICKET_EMAILS.map((email) => email.toLowerCase()));
+  if (!fromEnv || retired.has(fromEnv)) return BILLU_TICKET_EMAIL;
+  if (fromEnv === BILLU_TICKET_EMAIL) return BILLU_TICKET_EMAIL;
+  // Tickets go to Billu. A leftover env value must not stay on To.
+  return BILLU_TICKET_EMAIL || DEFAULT_SUPPORT_EMAIL;
 }
 
 export function lunaModel(): string {
@@ -203,6 +219,30 @@ export function lunaClientIp(headers: Record<string, string | undefined>): strin
   return xff || String(h['x-real-ip'] || '').trim() || 'unknown';
 }
 
+/** OpenAI chat body. max_tokens stays small so off-topic play does not run long. */
+export function lunaChatCompletionBody(
+  messages: LunaChatMessage[],
+  contextNote: string,
+): {
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  response_format: { type: 'json_object' };
+  messages: Array<{ role: string; content: string }>;
+} {
+  return {
+    model: lunaModel(),
+    temperature: 0.3,
+    max_tokens: LUNA_CHAT_MAX_TOKENS,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: buildLunaSystemPrompt() },
+      { role: 'system', content: contextNote },
+      ...messages,
+    ],
+  };
+}
+
 export async function runLunaChat(input: {
   messages: unknown;
   pageUrl?: string;
@@ -239,16 +279,7 @@ export async function runLunaChat(input: {
       'content-type': 'application/json',
       authorization: `Bearer ${key}`,
     },
-    body: JSON.stringify({
-      model: lunaModel(),
-      temperature: 0.3,
-      response_format: { type: 'json_object' },
-      messages: [
-        { role: 'system', content: buildLunaSystemPrompt() },
-        { role: 'system', content: contextNote },
-        ...messages,
-      ],
-    }),
+    body: JSON.stringify(lunaChatCompletionBody(messages, contextNote)),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => '');

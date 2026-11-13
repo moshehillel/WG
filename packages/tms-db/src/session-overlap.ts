@@ -163,7 +163,13 @@ export function soloGroupMandateNoteError(opts: {
   cptCodes?: readonly string[] | null;
   /** Parsed ratio token when it was not copied into serviceType. */
   ratio?: string | null;
+  /**
+   * Eval / progress report / consultation / meeting / documentation. Additional services
+   * are never group or individual visits, so this gate never applies to them.
+   */
+  additionalServiceType?: string | null;
 }): string | null {
+  if (String(opts.additionalServiceType || '').trim()) return null;
   if (opts.attendance !== 'attended' && opts.attendance !== 'makeup') return null;
   if (!childHasGroupMandate(opts.studentId, opts.mandates)) return null;
   if (
@@ -218,10 +224,13 @@ export function groupOverlapClusterStudentIds(opts: SessionOverlapCheckOpts): st
   const { candidate, peers, mandates } = opts;
   const ids = new Set<string>([candidate.studentId]);
   if (!occupiesProviderTime(candidate)) return [...ids];
+  // Additional services are never group visits: no group cluster, no group size cap.
+  if (isAdditionalServiceSession(candidate as SessionRow)) return [...ids];
 
   for (const peer of peers) {
     if (peer.id && candidate.id && peer.id === candidate.id) continue;
     if (!occupiesProviderTime(peer)) continue;
+    if (isAdditionalServiceSession(peer as SessionRow)) continue;
     if (!sameDateOfService(candidate.dateOfService, peer.dateOfService)) continue;
     if (!sessionsHaveInteriorOverlap(candidate, peer)) continue;
     if (!overlapExceptionAllows(candidate, peer, mandates)) continue;
@@ -272,8 +281,22 @@ export function sessionOverlapError(opts: SessionOverlapCheckOpts): string | nul
 
     const peerName = childLabel(peer.studentId, opts.studentNameById);
     const peerSlot = sessionSlotLabel(peer as SessionRow);
+    // An additional service on either side is a plain time clash. The group / individual
+    // wording never applies to it (it is not a group or individual visit).
+    const eitherAdditional =
+      isAdditionalServiceSession(candidate as SessionRow) ||
+      isAdditionalServiceSession(peer as SessionRow);
     const candLooksGroup = sessionLooksGroup(candidate.serviceType) === true;
     const peerLooksGroup = sessionLooksGroup(peer.serviceType) === true;
+
+    if (eitherAdditional) {
+      const other = isAdditionalServiceSession(peer as SessionRow) ? peer : candidate;
+      const otherLabel = String(other.serviceType || '').trim() || 'additional service';
+      return (
+        `Session time overlaps the ${otherLabel} on ${peerSlot}. ` +
+        `Adjacent times are OK (e.g. 2:00–2:30 then 2:30–3:00); interior overlap is not.`
+      );
+    }
 
     // Rule 4: group peer after a group-mandate child was already paid individually for this slot.
     if (candLooksGroup && !peerLooksGroup) {

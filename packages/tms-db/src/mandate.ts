@@ -52,6 +52,47 @@ export function disciplineFromServiceType(serviceType: string): Discipline | '' 
   return '';
 }
 
+/** PT / OT / SLP from any label (ST and speech map to SLP; PTA / COTA map to PT / OT). */
+export function normalizeDisciplineLabel(raw: string | undefined | null): Discipline | '' {
+  const s = String(raw || '').toUpperCase();
+  if (!s.trim()) return '';
+  if (/\bSLP\b|\bSLPA\b|\bST\b|\bSPEECH\b|\bLANGUAGE\b/.test(s)) return 'SLP';
+  if (/\bOTR?\b|\bCOTA\b|\bOCCUPATIONAL\b/.test(s)) return 'OT';
+  if (/\bPTA?\b|\bPHYSICAL\b/.test(s)) return 'PT';
+  return '';
+}
+
+/**
+ * Provider discipline match. Always enforced (no admin switch); every import / manual /
+ * note-upload path calls this.
+ * A regular session whose service type (or, when the label has no discipline, the child's
+ * mandate) is a different discipline than the provider's is an error.
+ * Additional services and unknown disciplines are never flagged.
+ */
+export function sessionProviderDisciplineMismatchError(
+  session: SessionRow,
+  provider: { discipline?: string } | undefined,
+  mandates: Mandate[],
+): string | null {
+  if (!provider) return null;
+  if (session.additionalServiceType) return null;
+  const providerDiscipline = normalizeDisciplineLabel(provider.discipline);
+  if (!providerDiscipline) return null;
+  let sessionDisciplineLabel = normalizeDisciplineLabel(session.serviceType);
+  let source = `service type "${String(session.serviceType || '').trim()}"`;
+  if (!sessionDisciplineLabel && session.studentId) {
+    const mandate = preferredMandateForSession(session, mandates);
+    sessionDisciplineLabel =
+      normalizeDisciplineLabel(mandate?.discipline) || normalizeDisciplineLabel(mandate?.serviceType);
+    source = `the child's mandate service type "${String(mandate?.serviceType || '').trim()}"`;
+  }
+  if (!sessionDisciplineLabel || sessionDisciplineLabel === providerDiscipline) return null;
+  return (
+    `Discipline mismatch: ${source} is ${sessionDisciplineLabel} but the provider's discipline is ` +
+    `${providerDiscipline}. An admin must fix the provider or the child's service type.`
+  );
+}
+
 export function mandateFrequencyKind(mandate: Mandate | undefined): FrequencyKind {
   if (!mandate) return 'weekly';
   return mandate.frequencyKind || 'weekly';
@@ -594,15 +635,17 @@ function sessionsCountingTowardWeekly(weekSessions: SessionRow[]): SessionRow[] 
 }
 
 /**
- * Weekly yellow frequency: every submitted attended or missed session counts.
- * Notes do not matter. Makeup rows stay out (separate makeup rules) and never
- * drop a missed session from this count.
+ * Weekly yellow frequency: every submitted attended, missed, or paid-absence
+ * session counts. Notes do not matter. Makeup rows stay out (separate makeup
+ * rules) and never drop a missed session from this count.
  */
 function sessionsSubmittedTowardWeekly(weekSessions: SessionRow[]): SessionRow[] {
   return weekSessions.filter(
     (s) =>
       !isAdditionalServiceSession(s) &&
-      (s.attendance === 'attended' || s.attendance === 'missed'),
+      (s.attendance === 'attended' ||
+        s.attendance === 'missed' ||
+        s.attendance === 'paid_absence'),
   );
 }
 
@@ -876,7 +919,7 @@ export function checkMandate(
   const submitted = sessionsSubmittedTowardWeekly(weekSessions).length;
   // Over stays attended-only: an extra miss must not exceed the weekly mandate.
   const over = used > allowed;
-  // Yellow is a missing session. Attended and missed both count; notes do not.
+  // Yellow is a missing session. Attended, missed, and paid absence count; notes do not.
   const under = submitted < allowed;
   return {
     used,
@@ -907,6 +950,11 @@ export type MandateWeekCheckOpts = {
    * (weekly 0-of-N, monthly / cycle shortfall, and calendar fallback).
    */
   includeStudentIds?: readonly string[];
+  /**
+   * Admin locker "allow a session shorter than the mandate service type" (default OFF).
+   * When true, the shorter-than-mandate error is skipped. All other mandate checks stay.
+   */
+  allowShortSession?: boolean;
   /**
    * When set, yellow under-mandate warnings only come from these providers'
    * mandates (this timesheet's caseload, including same-name alias ids).
@@ -1044,6 +1092,7 @@ export function checkMandatesForWeek(
       }
     }
     for (const s of rows) {
+      if (opts?.allowShortSession === true) break;
       const shortErr = sessionShorterThanMandateError(s, mandates);
       if (!shortErr) continue;
       const who = studentLabel ? `${studentLabel}: ` : '';

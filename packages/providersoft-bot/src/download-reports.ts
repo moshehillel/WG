@@ -250,6 +250,51 @@ async function ensureGenderColumn(
   }
 }
 
+/**
+ * Blank sticky non-date Step 3 filter controls so Playwright exports match the
+ * intentional date window only (same contract as HTTP clearNonDateNarrowingFiltersOnBody).
+ */
+async function clearNonDateNarrowingFiltersOnPage(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doc = (globalThis as any).document as {
+      querySelectorAll: (s: string) => ArrayLike<{
+        name?: string;
+        type?: string;
+        value: string;
+        options?: ArrayLike<{ value: string; text: string; selected: boolean }>;
+        selectedIndex: number;
+      }>;
+    };
+    let cleared = 0;
+    const inputs = Array.from(
+      doc.querySelectorAll(
+        'input[name*="dlREportColumns"]:not([name*="datePicker"]):not([name*="ClientState"]):not([type="hidden"]):not([type="submit"]):not([type="button"])',
+      ),
+    );
+    for (const inp of inputs) {
+      const typ = (inp.type || 'text').toLowerCase();
+      if (typ === 'checkbox' || typ === 'radio') continue;
+      if (String(inp.value || '') !== '') cleared += 1;
+      inp.value = '';
+    }
+    const selects = Array.from(
+      doc.querySelectorAll('select[name*="dlREportColumns"]'),
+    );
+    for (const sel of selects) {
+      const opts = Array.from(sel.options || []);
+      const chooseIdx = opts.findIndex((o) => /choose/i.test(String(o.text || '')));
+      const zeroIdx = opts.findIndex((o) => o.value === '0');
+      const negIdx = opts.findIndex((o) => o.value === '-1');
+      const idx =
+        chooseIdx >= 0 ? chooseIdx : zeroIdx >= 0 ? zeroIdx : negIdx >= 0 ? negIdx : 0;
+      if (sel.selectedIndex !== idx) cleared += 1;
+      sel.selectedIndex = idx;
+    }
+    return cleared;
+  });
+}
+
 /** Fill from/to date pickers for the Step 3 filter row matching `label`. */
 async function fillDateFilterByLabel(
   page: Page,
@@ -338,6 +383,16 @@ async function modifyDatesAndExport(
 
   await clickReady(page.getByRole('button', { name: 'Next >>' }));
   await settle(page);
+
+  // Dates-only intent: blank sticky Provider/Child/Program text + reset Choose selects.
+  const clearedNarrow = await clearNonDateNarrowingFiltersOnPage(page);
+  if (clearedNarrow > 0) {
+    log(
+      onStep,
+      'dates',
+      `${kind}: cleared ${clearedNarrow} non-date Step 3 filter control(s)`,
+    );
+  }
 
   const label = REPORT_DATE_FILTER_LABELS[kind];
   log(onStep, 'dates', `${kind}: ${label} ${range.from} → ${range.to}`);

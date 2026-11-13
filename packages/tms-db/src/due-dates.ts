@@ -59,9 +59,11 @@ function asKind(kind: string | undefined): DueKind {
 }
 
 function normalizeDue(row: LegacyDue, schoolId: string): DueDate {
+  const studentId = String(row.studentId || '').trim();
   return {
     id: String(row.id || ''),
     schoolId,
+    ...(studentId ? { studentId } : {}),
     kind: asKind(row.kind),
     dueOn: String(row.dueOn || '').trim(),
     notes: String(row.notes || '').trim(),

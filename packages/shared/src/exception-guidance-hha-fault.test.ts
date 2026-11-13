@@ -193,4 +193,34 @@ describe('explainException service-code / -74 titles', () => {
     expect(reason).toMatch(/^Failed — provider not eligible for that service/);
     expect(reason).not.toMatch(/ServiceCodeID|WGC-|Physical Therapy|PT CHHA|program type/i);
   });
+
+  it('blank pay rate title stays Pay rate is blank', () => {
+    const ex: PipelineException = {
+      code: 'hha_api_error',
+      message: '[verified_sessions] session=02887709 step=locateOrScheduleVisit: Pay rate is blank',
+      reportKind: 'verified_sessions',
+      rowId: '02887709',
+      details: { step: 'locateOrScheduleVisit', serviceCode: 'OT HC Eval' },
+    };
+    const explained = explainException(ex);
+    expect(explained.title).toBe('Pay rate is blank');
+    expect(explained.title).not.toMatch(/pay code not found|OT \$100/i);
+    expect(formatActionableReason(ex)).toMatch(/^Pay rate is blank/);
+    expect(formatActionableReason(ex)).not.toMatch(/pay code not found|OT \$100/i);
+  });
+
+  it('blank pay rate EVV visit message keeps Pay rate is blank title', () => {
+    const ex: PipelineException = {
+      code: 'hha_api_error',
+      message:
+        '[new_services] row=P0200009878201 step=locateOrScheduleVisit: Pay rate is blank — EVV visit not created',
+      reportKind: 'new_services',
+      rowId: 'P0200009878201',
+      details: { step: 'locateOrScheduleVisit', serviceCode: 'OT HC Eval' },
+    };
+    const explained = explainException(ex);
+    expect(explained.title).toBe('Pay rate is blank');
+    expect(explained.problem).toMatch(/EVV visit not created/i);
+    expect(explained.impact).toMatch(/cannot clock/i);
+  });
 });

@@ -4,6 +4,7 @@ import {
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
+  QueryCommand,
   ScanCommand,
   UpdateCommand,
 } from '@aws-sdk/lib-dynamodb';
@@ -13,6 +14,7 @@ import {
   MemoryStore,
   assembleSnapshot,
   diffSnapshots,
+  SNAPSHOT_COLLECTIONS,
   dynamoPk,
   dynamoSk,
   snapshotToEntityPuts,
@@ -43,6 +45,7 @@ export interface TmsDocStore {
     update: { expression: string; names: Record<string, string>; values: Record<string, unknown> },
   ): Promise<void>;
   scanAll(): Promise<Record<string, unknown>[]>;
+  queryByPk?(pk: string): Promise<Record<string, unknown>[]>;
   batchWrite(puts: Record<string, unknown>[], deletes: Array<{ pk: string; sk: string }>): Promise<void>;
 }
 
@@ -94,6 +97,12 @@ export class InMemoryTmsDocStore implements TmsDocStore {
 
   async scanAll(): Promise<Record<string, unknown>[]> {
     return [...this.items.values()].map((v) => structuredClone(v));
+  }
+
+  async queryByPk(pk: string): Promise<Record<string, unknown>[]> {
+    return [...this.items.values()]
+      .filter((row) => row.pk === pk)
+      .map((v) => structuredClone(v));
   }
 
   async batchWrite(
@@ -180,6 +189,24 @@ export class DynamoTmsDocStore implements TmsDocStore {
     return items;
   }
 
+  async queryByPk(pk: string): Promise<Record<string, unknown>[]> {
+    const items: Record<string, unknown>[] = [];
+    let ExclusiveStartKey: Record<string, unknown> | undefined;
+    do {
+      const res = await this.doc.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          KeyConditionExpression: 'pk = :pk',
+          ExpressionAttributeValues: { ':pk': pk },
+          ExclusiveStartKey,
+        }),
+      );
+      for (const item of res.Items || []) items.push(item as Record<string, unknown>);
+      ExclusiveStartKey = res.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (ExclusiveStartKey);
+    return items;
+  }
+
   async batchWrite(
     puts: Record<string, unknown>[],
     deletes: Array<{ pk: string; sk: string }>,
@@ -257,7 +284,9 @@ export async function loadSnapshotFromDynamo(
 ): Promise<TmsSnapshot> {
   const doc = getTmsDocStore(docStore);
   if (!doc) return store.snapshot();
-  const items = await doc.scanAll();
+  const items = doc.queryByPk
+    ? (await Promise.all(SNAPSHOT_COLLECTIONS.map((collection) => doc.queryByPk!(dynamoPk(collection))))).flat()
+    : await doc.scanAll();
   const entities = items
     .filter((it) => typeof it.pk === 'string' && String(it.pk).startsWith('ENTITY#'))
     .map((it) => ({
@@ -463,6 +492,14 @@ export async function ensureMigratedFromS3(
   }
 }
 
+/** Warm-container snapshot. Writes drop it. Short TTL so another container's save shows up quickly. */
+const SNAPSHOT_CACHE_MS = 60_000;
+let snapshotCache: { at: number; snap: TmsSnapshot } | null = null;
+
+export function invalidateTmsSnapshotCache(): void {
+  snapshotCache = null;
+}
+
 /** Load path used by Lambda: migrate once, then hydrate MemoryStore from Dynamo. */
 export async function loadTmsState(store: MemoryStore, docStore?: TmsDocStore): Promise<TmsSnapshot> {
   const doc = getTmsDocStore(docStore);
@@ -473,7 +510,17 @@ export async function loadTmsState(store: MemoryStore, docStore?: TmsDocStore): 
     return store.snapshot();
   }
   await ensureMigratedFromS3(doc);
-  return loadSnapshotFromDynamo(store, doc);
+  if (snapshotCache && Date.now() - snapshotCache.at < SNAPSHOT_CACHE_MS) {
+    store.load(structuredClone(snapshotCache.snap));
+    return store.snapshot();
+  }
+  const snap = await loadSnapshotFromDynamo(store, doc);
+  try {
+    snapshotCache = { at: Date.now(), snap: structuredClone(snap) };
+  } catch {
+    snapshotCache = null;
+  }
+  return snap;
 }
 
 /** Persist only changed entities (safe under concurrent writers of different rows). */
@@ -483,6 +530,7 @@ export async function saveTmsState(
   docStore?: TmsDocStore,
 ): Promise<SnapshotDiffResult> {
   const doc = getTmsDocStore(docStore);
+  invalidateTmsSnapshotCache();
   if (!doc) {
     const { saveSnapshotToS3 } = await import('./s3-state.js');
     await saveSnapshotToS3(store);

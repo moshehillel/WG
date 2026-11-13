@@ -19,6 +19,7 @@ export const SNAPSHOT_COLLECTIONS = [
   'hhaTransfers',
   'audit',
   'settings',
+  'blockReports',
 ] as const satisfies ReadonlyArray<keyof TmsSnapshot>;
 
 export type SnapshotCollection = (typeof SNAPSHOT_COLLECTIONS)[number];

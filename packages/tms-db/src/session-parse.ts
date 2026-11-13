@@ -22,7 +22,7 @@ export interface ParsedSessionNote {
   dateOfService: string;
   beginTime: string;
   endTime: string;
-  attendance: 'attended' | 'missed' | 'makeup';
+  attendance: 'attended' | 'missed' | 'makeup' | 'paid_absence';
   cancelReason: string;
   notes: string;
   serviceType: string;
@@ -189,6 +189,9 @@ function scrubPeerAbsentPhrases(notes: string): string {
 const FRONTLINE_LOG_TYPE_LEAD_RE =
   /^\s*((?:Service\s+Provided|Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|School\s+Closed|Staff\s+Shortage|M+ake[\s-]?up))\s*:/i;
 
+/** Frontline payable miss: "Student Not Available: Paid absence." keeps the clock. */
+const PAID_ABSENCE_RE = /\bpaid\s+absence\b/i;
+
 export function attendanceFromNotes(
   notes: string,
   timeIn: string,
@@ -204,12 +207,15 @@ export function attendanceFromNotes(
       return 'attended';
     }
     if (/^M+ake[\s-]?up$/i.test(label)) return 'makeup';
+    // Student Not Available: Paid absence. → payable, keep times.
+    if (PAID_ABSENCE_RE.test(n)) return 'paid_absence';
     // Provider Absence / Student Not Available / School Closed / etc.
     return 'missed';
   }
   // "MMAKE-UP for 10/8/26 (Provider absence)" is a makeup. The parenthetical
   // is why the earlier visit was missed, not the status of this visit.
   if (MAKEUP_RE.test(n) && MAKEUP_PHRASE_RE.test(n)) return 'makeup';
+  if (PAID_ABSENCE_RE.test(n)) return 'paid_absence';
   if (
     /provider absence|student absence|student not available|student not in school|student absent/i.test(
       n,
@@ -585,9 +591,34 @@ function studentNameBefore(blob: string, idx: number, fallback: string): string 
   return cleanStudentName(last[1]);
 }
 
+/**
+ * CPSE / Child Treatment Log pages: labeled `Child:` at the top of each page
+ * (often one child per page), ESID + Date/Time / ICD/CPT grid, footer
+ * "Child Treatment Log". Distinct from Therapist Activity Output (which prints
+ * the child in the grid beside CBRS, and "Therapist Activity Printed").
+ */
+export function isCpseChildTreatmentLogText(text: string): boolean {
+  const t = String(text || '');
+  if (!t) return false;
+  // Real Therapist Activity Output keeps its own detector path.
+  if (/Therapist\s+Activity\s*Printed/i.test(t)) return false;
+  if (/Child\s+Treatment\s+Log/i.test(t) && /\bChild\s*:\s*[A-Za-z]/i.test(t)) return true;
+  // ESID treatment-log pages with a labeled Child header + In/Out clocks.
+  if (
+    /\bESID\s*:/i.test(t) &&
+    /\bChild\s*:\s*[A-Za-z]/i.test(t) &&
+    /\bIn:\s*\d{1,2}:\d{2}/i.test(t) &&
+    /Date\s*\/\s*Time/i.test(t)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 /** Detect Therapist Activity Output reports (vs Frontline weekly notes). */
 export function isTherapistActivityText(text: string): boolean {
   const t = String(text || '');
+  if (isCpseChildTreatmentLogText(t)) return false;
   if (/Therapist\s+Activity\s*Printed/i.test(t)) return true;
   if (/Date\s*\/\s*Time/i.test(t) && /ICD\s*\/\s*CPT/i.test(t) && /\bIn:\s*\d{1,2}:\d{2}/i.test(t)) {
     return true;
@@ -759,11 +790,194 @@ export function parseTherapistActivityText(text: string): ParsedSessionNote[] {
       attendance = 'attended';
     }
     // Missed notes must not keep invented/clock times from the activity header.
+    // Paid absence keeps the printed Session Start/End.
     const beginTime = attendance === 'missed' ? '' : hit.beginTime;
     const endTime = attendance === 'missed' ? '' : hit.endTime;
 
     const cpt =
-      attendance === 'missed'
+      attendance === 'missed' || attendance === 'paid_absence'
+        ? { codes: [] as string[], totalUnits: 0, procedures: [] as string[] }
+        : cptPreview;
+    rows.push({
+      studentName,
+      providerName,
+      schoolName,
+      dateOfService: hit.dateOfService,
+      beginTime,
+      endTime,
+      attendance,
+      cancelReason: cancellationFromNotes(fullNotes || slice, attendance),
+      notes,
+      serviceType: serviceTypeWithRatio(mapped.serviceType, ratio),
+      location: location || schoolName,
+      ratio,
+      cptCodes: cpt.codes,
+      cptUnits: cpt.totalUnits,
+      cptProcedures: cpt.procedures,
+      signed: sessionIsSigned(slice),
+      sourceSlice: slice,
+    });
+  }
+  return mergeFrontlineSplitCptRows(rows);
+}
+
+/**
+ * Most recent labeled `Child: Last, First` before a session clock on a CPSE /
+ * Child Treatment Log page. Address lines like "Odell Plaza, Yonkers" are not
+ * labeled and must not win over this header.
+ */
+export function extractCpseChildHeaderName(blob: string, beforeIdx?: number): string {
+  const src =
+    typeof beforeIdx === 'number' && beforeIdx >= 0
+      ? String(blob || '').slice(0, beforeIdx)
+      : String(blob || '');
+  if (!src) return '';
+  const re =
+    /\bChild\s*:\s*([A-Za-z][A-Za-z0-9'.\s-]{0,40}),\s*([A-Za-z][A-Za-z0-9'.\s-]{0,40}?)(?=\s*(?:Date\s+of\s+Birth|Therapist\s*:|ESID\s*:|Date\s*\/\s*Time|DOB\b|$))/gi;
+  const matches = [...src.matchAll(re)];
+  const last = matches[matches.length - 1];
+  if (!last?.[1] || !last[2]) return '';
+  const name = takeStudentName(last[1], last[2]);
+  if (name) return name;
+  // Multi-word first names (e.g. "Three Zaki") still bind when plausible checks are strict.
+  return cleanStudentName(`${last[1]}, ${last[2]}`);
+}
+
+function cpseServiceTypeFromHeader(before: string): { serviceType: string; ratio: string } {
+  const m = String(before || '').match(
+    /\b((?:Physical|Occupational)\s+Therapy|Speech(?:\s+Language)?(?:\s+Therapy)?|Related\s+Service)\s*[-–]?\s*(Individual|Group)\b/i,
+  );
+  if (!m) return { serviceType: 'Related Service Individual', ratio: '1:1' };
+  const raw = m[1]!.toLowerCase();
+  let disc = 'Related Service';
+  if (raw.startsWith('physical')) disc = 'PT';
+  else if (raw.startsWith('occupational')) disc = 'OT';
+  else if (raw.startsWith('speech')) disc = 'Speech';
+  const group = /^group$/i.test(m[2] || '');
+  return {
+    serviceType: `${disc} ${group ? 'Group' : 'Individual'}`,
+    ratio: group ? '2:1' : '1:1',
+  };
+}
+
+function cpseProviderName(blob: string): string {
+  const labeled = blob.match(
+    /\bTherapist\s*:\s*([A-Za-z][A-Za-z .'-]+?)(?:,\s*(?:M\.?S\.?|M\.?A\.?|CCC|PT|OT|SLP|DPT|TSSLD|OTR)|\s+CCC|\s+\d{4,})/i,
+  );
+  if (labeled?.[1]) return labeled[1].replace(/\s+/g, ' ').trim();
+  return activityProviderName(blob);
+}
+
+/**
+ * Parse CPSE / Child Treatment Log pages: child name from the page-top
+ * `Child:` header; each In/Out row on that page attaches to that child.
+ */
+export function parseCpseChildTreatmentLogText(text: string): ParsedSessionNote[] {
+  const flat = normalizeTherapistActivityText(text);
+  if (!flat) return [];
+  const providerName = cpseProviderName(flat);
+  const rows: ParsedSessionNote[] = [];
+
+  const sessionRe =
+    /(\d{1,2}\/\d{1,2}\/\d{2,4})\s+In:\s*(\d{1,2}:\d{2})\s*(AM|PM)\s+Out:\s*(\d{1,2}:\d{2})\s*(AM|PM)/gi;
+  const hits: Array<{
+    dateOfService: string;
+    beginTime: string;
+    endTime: string;
+    idx: number;
+    endIdx: number;
+  }> = [];
+  for (const m of flat.matchAll(sessionRe)) {
+    const idx = m.index ?? -1;
+    if (idx < 0) continue;
+    hits.push({
+      dateOfService: m[1]!,
+      beginTime: `${m[2]} ${m[3]}`.replace(/\s+/g, ' '),
+      endTime: `${m[4]} ${m[5]}`.replace(/\s+/g, ' '),
+      idx,
+      endIdx: idx + m[0].length,
+    });
+  }
+
+  for (let i = 0; i < hits.length; i++) {
+    const hit = hits[i]!;
+    const nextStart = hits[i + 1]?.idx ?? flat.length;
+    const slice = flat.slice(hit.idx, Math.min(nextStart, hit.idx + 3500));
+    const headerBefore = flat.slice(Math.max(0, hit.idx - 500), hit.idx);
+
+    const studentName =
+      extractCpseChildHeaderName(flat, hit.idx) ||
+      extractTherapistActivityStudentName(slice, {
+        afterTimes: slice.slice(hit.endIdx - hit.idx),
+        lookback: headerBefore,
+      });
+
+    const mapped = cpseServiceTypeFromHeader(headerBefore);
+    const groupMatch = slice.match(/#\s*Children\s*in\s*Group:\s*(\d+)/i);
+    const groupSize = groupMatch ? Number(groupMatch[1]) : 0;
+    let ratio = mapped.ratio;
+    if (groupSize >= 2) ratio = `${groupSize}:1`;
+
+    const setting =
+      (slice.match(
+        /\b(Preschool|School|Clinic|Home|Telehealth|Office|Classroom|Community)\b/i,
+      ) || [])[1] || '';
+    const location = setting;
+    const schoolName =
+      setting && !isGenericSettingLabel(setting) ? setting : schoolFromSlice(slice);
+
+    let fullNotes = '';
+    const notesStart = slice.search(/\b(?:925\d{2}|97\d{3}|961\d{2}|975\d{2})x\d+\b/i);
+    if (notesStart >= 0) {
+      const afterCpt = slice.slice(notesStart).replace(/^(?:[\d,xX×\s]|F\d{2}(?:\.\d+)?)+/, '');
+      fullNotes = afterCpt
+        .replace(/\s*Notes\s+Entered:[\s\S]*$/i, '')
+        .replace(/\s*Signed:[\s\S]*$/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+    if (!fullNotes) {
+      const absenceHit = slice.match(
+        /\b((?:Provider\s+Absence|Student\s+Absence|Student\s+Not\s+Available|Student\s+Absent|Absent|Missed|Cancelled|Canceled|No[\s-]?Show)[:\s][\s\S]*?)(?=\s*Notes\s+Entered:|\s*Signed:|$)/i,
+      );
+      if (absenceHit?.[1]) {
+        fullNotes = absenceHit[1].replace(/\s+/g, ' ').trim();
+      }
+    }
+    const makeupFor =
+      extractMakeupForDate(fullNotes, { referenceDos: hit.dateOfService }) ||
+      extractMakeupForDate(slice, { referenceDos: hit.dateOfService });
+    if (makeupFor && !/make\s*up\s*for\s*:/i.test(fullNotes)) {
+      fullNotes = `Make up for: ${makeupFor}${fullNotes ? ` ${fullNotes}` : ''}`.trim();
+    }
+    const notes = clipSessionNotes(fullNotes);
+
+    const explicitAbsenceLabel = /(?:^|[\n\r]|Notes\s)\s*(?:Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|Student\s+Absent|School\s+Closed|Staff\s+Shortage|Absent|Missed|Cancelled|Canceled|No[\s-]?Show)\s*:/i.test(
+      fullNotes || slice,
+    ) || /^(?:Provider\s+Absence|Provider\s+Not\s+Available|Student\s+Absence|Student\s+Not\s+Available|Student\s+Absent|School\s+Closed|Staff\s+Shortage|Absent|Missed|Cancelled|Canceled|No[\s-]?Show)\b/i.test(
+      String(fullNotes || '').trim(),
+    );
+
+    let attendance: ParsedSessionNote['attendance'] = makeupFor
+      ? 'makeup'
+      : attendanceFromNotes(fullNotes || slice, hit.beginTime, hit.endTime);
+    const cptPreview = parseCptCoverage(slice);
+    const signedPreview = sessionIsSigned(slice);
+    if (
+      !makeupFor &&
+      attendance === 'missed' &&
+      !explicitAbsenceLabel &&
+      cptPreview.totalUnits > 0 &&
+      signedPreview
+    ) {
+      attendance = 'attended';
+    }
+    // Paid absence keeps the printed Session Start/End.
+    const beginTime = attendance === 'missed' ? '' : hit.beginTime;
+    const endTime = attendance === 'missed' ? '' : hit.endTime;
+
+    const cpt =
+      attendance === 'missed' || attendance === 'paid_absence'
         ? { codes: [] as string[], totalUnits: 0, procedures: [] as string[] }
         : cptPreview;
     rows.push({
@@ -1286,10 +1500,12 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
     const bannerOnly = Boolean(notesMatch) && !String(strippedNotes || '').trim();
     const absenceOnly =
       FRONTLINE_ABSENCE_LABEL_RE.test(slice) && !/Service\s+Provided\s*:/i.test(slice);
+    const paidAbsenceRow = PAID_ABSENCE_RE.test(fullNotes || slice);
     // Missed Frontline rows have no Session Start/End — never borrow times from a later visit.
+    // Paid absence rows do print Session Start/End (e.g. 2:00 pm–2:30 pm) — keep them.
     let beginTime = '';
     let endTime = '';
-    if (!absenceOnly) {
+    if (!absenceOnly || paidAbsenceRow) {
       // Signature stamp "10:39AM" is not the session clock when start/end
       // are already printed before Telehealth / Provider Signature.
       const sigAt = slice.search(/Provider\s+Signature\s*\/?\s*Credentials|Telehealth\s*:/i);
@@ -1308,17 +1524,23 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
     }
     // Group ratio (1:1, 2:1, N:1). Clock times like 8:40 / 9:10 must not become the service type.
     // Column order sometimes prints Ratio before the service date, outside this slice.
-    const ratio = absenceOnly
-      ? ''
-      : normalizeFrontlineRatioToken(slice) || frontlineRatioBeforeServiceDate(blob, idx);
+    const ratio =
+      absenceOnly && !paidAbsenceRow
+        ? ''
+        : normalizeFrontlineRatioToken(slice) || frontlineRatioBeforeServiceDate(blob, idx);
     const location = schoolFromSlice(slice);
     // Real building / Setting wins. District header is the match key only when Setting is not a school.
     const schoolName = location || reportSchool || districtHeader;
-    const cpt = attendance === 'missed' ? { codes: [] as string[], totalUnits: 0, procedures: [] as string[] } : parseCptCoverage(slice);
+    const cpt =
+      attendance === 'missed' || attendance === 'paid_absence'
+        ? { codes: [] as string[], totalUnits: 0, procedures: [] as string[] }
+        : parseCptCoverage(slice);
     const sliceFallback = stripFrontlineContinuedPageBanner(
       slice.replace(/\s+/g, ' ').trim(),
     ).slice(0, 200);
-    const noteText = bannerOnly ? '' : notes || (absenceOnly ? sliceFallback : '');
+    const noteText = bannerOnly
+      ? ''
+      : notes || (absenceOnly && !paidAbsenceRow ? sliceFallback : '');
     rows.push({
       studentName: studentNameBefore(blob, idx, fallbackStudent),
       providerName,
@@ -1330,7 +1552,8 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
       cancelReason: cancellationFromNotes(noteText || slice, attendance),
       notes: bannerOnly
         ? ''
-        : noteText || (attendance === 'missed' ? sliceFallback : ''),
+        : noteText ||
+          (attendance === 'missed' || attendance === 'paid_absence' ? sliceFallback : ''),
       serviceType: serviceTypeForFrontlineRow(serviceType, ratio, cpt.codes),
       location: location || schoolName,
       ratio,
@@ -1344,8 +1567,11 @@ function parseFrontlineWeeklySessionText(text: string): ParsedSessionNote[] {
   return mergeFrontlineSplitCptRows(rows);
 }
 
-/** Weekly notes as extracted text — Frontline or Therapist Activity (auto-detect). */
+/** Weekly notes as extracted text — CPSE, Therapist Activity, or Frontline (auto-detect). */
 export function parseWeeklySessionText(text: string): ParsedSessionNote[] {
+  if (isCpseChildTreatmentLogText(text)) {
+    return parseCpseChildTreatmentLogText(text);
+  }
   if (isTherapistActivityText(text)) {
     return parseTherapistActivityText(text);
   }
@@ -1566,28 +1792,42 @@ export function schoolNamesConflict(pdfSchool: string, knownSchool: string): boo
 }
 
 /**
- * Caseload school label for a child taught at home.
+ * Caseload school label for a child taught at home (homeschooled) or homebound.
+ * Homebound / home bound / home-bound are treated like homeschooled.
  * Those children are served through the district or school printed on the report.
  */
 export function isHomeschooledSchoolName(name: string): boolean {
   const n = normEntityName(name);
   if (!n) return false;
-  return /^(?:homeschooled|home schooled|homeschool|home school)$/.test(n);
+  return /^(?:homeschooled|home schooled|homeschool|home school|homebound|home bound)$/.test(n);
 }
+
+export type PdfSchoolConflictOpts = {
+  /**
+   * Building names that share the child's district (from store membership:
+   * school.district and/or caseload programType via the district directory).
+   * Same-district buildings do not conflict (Westbury Middle vs Drexel Avenue).
+   */
+  sameDistrictSchoolNames?: string[];
+};
 
 /**
  * PDF school vs child's building (+ optional district / program type).
  * District-level Frontline headers (e.g. "Westbury Union Free School District")
  * may match the child's program type / school.district even when the caseload
- * school is a building name like "Powells Lane". Concrete building names still
- * must match the child's building.
- * A Homeschooled / Home schooled / Home School caseload label is not a mismatch
- * against a real report district or school (the session keeps that report school).
+ * school is a building name like "Powells Lane".
+ * Another building in the same district (via sameDistrictSchoolNames) is allowed —
+ * use real store district membership, not a fuzzy substring on the district town.
+ * Cross-district buildings still conflict (Elmont vs Valley Stream).
+ * A Homeschooled / Home schooled / Home School / Homebound / Home bound /
+ * Home-bound caseload label is not a mismatch against a real report district or
+ * school (e.g. NSSA, Locust Valley); the session keeps that report school.
  */
 export function pdfSchoolConflictsWithChild(
   pdfSchool: string,
   known: { name?: string; district?: string },
   programType?: string,
+  opts?: PdfSchoolConflictOpts,
 ): boolean {
   const pdf = String(pdfSchool || '').trim();
   const building = String(known?.name || '').trim();
@@ -1598,6 +1838,10 @@ export function pdfSchoolConflictsWithChild(
     !isGenericSettingLabel(pdf) &&
     !isNonSchoolLikeSetting(pdf)
   ) {
+    return false;
+  }
+  const peers = opts?.sameDistrictSchoolNames || [];
+  if (peers.some((n) => String(n || '').trim() && !schoolNamesConflict(pdf, n))) {
     return false;
   }
   if (!looksLikeDistrictLabel(pdf)) return true;

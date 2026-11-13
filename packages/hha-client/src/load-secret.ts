@@ -10,6 +10,14 @@ import {
   resetEnvCache,
   type Env,
 } from '@white-glove/shared';
+import {
+  ENT_HHAMFA_COOKIES_ENV,
+  ENT_HHAMFA_COOKIES_SECRET_KEY,
+  ENT_HHAMFA_RENEWED_ENV,
+  ENT_HHAMFA_RENEWED_SECRET_KEY,
+  ENT_SPA_ACCESS_TOKEN_ENV,
+  ENT_SPA_SECRET_KEY,
+} from './ent-auth-fields.js';
 
 const secrets = new SecretsManagerClient({});
 
@@ -88,7 +96,8 @@ export async function applyHhaSecretFromArn(env: Env = getEnv()): Promise<Env> {
     if (parsed.appName) process.env.HHA_APP_NAME = parsed.appName;
     if (parsed.appSecret) process.env.HHA_APP_SECRET = parsed.appSecret;
     if (parsed.appKey) process.env.HHA_APP_KEY = parsed.appKey;
-    if (parsed.entSpaAccessToken) process.env.HHA_ENT_SPA_ACCESS_TOKEN = parsed.entSpaAccessToken;
+    const spaToken = parsed[ENT_SPA_SECRET_KEY];
+    if (typeof spaToken === 'string' && spaToken) process.env[ENT_SPA_ACCESS_TOKEN_ENV] = spaToken;
     if (parsed.entCoordinatorId) process.env.HHA_ENT_COORDINATOR_ID = parsed.entCoordinatorId;
     if (parsed.entCoordinatorNames) process.env.HHA_ENT_COORDINATOR_NAMES = parsed.entCoordinatorNames;
     if (parsed.entUserId != null) process.env.HHA_ENT_USER_ID = String(parsed.entUserId);
@@ -99,15 +108,16 @@ export async function applyHhaSecretFromArn(env: Env = getEnv()): Promise<Env> {
     if (parsed.entUsername) process.env.HHA_ENT_USERNAME = parsed.entUsername;
     if (parsed.entPassword) process.env.HHA_ENT_PASSWORD = parsed.entPassword;
     if (parsed.entOtp) process.env.HHA_ENT_OTP = parsed.entOtp;
-    if (parsed.entHhamfaRenewedAt) process.env.HHA_ENT_HHAMFA_RENEWED_AT = parsed.entHhamfaRenewedAt;
+    const renewedAt = parsed[ENT_HHAMFA_RENEWED_SECRET_KEY];
+    if (typeof renewedAt === 'string' && renewedAt) process.env[ENT_HHAMFA_RENEWED_ENV] = renewedAt;
     if (parsed.productionBaseUrl) process.env.HHA_PRODUCTION_BASE_URL = parsed.productionBaseUrl;
 
     const cookiesArn = process.env.HHA_ENT_COOKIES_SECRET_ARN?.trim();
     if (cookiesArn) {
       const cookieSecret = await readSecretString(cookiesArn);
-      if (cookieSecret) process.env.HHA_ENT_HHAMFA_COOKIES = cookieSecret;
-    } else if (parsed.entHhamfaCookies) {
-      process.env.HHA_ENT_HHAMFA_COOKIES = parsed.entHhamfaCookies;
+      if (cookieSecret) process.env[ENT_HHAMFA_COOKIES_ENV] = cookieSecret;
+    } else if (parsed[ENT_HHAMFA_COOKIES_SECRET_KEY]) {
+      process.env[ENT_HHAMFA_COOKIES_ENV] = String(parsed[ENT_HHAMFA_COOKIES_SECRET_KEY]);
     }
   }
 

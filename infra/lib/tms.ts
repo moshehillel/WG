@@ -34,12 +34,20 @@ export function addTherapyManagement(
     openaiModel?: string;
   },
 ): { apiUrl: lambda.FunctionUrl; userPool: cognito.UserPool; stateTable: dynamodb.Table } {
-  const spaOrigin = (props.spaOrigin || '').replace(/\/$/, '') || 'https://wgfront.netlify.app';
+  const spaOrigin = (props.spaOrigin || '').replace(/\/$/, '') || 'https://tms.whiteglovecare.net';
+  const spaOrigins = [
+    ...new Set([
+      spaOrigin,
+      'https://tms.whiteglovecare.net',
+      'https://whiteglovetms.netlify.app',
+      'https://wgfront.netlify.app',
+    ]),
+  ];
   const spaHost = (() => {
     try {
       return new URL(spaOrigin).hostname;
     } catch {
-      return 'wgfront.netlify.app';
+      return 'tms.whiteglovecare.net';
     }
   })();
   const cognitoFromEmail = (props.fromEmail || 'alerts@advancedautomations.net').trim();
@@ -108,12 +116,15 @@ export function addTherapyManagement(
 
   const webClient = userPool.addClient('TmsWebClient', {
     authFlows: { userPassword: true, userSrp: true, user: true },
+    // Ticket ExK0gOoGtIhfjWCM: default 1h forced re-login too fast. Live client set to 8h on 2026-11-11.
+    idTokenValidity: cdk.Duration.hours(8),
+    accessTokenValidity: cdk.Duration.hours(8),
     preventUserExistenceErrors: true,
     oAuth: {
       flows: { authorizationCodeGrant: true },
       scopes: [cognito.OAuthScope.EMAIL, cognito.OAuthScope.OPENID, cognito.OAuthScope.PROFILE],
-      callbackUrls: [`${spaOrigin}/`],
-      logoutUrls: [`${spaOrigin}/`],
+      callbackUrls: spaOrigins.map((origin) => `${origin}/`),
+      logoutUrls: spaOrigins.map((origin) => `${origin}/`),
     },
   });
 
@@ -180,17 +191,26 @@ export function addTherapyManagement(
       HHA_PRODUCTION_BASE_URL: 'https://app.hhaexchange.com/Integration/ENT/V1.8/ws.asmx',
       HHA_USE_PRODUCTION: 'true',
       HHA_ALLOW_PRODUCTION: 'true',
+      /** Billu Markowitz. Named by Moshe 2026-10-20. Do not change without asking. */
+      HHA_COORDINATOR_ID: '84898',
+      /** TMS CreatePatient channel: never uses ProviderSoft's CHHA Case branch. */
+      HHA_CREATE_PATIENT_CHANNEL: 'tms',
+      /**
+       * TMS therapy branch "WGCC Therapy Services" (10090277). Moshe directed this
+       * be set 2026-11-11. Read from prod GetPatientDemographics on existing
+       * therapy charts (office 1025, Therapy Team 10022046).
+       */
+      HHA_TMS_BRANCH_ID: '10090277',
       /** Set to "false" / "0" to pause Wednesday auto-transfer without removing the rule. */
       TMS_HHA_AUTO_TRANSFER: 'true',
       OPENAI_SECRET_ARN: lunaOpenAiSecret.secretArn,
       TMS_DOCUSIGN_SECRET_ARN: docusignSecret.secretArn,
-      LUNA_SUPPORT_EMAIL: props.lunaSupportEmail || 'moshe@advancedautomations.net',
+      LUNA_SUPPORT_EMAIL: props.lunaSupportEmail || 'bmarkowitz@whiteglovecare.net',
       OPENAI_MODEL: props.openaiModel || 'gpt-4o-mini',
       /** End-of-day HHA failure digest (SES). Recipient must be verified while SES is in sandbox. */
       TMS_HHA_ERROR_EMAIL: 'mgluck@whiteglovecare.net',
-      ...(spaOrigin
-        ? { TMS_CORS_ORIGIN: spaOrigin, TMS_SPA_ORIGIN: spaOrigin }
-        : { TMS_SPA_ORIGIN: 'https://wgfront.netlify.app' }),
+      TMS_CORS_ORIGIN: spaOrigins.join(','),
+      TMS_SPA_ORIGIN: spaOrigin,
     },
     bundling: {
       minify: true,
@@ -263,7 +283,7 @@ export function addTherapyManagement(
   const apiUrl = fn.addFunctionUrl({
     authType: lambda.FunctionUrlAuthType.NONE,
     cors: {
-      allowedOrigins: spaOrigin ? [spaOrigin] : ['*'],
+      allowedOrigins: spaOrigins,
       allowedMethods: [lambda.HttpMethod.ALL],
       allowedHeaders: ['content-type', 'authorization', 'x-tms-role', 'x-tms-email'],
     },

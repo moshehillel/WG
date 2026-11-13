@@ -16,6 +16,16 @@ export const HhaPatientSchema = z.object({
   zipCode: z.string().optional(),
   homePhone: z.string().optional(),
   emergencyContactName: z.string().optional(),
+  /**
+   * Set only by the provider last-name rule on a new child.
+   * TMS CreatePatient leaves this unset and stays Billu Markowitz (84898).
+   */
+  coordinatorId: z.number().optional(),
+  /**
+   * Coordinator 2 when another therapist on the same new child maps to the other person.
+   * TMS CreatePatient leaves this unset and does not send Coordinator 2.
+   */
+  coordinatorId2: z.number().optional(),
 });
 
 export type HhaPatient = z.infer<typeof HhaPatientSchema>;
@@ -86,6 +96,10 @@ export const HhaVisitSchema = z.object({
   callDashboardId: z.string().optional(),
   scheduleType: z.string().optional(),
   durationMinutes: z.number().optional(),
+  /** Therapy Team id applied on the patient chart for this visit. */
+  teamId: z.string().optional(),
+  /** Coordinator id applied on the patient chart for this visit. */
+  coordinatorId: z.string().optional(),
 });
 
 export type HhaVisit = z.infer<typeof HhaVisitSchema>;

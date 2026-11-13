@@ -21,6 +21,7 @@ export * from './utils/name-match.js';
 export * from './types/unscheduled.js';
 export * from './unscheduled-clock.js';
 export * from './ent-coordinator.js';
+export * from './therapy-assignment.js';
 export * from './unscheduled-call-mids.js';
 export { formatPipelineAlertHtml } from './alert-email-html.js';
 export { writeSandboxEmailFixtures } from './sandbox-email-fixtures.js';

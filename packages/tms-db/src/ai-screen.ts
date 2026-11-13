@@ -1,3 +1,33 @@
+import { notesMentionNoPeerAvailable } from './mandate.js';
+
+/**
+ * Words that can mean the child was not seen, including sentences the exact
+ * labels miss ("was sick and did not come", "missed a turn").
+ */
+const ABSENCE_HINT_RE =
+  /\b(?:sick|absent|absence|missed|no[-\s]?show|did not come|didn't come|did not attend|didn't attend|stayed home|not in school|did not happen|was not there|wasn't there|out sick)\b/i;
+
+/** Child-was-not-seen phrases. A partner being absent is a different fact. */
+const CHILD_ABSENCE_RE =
+  /\b(?:was sick|were sick|out sick|did not come|didn't come|did not attend|didn't attend|stayed home|not in school|did not happen|no[-\s]?show|was not there|wasn't there)\b/i;
+
+/**
+ * True only when keyword rules can still be wrong about a missed visit.
+ * An already-missed row, a peer-absent note, and a note with no absence
+ * language skip the model.
+ */
+export function noteNeedsAbsenceFallback(input: {
+  notes: string;
+  attendance: string;
+}): boolean {
+  const attendance = String(input.attendance || '').trim().toLowerCase();
+  if (attendance !== 'attended') return false;
+  const notes = String(input.notes || '');
+  if (!ABSENCE_HINT_RE.test(notes)) return false;
+  if (notesMentionNoPeerAvailable(notes) && !CHILD_ABSENCE_RE.test(notes)) return false;
+  return true;
+}
+
 /** Heuristic screen used when Bedrock is off; Bedrock wraps the same checklist. */
 export function screenServiceNote(input: {
   notes: string;

@@ -135,7 +135,7 @@ Preview must flag new Service Types **and** pay codes that fail the discipline+r
 Daily **~6:00 PM Eastern** (EventBridge `22:00 UTC`) email to **`mgluck@whiteglovecare.net`** listing that day’s HHA transfer failures (missing pay/service code, CreatePatient fail, and other `hhaStatus=failed` / transfer errors).
 
 - **Subject:** `HHA errors for YYYY-MM-DD`
-- **Body:** provider, child, week, session date/time, error, and a link to `https://wgfront.netlify.app/?hhaWeek=<id>` (opens admin dashboard, highlights the week, triage + **Send to HHA / Retry HHA**)
+- **Body:** provider, child, week, session date/time, error, and a link to `https://tms.whiteglovecare.net/?hhaWeek=<id>` (opens admin dashboard, highlights the week, triage + **Send to HHA / Retry HHA**)
 - **No failures that day → no email**
 - **SES sandbox:** recipient must be a verified identity (mgluck was verified for timesheet email). From address is `TMS_FROM_EMAIL` / `alertFromEmail` (`alerts@advancedautomations.net`).
 - **Job flag:** Lambda invoke `{ "tmsJob": "hha-error-digest" }` (also `POST /internal/hha-error-digest` with `TMS_INTERNAL_KEY`)

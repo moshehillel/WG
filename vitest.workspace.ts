@@ -5,6 +5,7 @@ export default defineWorkspace([
   'packages/hha-client',
   'packages/processors',
   'packages/providersoft-bot',
+  'packages/sesis-bot',
   'packages/tms-db',
   'packages/tms-api',
 ]);

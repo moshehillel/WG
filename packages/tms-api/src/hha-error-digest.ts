@@ -1,5 +1,6 @@
 import { isSettledHhaTransfer, type MemoryStore } from '@white-glove/tms-db';
 import type { Mailer } from './mail.js';
+import { tmsPublicOrigin } from './public-origin.js';
 
 export interface HhaDigestFailure {
   weekId: string;
@@ -38,11 +39,7 @@ function isoDayInEastern(iso: string | undefined): string | undefined {
 }
 
 function spaBase(): string {
-  const raw =
-    process.env.TMS_SPA_ORIGIN ||
-    process.env.TMS_CORS_ORIGIN ||
-    'https://wgfront.netlify.app';
-  return raw.replace(/\/$/, '');
+  return tmsPublicOrigin();
 }
 
 function digestRecipient(): string {

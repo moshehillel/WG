@@ -153,6 +153,77 @@ export function clearAllDateFiltersOnBody(body: URLSearchParams): void {
   }
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Prefer the "&lt; Choose &gt;" / empty option for a Step 3 filter &lt;select&gt;.
+ * Falls back to value "0", then "-1", then first option.
+ */
+export function pickChooseOptionValue(
+  html: string,
+  selectName: string,
+): string | undefined {
+  const re = new RegExp(
+    `<select\\b[^>]*\\bname=["']${escapeRegExp(selectName)}["'][^>]*>([\\s\\S]*?)</select>`,
+    'i',
+  );
+  const m = re.exec(html);
+  if (!m) return undefined;
+  const inner = m[1] ?? '';
+  const options: { value: string; text: string }[] = [];
+  const optRe = /<option\b([^>]*)>([\s\S]*?)<\/option>/gi;
+  let om: RegExpExecArray | null;
+  while ((om = optRe.exec(inner))) {
+    const attrs = om[1] ?? '';
+    const text = (om[2] ?? '').replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+    const vm = attrs.match(/\bvalue=["']([^"']*)["']/i);
+    options.push({ value: vm?.[1] ?? text, text });
+  }
+  if (!options.length) return undefined;
+  const choose = options.find((o) => /choose/i.test(o.text));
+  if (choose) return choose.value;
+  const zero = options.find((o) => o.value === '0');
+  if (zero) return zero.value;
+  const neg = options.find((o) => o.value === '-1');
+  if (neg) return neg.value;
+  return options[0]!.value;
+}
+
+/**
+ * Clear sticky non-date Step 3 filters (Provider Name, Child's Name, Program ID, etc.).
+ * The bot only intentionally sets the report date filter each run; other wizard
+ * fields are otherwise re-posted as-is via collectFormFields and can narrow the
+ * export (e.g. Provider Name → Evans-only API Report).
+ *
+ * Returns the field names that had a non-empty / non-Choose value cleared.
+ */
+export function clearNonDateNarrowingFiltersOnBody(
+  body: URLSearchParams,
+  html: string,
+): string[] {
+  const cleared: string[] = [];
+  for (const key of [...body.keys()]) {
+    if (!/dlREportColumns/i.test(key)) continue;
+    if (/datePicker|ClientState|calendar|_AD$|_SD$/i.test(key)) continue;
+    if (/\$btn|Button/i.test(key)) continue;
+
+    const selectChoose = pickChooseOptionValue(html, key);
+    if (selectChoose !== undefined) {
+      const prev = body.get(key) ?? '';
+      if (prev !== selectChoose) cleared.push(key);
+      body.set(key, selectChoose);
+      continue;
+    }
+
+    const prev = body.get(key) ?? '';
+    if (prev !== '') cleared.push(key);
+    body.set(key, '');
+  }
+  return cleared;
+}
+
 /**
  * Prefer label-matched datePicker inputs (IDs drift when Gender:/columns change).
  * Falls back to REPORT_DATE_INPUTS hard-coded ids.
@@ -399,6 +470,16 @@ export async function downloadOneReportHttp(
         `${kind}: dates ${range.from} → ${range.to} (via ${resolved.via}; ${resolved.fromName})`,
       );
       const body = collectFormFields(html);
+      // Dates-only intent: drop sticky Provider/Child/Program/etc. before applying the date window.
+      const clearedNarrow = clearNonDateNarrowingFiltersOnBody(body, html);
+      if (clearedNarrow.length) {
+        onStep?.(
+          'http',
+          `${kind}: cleared ${clearedNarrow.length} non-date Step 3 filter(s): ${clearedNarrow
+            .slice(0, 8)
+            .join(', ')}${clearedNarrow.length > 8 ? '…' : ''}`,
+        );
+      }
       clearAllDateFiltersOnBody(body);
       applyDateFilterToBody(body, resolved.fromName, range.from);
       applyDateFilterToBody(body, resolved.toName, range.to);

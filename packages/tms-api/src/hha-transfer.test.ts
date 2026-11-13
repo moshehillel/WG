@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { MockHhaClient } from '@white-glove/hha-client';
 import { MemoryStore, adminStudentsList, newId, nowIso } from '@white-glove/tms-db';
 import {
+  SHARED_NO_CHILD_CASE_ID,
+  SHARED_NO_CHILD_STUDENT_ID,
   ensurePatientAuthorizationForVisit,
   mandateToAuthPeriodMaximum,
   resolveHhaPatientId,
@@ -2299,6 +2301,100 @@ describe('transferLockedWeek Program Id', () => {
     expect(result.errors[0]).toMatch(/^Kid One · 2026-09-01 09:00–09:30 · OT School:/);
   });
 
+  it('names the pay code when HHA rejects CreateSchedule PayCodeID (-74)', async () => {
+    const store = new MemoryStore();
+    const provider = store.upsertProvider({
+      id: newId(),
+      userId: '',
+      firstName: 'Pat',
+      lastName: 'Lee',
+      discipline: 'OT',
+      payRatePerHour: null,
+      payRate30Min: 62.5,
+      payRate42Min: null,
+      payRate45Min: null,
+      payRateGroup30Min: null,
+      payRateGroup42Min: null,
+      payRateGroup45Min: null,
+      payRateEval: null,
+      payRateAdditionalHourly: null,
+      hhaCaregiverCode: 'WGC-1',
+      active: true,
+      createdAt: nowIso(),
+    });
+    const student = store.upsertStudent({
+      id: newId(),
+      schoolId: '',
+      firstName: 'Colin',
+      lastName: 'Terracciano',
+      dob: '',
+      programId: '1',
+      programType: 'Baldwin UFSD',
+      hhaPatientId: '999',
+      createdAt: nowIso(),
+    });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: '2026-08-31',
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: newId(),
+      weekId: week.id,
+      studentId: student.id,
+      dateOfService: '2026-09-01',
+      beginTime: '14:40',
+      endTime: '15:10',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'Occupational Therapy 1:1',
+      location: 'School',
+      notes: 'ok',
+      aiFlags: [],
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType: 'OT School',
+      discipline: 'OT',
+      frequencyPerWeek: 1,
+      ratioGroup: false,
+      durationMinutes: 30,
+      sourcePdfKey: '',
+      parsedAt: nowIso(),
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('OT SCHOOL 30', 'sc-ot-30');
+    hha.payCodes.set('OT $62.5', 'pay-ot-625');
+    hha.locateOrScheduleVisit = async () => {
+      throw new Error('HHA CreateSchedule failed: Invalid "PayCodeID" (ErrorID=-74)');
+    };
+
+    const result = await transferLockedWeek({
+      store,
+      week,
+      hha,
+      actorId: 'admin',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]).toMatch(/Invalid PayCodeID for "OT \$62\.5"/);
+    expect(result.errors[0]).toMatch(/PayCodeID pay-ot-625/);
+    expect(result.errors[0]).toMatch(/not on this caregiver/);
+  });
+
   it('labels missing provider pay-rate errors with child · DOS · time', async () => {
     const store = new MemoryStore();
     const provider = store.upsertProvider({
@@ -2549,7 +2645,7 @@ describe('transferLockedWeek Program Id', () => {
     expect(hha.calls).toContain('resolvePayCodeId');
   });
 
-  it('creates a new no-child patient on the week contract for each documentation row', async () => {
+  it('sends every no-child documentation row to ONE shared No Child patient', async () => {
     const store = new MemoryStore();
     const school = store.upsertSchool({
       id: newId(),
@@ -2637,14 +2733,13 @@ describe('transferLockedWeek Program Id', () => {
     expect(result.errors).toEqual([]);
     expect(result.ok).toBe(true);
     expect(result.transferred).toBe(2);
-    expect(hha.calls.filter((c) => c === 'createPatient')).toHaveLength(2);
-    expect(hha.calls).not.toContain('findPatient');
+    expect(hha.calls.filter((c) => c === 'createPatient')).toHaveLength(1);
     expect(hha.calls).not.toContain('upsertPatient');
 
     const visits = [...hha.visits.values()];
     expect(visits).toHaveLength(2);
     const patientIds = visits.map((v) => v.patientId);
-    expect(new Set(patientIds).size).toBe(2);
+    expect(new Set(patientIds).size).toBe(1);
     expect(patientIds).not.toContain(otherContractPatient.id);
     expect(visits.every((v) => v.contractId === '72817')).toBe(true);
     expect(visits.every((v) => v.serviceCode === 'SLP additional services 30')).toBe(true);
@@ -2656,10 +2751,14 @@ describe('transferLockedWeek Program Id', () => {
     const placeholders = store.data.students.filter(
       (s) => s.firstName === 'no' && s.lastName === 'child',
     );
-    expect(placeholders).toHaveLength(2);
-    expect(placeholders.every((s) => s.programType === 'Fred S. Keller School')).toBe(true);
-    expect(new Set(placeholders.map((s) => s.programId)).size).toBe(2);
-    expect(new Set(placeholders.map((s) => s.hhaPatientId))).toEqual(new Set(patientIds));
+    expect(placeholders).toHaveLength(1);
+    expect(placeholders[0]?.id).toBe(SHARED_NO_CHILD_STUDENT_ID);
+    expect(placeholders[0]?.programId).toBe(SHARED_NO_CHILD_CASE_ID);
+    expect(placeholders[0]?.hhaPatientId).toBe(patientIds[0]);
+    // The district is per session, never saved on the shared row.
+    expect(placeholders[0]?.programType).toBe('');
+    // One contract placement for the one district.
+    expect(hha.placementsByPatient.get(patientIds[0]!)?.map((p) => p.contractId)).toEqual(['72817']);
     const createdPatients = [...hha.patients.values()].filter(
       (p) => p.firstName === 'no' && p.lastName === 'child' && patientIds.includes(String(p.id)),
     );
@@ -2745,7 +2844,10 @@ describe('transferLockedWeek Program Id', () => {
     expect(store.data.sessions.find((s) => s.id === 'doc-missing-week')?.studentId).toBe('');
     const created = store.data.students.filter((s) => s.firstName === 'no' && s.lastName === 'child');
     expect(created).toHaveLength(1);
-    expect(created[0]?.programType).toBe('Fred S. Keller School');
+    expect(created[0]?.id).toBe(SHARED_NO_CHILD_STUDENT_ID);
+    expect(hha.placementsByPatient.get(String(visits[0]?.patientId))?.map((p) => p.contractId)).toEqual([
+      '72817',
+    ]);
   });
 
   it('uses the sibling Fred S Keller week when the documentation sheet has no program', async () => {
@@ -2841,8 +2943,8 @@ describe('transferLockedWeek Program Id', () => {
     expect(visits[0]?.contractId).toBe('72817');
     expect(store.data.sessions.find((s) => s.id === 'doc-916-blank')?.programType || '').toBe('');
     expect(
-      store.data.students.find((s) => s.firstName === 'no' && s.lastName === 'child')?.programType,
-    ).toBe('Fred S. Keller School');
+      store.data.students.find((s) => s.firstName === 'no' && s.lastName === 'child')?.id,
+    ).toBe(SHARED_NO_CHILD_STUDENT_ID);
   });
 
   it('does not guess a program when the same week has two sibling contracts', async () => {
@@ -2911,7 +3013,7 @@ describe('transferLockedWeek Program Id', () => {
     expect(result.errors.join(' ')).toMatch(/program type "\(missing\)"/);
   });
 
-  it('uses each week contract for no-child rows and does not share the patient', async () => {
+  it('adds each new district contract to the same shared No Child patient', async () => {
     const store = new MemoryStore();
     const school = store.upsertSchool({
       id: newId(),
@@ -2988,7 +3090,16 @@ describe('transferLockedWeek Program Id', () => {
       expect(visit?.contractId).toBe(programType.startsWith('Fred') ? '72817' : '68715');
       expect(visit?.serviceCode).toBe('OT additional services 60');
     }
-    expect(new Set(patientIds).size).toBe(2);
+    expect(new Set(patientIds).size).toBe(1);
+    expect(hha.calls.filter((c) => c === 'createPatient')).toHaveLength(1);
+    const placements = hha.placementsByPatient.get(patientIds[0]!) ?? [];
+    expect(placements.map((p) => p.contractId).sort()).toEqual(['68715', '72817']);
+    // Each district's visit uses that district's own authorization.
+    expect(hha.calls.filter((c) => c === 'upsertContract')).toHaveLength(2);
+    // Shared row keeps no district.
+    expect(
+      store.data.students.filter((s) => s.firstName === 'no' && s.lastName === 'child'),
+    ).toHaveLength(1);
   });
 
   it('sends a no-child patient with a placeholder address when no school address exists', async () => {
@@ -3115,6 +3226,234 @@ describe('transferLockedWeek Program Id', () => {
     expect(childAfter?.hhaPatientId).toBe('real-patient');
     expect(childAfter?.schoolId).toBe(realSchool.id);
     expect(store.data.sessions.find((s) => s.id === 'doc-no-addr')?.studentId).toBe('');
+  });
+
+  /** One locked week with one no-child documentation row on `programType`. */
+  function seedNoChildWeek(
+    store: MemoryStore,
+    opts: { programType: string; weekStart: string; sessionId: string },
+  ) {
+    const provider =
+      store.data.providers[0] ??
+      store.upsertProvider({
+        id: newId(),
+        userId: '',
+        firstName: 'Wiglishai',
+        lastName: 'Astacio',
+        discipline: 'SLP',
+        payRatePerHour: null,
+        payRate30Min: 52.5,
+        payRate42Min: null,
+        payRate45Min: null,
+        payRateGroup30Min: null,
+        payRateGroup42Min: null,
+        payRateGroup45Min: null,
+        payRateEval: null,
+        payRateAdditionalHourly: 55,
+        hhaCaregiverCode: 'WGC-1',
+        active: true,
+        createdAt: nowIso(),
+      });
+    const week = store.upsertWeek({
+      id: newId(),
+      providerId: provider.id,
+      weekStart: opts.weekStart,
+      schoolId: '',
+      programType: opts.programType,
+      status: 'locked',
+      signerName: 'P',
+      signerEmail: 'p@s.test',
+      timesheetKey: '',
+      signedKey: '',
+      envelopeId: '',
+      hhaStatus: 'none',
+    });
+    store.upsertSession({
+      id: opts.sessionId,
+      weekId: week.id,
+      studentId: '',
+      dateOfService: opts.weekStart,
+      beginTime: '9:00 am',
+      endTime: '9:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'Documentation',
+      additionalServiceType: 'documentation',
+      location: '',
+      notes: 'Chart documentation for the week.',
+      aiFlags: [],
+    });
+    return week;
+  }
+
+  function slpAdditionalHha(): MockHhaClient {
+    const hha = new MockHhaClient();
+    hha.serviceCodesByName.set('SLP ADDITIONAL SERVICES 30', 'sc-slp-addl');
+    hha.payCodes.set('SLP $27.5', 'pay-slp-275');
+    return hha;
+  }
+
+  it('re-finds the shared No Child patient by Program Id when the TMS id is lost and leaves older NC charts alone', async () => {
+    const hha = slpAdditionalHha();
+    // Older per-session NC charts already in HHA stay and are never picked.
+    const older = [];
+    for (const caseId of ['NC0000000001', 'NC0000000002']) {
+      older.push(
+        await hha.createPatient({
+          firstName: 'no',
+          lastName: 'child',
+          dateOfBirth: '2000-01-01',
+          caseId,
+          externalId: caseId,
+        }),
+      );
+    }
+    hha.calls.length = 0;
+
+    const storeA = new MemoryStore();
+    const weekA = seedNoChildWeek(storeA, {
+      programType: 'Fred S. Keller School',
+      weekStart: '2026-09-21',
+      sessionId: 'nc-a',
+    });
+    const first = await transferLockedWeek({ store: storeA, week: weekA, hha, actorId: 'admin' });
+    expect(first.errors).toEqual([]);
+    expect(hha.calls.filter((c) => c === 'createPatient')).toHaveLength(1);
+    const sharedId = storeA.data.students.find((s) => s.id === SHARED_NO_CHILD_STUDENT_ID)
+      ?.hhaPatientId as string;
+    expect(sharedId).toBeTruthy();
+    expect(older.map((o) => o.id)).not.toContain(sharedId);
+
+    // Fresh TMS state (shared id lost): the Program Id finds the same chart. No second CreatePatient.
+    const storeB = new MemoryStore();
+    const weekB = seedNoChildWeek(storeB, {
+      programType: 'Baldwin UFSD',
+      weekStart: '2026-09-28',
+      sessionId: 'nc-b',
+    });
+    const second = await transferLockedWeek({ store: storeB, week: weekB, hha, actorId: 'admin' });
+    expect(second.errors).toEqual([]);
+    expect(hha.calls.filter((c) => c === 'createPatient')).toHaveLength(1);
+    expect(storeB.data.students.find((s) => s.id === SHARED_NO_CHILD_STUDENT_ID)?.hhaPatientId).toBe(
+      sharedId,
+    );
+    const patientIds = [...hha.visits.values()].map((v) => v.patientId);
+    expect(patientIds).toEqual([sharedId, sharedId]);
+    expect(hha.placementsByPatient.get(sharedId)?.map((p) => p.contractId).sort()).toEqual([
+      '68715',
+      '72817',
+    ]);
+    for (const o of older) {
+      expect(hha.visits.size).toBe(2);
+      expect([...hha.visits.values()].some((v) => v.patientId === o.id)).toBe(false);
+      expect([...hha.patients.values()].some((p) => p.id === o.id)).toBe(true);
+    }
+  });
+
+  it('reuses the stored shared id without another lookup and does not re-add a contract it already has', async () => {
+    const store = new MemoryStore();
+    const hha = slpAdditionalHha();
+    // Real HHA PatientIDs are numeric; the stored id is trusted only when its chart is "no child".
+    hha.patients.set('555000111', {
+      id: '555000111',
+      firstName: 'no',
+      lastName: 'child',
+      dateOfBirth: '2000-01-01',
+    });
+    store.upsertStudent({
+      id: SHARED_NO_CHILD_STUDENT_ID,
+      schoolId: '',
+      firstName: 'no',
+      lastName: 'child',
+      dob: '2000-01-01',
+      programId: SHARED_NO_CHILD_CASE_ID,
+      programType: '',
+      hhaPatientId: '555000111',
+      createdAt: nowIso(),
+    });
+    const w1 = seedNoChildWeek(store, {
+      programType: 'Fred S. Keller School',
+      weekStart: '2026-09-21',
+      sessionId: 'nc-1',
+    });
+    expect((await transferLockedWeek({ store, week: w1, hha, actorId: 'admin' })).errors).toEqual([]);
+    const w2 = seedNoChildWeek(store, {
+      programType: 'Fred S. Keller School',
+      weekStart: '2026-09-22',
+      sessionId: 'nc-2',
+    });
+    hha.calls.length = 0;
+    expect((await transferLockedWeek({ store, week: w2, hha, actorId: 'admin' })).errors).toEqual([]);
+    expect(hha.calls).not.toContain('createPatient');
+    expect(hha.calls).not.toContain('findPatient');
+    const patientId = '555000111';
+    // Same district: the one placement is reused, not duplicated.
+    expect(hha.placementsByPatient.get(patientId)).toHaveLength(1);
+    expect([...hha.visits.values()].map((v) => v.patientId)).toEqual([patientId, patientId]);
+  });
+
+  it('refuses a chart that carries the shared Program Id but is a real child', async () => {
+    const store = new MemoryStore();
+    const hha = slpAdditionalHha();
+    await hha.createPatient({
+      firstName: 'Real',
+      lastName: 'Kid',
+      dateOfBirth: '2016-04-02',
+      caseId: SHARED_NO_CHILD_CASE_ID,
+      externalId: SHARED_NO_CHILD_CASE_ID,
+    });
+    hha.calls.length = 0;
+    const week = seedNoChildWeek(store, {
+      programType: 'Fred S. Keller School',
+      weekStart: '2026-09-21',
+      sessionId: 'nc-bad',
+    });
+    const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(' ')).toMatch(/not "no child"/);
+    expect(hha.calls).not.toContain('createPatient');
+    expect(hha.visits.size).toBe(0);
+  });
+
+  it('adopts HHA_NO_CHILD_PATIENT_ID when it is a no-child chart', async () => {
+    const store = new MemoryStore();
+    const hha = slpAdditionalHha();
+    const existing = await hha.createPatient({
+      firstName: 'no',
+      lastName: 'child',
+      dateOfBirth: '2000-01-01',
+      caseId: 'NC0000000009',
+      externalId: 'NC0000000009',
+    });
+    hha.calls.length = 0;
+    const prev = process.env.HHA_NO_CHILD_PATIENT_ID;
+    process.env.HHA_NO_CHILD_PATIENT_ID = '123456789';
+    try {
+      // Mock ids are UUIDs, so seed a numeric-id chart the env var can point at.
+      hha.patients.set('123456789', {
+        id: '123456789',
+        firstName: 'no',
+        lastName: 'child',
+        dateOfBirth: '2000-01-01',
+      });
+      const week = seedNoChildWeek(store, {
+        programType: 'Fred S. Keller School',
+        weekStart: '2026-09-21',
+        sessionId: 'nc-env',
+      });
+      const result = await transferLockedWeek({ store, week, hha, actorId: 'admin' });
+      expect(result.errors).toEqual([]);
+      expect(hha.calls).not.toContain('createPatient');
+      expect([...hha.visits.values()][0]?.patientId).toBe('123456789');
+      expect(
+        store.data.students.find((s) => s.id === SHARED_NO_CHILD_STUDENT_ID)?.hhaPatientId,
+      ).toBe('123456789');
+      expect(existing.id).not.toBe('123456789');
+    } finally {
+      if (prev === undefined) delete process.env.HHA_NO_CHILD_PATIENT_ID;
+      else process.env.HHA_NO_CHILD_PATIENT_ID = prev;
+    }
   });
 
   it('fails a session with no service type and does not emit the provider PT pay code', async () => {

@@ -27,6 +27,7 @@ import {
   schoolBillingServiceNameCandidates,
 } from '@white-glove/shared';
 import {
+  appSettingsFromStore,
   dominantProgramTypeForSessions,
   labelHhaTransferError,
   mandateDurationMinutesForSession,
@@ -283,14 +284,27 @@ const NO_CHILD_PLACEHOLDER_ADDRESS: Required<SchoolAddressForPatient> = {
   zipCode: '10001',
 };
 
-/** Unique Program Id / AdmissionID so each no-child row is a new HHA patient. */
-function noChildCaseId(sessionId: string): string {
-  const hex = createHash('sha256')
-    .update(`${sessionId}|${nowIso()}|${Math.random()}`)
-    .digest('hex');
-  const digits = BigInt(`0x${hex.slice(0, 12)}`).toString(10).padStart(10, '0').slice(0, 10);
-  return `NC${digits}`;
+/**
+ * The one shared "No Child" patient (Miri, Nov 2026). Every no-child additional
+ * service / paid absence uses this single HHA patient. Its identity is:
+ *  - TMS: one Student row with this fixed id; its hhaPatientId is the HHA PatientID.
+ *  - HHA: Program Id / AdmissionID "PS" + this case id, so a lost TMS id is re-found
+ *    by AdmissionID instead of creating a second shared patient.
+ * Per-session NC########## patients are no longer created. The older ones stay in HHA.
+ */
+export const SHARED_NO_CHILD_STUDENT_ID = 'no-child-shared';
+export const SHARED_NO_CHILD_CASE_ID = 'NCSHARED';
+
+/** Chart is the placeholder "no child" (name only; DOB is a placeholder). */
+function isNoChildChart(demo: PatientDemoFields): boolean {
+  return (
+    String(demo.firstName || '').trim().toLowerCase() === 'no' &&
+    String(demo.lastName || '').trim().toLowerCase() === 'child'
+  );
 }
+
+/** Serializes find-or-create so two sends in one process cannot create two shared patients. */
+let sharedNoChildChain: Promise<unknown> = Promise.resolve();
 
 function completeSchoolAddress(
   school: { id?: string; address1?: string; city?: string; state?: string; zipCode?: string } | undefined,
@@ -337,19 +351,15 @@ function schoolAddressForNoChild(
 }
 
 /**
- * New TMS child + HHA patient (first "no", last "child") on this week's contract.
- * Never searches or reuses an existing "no child" patient — one patient per row.
- * Does not write the session's studentId.
+ * The district/contract for a no-child row: the session's saved program, else the
+ * week's. Throws when HHA has no ContractID for it (never guesses a district).
  */
-async function createNoChildPlaceholderForSession(options: {
+async function resolveNoChildProgramType(options: {
   store: MemoryStore;
   hha: HhaClient;
   week: WeeklyPeriod;
-  sessionId: string;
-  serviceCode?: string;
-  /** Saved on the no-child row. Does not require a caseload child named "no child". */
   programType?: string;
-}): Promise<Student> {
+}): Promise<string> {
   const { store, hha, week } = options;
   const programType =
     canonicalContractProgramName(options.programType) ||
@@ -359,38 +369,130 @@ async function createNoChildPlaceholderForSession(options: {
   const contractNum = await hha.resolveContractId(programType);
   if (!contractNum) {
     throw new Error(
-      `No HHA ContractID for program type "${programType || '(missing)'}" — needed to create a no-child patient for this additional service`,
+      `No HHA ContractID for program type "${programType || '(missing)'}" — needed to put this no-child additional service on a district contract`,
     );
   }
-  const schoolAddress = schoolAddressForNoChild(store, week, programType);
-  const address = schoolAddress ?? NO_CHILD_PLACEHOLDER_ADDRESS;
-  const caseId = noChildCaseId(options.sessionId);
-  const student = store.upsertStudent({
-    id: newId(),
-    schoolId: schoolAddress?.schoolId || String(week.schoolId || '').trim(),
-    firstName: 'no',
-    lastName: 'child',
-    dob: NO_CHILD_PLACEHOLDER_DOB,
-    programId: caseId,
+  return programType;
+}
+
+/**
+ * Find or create the ONE shared "No Child" HHA patient and return it with its TMS row.
+ * Order: stored hhaPatientId on the shared TMS row (chart must still be "no child")
+ * → HHA_NO_CHILD_PATIENT_ID (adopt an existing no-child chart) → FindPatient by the
+ * fixed AdmissionID → CreatePatient (coordinator / team / branch come from the
+ * configured CreatePatient defaults) once, then saved on the shared row.
+ * It never searches by the name "no child", so none of the 48 older NC charts is picked.
+ * The caller attaches the session's district contract with AddPatientContract.
+ */
+async function resolveSharedNoChildPatient(options: {
+  store: MemoryStore;
+  hha: HhaClient;
+  week: WeeklyPeriod;
+  programType: string;
+  serviceCode?: string;
+  /** Skip the stored id (ErrorID=-56) and re-find / re-create. */
+  forceResearch?: boolean;
+}): Promise<{ student: Student; patientId: string }> {
+  const run = async (): Promise<{ student: Student; patientId: string }> => {
+    const { store, hha, week } = options;
+    let shared = store.data.students.find((s) => s.id === SHARED_NO_CHILD_STUDENT_ID);
+    if (!shared) {
+      shared = store.upsertStudent({
+        id: SHARED_NO_CHILD_STUDENT_ID,
+        schoolId: '',
+        firstName: 'no',
+        lastName: 'child',
+        dob: NO_CHILD_PLACEHOLDER_DOB,
+        programId: SHARED_NO_CHILD_CASE_ID,
+        programType: '',
+        hhaPatientId: '',
+        createdAt: nowIso(),
+      });
+    }
+    const save = (patientId: string): { student: Student; patientId: string } => {
+      const row = store.data.students.find((s) => s.id === SHARED_NO_CHILD_STUDENT_ID) ?? shared!;
+      const saved = store.upsertStudent({ ...row, hhaPatientId: patientId });
+      return { student: saved, patientId };
+    };
+
+    // 1) Stored id, only when the chart is still the no-child placeholder.
+    const stored = shared.hhaPatientId?.trim() || '';
+    if (!options.forceResearch && isTrustedHhaPatientId(stored, SHARED_NO_CHILD_CASE_ID)) {
+      const demo = await hha.getPatientDemographicsFields(stored);
+      if (!demo.chartLoaded || isNoChildChart(demo)) return save(stored);
+    }
+
+    // 2) Explicit chart to adopt (must be a "no child" chart).
+    const envId = process.env.HHA_NO_CHILD_PATIENT_ID?.trim() || '';
+    if (isTrustedHhaPatientId(envId, SHARED_NO_CHILD_CASE_ID)) {
+      const demo = await hha.getPatientDemographicsFields(envId);
+      if (demo.chartLoaded && !isNoChildChart(demo)) {
+        throw new Error(
+          `HHA_NO_CHILD_PATIENT_ID ${envId} is not a "no child" chart. Refusing to use it for the shared No Child patient.`,
+        );
+      }
+      return save(envId);
+    }
+
+    // 3) Fixed AdmissionID. No names are passed, so no name search can pick another NC chart.
+    const found = await hha.findPatient({
+      caseId: SHARED_NO_CHILD_CASE_ID,
+      externalId: SHARED_NO_CHILD_CASE_ID,
+    });
+    if (found) {
+      const demo = await hha.getPatientDemographicsFields(found);
+      if (demo.chartLoaded && !isNoChildChart(demo)) {
+        throw new Error(
+          `HHA patient ${found} has the shared No Child Program Id (${SHARED_NO_CHILD_CASE_ID}) but its chart is not "no child". Refusing to transfer.`,
+        );
+      }
+      return save(found);
+    }
+
+    // 4) Create the shared patient once.
+    const schoolAddress = schoolAddressForNoChild(store, week, options.programType);
+    const address = schoolAddress ?? NO_CHILD_PLACEHOLDER_ADDRESS;
+    const created = await hha.createPatient({
+      firstName: 'no',
+      lastName: 'child',
+      dateOfBirth: NO_CHILD_PLACEHOLDER_DOB,
+      caseId: SHARED_NO_CHILD_CASE_ID,
+      externalId: SHARED_NO_CHILD_CASE_ID,
+      serviceCode: options.serviceCode?.trim() || undefined,
+      address1: address.address1,
+      city: address.city,
+      state: address.state,
+      zipCode: address.zipCode,
+    });
+    return save(created.id);
+  };
+
+  const next = sharedNoChildChain.then(run, run);
+  sharedNoChildChain = next.catch(() => undefined);
+  return next;
+}
+
+/**
+ * The shared patient for one session: the shared TMS row with the session's district
+ * as programType (contract, billing code, auth). programType is never saved on the
+ * shared row, so concurrent weeks do not overwrite each other.
+ */
+async function sharedNoChildForSession(options: {
+  store: MemoryStore;
+  hha: HhaClient;
+  week: WeeklyPeriod;
+  serviceCode?: string;
+  programType?: string;
+}): Promise<Student> {
+  const programType = await resolveNoChildProgramType(options);
+  const { student, patientId } = await resolveSharedNoChildPatient({
+    store: options.store,
+    hha: options.hha,
+    week: options.week,
     programType,
-    hhaPatientId: '',
-    createdAt: nowIso(),
+    serviceCode: options.serviceCode,
   });
-  const created = await hha.createPatient({
-    firstName: 'no',
-    lastName: 'child',
-    dateOfBirth: NO_CHILD_PLACEHOLDER_DOB,
-    caseId,
-    externalId: caseId,
-    serviceCode: options.serviceCode?.trim() || undefined,
-    address1: address.address1,
-    city: address.city,
-    state: address.state,
-    zipCode: address.zipCode,
-  });
-  student.hhaPatientId = created.id;
-  store.upsertStudent(student);
-  return student;
+  return { ...student, programType, hhaPatientId: patientId };
 }
 
 /**
@@ -528,6 +630,8 @@ async function locateOrScheduleVisitWithPatientRecovery(options: {
   store: MemoryStore;
   hha: HhaClient;
   student: { id: string } | undefined;
+  /** Needed to re-find the shared No Child patient after ErrorID=-56. */
+  week?: WeeklyPeriod;
   patientId: string;
   visit: Parameters<HhaClient['locateOrScheduleVisit']>[0];
 }): Promise<{ result: Awaited<ReturnType<HhaClient['locateOrScheduleVisit']>>; patientId: string }> {
@@ -547,27 +651,26 @@ async function locateOrScheduleVisitWithPatientRecovery(options: {
     live.hhaPatientId = '';
 
     // 2) Real children: search first, CreatePatient only if not found.
-    //    No-child placeholders: always a new patient (never reuse another "no child").
+    //    No-child: re-find / re-create the ONE shared No Child patient (never a per-session one).
     let recovered: string | undefined;
     if (isNoChildPlaceholderName(live)) {
-      const caseId = noChildCaseId(live.id);
-      const addr = schoolAddressForStudent(store, live);
-      const created = await hha.createPatient({
-        firstName: 'no',
-        lastName: 'child',
-        dateOfBirth: live.dob?.trim() || NO_CHILD_PLACEHOLDER_DOB,
-        caseId,
-        externalId: caseId,
-        serviceCode: options.visit.serviceCode || undefined,
-        address1: addr?.address1,
-        city: addr?.city,
-        state: addr?.state,
-        zipCode: addr?.zipCode,
+      if (!options.week) throw err;
+      const programType = await resolveNoChildProgramType({
+        store,
+        hha,
+        week: options.week,
+        programType: options.visit.programType ?? live.programType,
       });
-      live.programId = caseId;
-      live.hhaPatientId = created.id;
-      store.upsertStudent(live);
-      recovered = created.id;
+      recovered = (
+        await resolveSharedNoChildPatient({
+          store,
+          hha,
+          week: options.week,
+          programType,
+          serviceCode: options.visit.serviceCode || undefined,
+          forceResearch: true,
+        })
+      ).patientId;
     } else {
       recovered = await resolveHhaPatientId({
         hha,
@@ -585,7 +688,8 @@ async function locateOrScheduleVisitWithPatientRecovery(options: {
         `HHA PatientID ${patientId} invalid for agency (ErrorID=-56); search/create found no patient for ${live.firstName} ${live.lastName}`.trim(),
       );
     }
-    persistStudentHhaPatientId(store, live.id, recovered);
+    // The shared No Child row is saved by resolveSharedNoChildPatient; legacy NC rows are not touched.
+    if (!isNoChildPlaceholderName(live)) persistStudentHhaPatientId(store, live.id, recovered);
     patientId = recovered;
 
     // New/recovered patients have no placement — attach program-type contract before retry.
@@ -825,7 +929,13 @@ export async function transferLockedWeek(options: {
       // Additional services are the exception and still use the clock.
       // A group-mandate child seen individually (no peer / individual tag) is
       // billed and paid as individual at that same mandate length.
-      const shortErr = sessionShorterThanMandateError(session, store.data.mandates);
+      // Admin locker "allow a session shorter than the mandate service type" (default OFF).
+      // When ON the visit is still billed and paid at the mandate length (rate + service code).
+      const allowShortSession =
+        appSettingsFromStore(store.data.settings).allowShortSessionVsMandate === true;
+      const shortErr = allowShortSession
+        ? null
+        : sessionShorterThanMandateError(session, store.data.mandates);
       if (shortErr) {
         throw new Error(shortErr);
       }
@@ -948,13 +1058,13 @@ export async function transferLockedWeek(options: {
       const paidAbsenceNoChild =
         !String(session.studentId || '').trim() && isPaidAbsenceSession(session);
       if (additionalServiceWithoutChild(session) || paidAbsenceNoChild) {
-        // New patient on this week's contract, then CreateSchedule on that patient.
+        // The ONE shared No Child patient. Its district contract (this session's program)
+        // is added below by ensurePatientProgramContract (AddPatientContract) when missing.
         // Session stays without a studentId so it is not attached to a real child.
-        student = await createNoChildPlaceholderForSession({
+        student = await sharedNoChildForSession({
           store,
           hha,
           week: workingWeek,
-          sessionId: session.id,
           serviceCode: createServiceHint,
           programType: session.programType,
         });
@@ -1017,15 +1127,25 @@ export async function transferLockedWeek(options: {
       }
       const contractStart =
         matchedMandate?.startOn?.trim() || session.dateOfService || undefined;
-      await ensurePatientProgramContract({
-        hha,
-        patientId,
-        programType: student?.programType,
-        startDate: contractStart,
-        visitDate: session.dateOfService,
-        serviceCodeId,
-        serviceCode: billingServiceName,
-      });
+      try {
+        // Shared No Child: reuses this district's placement when the patient has it,
+        // otherwise AddPatientContract puts the district contract on the same patient.
+        await ensurePatientProgramContract({
+          hha,
+          patientId,
+          programType: student?.programType,
+          startDate: contractStart,
+          visitDate: session.dateOfService,
+          serviceCodeId,
+          serviceCode: billingServiceName,
+        });
+      } catch (contractErr) {
+        if (student?.id !== SHARED_NO_CHILD_STUDENT_ID) throw contractErr;
+        const raw = contractErr instanceof Error ? contractErr.message : String(contractErr);
+        throw new Error(
+          `Could not add the "${student.programType || '(missing)'}" contract to the shared No Child patient ${patientId}. (${raw})`,
+        );
+      }
 
       // Patient-level auth (Period + Maximum from mandate) so HHA can pay the visit.
       // Mirror opened/new_services CreatePatientAuthorization — CreateSchedule has no AuthID field.
@@ -1036,7 +1156,11 @@ export async function transferLockedWeek(options: {
         serviceCodeId,
         serviceCode: billingServiceName,
         programType: student?.programType,
-        programId: student?.programId,
+        // Shared No Child: scope the auth number by contract so two districts never collide.
+        programId:
+          student?.id === SHARED_NO_CHILD_STUDENT_ID
+            ? `${student.programId}-${contractNum}`
+            : student?.programId,
         mandate: matchedMandate,
         visitDate: session.dateOfService,
         visitDurationMinutes: clockMinutes ?? matchedMandate?.durationMinutes ?? undefined,
@@ -1103,32 +1227,47 @@ export async function transferLockedWeek(options: {
       const priorVisitId = existing?.hhaVisitId?.trim() || '';
       // Paid absence stays "paid absence" on the timesheet. CreateSchedule has no
       // attendance field, so the visit is the same attended school visit HHA confirms.
-      const scheduled = await locateOrScheduleVisitWithPatientRecovery({
-        store,
-        hha,
-        student,
-        patientId,
-        visit: {
+      let scheduled;
+      try {
+        scheduled = await locateOrScheduleVisitWithPatientRecovery({
+          store,
+          hha,
+          student,
+          week: workingWeek,
           patientId,
-          // Prior HHA VisitID for rematch — never TMS session UUID (UUIDs are not VisitIDs).
-          // findExistingVisit ignores -415 on this id and falls through to SearchVisits/CreateSchedule.
-          visitExternalId: /^\d+$/.test(priorVisitId) ? priorVisitId : undefined,
-          visitDate: session.dateOfService,
-          startTime: session.beginTime,
-          endTime: session.endTime,
-          serviceCode: billingServiceName,
-          serviceCodeId,
-          contractId: String(contractNum),
-          caregiverId,
-          payCodeId,
-          scheduleType,
-          programType: student?.programType,
-          providerName: `${provider.firstName} ${provider.lastName}`,
-          payRate: String(rate),
-          // Must equal schedule window (begin/end). School billing name comes from mandate above.
-          durationMinutes: clockMinutes ?? undefined,
-        },
-      });
+          visit: {
+            patientId,
+            // Prior HHA VisitID for rematch — never TMS session UUID (UUIDs are not VisitIDs).
+            // findExistingVisit ignores -415 on this id and falls through to SearchVisits/CreateSchedule.
+            visitExternalId: /^\d+$/.test(priorVisitId) ? priorVisitId : undefined,
+            visitDate: session.dateOfService,
+            startTime: session.beginTime,
+            endTime: session.endTime,
+            serviceCode: billingServiceName,
+            serviceCodeId,
+            contractId: String(contractNum),
+            caregiverId,
+            payCodeId,
+            scheduleType,
+            programType: student?.programType,
+            providerName: `${provider.firstName} ${provider.lastName}`,
+            payRate: String(rate),
+            // Must equal schedule window (begin/end). School billing name comes from mandate above.
+            durationMinutes: clockMinutes ?? undefined,
+          },
+        });
+      } catch (scheduleErr) {
+        const scheduleRaw =
+          scheduleErr instanceof Error ? scheduleErr.message : String(scheduleErr);
+        // HHA -74 Invalid PayCodeID does not name the code — include what we sent.
+        if (/PayCodeID/i.test(scheduleRaw) && /(?:ErrorID\s*=\s*-74|Invalid)/i.test(scheduleRaw)) {
+          throw new Error(
+            `Invalid PayCodeID for "${pay.payCodeName}" (PayCodeID ${payCodeId}) — ` +
+              `the pay code is not on this caregiver in HHA. (${scheduleRaw})`,
+          );
+        }
+        throw scheduleErr;
+      }
       patientId = scheduled.patientId;
       const result = scheduled.result;
       scheduledVisitId = result.id;

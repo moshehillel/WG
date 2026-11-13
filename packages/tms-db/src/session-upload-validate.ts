@@ -273,7 +273,7 @@ export function extractNoteProgressForCompare(notes: string): string {
 
 /** Missed / empty absence templates must not be copy-paste sources for attended notes. */
 export function noteIsCopyPasteSource(attendance: string, notes: string): boolean {
-  if (attendance === 'missed') return false;
+  if (attendance === 'missed' || attendance === 'paid_absence') return false;
   const normalized = normalizeNoteForCompare(notes);
   if (!normalized) return false;
   // Bare miss labels left after stripping still aren't real clinical notes.

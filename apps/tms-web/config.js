@@ -1,1 +1,1 @@
-window.TMS_CONFIG={apiUrl:"https://wgfront.netlify.app/api",userPoolId:"us-east-1_nDJo2pcjL",clientId:"26mqlo51v8au2mhcg0nbmh4bu2"};
+window.TMS_CONFIG={apiUrl:"https://tms.whiteglovecare.net/api",userPoolId:"us-east-1_nDJo2pcjL",clientId:"26mqlo51v8au2mhcg0nbmh4bu2"};

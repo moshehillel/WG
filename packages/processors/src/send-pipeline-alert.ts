@@ -67,14 +67,14 @@ function deliverabilityHeaders(options: {
   ];
 }
 
-/** Build a multipart MIME message for SES SendRawEmail (HTML + optional CSV attachments). */
+/** Build a multipart MIME message for SES SendRawEmail (plain text, optional HTML, CSV attachments). */
 export function buildRawMimeMessage(options: {
   fromHeader: string;
   to: string;
   replyTo: string;
   subject: string;
   textBody: string;
-  htmlBody: string;
+  htmlBody?: string;
   attachments?: PipelineAlertAttachment[];
   fromEmail?: string;
 }): string {
@@ -98,25 +98,37 @@ export function buildRawMimeMessage(options: {
   ];
 
   const parts: string[] = [];
-  parts.push(
-    `--${mixed}`,
-    `Content-Type: multipart/alternative; boundary="${alt}"`,
-    '',
-    `--${alt}`,
-    'Content-Type: text/plain; charset=UTF-8',
-    'Content-Transfer-Encoding: 7bit',
-    '',
-    options.textBody,
-    '',
-    `--${alt}`,
-    'Content-Type: text/html; charset=UTF-8',
-    'Content-Transfer-Encoding: 7bit',
-    '',
-    options.htmlBody,
-    '',
-    `--${alt}--`,
-    '',
-  );
+  const htmlBody = options.htmlBody?.trim();
+  if (htmlBody) {
+    parts.push(
+      `--${mixed}`,
+      `Content-Type: multipart/alternative; boundary="${alt}"`,
+      '',
+      `--${alt}`,
+      'Content-Type: text/plain; charset=UTF-8',
+      'Content-Transfer-Encoding: 7bit',
+      '',
+      options.textBody,
+      '',
+      `--${alt}`,
+      'Content-Type: text/html; charset=UTF-8',
+      'Content-Transfer-Encoding: 7bit',
+      '',
+      htmlBody,
+      '',
+      `--${alt}--`,
+      '',
+    );
+  } else {
+    parts.push(
+      `--${mixed}`,
+      'Content-Type: text/plain; charset=UTF-8',
+      'Content-Transfer-Encoding: 7bit',
+      '',
+      options.textBody,
+      '',
+    );
+  }
 
   for (const att of attachments) {
     const contentType = att.contentType ?? 'text/csv; charset=utf-8';
@@ -149,7 +161,7 @@ async function sendSesHtmlBatch(options: {
   replyTo?: string;
   subject: string;
   textBody: string;
-  htmlBody: string;
+  htmlBody?: string;
   attachments?: PipelineAlertAttachment[];
 }): Promise<SesBatchResult> {
   const source = alertFromHeader(options.fromEmail, options.fromName);
@@ -218,7 +230,8 @@ export async function sendPipelineAlert(options: {
   alwaysSns?: boolean;
   subject: string;
   textBody: string;
-  htmlBody: string;
+  /** Omit for pipeline alerts. Row detail is in the CSV attachments. */
+  htmlBody?: string;
   attachments?: PipelineAlertAttachment[];
 }): Promise<PipelineAlertResult> {
   const recipients = parseAlertEmails(options.alertEmails);

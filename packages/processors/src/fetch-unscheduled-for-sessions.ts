@@ -1,6 +1,7 @@
 import {
   ensureEntSpaToken,
   fetchAllUnscheduledServices,
+  mfaStatusFromEnv,
   resolveEntCoordinatorIds,
   spaTokenFromEnv,
   type EntGraphqlConfig,
@@ -26,13 +27,20 @@ export class UnscheduledFetchError extends Error {
   }
 }
 
-function failUnscheduled(message: string, cause?: unknown): never {
+function failUnscheduled(message: string, env: NodeJS.ProcessEnv, cause?: unknown): never {
   const detail = cause instanceof Error ? cause.message : cause ? String(cause) : '';
   const suffix = detail && !message.includes(detail) ? `: ${detail}` : '';
-  const hint = /target crashed|devtools|browser/i.test(`${message}${suffix}`)
+  const combined = `${message}${suffix}`;
+  const clock = mfaStatusFromEnv(env);
+  const windowOpen = clock.renewedAt != null && (clock.daysRemaining ?? 0) > 2;
+  const mfaChallenged = (cause as { code?: string } | undefined)?.code === 'HHA_MFA_REQUIRED';
+  const hint = mfaChallenged || /target crashed|devtools|browser/i.test(combined)
     ? ''
-    : ' Renew HHA MFA on the White Glove dashboard if cookies expired, then re-run.';
-  throw new UnscheduledFetchError(`${message}${suffix}.${hint}`.trim(), cause instanceof Error ? { cause } : undefined);
+    : windowOpen
+      ? ' The 30-day HHA MFA window is still open. The saved SPA token was missing or expired.'
+      : ' Renew HHA MFA on the White Glove dashboard if cookies expired, then re-run.';
+  const text = /[.!?]$/.test(combined) ? `${combined}${hint}` : `${combined}.${hint}`;
+  throw new UnscheduledFetchError(text.trim(), cause instanceof Error ? { cause } : undefined);
 }
 
 function addCalendarDays(isoDate: string, delta: number): string {
@@ -87,7 +95,7 @@ export async function fetchUnscheduledForSessions(
   try {
     token = spaTokenFromEnv(env) ?? (await ensureEntSpaToken(env));
   } catch (err) {
-    failUnscheduled('HHA ENT login or SPA token capture failed', err);
+    failUnscheduled('HHA ENT login or SPA token capture failed', env, err);
   }
   const spaToken = token;
 
@@ -108,6 +116,7 @@ export async function fetchUnscheduledForSessions(
   if (result.status !== 200 || result.errors) {
     failUnscheduled(
       `HHA getUnscheduledServices failed (HTTP ${result.status})`,
+      env,
       result.errors ? JSON.stringify(result.errors) : undefined,
     );
   }

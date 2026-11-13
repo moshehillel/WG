@@ -85,84 +85,19 @@ export function buildPayCodeName(
   return { payCodeName, discipline, rateSuffix, isGroup };
 }
 
-export type PayCodeCatalogRow = { id: string; name: string };
-
-export type FallbackPayCodePick = {
-  id: string;
-  name: string;
-  /** Numeric rate suffix for CreateSchedule payRate (e.g. "70", "52.5"). */
-  rateSuffix: string;
-  isGroup: boolean;
-};
-
-function rateSuffixFromCatalogMatch(raw: string): string {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return raw;
-  if (Number.isInteger(n) || Math.abs(n - Math.trunc(n)) < 1e-9) return String(Math.trunc(n));
-  return String(parseFloat(n.toFixed(2)));
-}
-
-function parseDisciplinePayCodeRow(
-  row: PayCodeCatalogRow,
-  disc: string,
-  stDisc: string,
-): FallbackPayCodePick | undefined {
-  const n = row.name.trim().toUpperCase();
-  const groupM = n.match(/^([A-Z]{2,4})\s+GROUP\s+\$?\s*(\d+(?:\.\d+)?)/);
-  if (groupM) {
-    if (groupM[1] !== stDisc && groupM[1] !== disc) return undefined;
-    return {
-      id: row.id,
-      name: row.name,
-      rateSuffix: rateSuffixFromCatalogMatch(groupM[2]!),
-      isGroup: true,
-    };
-  }
-  const dollarM = n.match(/^([A-Z]{2,4})\s+\$(\d+(?:\.\d+)?)/);
-  if (dollarM) {
-    if (dollarM[1] !== stDisc && dollarM[1] !== disc) return undefined;
-    return {
-      id: row.id,
-      name: row.name,
-      rateSuffix: rateSuffixFromCatalogMatch(dollarM[2]!),
-      isGroup: false,
-    };
-  }
-  const bareM = n.match(/^([A-Z]{2,4})\s+(\d+(?:\.\d+)?)/);
-  if (!bareM) return undefined;
-  if (bareM[1] !== stDisc && bareM[1] !== disc) return undefined;
-  return {
-    id: row.id,
-    name: row.name,
-    rateSuffix: rateSuffixFromCatalogMatch(bareM[2]!),
-    isGroup: false,
-  };
-}
+/** Shown when ProviderSoft Pay Rate is missing, blank, or zero. No catalog pay code is chosen. */
+export const BLANK_PAY_RATE_MESSAGE = 'Pay rate is blank';
 
 /**
- * Placeholder-visit fallback when ProviderSoft Pay Rate is blank:
- * first GetPayRateCodes / caregiver catalog row for the service discipline
- * (SLP → ST). Prefers group vs individual to match `wantGroup`, then first
- * remaining match in catalog order.
+ * New-services EVV placeholder: auth may have been written, but CreateSchedule
+ * did not run because Pay Rate is blank and no caregiver-assigned rate was usable.
  */
-export function pickFirstPayCodeForDiscipline(
-  discipline: string | undefined,
-  hhaRows: PayCodeCatalogRow[],
-  options?: { group?: boolean },
-): FallbackPayCodePick | undefined {
-  if (!discipline?.trim()) return undefined;
-  const disc = discipline.trim().toUpperCase();
-  const stDisc = disc === 'SLP' ? 'ST' : disc;
-  const wantGroup = options?.group === true;
+export const BLANK_PAY_RATE_EVV_VISIT_MESSAGE =
+  'Pay rate is blank — EVV visit not created';
 
-  const matches: FallbackPayCodePick[] = [];
-  for (const row of hhaRows) {
-    const parsed = parseDisciplinePayCodeRow(row, disc, stDisc);
-    if (parsed) matches.push(parsed);
-  }
-  if (!matches.length) return undefined;
-
-  const preferred = matches.filter((m) => m.isGroup === wantGroup);
-  return preferred[0] ?? matches[0];
+/** True when Pay Rate is missing, blank, or not a positive amount (including 0). */
+export function isBlankOrZeroPayRate(payRate: string | number | null | undefined): boolean {
+  if (payRate === null) return true;
+  return payRateSuffix(payRate) === undefined;
 }
 

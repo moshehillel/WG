@@ -16,7 +16,12 @@ const targets = [
     id: 'opened',
     entry: 'packages/processors/src/handlers/opened.ts',
     fnName: 'WhiteGloveStack-OpenedFn4D66D9CE-4x7znFUvYknC',
-    mustInclude: ['overlap-existing', 'Overlapping shifts are not allowed'],
+    mustInclude: [
+      'overlap-existing',
+      'Overlapping shifts are not allowed',
+      'ensureAcceptedServices',
+      '==="SLP"?"ST"',
+    ],
   },
   {
     id: 'closed',

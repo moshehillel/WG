@@ -4,7 +4,10 @@ import {
   buildHandoffEmail,
   buildLunaSystemPrompt,
   checkLunaGuestRateLimit,
+  LUNA_CHAT_MAX_TOKENS,
   LUNA_GUEST_USER,
+  LUNA_OFF_TOPIC_REPLY,
+  lunaChatCompletionBody,
   normalizeHandoffContact,
   parseLunaModelJson,
   resetLunaGuestRateLimits,
@@ -43,6 +46,22 @@ describe('luna', () => {
     expect(prompt).toMatch(/Last service/i);
     expect(prompt).toMatch(/handoff/i);
     expect(prompt).not.toMatch(/HHA_USE_PRODUCTION\s*=\s*false/i);
+  });
+
+  it('refuses off-topic chat in the prompt and caps the reply', () => {
+    const prompt = buildLunaSystemPrompt();
+    expect(prompt).toContain(LUNA_OFF_TOPIC_REPLY);
+    expect(prompt).toMatch(/uploads, blocked sessions, mandates, signatures, CPT, makeup, timesheets, HHA errors/i);
+    expect(prompt).toMatch(/do not answer the question/i);
+    expect(prompt).toMatch(/jokes, homework, general knowledge, roleplay/i);
+    const body = lunaChatCompletionBody(
+      [{ role: 'user', content: 'Tell me a joke' }],
+      'Role: therapist',
+    );
+    expect(body.max_tokens).toBe(LUNA_CHAT_MAX_TOKENS);
+    expect(body.max_tokens).toBeLessThanOrEqual(400);
+    expect(body.messages[0]?.content).toContain(LUNA_OFF_TOPIC_REPLY);
+    expect(body.model).toBeTruthy();
   });
 
   it('parses ask and handoff JSON', () => {
@@ -101,7 +120,7 @@ describe('luna', () => {
         active: true,
         createdAt: '2026-01-01T00:00:00.000Z',
       },
-      pageUrl: 'https://wgfront.netlify.app/',
+      pageUrl: 'https://tms.whiteglovecare.net/',
       summary: 'Cannot submit timesheet.',
       timestamp: '2026-09-04T00:00:00.000Z',
       contactName: 'Ada Therapist',
@@ -120,13 +139,13 @@ describe('luna', () => {
     expect(text).toContain('Cannot submit timesheet.');
     expect(text).toContain('User: Submit fails');
     expect(text).toContain('Luna: Which error?');
-    expect(text).toContain('https://wgfront.netlify.app/');
+    expect(text).toContain('https://tms.whiteglovecare.net/');
   });
 
   it('builds guest handoff without signed-in account details', () => {
     const { text } = buildHandoffEmail({
       user: LUNA_GUEST_USER,
-      pageUrl: 'https://wgfront.netlify.app/',
+      pageUrl: 'https://tms.whiteglovecare.net/',
       summary: 'Cannot sign in.',
       timestamp: '2026-09-07T00:00:00.000Z',
       contactName: 'Guest User',

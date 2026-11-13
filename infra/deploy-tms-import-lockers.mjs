@@ -1,21 +1,45 @@
+﻿/**
+ * LIVE: TmsApiFn code only. Ticket 0QMQ_U "locker": two admin switches, default OFF:
+ *  - allowImportWithHardBlocks (import past hard blocks where technically possible)
+ *  - allowShortSessionVsMandate (session shorter than the mandate service type)
+ * No env change except the git stamp. HHA_USE_PRODUCTION must stay true. No CDK.
+ * CreatePatient coordinator 84898, team 10022046, branch 10090277 are unchanged.
+ */
 import * as esbuild from 'esbuild';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
+import { stampLambdaGitEnv, readGitSha } from './deploy-stamp.mjs';
 
+process.env.AWS_NO_VERIFY_SSL = '1';
+const aws = 'aws --no-verify-ssl';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.join(__dirname, '..');
+const fn = 'WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ';
+const gitSha = `${readGitSha()}-tms-import-lockers-2026-11-11`;
+
+const sh = (cmd, cwd = repoRoot) => execSync(cmd, { encoding: 'utf8', cwd, stdio: 'inherit' });
+const getEnv = () =>
+  JSON.parse(
+    execSync(
+      `${aws} lambda get-function-configuration --function-name ${fn} --query Environment.Variables --output json`,
+      { encoding: 'utf8' },
+    ),
+  );
+
+const before = getEnv();
+if (before.HHA_USE_PRODUCTION !== 'true') throw new Error('HHA_USE_PRODUCTION is not true; refusing');
+
+sh('npm run build -w @white-glove/shared');
+sh('npm run build -w @white-glove/tms-db');
+
 const outDir = path.join(__dirname, 'tms-api-import-lockers-asset');
+const stageDir = path.join(__dirname, '_zip_stage_import_lockers');
 const outfile = path.join(outDir, 'index.mjs');
 const zipPath = path.join(__dirname, 'tms-api-import-lockers.zip');
-const fnName = 'WhiteGloveStack-TmsApiFn07CCEBE7-acrm4XvWrXMQ';
-
 fs.mkdirSync(outDir, { recursive: true });
-for (const f of fs.readdirSync(outDir)) {
-  fs.unlinkSync(path.join(outDir, f));
-}
-
+for (const f of fs.readdirSync(outDir)) fs.unlinkSync(path.join(outDir, f));
 await esbuild.build({
   entryPoints: [path.join(repoRoot, 'packages/tms-api/src/handler.ts')],
   bundle: true,
@@ -28,49 +52,43 @@ await esbuild.build({
   banner: {
     js: "import { createRequire } from 'module'; const require = createRequire(import.meta.url);",
   },
+  define: { 'process.env.TMS_GIT_SHA': JSON.stringify(gitSha) },
   mainFields: ['module', 'main'],
   external: ['playwright', 'playwright-core', '@playwright/test'],
 });
-
-console.log('bundled', outfile);
-
+const bundled = fs.readFileSync(outfile, 'utf8');
+for (const t of ['allowImportWithHardBlocks', 'allowShortSessionVsMandate', 'allowShortSession', 'hard-block locker is ON', 'NCSHARED', '10022046', '84898', 'WGCC Therapy Services, 10090277']) {
+  if (!bundled.includes(t)) throw new Error(`bundle missing ${t}`);
+}
+fs.mkdirSync(stageDir, { recursive: true });
+for (const f of fs.readdirSync(stageDir)) fs.unlinkSync(path.join(stageDir, f));
+fs.copyFileSync(outfile, path.join(stageDir, 'index.mjs'));
 if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-execSync(
-  `powershell -NoProfile -Command "Compress-Archive -Path '${outfile.replace(/'/g, "''")}'${fs.existsSync(outfile + '.map') ? `, '${(outfile + '.map').replace(/'/g, "''")}'` : ''} -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force"`,
-  { stdio: 'inherit' },
+sh(
+  `powershell -NoProfile -Command "Compress-Archive -Path '${path.join(stageDir, 'index.mjs').replace(/'/g, "''")}' -DestinationPath '${zipPath.replace(/'/g, "''")}' -Force"`,
+  __dirname,
 );
-console.log('zipped', zipPath, fs.statSync(zipPath).size);
+console.log(
+  execSync(
+    `${aws} lambda update-function-code --function-name ${fn} --zip-file fileb://${zipPath} --region us-east-1 --query "{CodeSha256:CodeSha256,LastModified:LastModified,CodeSize:CodeSize}" --output json`,
+    { encoding: 'utf8', cwd: __dirname },
+  ),
+);
+execSync(`${aws} lambda wait function-updated --function-name ${fn} --region us-east-1`, { stdio: 'inherit' });
+stampLambdaGitEnv(fn, { sha: gitSha });
 
-const out = execSync(
-  `aws lambda update-function-code --function-name ${fnName} --zip-file fileb://${zipPath} --query "{CodeSha256:CodeSha256,LastModified:LastModified,CodeSize:CodeSize}" --output json`,
-  { encoding: 'utf8', cwd: __dirname },
+const after = getEnv();
+const lost = Object.keys(before).filter((k) => !(k in after));
+const changed = Object.keys(before).filter(
+  (k) => k in after && before[k] !== after[k] && !/^TMS_(GIT_SHA|BUILT_AT)$/.test(k),
 );
-console.log(out);
+console.log({
+  HHA_USE_PRODUCTION: after.HHA_USE_PRODUCTION,
+  HHA_TMS_BRANCH_ID: after.HHA_TMS_BRANCH_ID,
+  HHA_COORDINATOR_ID: after.HHA_COORDINATOR_ID,
+  HHA_TEAM_ID: after.HHA_TEAM_ID,
+  lost,
+  changed,
+});
+if (after.HHA_USE_PRODUCTION !== 'true' || lost.length || changed.length) throw new Error('env verification failed');
 
-const env = execSync(
-  `aws lambda get-function-configuration --function-name ${fnName} --query "{HHA_USE_MOCK:Environment.Variables.HHA_USE_MOCK,HHA_USE_PRODUCTION:Environment.Variables.HHA_USE_PRODUCTION,HHA_ALLOW_PRODUCTION:Environment.Variables.HHA_ALLOW_PRODUCTION,Handler:Handler,Runtime:Runtime}" --output json`,
-  { encoding: 'utf8' },
-);
-console.log(env);
-
-fs.writeFileSync(
-  path.join(__dirname, 'cdk-tms-import-lockers-deploy-out.txt'),
-  [
-    'TMS import/locker rules — processed-week add, no-mandate block, cycle over-check, group lockers',
-    `Function: ${fnName}`,
-    out.trim(),
-    env.trim(),
-    'HHA: sandbox preserved',
-    '',
-    'Rules:',
-    '1. Processed weeks: existing sessions immutable; new sessions/import allowed; overlap still checked',
-    '2. Makeup: miss-on-date link OR makeup-auth capacity',
-    '3. No mandate on file → BLOCK import',
-    '4. Under-mandate → warning only',
-    '5. Cycle (school_day_cycle): densest N-school-day window over-check (not silent weekly skip)',
-    '6. Group size cap: unspecified/small group → max 2; over = block; under = OK',
-    '7. Group↔individual mix → block',
-    '8. Group-mandate seen individually: note MUST say no peer available → else BLOCK; individual rate + overlap',
-    '',
-  ].join('\n'),
-);

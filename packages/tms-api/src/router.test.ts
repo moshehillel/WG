@@ -1549,7 +1549,7 @@ describe('TMS API weekly loop', () => {
         query: {},
         body: {
           messages: [{ role: 'user', content: 'I cannot sign in' }],
-          pageUrl: 'https://wgfront.netlify.app/',
+          pageUrl: 'https://tms.whiteglovecare.net/',
         },
       });
       // Guest path is public; without OpenAI configured we get 503, never 401.
@@ -1593,6 +1593,204 @@ describe('TMS API weekly loop', () => {
     const row = (report.body as { rows: Array<{ status: string; schoolName: string }> }).rows[0];
     expect(row?.status).toBe('overdue');
     expect(row?.schoolName).toBe('Forest Road');
+  });
+
+  it('creates one due date per selected child with provider on the report', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.upsertSchool({
+      id: newId(),
+      name: 'Forest Road',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const mkStudent = (firstName: string, lastName: string) =>
+      store.upsertStudent({
+        id: newId(),
+        schoolId: school.id,
+        firstName,
+        lastName,
+        dob: '',
+        programId: '',
+        programType: 'Baldwin UFSD',
+        hhaPatientId: '',
+        createdAt: nowIso(),
+      });
+    const a = mkStudent('Aiden', 'Odne');
+    const b = mkStudent('Bella', 'Park');
+    store.upsertMandate({
+      id: newId(),
+      studentId: a.id,
+      providerId: provider.id,
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      ratioGroup: false,
+      durationMinutes: 30,
+      billingServiceName: 'PT school 30',
+      sourcePdfKey: '',
+      parsedAt: '',
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    const created = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/due-dates',
+      headers: adminH,
+      query: {},
+      body: {
+        schoolId: school.id,
+        kind: 'progress',
+        dueOn: '2030-01-15',
+        studentIds: [b.id, a.id],
+      },
+    });
+    expect(created.status).toBe(201);
+    expect((created.body as { count: number }).count).toBe(2);
+    const wrong = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/due-dates',
+      headers: adminH,
+      query: {},
+      body: { schoolId: school.id, kind: 'progress', dueOn: '2030-01-15', studentIds: ['nope'] },
+    });
+    expect(wrong.status).toBe(404);
+    const report = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/due-dates',
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    const rows = (
+      report.body as { rows: Array<{ studentName: string; providerName: string }> }
+    ).rows;
+    expect(rows.map((r) => r.studentName)).toEqual(['Aiden Odne', 'Bella Park']);
+    expect(rows[0]?.providerName).toBeTruthy();
+    expect(rows[1]?.providerName).toBe('');
+
+    const fromNotes = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/due-dates',
+      headers: adminH,
+      query: {},
+      body: {
+        schoolId: school.id,
+        kind: 'progress',
+        dueOn: '2030-02-01',
+        notes: 'for the following Odne Aiden',
+      },
+    });
+    expect(fromNotes.status).toBe(201);
+    const noted = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/due-dates',
+      headers: adminH,
+      query: { from: '2030-02-01', to: '2030-02-01' },
+      body: {},
+    });
+    const notedRows = (
+      noted.body as { rows: Array<{ studentName: string; providerName: string }> }
+    ).rows;
+    expect(notedRows.map((r) => r.studentName)).toEqual(['Aiden Odne']);
+    expect(notedRows[0]?.providerName).toBeTruthy();
+  });
+
+  it('due-date report hides completed, shows district, lists children instead of school-wide; therapists only see near-term own-child reminders', async () => {
+    const { store, provider } = storeWithTherapist();
+    const school = store.upsertSchool({
+      id: newId(),
+      name: 'Forest Road',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const mkStudent = (firstName: string, lastName: string) =>
+      store.upsertStudent({
+        id: newId(),
+        schoolId: school.id,
+        firstName,
+        lastName,
+        dob: '',
+        programId: '',
+        programType: 'Baldwin UFSD',
+        hhaPatientId: '',
+        createdAt: nowIso(),
+      });
+    const mine = mkStudent('Aiden', 'Odne');
+    const other = mkStudent('Bella', 'Park');
+    store.upsertMandate({
+      id: newId(),
+      studentId: mine.id,
+      providerId: provider.id,
+      serviceType: 'Physical Therapy',
+      discipline: 'PT',
+      frequencyPerWeek: 2,
+      ratioGroup: false,
+      durationMinutes: 30,
+      billingServiceName: 'PT school 30',
+      sourcePdfKey: '',
+      parsedAt: '',
+      startOn: '',
+      endOn: '',
+      createdAt: nowIso(),
+    });
+    const mkDue = (over: Record<string, unknown>) =>
+      store.upsertDueDate({
+        id: newId(),
+        schoolId: school.id,
+        kind: 'progress',
+        dueOn: '2099-01-01',
+        notes: '',
+        completedAt: '',
+        lastNagOn: '',
+        ...over,
+      } as never);
+    const soon = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
+    mkDue({ dueOn: '2099-01-01' }); // school-wide, far future
+    mkDue({ dueOn: '2098-01-01', completedAt: nowIso() }); // completed
+    const nearMine = mkDue({ dueOn: soon, studentId: mine.id });
+    mkDue({ dueOn: soon, studentId: other.id });
+    store.addAlert({
+      id: newId(),
+      userId: '',
+      kind: 'due_progress',
+      severity: 'warning',
+      body: 'Forest Road (Bella Park): progress due 2099-01-01',
+      entityRef: 'due:x',
+      resolved: false,
+      createdAt: nowIso(),
+    });
+
+    const report = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/reports/due-dates',
+      headers: adminH,
+      query: {},
+      body: {},
+    });
+    const rows = (
+      report.body as { rows: Array<{ dueOn: string; districtName: string; studentName: string }> }
+    ).rows;
+    expect(rows.some((r) => r.dueOn === '2098-01-01')).toBe(false);
+    // school-wide 2099 row expands to both children (never "school-wide")
+    const far = rows.filter((r) => r.dueOn === '2099-01-01').map((r) => r.studentName).sort();
+    expect(far).toEqual(['Aiden Odne', 'Bella Park']);
+    expect(rows.every((r) => r.districtName === 'Baldwin UFSD')).toBe(true);
+
+    const me = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/me',
+      headers: thH,
+      query: {},
+      body: undefined,
+    });
+    const body = me.body as { dueDates: Array<{ id: string }>; alerts: Array<{ kind: string }> };
+    expect(body.dueDates.map((d) => d.id)).toEqual([nearMine.id]);
+    expect(body.alerts.some((a) => a.kind.startsWith('due_'))).toBe(false);
   });
 
   it('week progress report filters by week range', async () => {
@@ -3059,6 +3257,314 @@ describe('TMS upload-sessions errors', () => {
     expect(store.data.sessions).toHaveLength(0);
   });
 
+  it('hard-block locker (default OFF) lets an over-mandate row import only when an admin turns it ON', async () => {
+    const { store, provider } = storeWithTherapist();
+    const baseSettings = store.data.settings[0]!;
+    store.data.settings = [{ ...baseSettings, sessionImportAgeLockEnabled: false }];
+    expect(store.data.settings[0]!.allowImportWithHardBlocks).toBe(false);
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 1x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    const pdfText = [
+      'Student Name: Odne, Aiden',
+      'Service Provider: Pat Lee',
+      'Service: PT School',
+      '09/01/2026 9:00 am 9:30 am',
+      'Service Provided: balance work in gym',
+      '97110x2',
+      signedBlock('Sep 1 2026 9:35AM'),
+      '09/02/2026 10:00 am 10:30 am',
+      'Service Provided: second visit gait training',
+      '97110x2',
+      signedBlock('Sep 2 2026 10:35AM'),
+    ].join('\n');
+    const off = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-08-31', pdfText },
+    });
+    expect((off.body as { ok: boolean }).ok).toBe(false);
+    expect(store.data.sessions).toHaveLength(0);
+
+    // Therapists cannot flip it; an admin saves it explicitly.
+    const saved = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/settings',
+      headers: adminH,
+      query: {},
+      body: { allowImportWithHardBlocks: true },
+    });
+    expect(saved.status).toBe(200);
+    expect(
+      (saved.body as { settings: { allowImportWithHardBlocks: boolean; allowShortSessionVsMandate: boolean } })
+        .settings,
+    ).toMatchObject({ allowImportWithHardBlocks: true, allowShortSessionVsMandate: false });
+
+    const on = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: { providerId: provider.id, weekStart: '2026-08-31', pdfText },
+    });
+    const onBody = on.body as {
+      ok: boolean;
+      partial: boolean;
+      imported: number;
+      notImported: number;
+      message: string;
+      saved: Array<{ dateOfService: string }>;
+      failed: Array<{ dateOfService: string; error: string }>;
+      errors: string[];
+    };
+    // Partial import: only the clean row (09/01) is saved. The over-mandate row (09/02) is
+    // skipped and listed with its error. It is never saved.
+    expect(onBody.ok).toBe(true);
+    expect(onBody.partial).toBe(true);
+    expect(onBody.imported).toBe(1);
+    expect(onBody.notImported).toBe(1);
+    expect(onBody.saved.map((s) => s.dateOfService)).toEqual(['09/01/2026']);
+    expect(onBody.failed.map((f) => f.dateOfService)).toEqual(['09/02/2026']);
+    expect(onBody.failed[0]!.error).toMatch(/exceeds the mandate/i);
+    expect(onBody.errors.some((e) => /exceeds the mandate/i.test(e))).toBe(true);
+    expect(onBody.message).toMatch(/NOT imported/);
+    expect(store.data.sessions).toHaveLength(1);
+    expect(store.data.sessions[0]!.dateOfService).toBe('09/01/2026');
+  });
+
+  it('partial import (ON): unknown child and overlap rows are skipped, clean rows saved; all-error PDF saves nothing', async () => {
+    const { store, provider } = storeWithTherapist();
+    store.data.settings = [
+      { ...store.data.settings[0]!, sessionImportAgeLockEnabled: false, allowImportWithHardBlocks: true },
+    ];
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 3x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+    const run = (rows: string[]) =>
+      handleTmsRequest(store, {
+        method: 'POST',
+        path: '/week/upload-sessions',
+        headers: thH,
+        query: {},
+        body: { providerId: provider.id, weekStart: '2026-08-31', pdfText: rows.join('\n') },
+      });
+    type Out = {
+      ok: boolean;
+      partial: boolean;
+      imported: number;
+      saved: Array<{ dateOfService: string }>;
+      failed: Array<{ dateOfService: string; error: string }>;
+    };
+    const block = (name: string, dos: string, begin: string, end: string) => [
+      `Student Name: ${name}`,
+      'Service Provider: Pat Lee',
+      'Service: PT School',
+      `${dos} ${begin} ${end}`,
+      'Service Provided: balance work in gym',
+      '97110x2',
+      signedBlock('Sep 1 2026 9:35AM'),
+    ];
+    const good = block('Odne, Aiden', '09/01/2026', '9:00 am', '9:30 am');
+    const unknownChild = block('Nobody, Nemo', '09/02/2026', '9:00 am', '9:30 am');
+    const overlap = block('Odne, Aiden', '09/01/2026', '9:15 am', '9:45 am');
+    const lateGood = block('Odne, Aiden', '09/03/2026', '10:00 am', '10:30 am');
+
+    const mixed = await run([...good, ...unknownChild, ...overlap, ...lateGood]);
+    const mixedBody = mixed.body as Out;
+    expect(mixedBody.ok).toBe(true);
+    expect(mixedBody.partial).toBe(true);
+    expect(mixedBody.saved.map((s) => s.dateOfService).sort()).toEqual(['09/01/2026', '09/03/2026']);
+    expect(mixedBody.failed.some((f) => /Not found/i.test(f.error))).toBe(true);
+    expect(mixedBody.failed.some((f) => /overlaps/i.test(f.error))).toBe(true);
+    expect(mixedBody.failed).toHaveLength(2);
+    expect(store.data.sessions.map((s) => s.dateOfService).sort()).toEqual(['09/01/2026', '09/03/2026']);
+    // The overlapping row was dropped, so the saved 09/01 row is the 9:00-9:30 one.
+    expect(store.data.sessions.find((s) => s.dateOfService === '09/01/2026')?.beginTime).toBe('9:00 am');
+
+    // Every row has an error: nothing is saved and the import is reported as blocked.
+    const none = await run([...unknownChild, ...block('Nobody, Nemo', '09/04/2026', '9:00 am', '9:30 am')]);
+    const noneBody = none.body as Out;
+    expect(noneBody.ok).toBe(false);
+    expect(noneBody.partial).toBe(false);
+    expect(noneBody.saved).toHaveLength(0);
+    expect(store.data.sessions).toHaveLength(2);
+  });
+
+  it('discipline match is always enforced on PDF import, with the partial-import switch OFF or ON', async () => {
+    for (const hardOn of [false, true]) {
+      const { store, provider } = storeWithTherapist();
+      store.data.settings = [
+        { ...store.data.settings[0]!, sessionImportAgeLockEnabled: false, allowImportWithHardBlocks: hardOn },
+      ];
+      await handleTmsRequest(store, {
+        method: 'POST',
+        path: '/admin/mandates/parse',
+        headers: adminH,
+        query: {},
+        body: {
+          pdfText: `Child's Name: Odne Aiden\nService Type: OT School\nMandate frequency: 3x/week\nDOB: 07/12/2019`,
+          providerId: provider.id,
+        },
+      });
+      const out = await handleTmsRequest(store, {
+        method: 'POST',
+        path: '/week/upload-sessions',
+        headers: thH,
+        query: {},
+        body: {
+          providerId: provider.id,
+          weekStart: '2026-08-31',
+          pdfText: [
+            'Student Name: Odne, Aiden',
+            'Service Provider: Pat Lee',
+            'Service: OT School',
+            '09/01/2026 9:00 am 9:30 am',
+            'Service Provided: fine motor work with putty',
+            '97110x2',
+            signedBlock('Sep 1 2026 9:35AM'),
+          ].join('\n'),
+        },
+      });
+      const body = out.body as { ok: boolean; errors: string[]; saved: unknown[] };
+      expect(body.ok).toBe(false);
+      expect(body.saved).toHaveLength(0);
+      expect(body.errors.some((e) => /discipline mismatch/i.test(e))).toBe(true);
+      expect(store.data.sessions).toHaveLength(0);
+    }
+  });
+
+  it('drops the retired enforceProviderDisciplineMatch setting on save and read', async () => {
+    const { store } = storeWithTherapist();
+    store.data.settings = [{ ...store.data.settings[0]!, enforceProviderDisciplineMatch: false } as never];
+    const saved = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/settings',
+      headers: adminH,
+      query: {},
+      body: { enforceProviderDisciplineMatch: false, allowShortSessionVsMandate: true },
+    });
+    expect(saved.status).toBe(200);
+    const settings = (saved.body as { settings: Record<string, unknown> }).settings;
+    expect('enforceProviderDisciplineMatch' in settings).toBe(false);
+    expect(settings.allowShortSessionVsMandate).toBe(true);
+    expect('enforceProviderDisciplineMatch' in (store.data.settings[0] as object)).toBe(false);
+  });
+
+  it('failed import with no sessions does not appear in Provider status Drafts; week with sessions does', async () => {
+    const { store, provider } = storeWithTherapist();
+    if (store.data.settings[0]) {
+      store.data.settings = [{ ...store.data.settings[0], sessionImportAgeLockEnabled: false }];
+    }
+    await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/admin/mandates/parse',
+      headers: adminH,
+      query: {},
+      body: {
+        pdfText: `Child's Name: Odne Aiden\nService Type: PT School\nMandate frequency: 1x/week\nDOB: 07/12/2019`,
+        providerId: provider.id,
+      },
+    });
+
+    const blocked = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-08-31',
+        pdfText: [
+          'Student Name: Odne, Aiden',
+          'Service Provider: Pat Lee',
+          'Service: PT School',
+          '09/01/2026 9:00 am 9:30 am',
+          'Service Provided: balance work in gym',
+          '97110x2',
+          signedBlock('Sep 1 2026 9:35AM'),
+          '09/02/2026 10:00 am 10:30 am',
+          'Service Provided: second visit gait training',
+          '97110x2',
+          signedBlock('Sep 2 2026 10:35AM'),
+        ].join('\n'),
+      },
+    });
+    expect(blocked.status).toBe(200);
+    expect((blocked.body as { ok: boolean }).ok).toBe(false);
+    expect(store.data.sessions).toHaveLength(0);
+    // Empty draft created during validation must be discarded / filtered out.
+    expect(
+      store.data.weeks.filter((w) => w.providerId === provider.id && w.status === 'draft'),
+    ).toHaveLength(0);
+
+    const emptyList = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/weeks',
+      headers: adminH,
+      query: { weekStart: '2026-08-31' },
+      body: {},
+    });
+    expect(emptyList.status).toBe(200);
+    const emptyWeeks = (emptyList.body as { weeks: Array<{ id: string; providerId: string }> })
+      .weeks;
+    expect(emptyWeeks.filter((w) => w.providerId === provider.id)).toHaveLength(0);
+
+    // Successful single-session import shows under Provider status Drafts.
+    const okImport = await handleTmsRequest(store, {
+      method: 'POST',
+      path: '/week/upload-sessions',
+      headers: thH,
+      query: {},
+      body: {
+        providerId: provider.id,
+        weekStart: '2026-08-31',
+        pdfText: [
+          'Student Name: Odne, Aiden',
+          'Service Provider: Pat Lee',
+          'Service: PT School',
+          '09/01/2026 9:00 am 9:30 am',
+          'Service Provided: balance work in gym',
+          '97110x2',
+          signedBlock('Sep 1 2026 9:35AM'),
+        ].join('\n'),
+      },
+    });
+    expect(okImport.status).toBe(200);
+    expect((okImport.body as { ok: boolean; imported: number }).ok).toBe(true);
+    expect((okImport.body as { imported: number }).imported).toBe(1);
+    expect(store.data.sessions).toHaveLength(1);
+
+    const listed = await handleTmsRequest(store, {
+      method: 'GET',
+      path: '/admin/weeks',
+      headers: adminH,
+      query: { weekStart: '2026-08-31' },
+      body: {},
+    });
+    const weeks = (
+      listed.body as { weeks: Array<{ id: string; providerId: string; sessionCount: number; status: string }> }
+    ).weeks.filter((w) => w.providerId === provider.id);
+    expect(weeks).toHaveLength(1);
+    expect(weeks[0]?.status).toBe('draft');
+    expect(weeks[0]?.sessionCount).toBe(1);
+  });
+
   it('allows very short notes on upload and can save a previously failed row after fix', async () => {
     const { store, provider } = storeWithTherapist();
     await handleTmsRequest(store, {
@@ -4518,6 +5024,7 @@ describe('TMS solo-group / group-mandate note locker', () => {
         attendance: 'attended',
         notes: 'Service Provided: fine motor',
         serviceType: 'PT School',
+        signatureName: 'Pat Lee',
       },
     });
     expect(bad.status).toBe(400);
@@ -4537,6 +5044,7 @@ describe('TMS solo-group / group-mandate note locker', () => {
         attendance: 'attended',
         notes: 'Service Provided: peer not available; worked 1:1',
         serviceType: 'PT School',
+        signatureName: 'Pat Lee',
       },
     });
     expect(good.status).toBe(200);
@@ -4585,10 +5093,79 @@ describe('TMS solo-group / group-mandate note locker', () => {
         attendance: 'attended',
         notes: 'Service Provided: try join after individual',
         serviceType: 'PT School Group',
+        signatureName: 'Pat Lee',
       },
     });
     expect(peerAdd.status).toBe(400);
     expect((peerAdd.body as { error: string }).error).toMatch(/individual rate|overlaps|mix group/i);
+  });
+
+  it('timesheet view (GET /week): additional services never raise the solo-group note error (vBmVuBAb)', async () => {
+    const { store, provider, studentId, weekId } = await seedGroupMandateChild();
+    // Additional service tied to a group-mandate child, no "no peer" wording. Must not be flagged.
+    store.upsertSession({
+      id: newId(),
+      weekId,
+      studentId,
+      dateOfService: '09/01/2026',
+      beginTime: '1:00 pm',
+      endTime: '1:30 pm',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'Eval',
+      additionalServiceType: 'eval',
+      location: '',
+      notes: 'Evaluation completed',
+      cptCodes: [],
+      cptUnits: 0,
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+    const view = async () => {
+      const out = await handleTmsRequest(store, {
+        method: 'GET',
+        path: '/week',
+        headers: thH,
+        query: { weekStart: '2026-08-31', providerId: provider.id },
+        body: {},
+      });
+      expect(out.status).toBe(200);
+      return out.body as { errors: string[]; sessions: Array<{ additionalServiceType?: string }> };
+    };
+    const onlyAdditional = await view();
+    expect(onlyAdditional.sessions).toHaveLength(1);
+    expect(onlyAdditional.errors.some((e) => /seen individually|no peer was available/i.test(e))).toBe(false);
+    expect(onlyAdditional.errors.some((e) => /exceeds the mandate/i.test(e))).toBe(false);
+
+    // A regular 1:1 visit by the same child with no note is still flagged: the check is live.
+    store.upsertSession({
+      id: newId(),
+      weekId,
+      studentId,
+      dateOfService: '09/02/2026',
+      beginTime: '10:00 am',
+      endTime: '10:30 am',
+      attendance: 'attended',
+      cancelReason: '',
+      makeupOfSessionId: '',
+      serviceType: 'PT School',
+      additionalServiceType: '',
+      location: '',
+      notes: 'Service Provided: fine motor only',
+      cptCodes: [],
+      cptUnits: 0,
+      cptLabel: '',
+      aiFlags: [],
+      aiBlock: false,
+    });
+    const withRegular = await view();
+    expect(withRegular.errors.some((e) => /seen individually|no peer was available/i.test(e))).toBe(true);
+    // The error names the regular visit date only, never the additional service's date.
+    expect(
+      withRegular.errors.filter((e) => /seen individually|no peer was available/i.test(e)).every((e) => e.startsWith('09/02/2026')),
+    ).toBe(true);
   });
 
   it('accepts an explicit group session when the partner is not in TMS yet', async () => {
@@ -4636,6 +5213,7 @@ describe('TMS solo-group / group-mandate note locker', () => {
         attendance: 'attended',
         notes: 'Service Provided: custom group note',
         serviceType: 'PT School Group 2:1',
+        signatureName: 'Pat Lee',
       },
     });
     expect(manual.status).toBe(200);
@@ -4933,6 +5511,8 @@ describe('TMS MFA org policy', () => {
           sessionImportAgeLockEnabled: true,
           sessionImportMaxAgeDays: 14,
           yellowWarningsBlockImport: true,
+          allowImportWithHardBlocks: false,
+          allowShortSessionVsMandate: false,
           requireMfa: true,
           allowSmsMfa: false,
           unlockedWeekIds: [],
@@ -4958,6 +5538,8 @@ describe('TMS MFA org policy', () => {
           sessionImportAgeLockEnabled: true,
           sessionImportMaxAgeDays: 14,
           yellowWarningsBlockImport: true,
+          allowImportWithHardBlocks: false,
+          allowShortSessionVsMandate: false,
           requireMfa: false,
           allowSmsMfa: false,
           unlockedWeekIds: [],
@@ -4994,6 +5576,8 @@ describe('TMS MFA org policy', () => {
           sessionImportAgeLockEnabled: true,
           sessionImportMaxAgeDays: 14,
           yellowWarningsBlockImport: true,
+          allowImportWithHardBlocks: false,
+          allowShortSessionVsMandate: false,
           requireMfa: false,
           allowSmsMfa: false,
           unlockedWeekIds: [],
@@ -5080,6 +5664,7 @@ describe('TMS MFA org policy', () => {
         attendance: 'attended',
         additionalServiceType: 'eval',
         notes: 'admin eval',
+        signatureName: 'Pat Lee',
       },
     });
     expect(added.status).toBe(200);
@@ -5304,6 +5889,7 @@ describe('TMS MFA org policy', () => {
         attendance: 'attended',
         notes: 'School A session with enough clinical detail for screening.',
         serviceType: 'PT School',
+        signatureName: 'Pat Lee',
       },
     });
     const ensuredB = await handleTmsRequest(store, {
@@ -5329,6 +5915,7 @@ describe('TMS MFA org policy', () => {
         attendance: 'attended',
         notes: 'School B session with enough clinical detail for screening.',
         serviceType: 'PT School',
+        signatureName: 'Pat Lee',
       },
     });
 
@@ -6066,6 +6653,7 @@ describe('TMS admin manual session custom note archive', () => {
         endTime: '9:30 am',
         notes: 'Service Provided: manual entry with custom note attachment',
         serviceType: 'PT School',
+        signatureName: 'Pat Lee',
         fileName: 'custom-note.docx',
         fileBase64: fileBytes.toString('base64'),
         fileLabel: 'Custom note — 09/15/2026 — custom-note.docx',
@@ -6891,5 +7479,169 @@ describe('HHA triage already in HHA', () => {
     expect(store.transferForSession(jeremiah.id)).toMatchObject({ status: 'manual', hhaVisitId: '' });
     expect(store.transferForSession(other.id)).toMatchObject({ status: 'manual', hhaVisitId: '' });
     expect(store.data.sessions.map((s) => s.id).sort()).toEqual([jeremiah.id, other.id].sort());
+  });
+});
+
+describe('TMS manual sessions: signature, digital note, lockers (tickets V3R1no9 / ExK0gOo)', () => {
+  async function manualSetup(serviceType = 'PT School') {
+    const { store, provider } = storeWithTherapist();
+    store.data.settings = [{ ...store.data.settings[0]!, sessionImportAgeLockEnabled: false }];
+    const school = store.data.schools[0]!;
+    const student = store.upsertStudent({
+      id: newId(),
+      firstName: 'Ada',
+      lastName: 'Lovelace',
+      dob: '01/01/2018',
+      schoolId: school.id,
+      programId: '1012074',
+      programType: 'Westbury',
+      createdAt: nowIso(),
+    });
+    store.upsertMandate({
+      id: newId(),
+      studentId: student.id,
+      providerId: provider.id,
+      serviceType,
+      frequencyPerWeek: 3,
+      durationMinutes: 30,
+      groupSize: 1,
+      billingServiceName: 'PT school 30',
+      createdAt: nowIso(),
+    });
+    const post = async (body: Record<string, unknown>) => {
+      const ensured = await handleTmsRequest(store, {
+        method: 'POST',
+        path: '/week/ensure',
+        headers: thH,
+        query: {},
+        body: { providerId: provider.id, weekStart: '2026-09-14', schoolId: school.id },
+      });
+      const weekId = (ensured.body as { week: { id: string } }).week.id;
+      const editing = String(body.id || '');
+      const savedWeekId = editing ? store.data.sessions.find((s) => s.id === editing)?.weekId : '';
+      return handleTmsRequest(store, {
+        method: 'POST',
+        path: '/week/sessions',
+        headers: thH,
+        query: {},
+        body: {
+          weekId: savedWeekId || weekId,
+          studentId: student.id,
+          dateOfService: '09/15/2026',
+          beginTime: '9:00 am',
+          endTime: '9:30 am',
+          attendance: 'attended',
+          notes: 'Service Provided: worked on balance and gait with cues.',
+          serviceType,
+          ...body,
+        },
+      });
+    };
+    const setSettings = (patch: Record<string, unknown>) => {
+      store.data.settings = [{ ...store.data.settings[0]!, ...patch } as never];
+    };
+    return { store, provider, post, setSettings };
+  }
+
+  it('requires a provider signature on a manual attended session, then saves a digital note to archives', async () => {
+    const { store, post } = await manualSetup();
+    const unsigned = await post({});
+    expect(unsigned.status).toBe(400);
+    expect((unsigned.body as { error: string }).error).toMatch(/signature is required/i);
+    expect(store.data.sessions).toHaveLength(0);
+
+    const wrongName = await post({ signatureName: 'Someone Else' });
+    expect(wrongName.status).toBe(400);
+    expect((wrongName.body as { error: string }).error).toMatch(/provider's name/i);
+
+    const signed = await post({ signatureName: 'Pat Lee, PT' });
+    expect(signed.status).toBe(200);
+    const body = signed.body as {
+      session: { id: string; manualEntry?: boolean; providerSignatureName?: string };
+      digitalNote: { sourceType: string; kind: string; filename: string; id: string } | null;
+    };
+    expect(body.session.manualEntry).toBe(true);
+    expect(body.session.providerSignatureName).toBe('Pat Lee, PT');
+    expect(body.digitalNote?.sourceType).toBe('manual_session_note');
+    expect(body.digitalNote?.kind).toBe('upload');
+    expect(body.digitalNote?.filename).toMatch(/Session note - Ada Lovelace - 09-15-2026\.pdf/);
+
+    // Editing replaces the same archived note instead of adding a second one.
+    const edited = await post({ id: body.session.id, signatureName: 'Pat Lee', notes: 'Service Provided: updated note text here.' });
+    expect(edited.status).toBe(200);
+    expect(
+      store.data.archives.filter((a) => a.sourceType === 'manual_session_note'),
+    ).toHaveLength(1);
+  });
+
+  it('does not make a digital note for an additional service, and a missed session needs no signature', async () => {
+    const { store, post } = await manualSetup();
+    const additional = await post({
+      studentId: '',
+      additionalServiceType: 'documentation',
+      programType: 'Westbury',
+      signatureName: 'Pat Lee',
+      notes: 'Documentation time',
+    });
+    expect(additional.status).toBe(200);
+    expect((additional.body as { digitalNote: unknown }).digitalNote).toBeNull();
+    const missed = await post({
+      attendance: 'missed',
+      dateOfService: '09/16/2026',
+      cancelReason: 'Student Absence',
+      notes: 'Student Absence',
+    });
+    expect(missed.status).toBe(200);
+    expect(
+      store.data.archives.filter((a) => a.sourceType === 'manual_session_note').length,
+    ).toBe(1);
+  });
+
+  it('applies the import lockers to manual sessions: note screening, short session; partial-import switch never saves an error row', async () => {
+    const { store, post, setSettings } = await manualSetup();
+    // Hard (red) block: empty service note on an attended session.
+    const noNote = await post({ signatureName: 'Pat Lee', notes: '' });
+    expect(noNote.status).toBe(400);
+    expect((noNote.body as { error: string }).error).toMatch(/service note is required/i);
+    // The partial-import switch is PDF-import only: a manual error row is still refused.
+    setSettings({ allowImportWithHardBlocks: true });
+    const stillBlocked = await post({ signatureName: 'Pat Lee', notes: '' });
+    expect(stillBlocked.status).toBe(400);
+    expect(store.data.sessions).toHaveLength(0);
+    setSettings({ allowImportWithHardBlocks: false });
+
+    // Short session vs mandate (15 min on a 30 min mandate).
+    const short = await post({ signatureName: 'Pat Lee', dateOfService: '09/17/2026', endTime: '9:15 am' });
+    expect(short.status).toBe(400);
+    expect((short.body as { error: string }).error).toMatch(/shorter than the mandate|exceeds|mandate/i);
+    setSettings({ allowShortSessionVsMandate: true });
+    const shortOk = await post({ signatureName: 'Pat Lee', dateOfService: '09/17/2026', endTime: '9:15 am' });
+    expect(shortOk.status).toBe(200);
+  });
+
+  it('discipline match is always enforced (no switch) on manual entry; additional services stay exempt', async () => {
+    const { store, provider, post, setSettings } = await manualSetup('OT School');
+    store.upsertProvider({ ...provider, discipline: 'PT' });
+    // No setting needed: an OT service type for a PT provider is rejected.
+    const mismatch = await post({ signatureName: 'Pat Lee', serviceType: 'OT School', dateOfService: '09/18/2026' });
+    expect(mismatch.status).toBe(400);
+    expect((mismatch.body as { error: string }).error).toMatch(/discipline mismatch/i);
+    // A stored legacy "off" value is ignored, and the partial-import switch does not bypass it.
+    setSettings({ enforceProviderDisciplineMatch: false, allowImportWithHardBlocks: true });
+    const stillBlocked = await post({ signatureName: 'Pat Lee', serviceType: 'OT School', dateOfService: '09/18/2026' });
+    expect(stillBlocked.status).toBe(400);
+    expect((stillBlocked.body as { error: string }).error).toMatch(/discipline mismatch/i);
+    const matching = await post({ signatureName: 'Pat Lee', serviceType: 'PT School', dateOfService: '09/18/2026' });
+    expect(matching.status).toBe(200);
+    // Additional services are exempt.
+    const additional = await post({
+      studentId: '',
+      additionalServiceType: 'documentation',
+      programType: 'Westbury',
+      signatureName: 'Pat Lee',
+      notes: 'Documentation time',
+      dateOfService: '09/19/2026',
+    });
+    expect(additional.status).toBe(200);
   });
 });

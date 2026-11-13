@@ -32,7 +32,7 @@ export async function saveSnapshotToS3(store: MemoryStore): Promise<void> {
   );
 }
 
-export async function putLockerPdf(key: string, body: Buffer): Promise<void> {
+async function putPdfObject(key: string, body: Buffer): Promise<void> {
   const bucket = process.env.REPORTS_BUCKET;
   if (!bucket) return;
   const { PutObjectCommand, S3Client } = await import('@aws-sdk/client-s3');
@@ -45,6 +45,20 @@ export async function putLockerPdf(key: string, body: Buffer): Promise<void> {
       ContentType: 'application/pdf',
     }),
   );
+}
+
+export async function putLockerPdf(key: string, body: Buffer): Promise<void> {
+  await putPdfObject(key, body);
+}
+
+/** Same reports bucket as locker files. Fails closed when the bucket is unset. */
+export async function putReportPdf(key: string, body: Buffer): Promise<void> {
+  if (!process.env.REPORTS_BUCKET) {
+    const err = new Error('Report PDF storage is not configured.');
+    (err as Error & { status?: number }).status = 503;
+    throw err;
+  }
+  await putPdfObject(key, body);
 }
 
 export async function getPdfFromS3(key: string): Promise<Buffer | null> {

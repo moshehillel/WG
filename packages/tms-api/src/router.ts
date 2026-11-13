@@ -6,6 +6,9 @@ import {
   adminWeeksList,
   applyCaseloadImport,
   checkMandatesForWeek,
+  manualSessionNeedsSignature,
+  manualSignatureError,
+  sessionProviderDisciplineMismatchError,
   collectHeuristicAiIssues,
   dashboard,
   dueDateReport,
@@ -28,6 +31,7 @@ import {
   isGenericSettingLabel,
   isNonSchoolLikeSetting,
   pdfSchoolConflictsWithChild,
+  sameDistrictSchoolNames,
   screenServiceNote,
   sessionSlotLabel,
   cptDurationError,
@@ -67,6 +71,7 @@ import {
   SCHOOL_CALENDAR_PDF_HINT,
   SCHOOL_CALENDAR_PDF_NO_TEXT_ERROR,
   schoolSetupIncomplete,
+  shouldNagDue,
   blankProviderPay,
   sessionPayAmount,
   DEFAULT_ADMIN_NOTE_TAGS,
@@ -97,6 +102,7 @@ import {
   normalizeProgramTypeKey,
   type AppSettings,
   type ArchiveRecord,
+  type BlockErrorReport,
   type AppUser,
   type Discipline,
   type FrequencyKind,
@@ -118,8 +124,14 @@ import {
   zipStoredFiles,
 } from './archive-bundle.js';
 import { authenticate, requireAdmin, type AuthContext } from './auth.js';
-import { screenNoteWithOptionalBedrock } from './bedrock.js';
+import { invokeClaudeText, screenNoteWithOptionalBedrock } from './bedrock.js';
+import { readSessionNotesWithBedrock } from './note-read.js';
 import { markSessionAlreadyInHha, transferLockedWeek } from './hha-transfer.js';
+import {
+  buildManualSessionNotePdf,
+  manualSessionNoteApplies,
+  manualSessionNoteArchiveId,
+} from './manual-session-note.js';
 import { buildTimesheetPdf, formatTimesheetSignDate, isPaidAbsenceSession } from './timesheet.js';
 import {
   createSignEnvelope,
@@ -137,7 +149,7 @@ import { PDF_NO_TEXT_ERROR, bodyHasPdfBytes, pdfTextFromBody } from './pdf-text.
 import { runDueNags } from './due-nags.js';
 import { runHhaErrorDigest } from './hha-error-digest.js';
 import { runHhaAutoTransfer } from './hha-auto-transfer.js';
-import { getPdfFromS3, putLockerPdf, deletePdfFromS3 } from './s3-state.js';
+import { getPdfFromS3, putLockerPdf, putReportPdf, deletePdfFromS3 } from './s3-state.js';
 import type { Mailer } from './mail.js';
 import type { HhaClient } from '@white-glove/hha-client';
 import {
@@ -149,6 +161,28 @@ import {
   runLunaChat,
   sendLunaHandoff,
 } from './luna.js';
+import { lunaExplainText, runLunaDispute } from './luna-dispute.js';
+import { explainBlockErrors } from './luna-knowledge.js';
+import {
+  allowBlockReport,
+  blockReportPdfKey,
+  blockReportPdfTokenMatches,
+  blockReportPublic,
+  buildBilluBlockReportEmail,
+  buildMosheOverrideEmail,
+  buildPendingBlockReport,
+  canWaiveUploadError,
+  declineBlockReport,
+  errorsAfterAllowedOverrides,
+  markOverrideNotified,
+  newBlockReportPdfToken,
+  notesPdfBytes,
+  polishBlockReportExplanation,
+  summarizeBlockedRows,
+  uploadErrorOverridden,
+  withReportPdf,
+  type BlockReportFileStore,
+} from './block-reports.js';
 import {
   archiveListItem,
   archivesForProviderIds,
@@ -204,25 +238,14 @@ function coerceOptionalBool(value: unknown): boolean | undefined {
   return undefined;
 }
 
-function authorizationToken(headers: Record<string, string | undefined>): string {
-  const h = Object.fromEntries(
-    Object.entries(headers || {}).map(([k, v]) => [k.toLowerCase(), v]),
-  );
-  const auth = h.authorization || '';
-  return auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
-}
-
 /** Luna works signed-in or as a rate-limited guest (login screen). */
 async function resolveLunaCaller(
   store: MemoryStore,
   headers: Record<string, string | undefined>,
 ): Promise<{ user: AppUser; guest: boolean }> {
-  if (!authorizationToken(headers)) {
-    return { user: LUNA_GUEST_USER, guest: true };
-  }
   const auth = await authenticate(store, headers);
   if ('error' in auth) {
-    // Stale/invalid JWT on the login page — still allow guest support chat.
+    // Login page and stale JWTs still get guest support chat.
     return { user: LUNA_GUEST_USER, guest: true };
   }
   return { user: auth.user, guest: false };
@@ -232,22 +255,71 @@ async function handleLunaRoutes(
   store: MemoryStore,
   req: HttpRequest,
   path: string,
-  deps: { mail?: Mailer },
+  deps: TmsRequestDeps,
 ): Promise<HttpResponse | null> {
   if (req.method !== 'POST') return null;
-  if (path !== '/support/luna/chat' && path !== '/support/luna/handoff') return null;
+  if (
+    path !== '/support/luna/chat' &&
+    path !== '/support/luna/handoff' &&
+    path !== '/support/luna/explain' &&
+    path !== '/support/luna/dispute'
+  ) {
+    return null;
+  }
 
   const { user, guest } = await resolveLunaCaller(store, req.headers);
   if (guest) {
     const ip = lunaClientIp(req.headers);
     const limited =
-      path === '/support/luna/chat'
-        ? checkLunaGuestRateLimit(`luna-chat:${ip}`, 30, 15 * 60_000)
-        : checkLunaGuestRateLimit(`luna-handoff:${ip}`, 5, 60 * 60_000);
+      path === '/support/luna/handoff'
+        ? checkLunaGuestRateLimit(`luna-handoff:${ip}`, 5, 60 * 60_000)
+        : checkLunaGuestRateLimit(`luna-chat:${ip}`, 30, 15 * 60_000);
     if (limited) return json(429, { error: limited });
   }
 
   const b = obj(req);
+  if (path === '/support/luna/explain') {
+    const errors = Array.isArray(b.errors) ? b.errors.map((row) => String(row || '')) : [];
+    return json(200, {
+      explanations: explainBlockErrors(errors),
+      reply: lunaExplainText(errors),
+      replyKeys: [],
+      stage: 'explained',
+      approved: false,
+      pending: false,
+    });
+  }
+  if (path === '/support/luna/dispute') {
+    const errors = Array.isArray(b.errors) ? b.errors.map((row) => String(row || '')) : [];
+    const pdfBytes = notesPdfBytes(b.pdfBase64);
+    let noteText = '';
+    try {
+      noteText = pdfTextFromBody(b).trim();
+    } catch {
+      noteText = '';
+    }
+    const reviewed = await runLunaDispute({
+      store,
+      user,
+      guest,
+      errors,
+      stage: String(b.stage || ''),
+      choice: String(b.choice || ''),
+      userText: String(b.userText || ''),
+      noteText,
+      pdfBytes,
+      fileName: String(b.fileName || b.filename || ''),
+      invoke: deps.readLunaNote
+        ? (prompt) => deps.readLunaNote!(prompt)
+        : (prompt) => invokeClaudeText(prompt, 800, 12000),
+      explain: deps.explainBlockReport
+        ? (prompt) => deps.explainBlockReport!(prompt)
+        : undefined,
+      mail: deps.mail,
+      files: deps.blockReportFiles,
+    });
+    return json(200, reviewed);
+  }
   if (path === '/support/luna/chat') {
     try {
       const out = await runLunaChat({
@@ -331,10 +403,13 @@ function schoolNameByStudentId(store: MemoryStore): Map<string, string> {
 function mandateWeekOpts(store: MemoryStore): {
   calendarByStudentId: Map<string, SchoolCalendar | null>;
   schoolNameByStudentId: Map<string, string>;
+  allowShortSession: boolean;
 } {
   return {
     calendarByStudentId: calendarByStudentId(store),
     schoolNameByStudentId: schoolNameByStudentId(store),
+    // Admin locker, default OFF.
+    allowShortSession: getAppSettings(store).allowShortSessionVsMandate === true,
   };
 }
 
@@ -924,7 +999,14 @@ function getAppSettings(store: MemoryStore): AppSettings {
 }
 
 function upsertAppSettings(store: MemoryStore, next: AppSettings): AppSettings {
-  const row: AppSettings = { ...defaultAppSettings(), ...next, id: 'global' };
+  // enforceProviderDisciplineMatch was an admin switch. Discipline match is always on now,
+  // so a stored value from an older save is dropped here.
+  const { enforceProviderDisciplineMatch: _legacyDisciplineSwitch, ...rest } = {
+    ...defaultAppSettings(),
+    ...next,
+    id: 'global',
+  } as AppSettings & { enforceProviderDisciplineMatch?: unknown };
+  const row: AppSettings = rest as AppSettings;
   store.data.settings = [row];
   return row;
 }
@@ -1173,7 +1255,19 @@ function dueDatesForUser(store: MemoryStore, user: AppUser, programType?: string
     const scoped = schoolIdsForProviderProgramType(store, provider.id, pt);
     rows = rows.filter((d) => scoped.has(d.schoolId));
   }
-  return rows;
+  // Therapists only see reminders that matter to them now: overdue or due within the nag
+  // window (14 days), and for per-child rows only children on their own caseload.
+  // The full list stays on the admin Due dates report.
+  const seenDueIds = new Set<string>();
+  return rows.filter((d) => {
+    const childId = String((d as { studentId?: string }).studentId || '').trim();
+    if (childId && !myStudentIds.has(childId)) return false;
+    if (!shouldNagDue({ completedAt: d.completedAt || '', dueOn: d.dueOn })) return false;
+    // One banner line per due date (reports expand it once per child).
+    if (seenDueIds.has(d.id)) return false;
+    seenDueIds.add(d.id);
+    return true;
+  });
 }
 
 function linkUserToProvider(store: MemoryStore, userId: string, providerId: string): void {
@@ -1526,13 +1620,26 @@ function reportXlsxLastService(store: MemoryStore, query: Record<string, string 
 
 function reportXlsxDueDates(store: MemoryStore, query: Record<string, string | undefined>): HttpResponse {
   const { from, to } = reportRange(query);
-  const rows = dueDateReport(store, new Date(), { from, to });
+  const rows = dueDateReport(store, new Date(), {
+    from,
+    to,
+    excludeCompleted: true,
+    expandSchoolWide: true,
+  });
   return xlsxResponse(
     'due-dates.xlsx',
     rowsToXlsxBuffer(
       'Due dates',
-      ['School', 'Type', 'Due Date', 'Notes', 'Status'],
-      rows.map((r) => [r.schoolName, r.kind, r.dueOn, r.notes || '', r.status]),
+      ['District', 'Child', 'Provider', 'Type', 'Due Date', 'Notes', 'Status'],
+      rows.map((r) => [
+        r.districtName || r.schoolName,
+        r.studentName || '',
+        r.providerName || '',
+        r.kind,
+        r.dueOn,
+        r.notes || '',
+        r.status,
+      ]),
     ),
   );
 }
@@ -1662,7 +1769,288 @@ export type TmsRequestDeps = {
   persistNow?: () => Promise<void>;
   /** Fresh Dynamo (or store) settings row — used to avoid stale requireMfa clobbers. */
   readLiveSettings?: () => Promise<AppSettings | null | undefined>;
+  /** Test seam. Production uses Bedrock invokeClaudeText. */
+  explainBlockReport?: (prompt: string) => Promise<string>;
+  /** Test seam for Luna reading a disputed notes PDF. Production uses Bedrock. */
+  readLunaNote?: (prompt: string) => Promise<string>;
+  /** Test seam. Production uses the reports bucket. */
+  blockReportFiles?: BlockReportFileStore;
 };
+
+function auditBlockReport(report: BlockErrorReport) {
+  const { pdfToken: _token, pendingText: _pending, ...rest } = report;
+  return rest;
+}
+
+async function saveBlockReportPdf(key: string, body: Buffer, deps: TmsRequestDeps): Promise<void> {
+  if (deps.blockReportFiles) {
+    await deps.blockReportFiles.put(key, body);
+    return;
+  }
+  await putReportPdf(key, body);
+}
+
+async function readBlockReportPdf(key: string, deps: TmsRequestDeps): Promise<Buffer | null> {
+  if (deps.blockReportFiles) return deps.blockReportFiles.get(key);
+  return getPdfFromS3(key);
+}
+
+function blockReportPdfResponse(bytes: Buffer, fileName: string): HttpResponse {
+  const raw = String(fileName || '').trim() || 'therapist-report.pdf';
+  const cleaned = raw.replace(/[^\w.\-]+/g, '_') || 'therapist-report.pdf';
+  const safeName = cleaned.toLowerCase().endsWith('.pdf') ? cleaned : `${cleaned}.pdf`;
+  return {
+    status: 200,
+    headers: {
+      'content-type': 'application/pdf',
+      'content-disposition': `inline; filename="${safeName}"`,
+    },
+    body: bytes,
+  };
+}
+
+async function handleBlockReportRoutes(
+  store: MemoryStore,
+  req: HttpRequest,
+  path: string,
+  ctx: AuthContext,
+  deps: TmsRequestDeps,
+): Promise<HttpResponse | null> {
+  const decision = path.match(/^\/block-reports\/([^/]+)\/decision$/);
+  const reportFile = path.match(/^\/block-reports\/([^/]+)\/file$/);
+  if (req.method === 'GET' && reportFile) {
+    const report = (store.data.blockReports || []).find((row) => row.id === reportFile[1]);
+    if (!report || !String(report.pdfKey || '').trim()) {
+      return json(404, { error: 'Report PDF not found.' });
+    }
+    const provider = providerFor(store, ctx.user);
+    const owns =
+      ctx.user.role === 'admin' ||
+      report.therapistUserId === ctx.user.id ||
+      Boolean(provider?.id && report.providerId === provider.id);
+    if (!owns) return json(403, { error: 'You can only open your own report PDF.' });
+    const bytes = await readBlockReportPdf(report.pdfKey, deps);
+    if (!bytes?.length) return json(404, { error: 'Report PDF not found.' });
+    return blockReportPdfResponse(bytes, report.fileName || 'therapist-report.pdf');
+  }
+  if (req.method === 'GET' && path === '/block-reports') {
+    const provider = providerFor(store, ctx.user);
+    const rows = (store.data.blockReports || []).filter((row) => {
+      if (ctx.user.role === 'admin') return true;
+      return row.therapistUserId === ctx.user.id || (provider?.id && row.providerId === provider.id);
+    });
+    return json(200, {
+      reports: rows
+        .slice()
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+        .map(blockReportPublic),
+    });
+  }
+
+  if (req.method === 'POST' && path === '/block-reports') {
+    const provider = providerFor(store, ctx.user);
+    const b = obj(req);
+    let providerId = String(b.providerId || provider?.id || '');
+    if (ctx.user.role !== 'admin' && provider?.id && provider.id !== providerId) {
+      return json(403, { error: 'You can only report an error on your own upload.' });
+    }
+    if (ctx.user.role !== 'admin' && provider?.id) providerId = provider.id;
+    const account = store.data.providers.find((p) => p.id === providerId);
+    if (!account) return json(404, { error: 'Provider not found.' });
+    const pendingFromFile = (pdfTextFromBody(b) || textBody(req) || String(b.pdfText || '')).trim();
+    const notesPdfEarly = notesPdfBytes(b.pdfBase64);
+    const noteUnreadable = Boolean(notesPdfEarly) && !pendingFromFile;
+    const pendingText = pendingFromFile || (noteUnreadable
+      ? 'The notes PDF was attached but its text could not be read.'
+      : '');
+    const noteExcerpt = notesPdfEarly && pendingFromFile ? pendingFromFile.slice(0, 4000) : '';
+    const providerName = `${account.firstName || ''} ${account.lastName || ''}`.trim();
+    try {
+      const errors = (Array.isArray(b.errors) ? b.errors : [])
+        .map((row) => String(row || '').trim())
+        .filter(Boolean);
+      const therapistMessage = String(b.message ?? b.therapistMessage ?? '').trim();
+      if (!therapistMessage) {
+        return json(400, { error: 'Write a message explaining why this error is wrong.' });
+      }
+      if (!errors.length) return json(400, { error: 'Report the error text that is on screen.' });
+      if (!pendingText) {
+        return json(400, {
+          error: 'The blocked file could not be held. Import the PDF again, then report the error.',
+        });
+      }
+      const summary = summarizeBlockedRows(errors);
+      const polished = await polishBlockReportExplanation(
+        {
+          errors,
+          therapistMessage,
+          providerName,
+          childSummary: summary.childSummary,
+          dateSummary: summary.dateSummary,
+          noteExcerpt,
+          noteUnreadable,
+        },
+        deps.explainBlockReport
+          ? (prompt) => deps.explainBlockReport!(prompt)
+          : (prompt) => invokeClaudeText(prompt, 1200, 12000),
+      );
+      let report = buildPendingBlockReport({
+        id: newId(),
+        createdAt: nowIso(),
+        providerId,
+        providerName,
+        therapistUserId: ctx.user.id,
+        therapistName: ctx.user.displayName || ctx.user.email,
+        therapistEmail: ctx.user.email,
+        therapistMessage: b.message ?? b.therapistMessage,
+        errors: b.errors,
+        fileName: String(b.fileName || b.filename || ''),
+        schoolId: String(b.schoolId || ''),
+        programType: String(b.programType || ''),
+        pendingText,
+        aiExplanation: polished.aiExplanation,
+        aiExplanationStatus: polished.aiExplanationStatus,
+      });
+      const notesPdf = notesPdfBytes(b.pdfBase64);
+      if (notesPdf) {
+        const pdfKey = blockReportPdfKey(report.id);
+        await saveBlockReportPdf(pdfKey, notesPdf, deps);
+        report = withReportPdf(report, { pdfKey, pdfToken: newBlockReportPdfToken() });
+      }
+      store.upsertBlockReport(report);
+      store.audit(ctx.user.id, 'block_report_open', `blockReport:${report.id}`, null, {
+        errors: report.errors,
+        providerId: report.providerId,
+        aiExplanationStatus: report.aiExplanationStatus,
+        pdfKey: report.pdfKey || '',
+      });
+      let emailed = false;
+      if (deps.mail) {
+        try {
+          const letter = buildBilluBlockReportEmail(report);
+          await deps.mail.send({ to: letter.to, subject: letter.subject, text: letter.text });
+          emailed = true;
+        } catch {
+          emailed = false;
+        }
+      }
+      return json(200, { ok: true, report: blockReportPublic(report), emailed, pending: true });
+    } catch (err) {
+      const status = Number((err as { status?: number }).status) || 400;
+      return json(status, { error: err instanceof Error ? err.message : 'Could not file the report.' });
+    }
+  }
+
+  if (req.method === 'POST' && decision) {
+    if (ctx.user.role !== 'admin') return json(403, { error: 'Only an admin can review this report.' });
+    const report = (store.data.blockReports || []).find((row) => row.id === decision[1]);
+    if (!report) return json(404, { error: 'Report not found.' });
+    if (report.status === 'luna') {
+      return json(400, { error: 'Luna already saved this upload. It is not a Billu override.' });
+    }
+    const b = obj(req);
+    const action = String(b.action || '').trim().toLowerCase();
+    if (action !== 'allow' && action !== 'decline') {
+      return json(400, { error: 'Choose allow or decline.' });
+    }
+    if (action === 'decline') {
+      try {
+        const next = declineBlockReport(report, {
+          note: b.note,
+          actorId: ctx.user.id,
+          actorName: ctx.user.displayName || ctx.user.email,
+          actorEmail: ctx.user.email,
+          at: nowIso(),
+        });
+        store.upsertBlockReport(next);
+        store.audit(ctx.user.id, 'block_report_decline', `blockReport:${next.id}`, auditBlockReport(report), {
+          billuNote: next.billuNote,
+          pdfKey: next.pdfKey || '',
+        });
+        return json(200, { ok: true, report: blockReportPublic(next) });
+      } catch (err) {
+        const status = Number((err as { status?: number }).status) || 400;
+        return json(status, { error: err instanceof Error ? err.message : 'Could not decline the report.' });
+      }
+    }
+    if (report.status === 'allowed' && report.overrideNotifiedAt) {
+      return json(200, { ok: true, report: blockReportPublic(report), duplicate: true });
+    }
+    let decided = report;
+    try {
+      decided = allowBlockReport(report, {
+        note: b.note,
+        actorId: ctx.user.id,
+        actorName: ctx.user.displayName || ctx.user.email,
+        actorEmail: ctx.user.email,
+        at: nowIso(),
+      });
+    } catch (err) {
+      const status = Number((err as { status?: number }).status) || 400;
+      return json(status, { error: err instanceof Error ? err.message : 'Could not allow the report.' });
+    }
+    if (!report.importedAt) {
+      store.upsertBlockReport(decided);
+      const uploaded = await handleTmsRequest(
+        store,
+        {
+          method: 'POST',
+          path: '/week/upload-sessions',
+          headers: req.headers,
+          query: {},
+          body: {
+            providerId: decided.providerId,
+            pdfText: decided.pendingText,
+            fileName: decided.fileName,
+            schoolId: decided.schoolId,
+            programType: decided.programType,
+            blockReportId: decided.id,
+          },
+        },
+        deps,
+      );
+      const uploadedBody = (uploaded.body || {}) as { ok?: boolean; errors?: string[]; error?: string };
+      if (uploaded.status >= 400 || uploadedBody.ok !== true) {
+        store.upsertBlockReport(report);
+        return json(409, {
+          error: uploadedBody.error || 'The upload is still blocked.',
+          errors: uploadedBody.errors || [],
+          report: blockReportPublic(report),
+        });
+      }
+      decided = { ...decided, importedAt: nowIso() };
+      store.upsertBlockReport(decided);
+    }
+    if (decided.overrideNotifiedAt) {
+      return json(200, { ok: true, report: blockReportPublic(decided), duplicate: true });
+    }
+    let emailedOwner = false;
+    if (deps.mail) {
+      try {
+        const letter = buildMosheOverrideEmail(decided);
+        await deps.mail.send({ to: letter.to, subject: letter.subject, text: letter.text });
+        emailedOwner = true;
+        decided = markOverrideNotified(decided, nowIso());
+        store.upsertBlockReport(decided);
+      } catch {
+        emailedOwner = false;
+        store.upsertBlockReport(decided);
+      }
+    } else {
+      store.upsertBlockReport(decided);
+    }
+    store.audit(ctx.user.id, 'block_report_allow', `blockReport:${decided.id}`, auditBlockReport(report), {
+      billuNote: decided.billuNote,
+      errors: decided.errors,
+      therapistMessage: decided.therapistMessage,
+      importedAt: decided.importedAt,
+      pdfKey: decided.pdfKey || '',
+    });
+    return json(200, { ok: true, report: blockReportPublic(decided), emailedOwner });
+  }
+
+  return null;
+}
 
 export async function handleTmsRequest(
   store: MemoryStore,
@@ -1869,9 +2257,28 @@ export async function handleTmsRequest(
   const luna = await handleLunaRoutes(store, req, path, deps);
   if (luna) return luna;
 
+  const emailedPdf = path.match(/^\/block-reports\/([^/]+)\/file$/);
+  if (req.method === 'GET' && emailedPdf && String(req.query.t || '').trim()) {
+    const report = (store.data.blockReports || []).find((row) => row.id === emailedPdf[1]);
+    const token = String(req.query.t || '').trim();
+    if (
+      !report ||
+      !String(report.pdfKey || '').trim() ||
+      !blockReportPdfTokenMatches(String(report.pdfToken || ''), token)
+    ) {
+      return json(404, { error: 'Report PDF not found.' });
+    }
+    const bytes = await readBlockReportPdf(report.pdfKey, deps);
+    if (!bytes?.length) return json(404, { error: 'Report PDF not found.' });
+    return blockReportPdfResponse(bytes, report.fileName || 'therapist-report.pdf');
+  }
+
   const auth = await authenticate(store, req.headers);
   if ('error' in auth) return json(auth.status, { error: auth.error });
   const ctx = auth;
+
+  const blockReportResponse = await handleBlockReportRoutes(store, req, path, ctx, deps);
+  if (blockReportResponse) return blockReportResponse;
 
   if (req.method === 'GET' && path === '/me') {
     const provider = providerFor(store, ctx.user);
@@ -1887,11 +2294,18 @@ export async function handleTmsRequest(
         sessionImportAgeLockEnabled: getAppSettings(store).sessionImportAgeLockEnabled,
         sessionImportMaxAgeDays: getAppSettings(store).sessionImportMaxAgeDays,
         yellowWarningsBlockImport: getAppSettings(store).yellowWarningsBlockImport,
+        allowImportWithHardBlocks: getAppSettings(store).allowImportWithHardBlocks === true,
+        allowShortSessionVsMandate: getAppSettings(store).allowShortSessionVsMandate === true,
         // Exact stored boolean (appSettingsFromStore already defaults missing → true).
         requireMfa: getAppSettings(store).requireMfa === true,
         allowSmsMfa: getAppSettings(store).allowSmsMfa === true,
       },
-      alerts: store.openAlerts().slice(0, 20),
+      // Due-date reminders are listed (filtered) in dueDates; the school-wide due_* alert
+      // rows would list every school's reports on a therapist's screen.
+      alerts: store
+        .openAlerts()
+        .filter((a) => ctx.user.role === 'admin' || !String(a.kind || '').startsWith('due_'))
+        .slice(0, 20),
       dueDates: dueDatesForUser(store, ctx.user, programType || undefined),
     });
   }
@@ -2142,6 +2556,8 @@ export async function handleTmsRequest(
       const bodyRequireMfa = coerceOptionalBool(b.requireMfa);
       const bodyAgeLock = coerceOptionalBool(b.sessionImportAgeLockEnabled);
       const bodyYellow = coerceOptionalBool(b.yellowWarningsBlockImport);
+      const bodyHardLocker = coerceOptionalBool(b.allowImportWithHardBlocks);
+      const bodyShortLocker = coerceOptionalBool(b.allowShortSessionVsMandate);
       const next = upsertAppSettings(store, {
         ...prev,
         sessionImportAgeLockEnabled:
@@ -2152,6 +2568,11 @@ export async function handleTmsRequest(
             : prev.sessionImportMaxAgeDays,
         yellowWarningsBlockImport:
           bodyYellow !== undefined ? bodyYellow : prev.yellowWarningsBlockImport,
+        // Lockers default OFF; only an explicit bool from the admin turns them on.
+        allowImportWithHardBlocks:
+          bodyHardLocker !== undefined ? bodyHardLocker : prev.allowImportWithHardBlocks === true,
+        allowShortSessionVsMandate:
+          bodyShortLocker !== undefined ? bodyShortLocker : prev.allowShortSessionVsMandate === true,
         // Only apply requireMfa when the client explicitly sends a bool-ish value — never invent true.
         // String "false" must not fall through to prev (was sticky ON behind some proxies).
         requireMfa: bodyRequireMfa !== undefined ? bodyRequireMfa : prev.requireMfa,
@@ -3344,32 +3765,70 @@ export async function handleTmsRequest(
       if (!dueOn) return json(400, { error: 'dueOn is required.' });
       const notes =
         b.notes !== undefined ? String(b.notes || '').trim() : String(existing?.notes || '').trim();
-      // Create a new assignment unless editing by id — same type + different notes allowed.
-      const row = store.upsertDueDate({
-        id: existing?.id || newId(),
-        schoolId,
-        kind,
-        dueOn,
-        notes,
-        completedAt: String(b.completedAt ?? existing?.completedAt ?? ''),
-        lastNagOn:
-          existing && existing.dueOn === dueOn ? existing.lastNagOn || '' : '',
-      });
-      const label = school.name || schoolId;
-      const noteBit = row.notes ? ` — ${row.notes}` : '';
-      for (const a of store.data.alerts) {
-        if (a.entityRef === `due:${row.id}` && !a.resolved) a.resolved = true;
+      // Child targets: studentIds[] (new rows) or a single studentId.
+      const rawIds: unknown[] = Array.isArray(b.studentIds)
+        ? (b.studentIds as unknown[])
+        : [];
+      const singleId = String(b.studentId || '').trim();
+      const studentIds = [
+        ...new Set(
+          [...rawIds, ...(rawIds.length ? [] : [singleId])]
+            .map((x) => String(x || '').trim())
+            .filter(Boolean),
+        ),
+      ];
+      for (const sid of studentIds) {
+        const st = store.data.students.find((s) => s.id === sid);
+        if (!st) return json(404, { error: `Child not found: ${sid}` });
+        if (st.schoolId !== schoolId) {
+          return json(400, { error: 'Selected child is not at this school.' });
+        }
       }
-      store.addAlert({
-        id: newId(),
-        userId: '',
-        kind: `due_${row.kind}`,
-        severity: 'warning',
-        body: `${label}: ${row.kind} due ${row.dueOn}${noteBit}`,
-        entityRef: `due:${row.id}`,
-        resolved: Boolean(row.completedAt),
-        createdAt: nowIso(),
-      });
+      const saveDue = (id: string, studentId: string, prior?: typeof existing) => {
+        const row = store.upsertDueDate({
+          id,
+          schoolId,
+          ...(studentId ? { studentId } : {}),
+          kind,
+          dueOn,
+          notes,
+          completedAt: String(b.completedAt ?? prior?.completedAt ?? ''),
+          lastNagOn: prior && prior.dueOn === dueOn ? prior.lastNagOn || '' : '',
+        });
+        const label = school.name || schoolId;
+        const child = studentId
+          ? store.data.students.find((s) => s.id === studentId)
+          : undefined;
+        const childBit = child
+          ? ` (${[child.firstName, child.lastName].map((p) => String(p || '').trim()).filter(Boolean).join(' ')})`
+          : '';
+        const noteBit = row.notes ? ` — ${row.notes}` : '';
+        for (const a of store.data.alerts) {
+          if (a.entityRef === `due:${row.id}` && !a.resolved) a.resolved = true;
+        }
+        store.addAlert({
+          id: newId(),
+          userId: '',
+          kind: `due_${row.kind}`,
+          severity: 'warning',
+          body: `${label}${childBit}: ${row.kind} due ${row.dueOn}${noteBit}`,
+          entityRef: `due:${row.id}`,
+          resolved: Boolean(row.completedAt),
+          createdAt: nowIso(),
+        });
+        return row;
+      };
+      // Create a new assignment unless editing by id — same type + different notes allowed.
+      if (!existing && studentIds.length > 0) {
+        const dueDates = studentIds.map((sid) => saveDue(newId(), sid));
+        return json(201, { dueDates, dueDate: dueDates[0], count: dueDates.length });
+      }
+      // Editing keeps the existing child unless a studentId is supplied.
+      const row = saveDue(
+        existing?.id || newId(),
+        studentIds[0] ?? String(existing?.studentId || '').trim(),
+        existing,
+      );
       return json(existing ? 200 : 201, { dueDate: row });
     });
   }
@@ -3421,7 +3880,16 @@ export async function handleTmsRequest(
     return adminUser(() => {
       const from = String(req.query.from || '').trim();
       const to = String(req.query.to || '').trim();
-      return json(200, { rows: dueDateReport(store, new Date(), { from, to }) });
+      // raw=1 is the school editor's full list (completed + school-wide rows as stored).
+      const raw = String(req.query.raw || '') === '1';
+      return json(200, {
+        rows: dueDateReport(store, new Date(), {
+          from,
+          to,
+          excludeCompleted: !raw,
+          expandSchoolWide: !raw,
+        }),
+      });
     });
   }
   if (req.method === 'GET' && path === '/admin/reports/week-progress') {
@@ -3959,15 +4427,20 @@ export async function handleTmsRequest(
         }),
         mandateDurationMinutes: mandateDurationMinutesForSession(s, store.data.mandates),
       };
-      const soloNote = soloGroupMandateNoteError({
-        notes: s.notes,
-        serviceType: s.serviceType,
-        cptCodes: s.cptCodes,
-        studentId: s.studentId,
-        attendance: s.attendance,
-        mandates: store.data.mandates,
-        presentGroupPeerCount: payOpts.presentGroupPeerCount,
-      });
+      // Additional services (eval, report, consult, meeting, documentation) are never
+      // group or individual visits: skip the solo-group note check for them.
+      const soloNote = isAdditionalServiceType(s.additionalServiceType || '')
+        ? null
+        : soloGroupMandateNoteError({
+            notes: s.notes,
+            serviceType: s.serviceType,
+            cptCodes: s.cptCodes,
+            studentId: s.studentId,
+            attendance: s.attendance,
+            mandates: store.data.mandates,
+            presentGroupPeerCount: payOpts.presentGroupPeerCount,
+            additionalServiceType: s.additionalServiceType,
+          });
       if (soloNote) {
         const who = nameMap.get(s.studentId) || s.studentId;
         soloNoteErrors.push(`${s.dateOfService} ${who}: ${soloNote}`);
@@ -3976,7 +4449,11 @@ export async function handleTmsRequest(
         ...s,
         studentName: sessionListedChildName(s, nameMap.get(s.studentId) || ''),
         aiFlags: flags,
-        aiBlock: Boolean(s.aiBlock) || local.block,
+        aiBlock:
+          errorsAfterAllowedOverrides(store.data.blockReports || [], payProviderId, [
+            ...(local.block ? local.blockFlags : []),
+            ...(s.aiBlock ? s.aiFlags || [] : []),
+          ]).length > 0,
         payAmount: payProvider ? sessionPayAmount(payProvider, s, payOpts) : null,
       };
     });
@@ -4023,7 +4500,9 @@ export async function handleTmsRequest(
       siblingWeeks,
       mandates: store.data.mandates.filter((m) => students.some((s) => s.id === m.studentId) || ctx.user.role === 'admin'),
       warnings: [...new Set([...check.warnings, ...ai.warnings])],
-      errors: [...new Set([...check.errors, ...ai.errors, ...soloNoteErrors])],
+      errors: errorsAfterAllowedOverrides(store.data.blockReports || [], providerId, [
+        ...new Set([...check.errors, ...ai.errors, ...soloNoteErrors]),
+      ]),
     });
   }
 
@@ -4099,6 +4578,30 @@ export async function handleTmsRequest(
     return json(200, { week, school: preferredSchool || null });
   }
 
+  if (req.method === 'POST' && path === '/week/read-notes') {
+    const b = obj(req);
+    const text = pdfTextFromBody(b) || textBody(req) || String(b.pdfText || '');
+    if (!String(text).trim()) {
+      const error = bodyHasPdfBytes(b)
+        ? PDF_NO_TEXT_ERROR
+        : 'Choose a notes PDF (or paste the report text).';
+      return json(400, { error, errors: [error], created: false });
+    }
+    const parsed = parseWeeklySessionText(text);
+    if (!parsed.length) {
+      const error =
+        'Could not find any sessions in this PDF. Use a Frontline Related Service Session Notes or Therapist Activity Output report with a text layer (not a scan).';
+      return json(400, { error, errors: [error], created: false });
+    }
+    try {
+      const read = await readSessionNotesWithBedrock(parsed);
+      return json(200, { ok: true, created: false, ...read });
+    } catch (err) {
+      const error = err instanceof Error ? err.message : 'Claude could not read this note.';
+      return json(502, { error, errors: [error], created: false });
+    }
+  }
+
   if (req.method === 'POST' && path === '/week/upload-sessions') {
     const provider = providerFor(store, ctx.user);
     const b = obj(req);
@@ -4157,6 +4660,8 @@ export async function handleTmsRequest(
     // Attach each session to the Monday week of its date of service (no calendar picker required),
     // scoped by the child's program type so multi-district imports become separate timesheets.
     const weekCache = new Map<string, (typeof store.data.weeks)[number]>();
+    /** Weeks created by this upload attempt — discarded on failure when still session-empty. */
+    const createdWeekIds = new Set<string>();
     const uploadSchoolId = String(b.schoolId || '').trim();
     const uploadProgramType = String(b.programType || '').trim();
     const ensureWeek = (weekStart: string, sessionSchoolId?: string, sessionProgramType?: string) => {
@@ -4180,11 +4685,15 @@ export async function handleTmsRequest(
       // Signed/locked sheet stays put. A scoped upload opens (or reuses) one draft.
       // An unscoped probe must not create a blank draft next to that locked sheet.
       if (w && weekIsProcessed(w.status) && (scopeProgramType || scopeSchoolId)) {
+        const idsBefore = new Set(
+          weeksForProviderStart(store, providerId, weekStart).map((row) => row.id),
+        );
         w = openDraftBesideProcessed(store, w, {
           providerId,
           programType: scopeProgramType,
           schoolId: scopeSchoolId,
         });
+        if (!idsBefore.has(w.id)) createdWeekIds.add(w.id);
       }
       if (!w) {
         const school = resolveWeekSchool(store, providerId, {
@@ -4210,6 +4719,7 @@ export async function handleTmsRequest(
           hhaStatus: 'none',
           hhaError: '',
         });
+        createdWeekIds.add(w.id);
       } else if (therapistCanEdit(w.status)) {
         const patch: Partial<WeeklyPeriod> = {};
         if (scopeSchoolId && !String(w.schoolId || '').trim()) {
@@ -4259,13 +4769,25 @@ export async function handleTmsRequest(
     const fallbackWeekStart = String(
       b.weekStart || (parsed[0] ? weekStartFromDos(parsed[0].dateOfService) : ''),
     );
-    let week = fallbackWeekStart ? ensureWeek(fallbackWeekStart) : undefined;
-    if (!week) {
+    // Do not create a draft week until a row is far enough along to need one.
+    // Failed validation must not leave empty Provider status Drafts rows.
+    let week: (typeof store.data.weeks)[number] | undefined;
+    if (!fallbackWeekStart) {
       return json(400, {
         error: 'Could not determine a week for this upload (missing dates of service).',
         errors: ['Could not determine a week for this upload (missing dates of service).'],
       });
     }
+    const discardEmptyCreatedWeeks = () => {
+      for (const id of createdWeekIds) {
+        if (store.sessionsForWeek(id).length > 0) continue;
+        store.removeWeek(id);
+        for (const [key, cached] of weekCache) {
+          if (cached.id === id) weekCache.delete(key);
+        }
+        if (week?.id === id) week = undefined;
+      }
+    };
 
     type UploadFail = {
       studentName: string;
@@ -4285,6 +4807,34 @@ export async function handleTmsRequest(
       notes: string;
     };
     const failed: UploadFail[] = [];
+    const blockReportId = String(b.blockReportId || '').trim();
+    const heldOverride = blockReportId
+      ? (store.data.blockReports || []).find((row) => row.id === blockReportId)
+      : undefined;
+    const overrideErrorTexts =
+      heldOverride &&
+      heldOverride.status === 'allowed' &&
+      heldOverride.providerId === providerId &&
+      (ctx.user.role === 'admin' || heldOverride.therapistUserId === ctx.user.id)
+        ? heldOverride.errors
+        : [];
+    const importProvider = store.data.providers.find((p) => p.id === providerId);
+    // Admin "partial import" locker (default OFF). OFF: one error rejects the whole PDF.
+    // ON: only rows with no error are saved; every error row is skipped and listed.
+    // A row with an error is never saved in either mode (unknown child, unreadable name,
+    // signed/locked week, 14-day age lock, discipline mismatch, overlap, mandate ...).
+    const partialImportLocker = getAppSettings(store).allowImportWithHardBlocks === true;
+    const rejectUploadRow = (row: UploadFail): boolean => {
+      if (
+        overrideErrorTexts.length &&
+        canWaiveUploadError(row.error) &&
+        uploadErrorOverridden(overrideErrorTexts, row.error)
+      ) {
+        return false;
+      }
+      failed.push(row);
+      return true;
+    };
     const pending: Array<{ session: SessionRow; studentName: string }> = [];
     const skipped: UploadSaved[] = [];
     const softWarns: string[] = [];
@@ -4325,25 +4875,23 @@ export async function handleTmsRequest(
             .trim()
             .slice(0, 320),
         });
-        failed.push({
+        if (rejectUploadRow({
           studentName: display,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
           error: `${label}: Could not read the student name from this PDF row. Re-export/re-scan the note so the child name and program id appear next to the date/time, then try again.`,
-        });
-        continue;
+        })) continue;
       }
       const student = resolveStudent(row.studentName);
       if (!student) {
-        failed.push({
+        if (rejectUploadRow({
           studentName: display,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
           error: `${label}: Not found. Please reach out to your administrator to import the caseload first.`,
-        });
-        continue;
+        })) continue;
       }
       const studentName =
         `${student.firstName} ${student.lastName}`.trim() || display;
@@ -4358,14 +4906,13 @@ export async function handleTmsRequest(
             : weekIsProcessed(targetWeek.status)
               ? 'Week is signed/locked — revoke the signature before importing.'
               : 'This week cannot accept imports.';
-        failed.push({
+        if (rejectUploadRow({
           studentName,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
           error: `${label}: ${lockMsg}`,
-        });
-        continue;
+        })) continue;
       }
 
       const ageErr = sessionImportAgeError(row.dateOfService, {
@@ -4375,14 +4922,13 @@ export async function handleTmsRequest(
         isAdmin: ctx.user.role === 'admin',
       });
       if (ageErr) {
-        failed.push({
+        if (rejectUploadRow({
           studentName,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
           error: `${label}: ${ageErr}`,
-        });
-        continue;
+        })) continue;
       }
 
       const rawSchool = String(row.schoolName || row.location || '').trim();
@@ -4394,32 +4940,38 @@ export async function handleTmsRequest(
         const knownSchool = store.data.schools.find((s) => s.id === student.schoolId);
         if (
           knownSchool &&
-          pdfSchoolConflictsWithChild(pdfSchool, knownSchool, student.programType)
+          pdfSchoolConflictsWithChild(pdfSchool, knownSchool, student.programType, {
+            sameDistrictSchoolNames: sameDistrictSchoolNames(
+              store,
+              knownSchool,
+              student.programType,
+            ),
+          })
         ) {
-          failed.push({
+          if (rejectUploadRow({
             studentName,
             dateOfService: row.dateOfService,
             beginTime: row.beginTime,
             endTime: row.endTime,
             error: `${label}: School '${pdfSchool}' does not match child's school '${knownSchool.name}'.`,
-          });
-          continue;
+          })) continue;
         }
         if (!knownSchool) {
           const exists = store.data.schools.some(
             (s) =>
               Boolean(String(s.name || '').trim()) &&
-              !pdfSchoolConflictsWithChild(pdfSchool, s),
+              !pdfSchoolConflictsWithChild(pdfSchool, s, undefined, {
+                sameDistrictSchoolNames: sameDistrictSchoolNames(store, s, undefined),
+              }),
           );
           if (!exists) {
-            failed.push({
+            if (rejectUploadRow({
               studentName,
               dateOfService: row.dateOfService,
               beginTime: row.beginTime,
               endTime: row.endTime,
               error: `${label}: School '${pdfSchool}' not found`,
-            });
-            continue;
+            })) continue;
           }
         }
       }
@@ -4474,14 +5026,33 @@ export async function handleTmsRequest(
 
       const serviceTypeErr = sessionServiceTypeRequiredError(session.serviceType);
       if (serviceTypeErr) {
-        failed.push({
+        if (rejectUploadRow({
           studentName,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
           error: `${label}: ${serviceTypeErr}`,
-        });
-        continue;
+        })) continue;
+      }
+
+      // Always on: the session's service-type discipline must match the provider's.
+      // Additional services are exempt. Not waivable by any switch or block-report override.
+      {
+        const disciplineErr = sessionProviderDisciplineMismatchError(
+          session,
+          importProvider,
+          store.data.mandates,
+        );
+        if (disciplineErr) {
+          failed.push({
+            studentName,
+            dateOfService: row.dateOfService,
+            beginTime: row.beginTime,
+            endTime: row.endTime,
+            error: `${label}: ${disciplineErr}`,
+          });
+          continue;
+        }
       }
 
       const projectedSessions = [
@@ -4498,26 +5069,26 @@ export async function handleTmsRequest(
       if (session.attendance === 'makeup') {
         const resolved = resolveMakeupOfSessionId(session, allSessionsProjected, store.data.mandates);
         if ('error' in resolved) {
-          failed.push({
+          if (rejectUploadRow({
             studentName,
             dateOfService: row.dateOfService,
             beginTime: row.beginTime,
             endTime: row.endTime,
             error: `${label}: ${resolved.error}`,
-          });
-          continue;
+          })) continue;
         }
-        session = { ...session, makeupOfSessionId: resolved.makeupOfSessionId };
+        if (!('error' in resolved)) {
+          session = { ...session, makeupOfSessionId: resolved.makeupOfSessionId };
+        }
         const makeupErr = validateMakeup(session, allSessionsProjected, store.data.mandates);
         if (makeupErr) {
-          failed.push({
+          if (rejectUploadRow({
             studentName,
             dateOfService: row.dateOfService,
             beginTime: row.beginTime,
             endTime: row.endTime,
             error: `${label}: ${makeupErr}`,
-          });
-          continue;
+          })) continue;
         }
       }
 
@@ -4527,14 +5098,13 @@ export async function handleTmsRequest(
         session.notes,
       );
       if (missedReasonErr) {
-        failed.push({
+        if (rejectUploadRow({
           studentName,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
           error: `${label}: ${missedReasonErr}`,
-        });
-        continue;
+        })) continue;
       }
 
       const cptErr = cptDurationError(
@@ -4545,26 +5115,24 @@ export async function handleTmsRequest(
         { serviceType: session.serviceType, ratio: row.ratio },
       );
       if (cptErr) {
-        failed.push({
+        if (rejectUploadRow({
           studentName,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
           error: `${label}: ${cptErr}`,
-        });
-        continue;
+        })) continue;
       }
 
       const sigErr = sessionSignatureError(row.sourceSlice || row.notes || '', session.attendance);
       if (sigErr) {
-        failed.push({
+        if (rejectUploadRow({
           studentName,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
           error: `${label}: ${sigErr}`,
-        });
-        continue;
+        })) continue;
       }
 
       const dayPeers = [
@@ -4579,6 +5147,33 @@ export async function handleTmsRequest(
           .map((p) => p.session)
           .filter((s) => s.dateOfService === session.dateOfService),
       ];
+      // Solo-group note locker (regular sessions only; imports are never additional services).
+      // Checked per row, before overlap / mandate, so a row that fails it never holds a slot
+      // and the partial-import mode re-validates the remaining rows without it.
+      if (!isAdditionalServiceType(session.additionalServiceType || '')) {
+        const soloNoteErr = soloGroupMandateNoteError({
+          notes: session.notes,
+          serviceType: session.serviceType,
+          cptCodes: session.cptCodes,
+          studentId: session.studentId,
+          attendance: session.attendance,
+          mandates: store.data.mandates,
+          presentGroupPeerCount: presentGroupPeerCount({
+            candidate: session,
+            peers: dayPeers,
+            mandates: store.data.mandates,
+          }),
+        });
+        if (soloNoteErr) {
+          if (rejectUploadRow({
+            studentName,
+            dateOfService: row.dateOfService,
+            beginTime: row.beginTime,
+            endTime: row.endTime,
+            error: `${label}: ${soloNoteErr}`,
+          })) continue;
+        }
+      }
       const overlapErr = sessionOverlapError({
         candidate: session,
         peers: dayPeers,
@@ -4586,14 +5181,13 @@ export async function handleTmsRequest(
         mandates: store.data.mandates,
       });
       if (overlapErr) {
-        failed.push({
+        if (rejectUploadRow({
           studentName,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
           error: `${label}: ${overlapErr}`,
-        });
-        continue;
+        })) continue;
       }
 
       const notePeers: Array<{
@@ -4630,14 +5224,13 @@ export async function handleTmsRequest(
             notesLookCopyPasted(session.notes, p.notes),
         );
         if (peer) {
-          failed.push({
+          if (rejectUploadRow({
             studentName,
             dateOfService: row.dateOfService,
             beginTime: row.beginTime,
             endTime: row.endTime,
             error: `${label}: ${noteCopyPasteError(studentName, peer.studentName, peer.dateOfService)}`,
-          });
-          continue;
+          })) continue;
         }
       }
 
@@ -4649,28 +5242,28 @@ export async function handleTmsRequest(
       };
       // Red/hard always rejects. Yellow rejects only when admin setting is on (default).
       if (screened.block) {
-        failed.push({
+        const screenError = `${label}: ${screened.blockFlags.join('; ') || 'Note screening failed'}`;
+        if (rejectUploadRow({
           studentName,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
-          error: `${label}: ${screened.blockFlags.join('; ') || 'Note screening failed'}`,
-        });
-        continue;
+          error: screenError,
+        })) continue;
+        session = { ...session, aiBlock: false };
       }
       if (screened.warnFlags.length) {
         const warnMsg = `${label}: ${screened.warnFlags.join('; ')}`;
         softWarns.push(warnMsg);
         if (yellowBlocks) {
-          failed.push({
+          if (rejectUploadRow({
             studentName,
             dateOfService: row.dateOfService,
             beginTime: row.beginTime,
             endTime: row.endTime,
             error: warnMsg,
             severity: 'warn',
-          });
-          continue;
+          })) continue;
         }
       }
 
@@ -4686,27 +5279,25 @@ export async function handleTmsRequest(
           check.errors.find((e) => e.includes(studentName) || e.includes(session.dateOfService)) ||
           check.errors[0] ||
           'This exceeds the mandate.';
-        failed.push({
+        if (rejectUploadRow({
           studentName,
           dateOfService: row.dateOfService,
           beginTime: row.beginTime,
           endTime: row.endTime,
           error: `${label}: ${detail}`,
-        });
-        continue;
+        })) continue;
       }
 
       existingKeys.set(key, session);
       pending.push({ session, studentName });
     }
 
-    // Solo-group note locker after the full batch is known so same-slot peers count.
-    // Also re-check exact-duplicate skips against the existing saved row — re-import must
+    // Re-check exact-duplicate skips against the existing saved row — re-import must
     // never silently accept a non-compliant solo-group session that slipped in earlier.
-    if (!failed.length) {
+    // New rows were already checked in the row loop above; only the saved duplicates remain.
+    {
       const pendingByDos = pending.map((p) => p.session);
       const toCheck: Array<{ session: SessionRow; studentName: string }> = [
-        ...pending,
         ...skipped
           .map((sk) => {
             const session = store.data.sessions.find((s) => s.id === sk.id);
@@ -4742,7 +5333,7 @@ export async function handleTmsRequest(
           }),
         });
         if (soloNoteErr) {
-          failed.push({
+          rejectUploadRow({
             studentName: item.studentName,
             dateOfService: item.session.dateOfService,
             beginTime: item.session.beginTime,
@@ -4760,17 +5351,19 @@ export async function handleTmsRequest(
 
     const rawUploadName = String(b.fileName || b.filename || b.label || '').trim();
     const uploadSourceType = detectUploadSourceType(text);
+    const uploadWeekStartLabel = week?.weekStart || fallbackWeekStart || 'upload';
     const defaultUploadFilename =
       rawUploadName ||
       (uploadSourceType === 'therapist_activity'
-        ? `therapist-activity-${week.weekStart || 'upload'}.pdf`
-        : `frontline-${week.weekStart || 'upload'}.pdf`);
+        ? `therapist-activity-${uploadWeekStartLabel}.pdf`
+        : `frontline-${uploadWeekStartLabel}.pdf`);
 
     /** Persist PDF only after a successful import — blocked attempts must not clutter archive. */
     const archiveUploadPdf = async (
       status: 'imported',
       schoolIdHint?: string,
     ): Promise<string | null> => {
+      if (!week) return null;
       const uploadPdf = pdfBufferFromBody(b);
       if (!uploadPdf?.length) return null;
       const archiveId = newId();
@@ -4801,8 +5394,12 @@ export async function handleTmsRequest(
       return row?.id || null;
     };
 
+    // Partial-import locker ON and at least one clean row: save the clean rows below and
+    // report every error row. Otherwise any issue → save nothing.
+    const partialImport = partialImportLocker && failed.length > 0 && pending.length > 0;
+
     // Any issue → save nothing (audit log only — do not archive blocked PDFs).
-    if (failed.length) {
+    if (failed.length && !partialImport) {
       const errors = failed.map((f) => f.error);
       const attendanceCounts = parsed.reduce(
         (acc, r) => {
@@ -4820,11 +5417,15 @@ export async function handleTmsRequest(
         attendanceCounts,
         sampleErrors: errors.slice(0, 5),
       });
+      const blockedWeekId = week?.id || '';
+      const blockedWeekStart = week?.weekStart || fallbackWeekStart;
+      // Drop empty drafts created only for this failed attempt (Provider status Drafts).
+      discardEmptyCreatedWeeks();
       store.audit(ctx.user.id, 'upload_sessions', `provider:${providerId}`, null, {
         ok: false,
         filename: defaultUploadFilename,
-        weekId: week.id,
-        weekStart: week.weekStart,
+        weekId: blockedWeekId,
+        weekStart: blockedWeekStart,
         parsed: parsed.length,
         imported: 0,
         failed: failed.length,
@@ -4839,11 +5440,12 @@ export async function handleTmsRequest(
         ]),
       ];
       const hardMsgs = failed.filter((f) => f.severity !== 'warn').map((f) => f.error);
+      // Still blocked. Pending review starts only after Report incorrect error.
       return json(200, {
         ok: false,
         partial: false,
-        week,
-        sessions: store.sessionsForWeek(week.id),
+        week: week || null,
+        sessions: week ? store.sessionsForWeek(week.id) : [],
         saved: [],
         failed,
         skipped,
@@ -4855,6 +5457,7 @@ export async function handleTmsRequest(
           `Import blocked — ${failed.length} issue(s). Nothing was saved. Fix all errors and import again.`,
         parsed: parsed.length,
         imported: 0,
+        notImported: failed.length,
         skippedCount: skipped.length,
       });
     }
@@ -4873,6 +5476,15 @@ export async function handleTmsRequest(
       });
     }
 
+    if (partialImport) {
+      // Drafts opened only for rows that were skipped stay out of the list.
+      discardEmptyCreatedWeeks();
+      const firstSavedWeekId = pending[0]!.session.weekId;
+      if (week?.id !== firstSavedWeekId) {
+        week = store.data.weeks.find((w) => w.id === firstSavedWeekId);
+      }
+    }
+
     // After sessions land, stamp signer from children's schools (not org schools[0] / picker).
     const touchedWeekIds = new Set(pending.map((p) => p.session.weekId).filter(Boolean));
     for (const wid of touchedWeekIds) {
@@ -4882,6 +5494,26 @@ export async function handleTmsRequest(
       const stamped = stampWeekSignerFromSchool(store, w, school);
       weekCache.set(stamped.weekStart, stamped);
       if (week?.id === stamped.id) week = stamped;
+    }
+    if (!week && pending[0]) {
+      week = store.data.weeks.find((w) => w.id === pending[0]!.session.weekId);
+    }
+    if (!week) {
+      // Duplicate-only reimport that never needed a new draft — nothing new to list.
+      return json(200, {
+        ok: true,
+        partial: false,
+        week: null,
+        sessions: [],
+        saved,
+        failed: [],
+        skipped,
+        warnings: [...new Set(softWarns)],
+        errors: [],
+        parsed: parsed.length,
+        imported: saved.length,
+        skippedCount: skipped.length,
+      });
     }
 
     const weekCheck = checkMandatesForWeek(
@@ -4923,22 +5555,41 @@ export async function handleTmsRequest(
       weekStart: week.weekStart,
       parsed: parsed.length,
       imported: saved.length,
-      failed: 0,
+      failed: failed.length,
       skipped: skipped.length,
       attendanceCounts,
       archiveId,
+      ...(partialImport
+        ? { partial: true, notImported: failed.length, errors: failed.map((f) => f.error).slice(0, 40) }
+        : {}),
     });
 
+    // Partial import (admin locker ON): the clean rows are saved, every error row is listed.
+    const partialErrors = partialImport ? failed.map((f) => f.error) : [];
     return json(200, {
       ok: true,
-      partial: false,
+      partial: partialImport,
       week,
       sessions: store.sessionsForWeek(week.id),
       saved,
-      failed: [],
+      failed: partialImport ? failed : [],
       skipped,
-      warnings: [...new Set([...softWarns, ...weekCheck.warnings])],
-      errors: [],
+      warnings: [
+        ...new Set([
+          ...softWarns,
+          ...weekCheck.warnings,
+        ]),
+      ],
+      errors: partialErrors,
+      ...(partialImport
+        ? {
+            message:
+              `Partial import: ${saved.length} clean session(s) saved. ` +
+              `${failed.length} row(s) with errors were NOT imported and are listed below. ` +
+              `Fix them and import the PDF again.`,
+            notImported: failed.length,
+          }
+        : {}),
       parsed: parsed.length,
       imported: saved.length,
       skippedCount: skipped.length,
@@ -4949,6 +5600,9 @@ export async function handleTmsRequest(
     const b = obj(req);
     const week = store.data.weeks.find((w) => w.id === String(b.weekId || ''));
     if (!week) return json(404, { error: 'Week not found.' });
+    // The yellow-warning locker applies to manual sessions / notes. The partial-import
+    // locker is PDF-import only: a manual session with an error is never saved.
+    const manualSettings = getAppSettings(store);
     const existing = store.data.sessions.find((s) => s.id === String(b.id || ''));
     if (existing) {
       if (!therapistCanMutateExistingSession(week.status, { isAdmin: ctx.user.role === 'admin' })) {
@@ -5197,6 +5851,33 @@ export async function handleTmsRequest(
     }
     const serviceTypeErr = sessionServiceTypeRequiredError(session.serviceType);
     if (serviceTypeErr) return json(400, { error: serviceTypeErr, errors: [serviceTypeErr] });
+    const manualProvider = store.data.providers.find((p) => p.id === week.providerId);
+    // Always on: service-type discipline must match the provider's (additional services exempt).
+    {
+      const disciplineErr = sessionProviderDisciplineMismatchError(
+        session,
+        manualProvider,
+        store.data.mandates,
+      );
+      if (disciplineErr) return json(400, { error: disciplineErr, errors: [disciplineErr] });
+    }
+    // Manual entry: carry the manual flag / signature from the saved row, then require a signature.
+    session.manualEntry = existing ? existing.manualEntry === true : true;
+    if (existing) {
+      session.providerSignatureName = existing.providerSignatureName;
+      session.providerSignedAt = existing.providerSignedAt;
+      session.providerSignedByUserId = existing.providerSignedByUserId;
+    }
+    const typedSignature = pickStr(b.signatureName, '').trim();
+    if (session.manualEntry && manualSessionNeedsSignature(session)) {
+      const sigErr = manualSignatureError(typedSignature, manualProvider);
+      if (sigErr) return json(400, { error: sigErr, errors: [sigErr] });
+    }
+    if (typedSignature && session.manualEntry) {
+      session.providerSignatureName = typedSignature.slice(0, 200);
+      session.providerSignedAt = nowIso();
+      session.providerSignedByUserId = ctx.user.id;
+    }
     if (session.attendance === 'missed') {
       session.makeupOfSessionId = '';
       // Paid absence is payable on the timesheet and keeps its clock.
@@ -5250,7 +5931,9 @@ export async function handleTmsRequest(
         studentNameById: studentNameById(store),
         mandates: store.data.mandates,
       });
-      if (overlapErr) return json(400, { error: overlapErr, errors: [overlapErr] });
+      if (overlapErr) {
+        return json(400, { error: overlapErr, errors: [overlapErr] });
+      }
       const soloNoteErr = soloGroupMandateNoteError({
         notes: session.notes,
         serviceType: session.serviceType,
@@ -5264,11 +5947,24 @@ export async function handleTmsRequest(
           mandates: store.data.mandates,
         }),
       });
-      if (soloNoteErr) return json(400, { error: soloNoteErr, errors: [soloNoteErr] });
+      if (soloNoteErr) {
+        return json(400, { error: soloNoteErr, errors: [soloNoteErr] });
+      }
     }
     const screenedLocal = screenServiceNote(session);
     session.aiFlags = screenedLocal.flags;
     session.aiBlock = screenedLocal.block;
+    // Same note screening as the PDF import (regular sessions): red blocks, yellow per admin setting.
+    if (!isAdditionalServiceType(session.additionalServiceType || '')) {
+      if (screenedLocal.block) {
+        const screenMsg = screenedLocal.blockFlags.join('; ') || 'Note screening failed';
+        return json(400, { error: screenMsg, errors: [screenMsg] });
+      }
+      if (screenedLocal.warnFlags.length && manualSettings.yellowWarningsBlockImport !== false) {
+        const warnMsg = screenedLocal.warnFlags.join('; ');
+        return json(400, { error: warnMsg, errors: [warnMsg] });
+      }
+    }
     store.upsertSession(session);
     // Drop empty draft shells left behind when a no-child additional was re-homed.
     if (week.id !== targetWeek.id && therapistCanEdit(week.status)) {
@@ -5308,6 +6004,52 @@ export async function handleTmsRequest(
         errors: check.errors,
       });
     }
+    // Digital session note for a manually entered REGULAR session (not additional services).
+    // Stable archive id: editing the session replaces its note instead of adding another.
+    let digitalNote: Awaited<ReturnType<typeof persistArchivePdf>> = null;
+    let digitalNoteWarning = '';
+    const makeDigitalNote = async (): Promise<void> => {
+      if (!session.manualEntry || !manualSessionNoteApplies(session)) return;
+      try {
+        const noteStudent = store.data.students.find((s) => s.id === session.studentId);
+        const noteSchool = store.data.schools.find(
+          (s) => s.id === (noteStudent?.schoolId || childSchoolId || targetWeek.schoolId),
+        );
+        const noteProvider = store.data.providers.find((p) => p.id === targetWeek.providerId);
+        const notePdf = await buildManualSessionNotePdf({
+          session,
+          student: noteStudent,
+          provider: noteProvider,
+          school: noteSchool,
+          providerName: noteProvider
+            ? `${noteProvider.firstName} ${noteProvider.lastName}`.trim()
+            : '',
+        });
+        const noteArchiveId = manualSessionNoteArchiveId(session.id);
+        const noteChild = noteStudent
+          ? `${noteStudent.firstName} ${noteStudent.lastName}`.trim()
+          : 'Child';
+        digitalNote = await persistArchivePdf({
+          store,
+          kind: 'upload',
+          sourceType: 'manual_session_note',
+          userId: ctx.user.id,
+          providerId: String(targetWeek.providerId || ''),
+          schoolId: childSchoolId || targetWeek.schoolId || '',
+          weekId: targetWeek.id,
+          weekStart: targetWeek.weekStart,
+          filename: `Session note - ${noteChild} - ${session.dateOfService.replace(/\//g, '-')}.pdf`,
+          s3Key: `tms/archive/uploads/${targetWeek.providerId || 'p'}/${noteArchiveId}.pdf`,
+          status: 'imported',
+          pdf: notePdf,
+          replaceId: noteArchiveId,
+        });
+        if (!digitalNote) digitalNoteWarning = 'The digital session note could not be saved to Archived Documents.';
+      } catch (err) {
+        console.warn('manual session note failed', err instanceof Error ? err.message : err);
+        digitalNoteWarning = 'The digital session note could not be generated.';
+      }
+    };
     // Optional custom note (Word/PDF): store bytes only — never session-parse / PDF-read.
     // Locker links the file to the session; uploads archive mirrors Frontline/Therapist Activity archive.
     let attachedFile: StoredFile | undefined;
@@ -5357,11 +6099,17 @@ export async function handleTmsRequest(
         replaceId: archiveId,
       });
     }
+    await makeDigitalNote();
     return json(200, {
       session,
       file: attachedFile || null,
       archive: archiveRow || null,
-      warnings: [...check.warnings, ...screenedLocal.warnFlags],
+      digitalNote: digitalNote || null,
+      warnings: [
+        ...check.warnings,
+        ...screenedLocal.warnFlags,
+        ...(digitalNoteWarning ? [digitalNoteWarning] : []),
+      ],
     });
   }
 
@@ -5417,10 +6165,15 @@ export async function handleTmsRequest(
       studentNameById(store),
       providerWeekMandateOpts(store, week.providerId, week.weekStart),
     );
-    if (check.errors.length) {
+    const mandateErrors = errorsAfterAllowedOverrides(
+      store.data.blockReports || [],
+      week.providerId,
+      check.errors,
+    );
+    if (mandateErrors.length) {
       return json(400, {
-        error: overMandateSummary(check.errors),
-        errors: check.errors,
+        error: overMandateSummary(mandateErrors),
+        errors: mandateErrors,
       });
     }
     const soloNoteErrors: string[] = [];
@@ -5451,10 +6204,15 @@ export async function handleTmsRequest(
         soloNoteErrors.push(`${s.dateOfService} ${who}: ${soloNoteErr}`);
       }
     }
-    if (soloNoteErrors.length) {
+    const openSoloErrors = errorsAfterAllowedOverrides(
+      store.data.blockReports || [],
+      week.providerId,
+      soloNoteErrors,
+    );
+    if (openSoloErrors.length) {
       return json(400, {
-        error: soloNoteErrors[0],
-        errors: soloNoteErrors,
+        error: openSoloErrors[0],
+        errors: openSoloErrors,
       });
     }
     const provider = store.data.providers.find((p) => p.id === week!.providerId);
@@ -5586,10 +6344,15 @@ export async function handleTmsRequest(
       studentNameById(store),
       providerWeekMandateOpts(store, week.providerId, week.weekStart),
     );
-    if (check.errors.length) {
+    const mandateErrors = errorsAfterAllowedOverrides(
+      store.data.blockReports || [],
+      week.providerId,
+      check.errors,
+    );
+    if (mandateErrors.length) {
       return json(400, {
-        error: overMandateSummary(check.errors),
-        errors: check.errors,
+        error: overMandateSummary(mandateErrors),
+        errors: mandateErrors,
       });
     }
     const soloNoteErrors: string[] = [];
@@ -5620,27 +6383,40 @@ export async function handleTmsRequest(
         soloNoteErrors.push(`${s.dateOfService} ${who}: ${soloNoteErr}`);
       }
     }
-    if (soloNoteErrors.length) {
+    const openSoloErrors = errorsAfterAllowedOverrides(
+      store.data.blockReports || [],
+      week.providerId,
+      soloNoteErrors,
+    );
+    if (openSoloErrors.length) {
       return json(400, {
-        error: soloNoteErrors[0],
-        errors: soloNoteErrors,
+        error: openSoloErrors[0],
+        errors: openSoloErrors,
       });
     }
     const aiErrors: string[] = [];
     for (const s of sessions) {
       const makeupErr = validateMakeup(s, store.data.sessions, store.data.mandates);
-      if (makeupErr) return json(400, { error: makeupErr });
+      if (
+        makeupErr &&
+        errorsAfterAllowedOverrides(store.data.blockReports || [], week.providerId, [makeupErr]).length
+      ) {
+        return json(400, { error: makeupErr });
+      }
       if (s.attendance !== 'missed') {
         const screened = await screenNoteWithOptionalBedrock(s);
+        const stillBlocking = errorsAfterAllowedOverrides(
+          store.data.blockReports || [],
+          week.providerId,
+          screened.blockFlags,
+        );
         store.upsertSession({
           ...s,
           aiFlags: screened.flags,
-          aiBlock: screened.block,
+          aiBlock: stillBlocking.length > 0,
         });
-        if (screened.block) {
-          for (const f of screened.blockFlags) {
-            aiErrors.push(`${s.dateOfService}: ${f}`);
-          }
+        for (const f of stillBlocking) {
+          aiErrors.push(`${s.dateOfService}: ${f}`);
         }
       }
     }

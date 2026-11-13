@@ -6,7 +6,7 @@
 
 [build.environment]
   # Browser calls same-origin /api (proxied below). Avoids NetFree blocking *.lambda-url.*.on.aws.
-  TMS_API_URL = "https://wgfront.netlify.app/api"
+  TMS_API_URL = "https://tms.whiteglovecare.net/api"
   TMS_USER_POOL_ID = "us-east-1_nDJo2pcjL"
   TMS_CLIENT_ID = "26mqlo51v8au2mhcg0nbmh4bu2"
 

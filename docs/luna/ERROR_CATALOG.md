@@ -2,6 +2,12 @@
 
 Source of truth for the live bot: `packages/tms-api/src/luna-knowledge.ts`.
 
+## Select a notes PDF first
+
+**Means:** No notes PDF was selected, so nothing was read. The file picker was still empty.
+
+**Do:** Choose the PDF, then upload again.
+
 ## No HHA pay code rate / No dollar rate
 
 **Means:** TMS could not pick an HHA pay-code dollar rate for this session (provider rates missing for that duration/group/eval/additional, or discipline blank).

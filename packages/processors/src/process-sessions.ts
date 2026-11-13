@@ -256,6 +256,16 @@ export async function processVerifiedSessions(options: {
       // Patient-level auth + AuthorizationID on CreateSchedule so visits are not "Unauthorized".
       step = 'upsertAuthorization';
       const visitBase = resolved.resolved.visit;
+      if (!visitBase.teamId || !visitBase.coordinatorId) {
+        throw new Error(
+          `[verified_sessions] session=${row.sessionId} FAILED — missing provider last name. Coordinator is not assigned. No HHA write attempted.`,
+        );
+      }
+      step = 'assignTeamCoordinator';
+      await hha.ensureAcceptedServices(patientId, [], {
+        teamId: Number(visitBase.teamId),
+        coordinatorId: Number(visitBase.coordinatorId),
+      });
       if (!visitBase.contractId || !visitBase.serviceCodeId || !visitBase.serviceCode) {
         throw new Error(
           `[verified_sessions] session=${row.sessionId} missing contract/service for authorization`,
@@ -381,6 +391,16 @@ export async function processVerifiedSessions(options: {
 
       step = 'approveVisit';
       await hha.approveVisit(visit.id);
+
+      if (needsEvv) {
+        step = 'removeEvvPlaceholder';
+        await hha.removeEvvPlaceholderVisits({
+          patientId,
+          caregiverId: visitInput.caregiverId,
+          visitDate: visitInput.visitDate ?? row.visitDate,
+          keepVisitId: visit.id,
+        });
+      }
 
       await store.markProcessed(pk, sk, { triage: decision.triage, runId });
       succeeded += 1;

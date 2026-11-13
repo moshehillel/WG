@@ -9,7 +9,9 @@
   ],
   "scripts": {
     "build": "npm run build -w @white-glove/shared && npm run build -w @white-glove/hha-client && npm run build -w @white-glove/tms-db && npm run build -w @white-glove/tms-api && npm run build -w @white-glove/processors && npm run build -w @white-glove/providersoft-bot && npm run build -w @white-glove/infra",
-    "test": "npm run test -w @white-glove/shared && npm run test -w @white-glove/hha-client && npm run test -w @white-glove/tms-db && npm run test -w @white-glove/tms-api && npm run test -w @white-glove/processors && npm run test -w @white-glove/providersoft-bot",
+    "test": "npm run test -w @white-glove/shared && npm run test -w @white-glove/hha-client && npm run test -w @white-glove/tms-db && npm run test -w @white-glove/tms-api && npm run test -w @white-glove/processors && npm run test -w @white-glove/providersoft-bot && npm run test -w @white-glove/sesis-bot",
+    "sesis:download": "npm run local:download -w @white-glove/sesis-bot",
+    "sesis:stubs": "npm run local:stubs -w @white-glove/sesis-bot",
     "lint": "eslint .",
     "format": "prettier --write .",
     "typecheck": "npm run typecheck --workspaces --if-present",

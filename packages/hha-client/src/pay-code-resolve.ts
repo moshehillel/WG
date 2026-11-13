@@ -190,8 +190,3 @@ export function payCodeLookupCandidates(psPayCodeName: string): string[] {
   ].filter(Boolean);
   return [...new Set(out)];
 }
-
-export {
-  pickFirstPayCodeForDiscipline,
-  type FallbackPayCodePick,
-} from '@white-glove/shared';

@@ -7,6 +7,7 @@ import { createReferenceMappingStore } from '../reference-mapping.js';
 import { processClosedCases } from '../process-closed.js';
 import { processDischargeService, type DischargeServiceRow } from '../process-discharge.js';
 import { runProcessorBranchSafely } from '../safe-handler.js';
+import { emptyCaseBranchResult } from '../dry-run-sessions-only.js';
 import { getObjectText, putJson } from '../s3.js';
 
 export interface ClosedEvent {
@@ -21,6 +22,10 @@ export interface ClosedEvent {
  * so Validate/email/CSV label them independently — SFN return is closed-only.
  */
 export const handler: Handler<ClosedEvent, ProcessorResult> = async (event) => {
+  if (event.dryRun) {
+    console.log(`[closed] dry run reads sessions only; skipping Gluck closure run=${event.parse.runId}`);
+    return emptyCaseBranchResult(event.parse.runId, 'closed_cases');
+  }
   const env = await applyHhaSecretFromArn(getEnv());
   const bucket = event.bucket || env.REPORTS_BUCKET;
   if (!bucket) throw new Error('REPORTS_BUCKET required');

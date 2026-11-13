@@ -1,5 +1,11 @@
 const CFG = (typeof window !== 'undefined' && window.TMS_CONFIG) || {};
-const API = (localStorage.getItem('tmsApi') || CFG.apiUrl || 'http://127.0.0.1:8787').replace(/\/$/, '');
+function apiBase() {
+  const host = location.hostname;
+  const local = host === 'localhost' || host === '127.0.0.1';
+  if (!local && location.protocol !== 'file:') return `${location.origin}/api`;
+  return (localStorage.getItem('tmsApi') || CFG.apiUrl || 'http://127.0.0.1:8787').replace(/\/$/, '');
+}
+const API = apiBase();
 const USER_POOL_ID = CFG.userPoolId || '';
 const CLIENT_ID = CFG.clientId || '';
 // Real sign-in only when the build gives us a Cognito app client id.
@@ -67,7 +73,7 @@ const REPORT_LIST = [
   {
     id: 'last-service',
     title: 'Last date of service',
-    blurb: 'Every child in TMS. Most recent attended or makeup date by child and provider. Blank Last DOS means never serviced.',
+    blurb: 'Children with an active mandate, one row each. Last DOS is the latest attended or makeup date across that child’s mandates.',
   },
   {
     id: 'due-dates',
@@ -260,6 +266,49 @@ const I18N = {
     'common.ok': 'OK',
     'common.back': 'Back',
     'session.ended': 'Your session has ended. Please sign in again.',
+    'upload.askLuna': 'You can ask Luna to explain this error.',
+    'upload.reportIncorrect': 'Report incorrect error',
+    'upload.reportWhy': 'Why is this error wrong?',
+    'upload.reportSend': 'Send report',
+    'upload.reportPending':
+      'This is now pending. If it is rejected, support will reach out to you. If not, rest assured that it is uploaded.',
+    'luna.wronglyFlagged': 'Did you feel that this error was wrongly flagged?',
+    'luna.yes': 'Yes',
+    'luna.no': 'No',
+    'luna.whatWrong': 'What do you think is wrong?',
+    'luna.hold': 'Please hold while I read the PDF.',
+    'luna.uploaded': 'I successfully uploaded it for you.',
+    'luna.pending':
+      'This is now pending. If it is rejected, support will reach out to you. If not, rest assured that it is uploaded.',
+    'luna.choosePdf': 'Choose the notes PDF first.',
+    'luna.unreadable': 'The note could not be read.',
+    'luna.okay': 'Okay.',
+    'upload.reportNotSent': 'Nothing is sent until you submit this report. The upload stays blocked.',
+    'upload.reportNeedMessage': 'Write why this error is wrong before sending the report.',
+    'upload.readOtherAi': 'Read with other AI',
+    'upload.readHint':
+      'Accepts Frontline session-notes or Therapist Activity Output PDFs. Import caseloads under Mandates. Scanned PDFs are not supported. Read with other AI checks the same file for wording the rules can miss, and does not add sessions.',
+    'upload.readHintShort':
+      'Read with other AI checks this file for wording the rules can miss. It does not add sessions.',
+    'upload.reading': 'Reading the note with other AI…',
+    'upload.otherAiTitle': 'Other AI reading. No sessions were added.',
+    'upload.rulesSay': 'Rules say',
+    'upload.otherAiSays': 'Other AI says',
+    'upload.otherAiEmpty': 'Other AI returned no reading.',
+    'upload.otherAiFail': 'Other AI could not read this note.',
+    'upload.otherAiDone': 'Other AI read',
+    'nav.errorReports': 'Error reports',
+    'luna.readyTicket': 'Ready to submit this ticket? Name and email are required.',
+    'luna.submitTicket': 'Submit a ticket',
+    'block.allow': 'Allow upload',
+    'block.decline': 'Decline',
+    'block.noteLabel': 'Why was the block wrong, and why is the override correct?',
+    'block.needNote': 'Write a note before allowing or declining.',
+    'block.reviewTitle': 'Incorrect-error reports',
+    'block.explanation': 'Explanation',
+    'block.therapistMessage': 'Therapist message',
+    'block.openPdf': "Open therapist's report PDF",
+    'block.noPdf': 'No therapist report PDF was attached.',
     'lang.en': 'English',
     'lang.es': 'Español',
   },
@@ -419,6 +468,49 @@ const I18N = {
     'common.ok': 'Aceptar',
     'common.back': 'Volver',
     'session.ended': 'Su sesión ha terminado. Inicie sesión de nuevo.',
+    'upload.askLuna': 'Puede pedirle a Luna que explique este error.',
+    'upload.reportIncorrect': 'Informar error incorrecto',
+    'upload.reportWhy': '¿Por qué este error es incorrecto?',
+    'upload.reportSend': 'Enviar informe',
+    'upload.reportPending':
+      'Esto quedó pendiente. Si se rechaza, soporte se comunicará con usted. Si no, puede estar tranquilo: se subió.',
+    'luna.wronglyFlagged': '¿Sintió que este error se marcó por error?',
+    'luna.yes': 'Sí',
+    'luna.no': 'No',
+    'luna.whatWrong': '¿Qué cree que está mal?',
+    'luna.hold': 'Espere un momento mientras leo el PDF.',
+    'luna.uploaded': 'La subí correctamente.',
+    'luna.pending':
+      'Esto quedó pendiente. Si se rechaza, soporte se comunicará con usted. Si no, puede estar tranquilo: se subió.',
+    'luna.choosePdf': 'Elija primero el PDF de las notas.',
+    'luna.unreadable': 'No se pudo leer la nota.',
+    'luna.okay': 'Está bien.',
+    'upload.reportNotSent': 'No se envía nada hasta que envíe este informe. La carga sigue bloqueada.',
+    'upload.reportNeedMessage': 'Escriba por qué este error es incorrecto antes de enviar el informe.',
+    'upload.readOtherAi': 'Leer con otra IA',
+    'upload.readHint':
+      'Acepta PDF de notas de Frontline o de Therapist Activity Output. Importe los caseloads en Mandatos. Los PDF escaneados no son compatibles. Leer con otra IA revisa el mismo archivo por redacción que las reglas pueden pasar por alto, y no agrega sesiones.',
+    'upload.readHintShort':
+      'Leer con otra IA revisa este archivo por redacción que las reglas pueden pasar por alto. No agrega sesiones.',
+    'upload.reading': 'Leyendo la nota con otra IA…',
+    'upload.otherAiTitle': 'Lectura de otra IA. No se agregaron sesiones.',
+    'upload.rulesSay': 'Las reglas dicen',
+    'upload.otherAiSays': 'La otra IA dice',
+    'upload.otherAiEmpty': 'La otra IA no devolvió una lectura.',
+    'upload.otherAiFail': 'La otra IA no pudo leer esta nota.',
+    'upload.otherAiDone': 'La otra IA leyó',
+    'nav.errorReports': 'Informes de errores',
+    'luna.readyTicket': '¿Listo para enviar este ticket? El nombre y el correo son obligatorios.',
+    'luna.submitTicket': 'Enviar un ticket',
+    'block.allow': 'Permitir carga',
+    'block.decline': 'Rechazar',
+    'block.noteLabel': '¿Por qué el bloqueo fue incorrecto y por qué la excepción es correcta?',
+    'block.needNote': 'Escriba una nota antes de permitir o rechazar.',
+    'block.reviewTitle': 'Informes de error incorrecto',
+    'block.explanation': 'Explicación',
+    'block.therapistMessage': 'Mensaje del terapeuta',
+    'block.openPdf': 'Abrir el PDF del informe del terapeuta',
+    'block.noPdf': 'No se adjuntó el PDF del informe del terapeuta.',
     'lang.en': 'English',
     'lang.es': 'Español',
   },
@@ -490,6 +582,7 @@ function applyStaticI18n() {
     districts: 'nav.districts',
     admins: 'nav.admins',
     reports: 'nav.reports',
+    blockReports: 'nav.errorReports',
   };
   document.querySelectorAll('#adminNav [data-admin]').forEach((btn) => {
     const screen = btn.getAttribute('data-admin');
@@ -497,10 +590,18 @@ function applyStaticI18n() {
     if (!key) return;
     btn.textContent = t(key);
   });
+  const lunaLead = document.getElementById('lunaHandoffLead');
+  if (lunaLead) lunaLead.textContent = t('luna.readyTicket');
+  const lunaTicket = document.getElementById('lunaSendHandoff');
+  if (lunaTicket) lunaTicket.textContent = t('luna.submitTicket');
   const headerLang = document.getElementById('headerLang');
   if (headerLang) {
     headerLang.innerHTML = langSwitcherHtml(true);
     bindLangSwitcher(headerLang, () => {
+      if (previewBlockActive()) {
+        renderPreviewBlock();
+        return;
+      }
       if (document.body.classList.contains('is-auth') && document.getElementById('loginBtn')) {
         const msg = document.getElementById('loginErr')?.textContent || '';
         showLogin(msg);
@@ -758,7 +859,48 @@ function apiError(message, extras = {}) {
   return err;
 }
 
+const readCache = new Map();
+const READ_CACHE_MS = 60_000;
+
+function peekGet(path) {
+  const hit = readCache.get(String(path || ''));
+  if (!hit || Date.now() - hit.at > READ_CACHE_MS) return null;
+  return hit.data;
+}
+
+function loaderHtml(label = 'Loading…') {
+  const text = label ? `<span>${esc(label)}</span>` : '';
+  return `<span class="loader" role="status"><span class="spin" aria-hidden="true"></span>${text}</span>`;
+}
+
+/** Phone-style spinner on a button while a request runs. */
+function setBusyButton(btn, busy, label) {
+  if (!btn) return;
+  if (busy) {
+    if (btn.dataset.idleHtml == null) btn.dataset.idleHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.innerHTML = loaderHtml(label || 'Working…');
+    return;
+  }
+  btn.disabled = false;
+  btn.removeAttribute('aria-busy');
+  if (label != null) btn.textContent = label;
+  else if (btn.dataset.idleHtml != null) btn.innerHTML = btn.dataset.idleHtml;
+  delete btn.dataset.idleHtml;
+}
+
+function showWorking(title) {
+  view(`<div class="hero-strip" aria-hidden="true"></div><div class="card"><h2>${esc(title)}</h2>${loaderHtml()}</div>`);
+}
+
 async function api(method, path, body, opts = {}) {
+  const verb = String(method || 'GET').toUpperCase();
+  if (verb !== 'GET' && verb !== 'HEAD' && verb !== 'OPTIONS') readCache.clear();
+  if (verb === 'GET' && !opts.fresh && !opts.skipCache) {
+    const hit = peekGet(path);
+    if (hit) return hit;
+  }
   const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : 0;
   const controller = timeoutMs ? new AbortController() : null;
   const timer = controller
@@ -807,12 +949,24 @@ async function api(method, path, body, opts = {}) {
       `Request failed (${res.status}). Review the error details under Import.`;
     throw apiError(msg, { errors, warnings, status: res.status });
   }
+  if (verb === 'GET' && res.ok && !(data instanceof Blob)) {
+    readCache.set(path, { at: Date.now(), data });
+  }
   return data;
 }
 
 function lunaApiOpts() {
   const signedIn = Boolean(COGNITO_MODE ? String(state.idToken || '').trim() : state.role);
   return signedIn ? {} : { anonymous: true, skipAuthSignOut: true };
+}
+
+function lunaVisibleReply(out) {
+  const keys = Array.isArray(out?.replyKeys) ? out.replyKeys : [];
+  if (uiLang === 'es' && keys.length) {
+    const text = keys.map((key) => t(key)).filter(Boolean).join('\n\n');
+    if (text) return text;
+  }
+  return String(out?.reply || '').trim();
 }
 
 function clearUploadIssues() {
@@ -850,17 +1004,152 @@ function splitFailedBySeverity(failed, extraWarnings) {
   };
 }
 
-function setUploadIssues(errors, warnings, successes) {
+let blockedUploadHold = null;
+
+async function holdForSelectedPdf(inputId, providerId, errors) {
+  const list = (errors || []).map((row) => String(row || '').trim()).filter(Boolean);
+  if (list.length && list.every((row) => /select a notes pdf first/i.test(row))) return null;
+  const file = document.getElementById(inputId)?.files?.[0];
+  if (!file) return null;
+  const pdfBase64 = await fileToBase64(file);
+  if (!String(pdfBase64 || '').startsWith('JVBER')) return null;
+  return {
+    pdfBase64,
+    fileName: file.name || '',
+    providerId: providerId || '',
+    schoolId: state.selectedSchoolId || '',
+    programType: state.selectedProgramType || '',
+  };
+}
+
+function explainBlockLocal(error) {
+  const text = String(error || '');
+  if (/school/i.test(text) && /match|not found/i.test(text)) {
+    return 'This row was blocked because the school on the PDF does not match the child’s school. The rule compares that line to the caseload. A parental-placement sentence is not a school name. Fix the school or re-export the PDF. If the rule used the wrong line, report the error.';
+  }
+  if (/cpt/i.test(text)) {
+    return 'This session was blocked because the CPT units do not cover the visit. Timed codes need 1 unit per 15 minutes, and several timed codes on one visit are added together. Fix the units or the times.';
+  }
+  if (/mandate/i.test(text)) {
+    return 'This was blocked or flagged because of the mandate. Exceeding the mandate means too many sessions. Shorter than the mandate means the clock is under the mandate length. A yellow under-mandate line does not by itself stop submit.';
+  }
+  if (/sign/i.test(text)) {
+    return 'This attended or makeup session was blocked because no signature was found. Sign and re-export. If the signature is already on the PDF, report the error.';
+  }
+  if (/hha|errorid|pay code|paycode/i.test(text)) {
+    return 'Send to HHA was blocked. The message names the reason, such as a missing patient, rate, contract, or an HHA error id. Fix that item and retry. Do not create another visit to get past a duplicate.';
+  }
+  if (/service note|placeholder|makeup notes|time in|frontline reason|copy-pasted|no peer/i.test(text)) {
+    return 'The note or the clock did not meet the rule. Add the missing note, reason, times, or the no-peer sentence, then save or import again.';
+  }
+  return text ? `The upload was blocked with this message: ${text}` : 'The upload was blocked.';
+}
+
+async function selectedNotesPdfForLuna() {
+  const hold = blockedUploadHold;
+  const raw = String(hold?.pdfBase64 || '').trim().replace(/^data:application\/pdf;base64,/i, '');
+  if (raw.startsWith('JVBER')) {
+    return {
+      pdfBase64: raw,
+      fileName: hold.fileName || '',
+      providerId: hold.providerId || '',
+    };
+  }
+  const file = document.getElementById('pdfFile')?.files?.[0] || document.getElementById('pSessionPdf')?.files?.[0];
+  if (!file) return null;
+  const pdfBase64 = await fileToBase64(file);
+  if (!String(pdfBase64 || '').startsWith('JVBER')) return null;
+  return { pdfBase64, fileName: file.name || '', providerId: hold?.providerId || '' };
+}
+
+async function askLunaAboutErrors(errors) {
+  const list = (errors || []).map((row) => String(row || '').trim()).filter(Boolean);
+  if (!list.length) return;
+  setLunaOpen(true);
+  ensureLunaWelcome();
+  lunaState.messages.push({
+    role: 'user',
+    content: `Please explain this blocked upload:\n${list.join('\n')}`,
+  });
+  renderLunaMessages(true);
+  lunaState.dispute = { errors: list, stage: 'explained', buttons: true };
+  let reply = '';
+  try {
+    const out = await api('POST', '/support/luna/explain', { errors: list }, lunaApiOpts());
+    reply = lunaVisibleReply(out);
+    if (!reply) {
+      const rows = Array.isArray(out?.explanations) ? out.explanations : [];
+      reply = rows
+        .map((row) => [row.blocked, row.why].filter(Boolean).join(' '))
+        .join('\n\n');
+    }
+  } catch {
+    reply = '';
+  }
+  if (!reply) {
+    reply = `${list.map(explainBlockLocal).join('\n\n')}\n\nA fuller explanation is unavailable right now. This is Luna’s summary of the rule.`;
+  }
+  lunaState.messages.push({ role: 'assistant', content: reply });
+  lunaState.messages.push({ role: 'assistant', content: t('luna.wronglyFlagged') });
+  renderLunaMessages(false);
+}
+
+async function submitIncorrectErrorReport(errors) {
+  const message = String(document.getElementById('blockReportMessage')?.value || '');
+  if (!message.trim()) {
+    setStatus(t('upload.reportNeedMessage'), 'error');
+    return;
+  }
+  const card = document.getElementById('blockReportCard');
+  if (previewBlockActive()) {
+    if (card) card.innerHTML = `<p class="warn-box">${esc(t('upload.reportPending'))}</p>`;
+    return;
+  }
+  const hold = blockedUploadHold;
+  if (!hold) return;
+  const btn = document.getElementById('blockReportSend');
+  if (btn) btn.disabled = true;
+  try {
+    await api('POST', '/block-reports', {
+      providerId: hold.providerId,
+      message: message.trim(),
+      errors,
+      pdfBase64: hold.pdfBase64,
+      fileName: hold.fileName || '',
+      schoolId: hold.schoolId || '',
+      programType: hold.programType || '',
+    });
+    blockedUploadHold = null;
+    if (card) card.innerHTML = `<p class="warn-box">${esc(t('upload.reportPending'))}</p>`;
+    setStatus(t('upload.reportPending'), 'ok');
+  } catch (err) {
+    setStatus(err?.message || t('common.error'), 'error');
+    if (btn) btn.disabled = false;
+  }
+}
+
+function setUploadIssues(errors, warnings, successes, hold, opts) {
   const el = uploadIssueHost();
   if (!el) return;
   const errs = (errors || []).map((e) => String(e || '').trim()).filter(Boolean);
   const warns = (warnings || []).map((w) => String(w || '').trim()).filter(Boolean);
   const oks = (successes || []).map((s) => String(s || '').trim()).filter(Boolean);
+  if (hold && (hold.pdfBase64 || hold.pdfText)) blockedUploadHold = hold;
+  else blockedUploadHold = null;
   if (!errs.length && !warns.length && !oks.length) {
     el.hidden = true;
     el.innerHTML = '';
     return;
   }
+  const reportForm = (errs.length || warns.length) && blockedUploadHold
+    ? `<div id="blockReportCard">
+        <label>${esc(t('upload.reportWhy'))}
+          <textarea id="blockReportMessage" rows="3" maxlength="4000"></textarea>
+        </label>
+        <p class="muted">${esc(t('upload.reportNotSent'))}</p>
+        <button type="button" class="btn" id="blockReportSend">${esc(t('upload.reportIncorrect'))}</button>
+      </div>`
+    : '';
   el.hidden = false;
   el.innerHTML = [
     `<div class="dismissible-toolbar">
@@ -872,31 +1161,63 @@ function setUploadIssues(errors, warnings, successes) {
           .join('')}</div>`
       : '',
     errs.length
-      ? `<div class="err-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-upload-issues aria-label="Clear upload issues">×</button><strong>${oks.length ? 'Failed sessions' : 'Upload issues'}</strong>${errs
-          .map((e) => `<div class="upload-issue-line">${esc(e)}</div>`)
-          .join('')}</div>`
+      ? `<div class="err-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-upload-issues aria-label="Clear upload issues">×</button><strong>${opts?.partial ? `NOT imported: ${errs.length} row(s) with errors. Fix them and import the PDF again.` : oks.length ? 'Failed sessions' : 'Upload issues'}</strong>${errs
+          .map((e) => `<div class="upload-issue-line" data-block-line>${esc(e)}</div>`)
+          .join('')}<p><button type="button" class="btn" data-ask-luna>${esc(t('upload.askLuna'))}</button></p>${reportForm}</div>`
       : '',
     warns.length
       ? `<div class="warn-box upload-issue-block status-banner"><button type="button" class="status-banner-dismiss" data-clear-upload-issues aria-label="Clear warnings">×</button><strong>Warnings</strong>${warns
-          .map((w) => `<div class="upload-issue-line">${esc(w)}</div>`)
-          .join('')}</div>`
+          .map((w) => `<div class="upload-issue-line" data-block-line>${esc(w)}</div>`)
+          .join('')}${errs.length ? '' : `<p><button type="button" class="btn" data-ask-luna>${esc(t('upload.askLuna'))}</button></p>${reportForm}`}</div>`
       : '',
   ]
     .filter(Boolean)
     .join('');
   el.querySelectorAll('[data-clear-upload-issues]').forEach((btn) => {
     btn.onclick = () => {
+      blockedUploadHold = null;
       clearUploadIssues();
       clearStatus();
     };
+  });
+  const reportBtn = document.getElementById('blockReportSend');
+  if (reportBtn) reportBtn.onclick = () => submitIncorrectErrorReport(errs.length ? errs : warns);
+}
+
+function showClaudeReading(host, out) {
+  if (!host) return;
+  const readings = Array.isArray(out?.readings) ? out.readings : [];
+  const lines = readings.map((row) => {
+    const who = [row.studentName, row.dateOfService, row.beginTime && row.endTime ? `${row.beginTime}–${row.endTime}` : '']
+      .filter(Boolean)
+      .join(' · ');
+    const rules = row.rulesAttendance || '—';
+    const claude = row.claudeAttendance || '—';
+    const comment = row.comment ? ` ${row.comment}` : '';
+    const mark = row.agrees ? 'Agrees' : 'Differs';
+    return `${mark}: ${who || 'Session'}. ${t('upload.rulesSay')} ${rules}. ${t('upload.otherAiSays')} ${claude}.${comment}`;
+  });
+  host.hidden = false;
+  host.innerHTML = `<div class="warn-box upload-issue-block"><strong>${esc(t('upload.otherAiTitle'))}</strong>${
+    out?.truncated ? '<div class="upload-issue-line">Only the first 24 sessions in the file were read.</div>' : ''
+  }${lines.map((line) => `<div class="upload-issue-line">${esc(line)}</div>`).join('') || `<div class="upload-issue-line">${esc(t('upload.otherAiEmpty'))}</div>`}</div>`;
+}
+
+async function readNotesPdfWithClaude(file, providerId) {
+  const pdfBase64 = await fileToBase64(file);
+  return api('POST', '/week/read-notes', {
+    providerId: providerId || undefined,
+    fileName: file.name || '',
+    pdfBase64,
   });
 }
 
 function openingAccountView() {
   view(`
+    <div class="hero-strip" aria-hidden="true"></div>
     <div class="card">
-      <h2>Loading your account…</h2>
-      <p>One moment, please.</p>
+      <h2>Loading your account</h2>
+      ${loaderHtml('One moment…')}
     </div>
   `);
 }
@@ -1048,7 +1369,55 @@ function timesheetSendBlockReason({ week, sessions, locked, errors, signerEmail,
   return '';
 }
 
+let sectionPageState = null;
+
+function closeSectionPage() {
+  if (!sectionPageState) return;
+  const { hidden, back, section } = sectionPageState;
+  sectionPageState = null;
+  if (back?.isConnected) back.remove();
+  if (section?.isConnected) section.hidden = true;
+  for (const el of hidden) {
+    if (el.isConnected) el.hidden = false;
+  }
+}
+
+/** Show one block by itself. Back restores the screen that was already open. */
+function openSectionPage(section) {
+  closeSectionPage();
+  const viewEl = document.getElementById('view');
+  if (!viewEl || !section) return;
+  const hidden = [];
+  const hideExcept = (root) => {
+    for (const child of [...root.children]) {
+      if (child === section || section.contains(child)) continue;
+      if (child.contains(section)) {
+        hideExcept(child);
+        continue;
+      }
+      if (!child.hidden) {
+        hidden.push(child);
+        child.hidden = true;
+      }
+    }
+  };
+  hideExcept(viewEl);
+  section.hidden = false;
+  const back = document.createElement('p');
+  back.className = 'row';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn';
+  btn.textContent = 'Back';
+  btn.onclick = () => closeSectionPage();
+  back.appendChild(btn);
+  section.prepend(back);
+  sectionPageState = { hidden, back, section };
+  window.scrollTo(0, 0);
+}
+
 function view(html) {
+  closeSectionPage();
   const el = document.getElementById('view');
   el.innerHTML = html;
   armSortableTables(el);
@@ -1686,6 +2055,71 @@ function manualChildOptions(students) {
     return `<option value="${esc(s.id)}">${esc(label)}</option>`;
   }).join('');
   return `${rows}<option value="">No child</option>`;
+}
+
+/**
+ * Service types on the selected child's mandates, in the same text the free-text box took
+ * (mandate serviceType with any N:1 ratio removed; the Ratio select adds it back on save).
+ * Prefers the signed-in provider's own mandates; falls back to all of the child's mandates
+ * when none carry that provider id (merged provider ids).
+ */
+function manualServiceTypeChoices(mandates, studentId, providerId) {
+  const sid = String(studentId || '').trim();
+  if (!sid) return [];
+  const forChild = (mandates || []).filter((m) => String(m.studentId || '') === sid);
+  const pid = String(providerId || '').trim();
+  const mine = pid ? forChild.filter((m) => String(m.providerId || '') === pid) : [];
+  const rows = mine.length ? mine : forChild;
+  const seen = new Set();
+  const out = [];
+  for (const m of rows) {
+    const raw = String(m.serviceType || '').trim();
+    if (!raw || /^makeup auth/i.test(raw)) continue;
+    const value = stripSessionRatio(raw) || raw;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+}
+
+/**
+ * Turn #pManService into a dropdown of the selected child's mandate service types.
+ * `set(value)` is for edit/reset: it keeps a legacy value that is no longer on a mandate
+ * so editing an old session never silently changes its service type.
+ */
+function bindManualServiceSelect(studentEl, serviceEl, getMandates, providerId) {
+  if (!studentEl || !serviceEl) return { set() {}, refresh() {} };
+  const render = (wanted, allowLegacy) => {
+    const studentId = studentEl.value || '';
+    const choices = manualServiceTypeChoices(getMandates(), studentId, providerId);
+    const want = String(wanted || '').trim();
+    const list = [...choices];
+    const match = (v) => list.find((c) => c.toLowerCase() === v.toLowerCase());
+    if (want && allowLegacy && !match(want)) list.unshift(want);
+    const placeholder = !studentId
+      ? 'Select a child first'
+      : choices.length
+        ? 'Select service type'
+        : 'No service types on this child’s mandate';
+    serviceEl.innerHTML = `<option value="">${esc(placeholder)}</option>${list
+      .map((v) => `<option value="${esc(v)}">${esc(v)}</option>`)
+      .join('')}`;
+    const hit = want ? match(want) : '';
+    if (hit) serviceEl.value = hit;
+    else if (!want && choices.length === 1) serviceEl.value = choices[0];
+    else serviceEl.value = '';
+  };
+  studentEl.addEventListener('change', () => {
+    const current = String(serviceEl.value || '').trim();
+    render(current, false);
+  });
+  render('', false);
+  return {
+    set: (value) => render(value, true),
+    refresh: () => render(serviceEl.value, false),
+  };
 }
 
 function sessionChildLabel(s, students) {
@@ -2427,7 +2861,7 @@ async function openTimesheetModal(opts) {
       </div>
       ${meta.length ? `<p class="muted timesheet-pdf-meta">${meta.map((m) => esc(m)).join(' · ')}</p>` : ''}
       <p class="muted timesheet-pdf-hint">Same branded PDF that SignNow / email will send.</p>
-      <div class="timesheet-pdf-loading muted">Loading branded timesheet…</div>
+      <div class="timesheet-pdf-loading">${loaderHtml('Loading branded timesheet…')}</div>
       <div class="timesheet-pdf-pages" hidden></div>
       <iframe class="timesheet-pdf-frame" title="Timesheet PDF fallback" hidden></iframe>
     </div>
@@ -2854,13 +3288,62 @@ function askSignatureName(nameGuess) {
   });
 }
 
+let therapistBootCache = null;
+let therapistHomeGen = 0;
+
+function showTherapistWorking(pane) {
+  const tab = (id, label) =>
+    `<button type="button" class="pane-tab${pane === id ? ' on' : ''}" data-therapist-pane="${id}" role="tab">${esc(label)}</button>`;
+  view(`
+    <div class="hero-strip" aria-hidden="true"></div>
+    <div class="card">
+      <div class="pane-tabs" id="therapistPaneTabs" role="tablist">
+        ${tab('current', t('therapist.pending'))}
+        ${tab('draft', t('therapist.draft'))}
+        ${tab('prior', t('therapist.processed'))}
+        ${tab('archive', t('therapist.archive'))}
+      </div>
+      ${loaderHtml()}
+    </div>
+  `);
+  document.querySelectorAll('[data-therapist-pane]').forEach((btn) => {
+    btn.onclick = () => {
+      const next = btn.getAttribute('data-therapist-pane') || 'current';
+      state.therapistPane = next;
+      sessionStorage.setItem('tmsTherapistPane', next);
+      if (next === 'current') {
+        state.weekStart = String(state.pendingWeekStart || '').trim() || mondayIso();
+        state.draftFocusWeekStart = '';
+        sessionStorage.removeItem('tmsDraftFocusWeek');
+      } else if (next === 'draft') {
+        state.draftFocusWeekStart = '';
+        sessionStorage.removeItem('tmsDraftFocusWeek');
+      }
+      therapistHome();
+    };
+  });
+}
+
 async function therapistHome(statusFlash) {
+  const gen = ++therapistHomeGen;
   clearActionToast();
   clearUploadIssues();
+  const paneNow =
+    state.therapistPane === 'prior'
+      ? 'prior'
+      : state.therapistPane === 'archive'
+        ? 'archive'
+        : state.therapistPane === 'draft'
+          ? 'draft'
+          : 'current';
+  document.querySelectorAll('#therapistPaneTabs [data-therapist-pane]').forEach((btn) => {
+    btn.classList.toggle('on', btn.getAttribute('data-therapist-pane') === paneNow);
+  });
   let banner = '';
   let week = null;
   let sessions = [];
   let students = [];
+  let studentMandates = [];
   let errors = [];
   let warnings = [];
   let signerName = '';
@@ -2871,9 +3354,42 @@ async function therapistHome(statusFlash) {
   let loadFailed = null;
   let schools = [];
   let programTypes = [];
+  let studentsEarly = null;
+  let me = null;
+  const knownProgram = state.programConfirmed ? String(state.selectedProgramType || '').trim() : '';
+  const bootCache =
+    !statusFlash &&
+    therapistBootCache &&
+    therapistBootCache.key === knownProgram.toLowerCase() &&
+    Date.now() - therapistBootCache.at < 120000
+      ? therapistBootCache
+      : null;
+  const weeksPath = `/weeks?${new URLSearchParams({
+    ...(knownProgram ? { programType: knownProgram } : {}),
+  }).toString()}`.replace(/\?$/, '');
+  if (!(bootCache && (paneNow === 'current' || peekGet(weeksPath)))) {
+    showTherapistWorking(paneNow);
+  }
 
   try {
-    let me = await api('GET', '/me');
+    if (bootCache) {
+      me = bootCache.me;
+    } else {
+      if (paneNow === 'current' && knownProgram) {
+        const pendingWs = String(state.pendingWeekStart || '').trim();
+        state.weekStart = pendingWs || mondayIso();
+        const earlyScope = therapistScopeQuery();
+        const earlySchoolQ = earlyScope.toString() ? `&${earlyScope.toString()}` : '';
+        studentsEarly = api(
+          'GET',
+          `/students?weekStart=${encodeURIComponent(state.weekStart)}${earlySchoolQ}`,
+        );
+      }
+      me = await api(
+        'GET',
+        knownProgram ? `/me?programType=${encodeURIComponent(knownProgram)}` : '/me',
+      );
+    }
     providerId = me.provider?.id || '';
     providerDisplayName = `${me.provider?.firstName || ''} ${me.provider?.lastName || ''}`.trim();
     schools = me.schools || [];
@@ -2907,6 +3423,7 @@ async function therapistHome(statusFlash) {
         (p) => String(p).toLowerCase() === String(state.selectedProgramType || '').toLowerCase(),
       );
       if (!state.programConfirmed || !stillValid) {
+        if (gen !== therapistHomeGen) return;
         await showProgramPicker(programTypes);
         return;
       }
@@ -2928,8 +3445,28 @@ async function therapistHome(statusFlash) {
     }
     state.schoolConfirmed = true;
     sessionStorage.setItem('tmsSchoolConfirmed', '1');
-    // Re-fetch /me with programType so due banners stay scoped to the selected district/payer.
-    if (state.selectedProgramType) {
+    const paneForStudents = paneNow;
+    if (paneForStudents === 'current') {
+      const pendingWs = String(state.pendingWeekStart || '').trim();
+      state.weekStart = pendingWs || mondayIso();
+    }
+    if (
+      bootCache &&
+      paneForStudents === 'current' &&
+      bootCache.weekStart === state.weekStart &&
+      Array.isArray(bootCache.students)
+    ) {
+      studentsEarly = Promise.resolve({ students: bootCache.students, mandates: bootCache.mandates });
+    } else if (!studentsEarly && paneForStudents === 'current') {
+      const earlyScope = therapistScopeQuery();
+      const earlySchoolQ = earlyScope.toString() ? `&${earlyScope.toString()}` : '';
+      studentsEarly = api(
+        'GET',
+        `/students?weekStart=${encodeURIComponent(state.weekStart)}${earlySchoolQ}`,
+      );
+    }
+    // A second /me is only needed when the confirmed program was not on the first request.
+    if (state.selectedProgramType && state.selectedProgramType !== knownProgram && programTypes.length > 1) {
       me = await api(
         'GET',
         `/me?programType=${encodeURIComponent(state.selectedProgramType)}`,
@@ -2965,7 +3502,7 @@ async function therapistHome(statusFlash) {
         state.pendingWeekStart = state.weekStart;
         sessionStorage.setItem('tmsPendingWeek', state.weekStart);
       }
-      if (!draftListOnly && paneEarly !== 'prior' && paneEarly !== 'archive') {
+      if (!draftListOnly && paneEarly !== 'prior' && paneEarly !== 'archive' && paneEarly !== 'current') {
         const ensured = await api('POST', '/week/ensure', {
           weekStart: state.weekStart,
           providerId,
@@ -2996,18 +3533,31 @@ async function therapistHome(statusFlash) {
 
   try {
     if (!isDraftListPreview) {
-      const list = await api(
-        'GET',
-        `/students?weekStart=${encodeURIComponent(state.weekStart)}${schoolQ}`,
-      );
+      const list = studentsEarly
+        ? await studentsEarly
+        : await api(
+            'GET',
+            `/students?weekStart=${encodeURIComponent(state.weekStart)}${schoolQ}`,
+          );
       students = list.students || [];
+      studentMandates = Array.isArray(list.mandates) ? list.mandates : [];
+      if (me && !loadFailed) {
+        therapistBootCache = {
+          at: Date.now(),
+          key: String(state.selectedProgramType || '').toLowerCase(),
+          weekStart: state.weekStart,
+          me,
+          students,
+          mandates: studentMandates,
+        };
+      }
     }
   } catch {
     students = [];
   }
 
   try {
-    if (!isDraftListPreview) {
+    if (!isDraftListPreview && panePreview !== 'current') {
       const data = await api(
         'GET',
         `/week?weekStart=${encodeURIComponent(state.weekStart)}${schoolQ}`,
@@ -3066,7 +3616,7 @@ async function therapistHome(statusFlash) {
   let draftSessions = [];
   let pendingWeeks = [];
   let pendingWeekStarts = [];
-  if (providerId) {
+  if (providerId && panePreview !== 'current') {
     try {
       const listed = await api(
         'GET',
@@ -3161,11 +3711,8 @@ async function therapistHome(statusFlash) {
   const isArchivePane = pane === 'archive';
   const isDraftPane = pane === 'draft';
   const isDraftList = isDraftPane && !state.draftFocusWeekStart;
-  const isWeekWorkspace = pane === 'current' || (isDraftPane && !isDraftList);
-  const yellowBlocksImport = state.meSettings?.yellowWarningsBlockImport !== false;
-  const importBlockCopy = yellowBlocksImport
-    ? 'Import is all-or-nothing — any error or yellow warning blocks the whole file.'
-    : 'Import is all-or-nothing for hard errors (red). Yellow note warnings are shown but do not block the file.';
+  const isWeekWorkspace = isDraftPane && !isDraftList;
+  const isAddPane = pane === 'current';
 
   let archiveUploads = [];
   let archiveTimesheets = [];
@@ -3185,8 +3732,20 @@ async function therapistHome(statusFlash) {
 
   const entryCards = `
     <div class="card sec-card">
-      <h2 class="sec" id="pManHeading"><span class="sec-num">1</span> Manual session + custom note</h2>
-      <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note. Optional additional-service type (Eval, Documentation, etc.) shows in the Service column. The session attaches to the week of the date of service (within the 14-day locker). You do not pick a week first.</p>
+      <h2 class="sec"><span class="sec-num">1</span> Import session notes</h2>
+      <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
+      <div class="row">
+        <button class="btn-primary big" id="upload">Import</button>
+      </div>
+      <div id="uploadIssues" class="upload-issues" hidden></div>
+      <div id="myBlockReports"></div>
+    </div>
+    <div class="card sec-card">
+      <h2 class="sec"><span class="sec-num">2</span> Manual session notes</h2>
+      <button type="button" class="btn-primary" id="pManAddNew">Add new session</button>
+      <div id="pManPage" hidden>
+      <h2 class="sec" id="pManHeading"><span class="sec-num">2</span> Manual session notes</h2>
+      <div id="pManForm">
       <input type="hidden" id="pManEditId" value="" />
       <input type="hidden" id="pManEditWeekId" value="" />
       <div class="row">
@@ -3197,7 +3756,7 @@ async function therapistHome(statusFlash) {
       </div>
       <div class="row">
         <label>Service type
-          <input id="pManService" placeholder="PT School, ST Individual, OT School" />
+          <select id="pManService"><option value="">Select a child first</option></select>
         </label>
         <label>Additional service (optional)
           <select id="pManAddlType">
@@ -3240,21 +3799,16 @@ async function therapistHome(statusFlash) {
       <p class="muted" id="pManMakeupEmpty" hidden></p>
       <label>Notes <textarea id="pManNotes" rows="3"></textarea></label>
       <p class="muted" id="pManMakeupNotesHint" hidden>${esc(MAKEUP_NOTES_HINT)}</p>
-      <p class="muted">If a group-mandate child is seen individually (1:1 or no group ratio), the note must say no peer/partner was available, or “Group Mandate- seen individually”. A group visit (any N:1 where N is 2 or more, or the word Group) does not need that phrase when the other child’s note will be entered separately. Other… accepts any whole number, including a very large group.</p>
       <label>Custom note file (optional Word/PDF — not parsed) <input id="pManFile" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" /></label>
+      <label>Provider signature (required for attended / makeup) <input id="pManSign" autocomplete="off" placeholder="Type the provider full name to sign" /></label>
+      <p class="muted">Typing your name signs this session. A digital session note (like a Frontline report) is saved to Archived Documents for regular sessions. Additional services do not get a digital note.</p>
       <div class="row">
         <button type="button" class="btn-primary big" id="pManSave">Submit session</button>
-        <button type="button" class="btn" id="pManCancelEdit" hidden>Cancel edit</button>
+        <button type="button" class="btn" id="pManCancelEdit">Cancel</button>
       </div>
-    </div>
-    <div class="card sec-card">
-      <h2 class="sec"><span class="sec-num">2</span> Import session notes</h2>
-      <p>Select one Frontline Related Service Session Notes PDF or a Therapist Activity Output PDF (text-based, not a scan). It can include every session from the last 14 days, even when those dates fall in more than one calendar week — do not split the file by week, and do not pick a week first. Children and schools must already exist from caseload import; this upload will not create them. ${importBlockCopy} Exact duplicates (same child, date, times, and attendance) are skipped — missed and attended at the same slot are kept separate. Each session attaches to the week of its date of service (within the 14-day locker).</p>
-      <input id="pdfFile" type="file" accept="application/pdf,.pdf" />
-      <button class="btn-primary big" id="upload">Import</button>
-      <p class="muted" id="uploadHint">Accepts Frontline session-notes or Therapist Activity Output PDFs. Import caseloads under Mandates. Scanned PDFs are not supported.</p>
-    </div>
-    <div id="uploadIssues" class="upload-issues" hidden></div>`;
+      </div>
+      </div>
+    </div>`;
 
   const lockedWeekNote = !isWeekWorkspace
     ? ''
@@ -3268,6 +3822,7 @@ async function therapistHome(statusFlash) {
           : 'Approval is pending. Sessions are locked until you cancel or retrieve the signature request (returns the week to unsigned) or the timesheet is signed.'}</div>`
         : '';
   const draftEntryCards = isDraftPane && canImport ? entryCards : '';
+  // Timesheet sign/send lives on Draft only (list row actions + week workspace).
   const timesheetHtml = !isWeekWorkspace
     ? ''
     : pending || processed
@@ -3292,6 +3847,7 @@ async function therapistHome(statusFlash) {
       <button type="button" class="btn big" id="viewTimesheet" ${sessions.length ? '' : 'disabled'}>View timesheet</button>
     </div>`;
 
+  if (gen !== therapistHomeGen) return;
   view(`
     <div class="hero-strip" aria-hidden="true"></div>
     <div class="card">
@@ -3301,6 +3857,7 @@ async function therapistHome(statusFlash) {
         <button type="button" class="pane-tab${pane === 'prior' ? ' on' : ''}" data-therapist-pane="prior" role="tab">${esc(t('therapist.processed'))}</button>
         <button type="button" class="pane-tab${pane === 'archive' ? ' on' : ''}" data-therapist-pane="archive" role="tab">${esc(t('therapist.archive'))}</button>
       </div>
+      ${programTypes.length > 1 ? `<div class="row"><button type="button" class="btn" id="changeSchool">${esc(t('therapist.changeProgram'))}</button></div>` : ''}
       ${isArchivePane ? `
       <h2>My uploads &amp; timesheets</h2>
       <p class="muted">Successfully imported session-note PDFs and timesheets you generated. Select rows to download them as one zip, or merge the PDFs into a single file. Both follow week, then the time each file was saved.</p>
@@ -3345,16 +3902,6 @@ async function therapistHome(statusFlash) {
         const rows = filterWs
           ? processedSessions.filter((s) => s.weekStart === filterWs)
           : processedSessions;
-        const revokeWeeks = [];
-        const seenRevoke = new Set();
-        for (const s of rows) {
-          const id = String(s.weekId || '').trim();
-          const st = String(s.weekStatus || '');
-          if (!id || seenRevoke.has(id)) continue;
-          if (st !== 'signed' && st !== 'locked') continue;
-          seenRevoke.add(id);
-          revokeWeeks.push(s);
-        }
         return `
       <div class="row">
         <label>${esc(t('therapist.pendingWeekFilter'))}
@@ -3364,7 +3911,6 @@ async function therapistHome(statusFlash) {
           </select>
         </label>
       </div>
-      ${revokeWeeks.length ? `<div class="row">${revokeWeeks.map((s) => `<button type="button" class="btn" data-revoke-signature="${esc(s.weekId)}" data-revoke-week-start="${esc(s.weekStart || '')}">Revoke signature${s.weekStart ? ` · week of ${esc(s.weekStart)}` : ''}</button>`).join('')}</div>` : ''}
       <div class="table-wrap"><table>
         <tr><th>Session date</th><th>Child</th><th>Attended status</th><th>Start/End time</th><th>Week</th></tr>
         ${rows.map((s) => {
@@ -3407,46 +3953,38 @@ async function therapistHome(statusFlash) {
       ${draftSessions.length ? `
       <h3 class="sec">Draft sessions</h3>
       <div class="table-wrap"><table>
-        <tr><th>Week</th><th>Session date</th><th>Child</th><th>Attendance</th><th>Time</th></tr>
+        <tr><th>Week</th><th>Session date</th><th>Child</th><th>Attendance</th><th>Time</th><th></th></tr>
         ${draftSessions.map((s) => {
           const time = [s.beginTime, s.endTime].filter(Boolean).join(' – ') || '—';
+          // Delete only while the week is still editable (draft / reopened). Submitted, signed and
+          // locked weeks keep their sessions. A visit already sent to HHA is not deletable here.
+          const wkStatus = String(s.weekStatus || '');
+          const canDeleteDraft = (wkStatus === 'draft' || wkStatus === 'reopened')
+            && !['sent', 'confirmed'].includes(String(s.hhaStatus || ''));
           return `<tr>
           <td>${esc(s.weekStart || '—')}</td>
           <td>${esc(s.dateOfService || '—')}</td>
           <td>${esc(sessionChildLabel(s))}</td>
           <td>${esc(attendanceLabel(s))}</td>
           <td>${esc(time)}</td>
+          <td class="row-actions">${canDeleteDraft ? `<button type="button" class="btn" data-delete-draft-session="${esc(s.id)}" title="Delete this draft session">Delete</button>` : ''}</td>
         </tr>`;
         }).join('')}
       </table></div>` : ''}
       ` : `
       <h2>${isDraftPane ? esc(t('therapist.draft')) : esc(t('therapist.pending'))}</h2>
-      ${isDraftPane ? `<p class="row"><button type="button" class="btn" id="backToDraftList">${esc(t('therapist.backToDrafts'))}</button></p>` : `
-      <p class="muted">Upload one Frontline or Therapist Activity report for sessions in the last 14 days, or enter a session by hand. You do not pick a week first. One PDF may span more than one calendar week — each session attaches to the week of its date of service.</p>
-      </div>
-      ${entryCards}
-      <div class="card">
-      <h3>Sessions on file</h3>
-      <div class="row">
-        <label>${esc(t('therapist.pendingWeekFilter'))}
-          <select id="pendingWeekFilter">
-            ${pendingWeekStarts.map((ws) => `<option value="${esc(ws)}" ${state.weekStart === ws ? 'selected' : ''}>${esc(ws)}${ws === mondayIso() ? ' · current' : ''}</option>`).join('') || `<option value="${esc(state.weekStart)}">${esc(state.weekStart)}</option>`}
-          </select>
-        </label>
-      </div>
-      <p class="muted">This week filter only changes the list below. Upload and manual entry do not use it.</p>`}
+      ${banner}
+      ${isDraftPane ? `<p class="row"><button type="button" class="btn" id="backToDraftList">${esc(t('therapist.backToDrafts'))}</button></p>
       ${banner}
       ${week ? approvalBanner(status) : '<div class="warn-box">Contact the office to complete your therapist profile setup.</div>'}
       <p class="muted">Week of ${esc(state.weekStart)}${schoolLabel ? ` · ${esc(schoolLabel)}` : ''}${pending ? ' · awaiting signature (sessions locked)' : ''}${processed ? ' · signed/locked (sessions locked)' : ''}${providerSigned && !pending && !processed ? ' · provider signed' : ''}</p>
       <div class="row">
-        ${programTypes.length > 1 ? `<button type="button" class="btn" id="changeSchool">${esc(t('therapist.changeProgram'))}</button>` : ''}
         <button class="btn" id="refreshHome">${esc(t('therapist.reload'))}</button>
-        <button type="button" class="btn" id="retrieveSignature" ${pending ? '' : 'disabled'} title="${esc(pending ? t('therapist.retrieveSignature') : processed ? t('therapist.signatureAlreadyDone') : t('therapist.noOpenSignature'))}">${esc(t('therapist.retrieveSignature'))}</button>
+        <button type="button" class="btn" id="retrieveSignature" ${pending ? '' : 'disabled'} title="${esc(pending ? t('therapist.retrieveSignature') : t('therapist.noOpenSignature'))}">${esc(t('therapist.retrieveSignature'))}</button>
         ${pending ? `<button type="button" class="btn" id="resendInvite">Resend e-sign email</button>` : ''}
-        ${processed ? `<button type="button" class="btn" id="revokeSignature">Revoke signature</button>` : ''}
-      </div>
+      </div>` : ''}
       `}
-      ${isWeekWorkspace && errors.length ? `<div class="err-box status-banner" id="weekErrorsBox" data-week-issue="errors"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss errors">×</button><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div>${esc(e)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
+      ${isWeekWorkspace && errors.length ? `<div class="err-box status-banner" id="weekErrorsBox" data-week-issue="errors"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss errors">×</button><strong>Resolve these items before submitting.</strong>${errors.map((e) => `<div class="upload-issue-line" data-block-line>${esc(e)}</div>`).join('')}<p><button type="button" class="btn" data-ask-luna>${esc(t('upload.askLuna'))}</button></p><button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
       ${isWeekWorkspace && warnings.length ? `<div class="warn-box status-banner" id="weekWarningsBox" data-week-issue="warnings"><button type="button" class="status-banner-dismiss" data-dismiss-week-issue aria-label="Dismiss warnings">×</button><strong>Warnings (submission is still allowed).</strong>${warnings.map((w) => `<div>${esc(w)}</div>`).join('')}<button type="button" class="btn status-clear-btn" data-dismiss-week-issue>Clear</button></div>` : ''}
       ${isWeekWorkspace ? `<p class="muted">Red indicates a blocking issue (no mandate on file, over-mandate, or a required note on an attended or makeup session). Yellow means fewer submitted sessions than the mandate (attended and missed both count). Yellow does not block submit.</p>
       <div class="table-wrap">
@@ -3493,6 +4031,7 @@ async function therapistHome(statusFlash) {
     </div>` : ''}
     </div>
 
+    ${isAddPane ? entryCards : ''}
     ${isWeekWorkspace ? `
     ${lockedWeekNote}
     ${draftEntryCards}
@@ -3552,6 +4091,21 @@ async function therapistHome(statusFlash) {
       therapistHome();
     };
   });
+  document.querySelectorAll('[data-delete-draft-session]').forEach((btn) => {
+    btn.onclick = async () => {
+      const sessionId = btn.getAttribute('data-delete-draft-session') || '';
+      if (!sessionId) return;
+      if (!confirm('Delete this draft session? This cannot be undone.')) return;
+      btn.disabled = true;
+      try {
+        await api('DELETE', `/sessions/${encodeURIComponent(sessionId)}`);
+        await therapistHome({ success: ['Draft session deleted.'] });
+      } catch (err) {
+        btn.disabled = false;
+        setStatus(err.message || 'Could not delete this session.', 'error');
+      }
+    };
+  });
   const runProviderSign = async (weekId, weekStart) => {
     let id = weekId;
     const scopeQSign = therapistScopeQuery();
@@ -3580,13 +4134,11 @@ async function therapistHome(statusFlash) {
       const weekStart = btn.getAttribute('data-draft-week-start') || '';
       const prev = btn.textContent;
       try {
-        btn.disabled = true;
-        btn.textContent = 'Signing…';
+        setBusyButton(btn, true, 'Signing…');
         clearTransientErrors();
         const out = await runProviderSign(weekId, weekStart);
         if (!out) {
-          btn.disabled = false;
-          btn.textContent = prev || t('therapist.signTimesheet');
+          setBusyButton(btn, false, prev || t('therapist.signTimesheet'));
           return;
         }
         showActionToast(out.message || 'Timesheet signed and saved.', 'success');
@@ -3597,8 +4149,7 @@ async function therapistHome(statusFlash) {
           : [e.message || 'Unable to sign timesheet.'];
         setStatus({ error: errs });
         showActionToast(errs[0], 'error');
-        btn.disabled = false;
-        btn.textContent = prev || t('therapist.signTimesheet');
+        setBusyButton(btn, false, prev || t('therapist.signTimesheet'));
       }
     };
   });
@@ -3616,8 +4167,7 @@ async function therapistHome(statusFlash) {
       }
       const prev = btn.textContent;
       try {
-        btn.disabled = true;
-        btn.textContent = 'Sending…';
+        setBusyButton(btn, true, 'Sending…');
         clearTransientErrors();
         showActionToast(
           'Sending timesheet… note review can take up to a minute.',
@@ -3668,8 +4218,7 @@ async function therapistHome(statusFlash) {
           : [e.message || 'Unable to send timesheet.'];
         setStatus({ error: errs, warn: Array.isArray(e.warnings) ? e.warnings : [] });
         showActionToast(errs[0] || 'Unable to send timesheet.', 'error');
-        btn.disabled = false;
-        btn.textContent = prev || t('therapist.sendTimesheet');
+        setBusyButton(btn, false, prev || t('therapist.sendTimesheet'));
         if (weekStart && /resolve|blocking|signer|session|sign/i.test(String(errs[0] || ''))) {
           state.therapistPane = 'draft';
           state.draftFocusWeekStart = weekStart;
@@ -3683,6 +4232,7 @@ async function therapistHome(statusFlash) {
   });
   document.getElementById('refreshHome')?.addEventListener('click', () => {
     clearTransientErrors();
+    therapistBootCache = null;
     therapistHome();
   });
   document.getElementById('changeSchool')?.addEventListener('click', async () => {
@@ -3691,8 +4241,14 @@ async function therapistHome(statusFlash) {
   });
   const retrieveSignatureFromUi = async () => {
     const btn = document.getElementById('retrieveSignature');
-    if (!state.weekId || btn?.disabled) return;
-    if (!confirm(t('therapist.retrieveSignatureConfirm'))) return;
+    if (btn?.disabled) return;
+    if (!state.weekId) {
+      showActionToast(t('therapist.noOpenSignature'), 'error');
+      return;
+    }
+    if (!confirm(t('therapist.retrieveSignatureConfirm'))) {
+      return;
+    }
     try {
       clearTransientErrors();
       if (btn) btn.disabled = true;
@@ -3780,15 +4336,24 @@ async function therapistHome(statusFlash) {
 
   const viewTimesheetBtn = document.getElementById('viewTimesheet');
   if (viewTimesheetBtn) {
-    viewTimesheetBtn.onclick = () => {
-      openTimesheetModal({
-        weekId: state.weekId || week?.id,
-        weekStart: state.weekStart,
-        status,
-        signerName,
-        signerEmail,
-        schoolDistrict: schoolLabel,
-      });
+    viewTimesheetBtn.onclick = async () => {
+      setBusyButton(viewTimesheetBtn, true, 'Opening…');
+      try {
+        const weekId = state.weekId || week?.id || '';
+        if (!weekId) throw new Error('Open a draft week first.');
+        await openTimesheetModal({
+          weekId,
+          weekStart: state.weekStart,
+          status,
+          signerName: signerName || '',
+          signerEmail: signerEmail || '',
+          schoolDistrict: schoolLabel,
+        });
+      } catch (err) {
+        setStatus(err.message || 'Unable to open the timesheet.', 'error');
+      } finally {
+        setBusyButton(viewTimesheetBtn, false, 'View timesheet');
+      }
     };
   }
   document.getElementById('signTimesheet')?.addEventListener('click', async () => {
@@ -3796,15 +4361,15 @@ async function therapistHome(statusFlash) {
     const prev = btn?.textContent;
     try {
       if (btn) {
-        btn.disabled = true;
-        btn.textContent = 'Signing…';
+        setBusyButton(btn, true, 'Signing…');
       }
       clearTransientErrors();
-      const out = await runProviderSign(state.weekId || week?.id, state.weekStart);
+      const signWeekId = state.weekId || week?.id || '';
+      if (!signWeekId) throw new Error('Open a draft week first.');
+      const out = await runProviderSign(signWeekId, state.weekStart);
       if (!out) {
         if (btn) {
-          btn.disabled = false;
-          btn.textContent = prev || t('therapist.signTimesheet');
+          setBusyButton(btn, false, prev || t('therapist.signTimesheet'));
         }
         return;
       }
@@ -3817,8 +4382,7 @@ async function therapistHome(statusFlash) {
       setStatus({ error: errs });
       showActionToast(errs[0], 'error');
       if (btn) {
-        btn.disabled = false;
-        btn.textContent = prev || t('therapist.signTimesheet');
+        setBusyButton(btn, false, prev || t('therapist.signTimesheet'));
       }
     }
   });
@@ -3874,26 +4438,44 @@ async function therapistHome(statusFlash) {
   syncTherapistRatio();
   bindAdminMakeupNotes();
 
+  const setTherapistManualOpen = (open) => {
+    const page = document.getElementById('pManPage');
+    if (!page) return;
+    if (open) {
+      openSectionPage(page);
+      document.getElementById('pManStudent')?.focus();
+    } else closeSectionPage();
+  };
+  const manualService = bindManualServiceSelect(
+    document.getElementById('pManStudent'),
+    document.getElementById('pManService'),
+    () => studentMandates,
+    providerId,
+  );
   const clearTherapistManualEdit = () => {
     const editId = document.getElementById('pManEditId');
     if (editId) editId.value = '';
     const editWeekId = document.getElementById('pManEditWeekId');
     if (editWeekId) editWeekId.value = '';
     const heading = document.getElementById('pManHeading');
-    if (heading) heading.innerHTML = '<span class="sec-num">1</span> Manual session + custom note';
+    if (heading) heading.innerHTML = '<span class="sec-num">2</span> Manual session notes';
     const saveBtn = document.getElementById('pManSave');
     if (saveBtn) saveBtn.textContent = 'Submit session';
-    const cancelBtn = document.getElementById('pManCancelEdit');
-    if (cancelBtn) cancelBtn.hidden = true;
     const fileInput = document.getElementById('pManFile');
     if (fileInput) fileInput.value = '';
+    setTherapistManualOpen(false);
   };
+  document.getElementById('pManAddNew')?.addEventListener('click', () => {
+    clearTherapistManualEdit();
+    setTherapistManualOpen(true);
+    document.getElementById('pManStudent')?.focus();
+  });
   document.getElementById('pManCancelEdit')?.addEventListener('click', () => {
     clearTherapistManualEdit();
     const studentEl = document.getElementById('pManStudent');
     if (studentEl) studentEl.value = '';
     document.getElementById('pManDos').value = '';
-    document.getElementById('pManService').value = '';
+    manualService.set('');
     document.getElementById('pManAddlType').value = '';
     setSessionRatio(document.getElementById('pManRatio'), '1:1');
     syncTherapistRatio();
@@ -3903,6 +4485,8 @@ async function therapistHome(statusFlash) {
     document.getElementById('pManCpt').value = '';
     document.getElementById('pManCancel').value = '';
     document.getElementById('pManNotes').value = '';
+    const signReset = document.getElementById('pManSign');
+    if (signReset) signReset.value = '';
     void bindAdminMakeupNotes();
   });
 
@@ -3935,7 +4519,7 @@ async function therapistHome(statusFlash) {
       document.getElementById('pManDos').value = raw.dateOfService || '';
       const rawSvc = String(raw.serviceType || '');
       const extractedRatio = extractSessionRatio(rawSvc);
-      document.getElementById('pManService').value = stripSessionRatio(rawSvc) || rawSvc;
+      manualService.set(stripSessionRatio(rawSvc) || rawSvc);
       const legacyPaid = raw.additionalServiceType === 'paid_absence' || raw.attendance === 'paid_absence';
       document.getElementById('pManAddlType').value = legacyPaid ? '' : (raw.additionalServiceType || '');
       setSessionRatio(document.getElementById('pManRatio'), extractedRatio);
@@ -3946,12 +4530,13 @@ async function therapistHome(statusFlash) {
       document.getElementById('pManCpt').value = raw.cptLabel || '';
       document.getElementById('pManCancel').value = raw.cancelReason || '';
       document.getElementById('pManNotes').value = raw.notes || '';
+      const signEl = document.getElementById('pManSign');
+      if (signEl) signEl.value = raw.providerSignatureName || '';
       const heading = document.getElementById('pManHeading');
-      if (heading) heading.innerHTML = '<span class="sec-num">1</span> Edit session';
+      if (heading) heading.innerHTML = '<span class="sec-num">2</span> Edit session';
       const saveBtn = document.getElementById('pManSave');
       if (saveBtn) saveBtn.textContent = 'Update session';
-      const cancelBtn = document.getElementById('pManCancelEdit');
-      if (cancelBtn) cancelBtn.hidden = false;
+      setTherapistManualOpen(true);
       await bindAdminMakeupNotes();
       if (raw.attendance === 'makeup') {
         const makeupOfEl = document.getElementById('pManMakeupOf');
@@ -3977,6 +4562,7 @@ async function therapistHome(statusFlash) {
     }
   };
 
+  loadMyBlockReports();
   const uploadBtn = document.getElementById('upload');
   if (uploadBtn) uploadBtn.onclick = async () => {
     const btn = uploadBtn;
@@ -3988,8 +4574,7 @@ async function therapistHome(statusFlash) {
           errors: ['Your provider profile is not linked yet. Contact the office for assistance.'],
         });
       }
-      btn.disabled = true;
-      btn.textContent = 'Importing…';
+      setBusyButton(btn, true, 'Importing…');
       clearTransientErrors();
       setStatus('Importing PDF…', '');
       const pdfBase64 = await fileToBase64(file);
@@ -4021,7 +4606,11 @@ async function therapistHome(statusFlash) {
       if (!successMsgs.length && !failedList.length) {
         successMsgs.push(`Imported ${out.parsed || 0} session(s).`);
       }
-      if (failedList.length) successMsgs.length = 0;
+      const partialImport = out.partial === true;
+      if (failedList.length && !partialImport) successMsgs.length = 0;
+      if (partialImport) {
+        successMsgs.push(out.message || `Partial import: ${out.notImported || failedList.length} row(s) with errors were NOT imported. Fix them and import the PDF again.`);
+      }
       const blockedByYellow = Boolean(out.ok === false && warnList.length && !failedList.length);
       await therapistHome({
         success: successMsgs,
@@ -4033,21 +4622,67 @@ async function therapistHome(statusFlash) {
             : []),
         ],
       });
-      setUploadIssues(failedList, warnList, failedList.length || warnList.length ? [] : savedList);
+      setUploadIssues(
+        failedList,
+        warnList,
+        partialImport ? savedList : failedList.length || warnList.length ? [] : savedList,
+        failedList.length || blockedByYellow
+          ? {
+              pdfBase64,
+              fileName: file.name || '',
+              providerId,
+              schoolId: state.selectedSchoolId || '',
+              programType: state.selectedProgramType || '',
+            }
+          : null,
+        { partial: partialImport },
+      );
     } catch (e) {
       const errs = Array.isArray(e.errors) && e.errors.length
         ? e.errors
         : [e.message || 'Unable to import this PDF.'];
       const warns = Array.isArray(e.warnings) ? e.warnings : [];
-      setUploadIssues(errs, warns);
+      setUploadIssues(errs, warns, [], await holdForSelectedPdf('pdfFile', providerId, errs));
       setStatus({
         error: errs.length ? errs : ['Import blocked — see details below.'],
         warn: warns,
       });
       if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Import';
+        setBusyButton(btn, false, 'Import');
       }
+    }
+  };
+
+  const readClaudeBtn = document.getElementById('readWithClaude');
+  if (readClaudeBtn) readClaudeBtn.onclick = async () => {
+    const btn = readClaudeBtn;
+    const host = document.getElementById('claudeRead');
+    try {
+      const file = document.getElementById('pdfFile').files[0];
+      if (!file) throw new Error('Select a notes PDF first.');
+      setBusyButton(btn, true, 'Reading…');
+      if (host) {
+        host.hidden = true;
+        host.innerHTML = '';
+      }
+      setStatus(t('upload.reading'), '');
+      const out = await readNotesPdfWithClaude(file, providerId);
+      showClaudeReading(host, out);
+      const differs = (out.readings || []).filter((row) => !row.agrees).length;
+      setStatus(
+        differs
+          ? `${t('upload.otherAiDone')} ${out.shown || 0} session(s). ${differs} differ from the rules. No sessions were added.`
+          : `${t('upload.otherAiDone')} ${out.shown || 0} session(s) and agrees with the rules. No sessions were added.`,
+        differs ? 'warn' : 'ok',
+      );
+    } catch (e) {
+      if (host) {
+        host.hidden = false;
+        host.innerHTML = `<div class="err-box">${esc(e.message || t('upload.otherAiFail'))}</div>`;
+      }
+      setStatus(e.message || t('upload.otherAiFail'), 'error');
+    } finally {
+      setBusyButton(btn, false, t('upload.readOtherAi'));
     }
   };
 
@@ -4089,8 +4724,7 @@ async function therapistHome(statusFlash) {
           throw new Error('Note file must be a PDF or Word document (.doc / .docx).');
         }
       }
-      btn.disabled = true;
-      btn.textContent = editId ? 'Updating…' : 'Submitting…';
+      setBusyButton(btn, true, editId ? 'Updating…' : 'Submitting…');
       clearTransientErrors();
       setStatus(editId ? 'Updating session…' : 'Submitting session…', '');
       const weekStart = mondayFromDos(dateOfService) || mondayIso();
@@ -4121,6 +4755,7 @@ async function therapistHome(statusFlash) {
         makeupOfSessionId: attendance === 'makeup' ? (makeupOfEl?.value || '') : '',
         cptLabel: document.getElementById('pManCpt')?.value?.trim() || '',
         notes,
+        signatureName: document.getElementById('pManSign')?.value?.trim() || '',
         programType: state.selectedProgramType || undefined,
       };
       if (serviceTypeEarly) payload.serviceType = serviceTypeEarly;
@@ -4132,16 +4767,16 @@ async function therapistHome(statusFlash) {
       }
       const out = await api('POST', '/week/sessions', payload);
       const warns = Array.isArray(out.warnings) ? out.warnings : [];
+      const noteTail = out.digitalNote ? ' Digital session note saved to Archived Documents.' : '';
       const okMsg = editId
-        ? (out.archive || out.file ? 'Session updated; custom note archived (not parsed).' : 'Session updated.')
-        : (out.archive || out.file ? 'Session saved; custom note archived (not parsed).' : 'Session saved.');
+        ? (out.archive || out.file ? 'Session updated; custom note archived (not parsed).' : 'Session updated.') + noteTail
+        : (out.archive || out.file ? 'Session saved; custom note archived (not parsed).' : 'Session saved.') + noteTail;
       await therapistHome({ success: [okMsg], warn: warns });
     } catch (e) {
       const errs = Array.isArray(e.errors) && e.errors.length ? e.errors : [e.message];
       const warns = Array.isArray(e.warnings) ? e.warnings : [];
       setStatus({ error: errs, warn: warns });
-      btn.disabled = false;
-      btn.textContent = document.getElementById('pManEditId')?.value?.trim() ? 'Update session' : 'Submit session';
+      setBusyButton(btn, false, document.getElementById('pManEditId')?.value?.trim() ? 'Update session' : 'Submit session');
     }
   };
 
@@ -4172,8 +4807,7 @@ async function therapistHome(statusFlash) {
       try {
         if (!state.weekId) throw new Error('Add at least one session first.');
         if (!signerEmail) throw new Error('No school signer is on file. Contact the office to assign a signer.');
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Sending…';
+        setBusyButton(submitBtn, true, 'Sending…');
         clearUploadIssues();
         if (hint) {
           hint.hidden = false;
@@ -4215,8 +4849,7 @@ async function therapistHome(statusFlash) {
         }
         showActionToast(errs[0] || 'Unable to send timesheet.', 'error');
         revealStatus();
-        submitBtn.disabled = false;
-        submitBtn.textContent = prevLabel || 'Send timesheet';
+        setBusyButton(submitBtn, false, prevLabel || 'Send timesheet');
       }
     };
   }
@@ -4355,6 +4988,17 @@ function explainHhaTriage(detail) {
     return 'This caregiver already has a visit at this time in HHA. Cancel that HHA visit or change the TMS time, then retry.';
   }
   if (id === '-74' && /PayCodeID/i.test(t)) {
+    const named =
+      t.match(/PayCodeID\s+for\s+"([^"]+)"/i)?.[1] ||
+      t.match(/pay code\s+"([^"]+)"/i)?.[1] ||
+      t.match(/\bfor\s+"([^"]+)"\s*\(PayCodeID/i)?.[1] ||
+      '';
+    const idOnly = t.match(/\(PayCodeID\s+(\d+)\)/i)?.[1] || '';
+    if (named && idOnly) {
+      return `The pay code "${named}" (PayCodeID ${idOnly}) is not on this caregiver in HHA.`;
+    }
+    if (named) return `The pay code "${named}" is not on this caregiver in HHA.`;
+    if (idOnly) return `Pay code ${idOnly} is not on this caregiver in HHA.`;
     return 'The pay code sent is not on this caregiver in HHA.';
   }
   if (id === '-415' || /Invalid VisitID/i.test(t)) {
@@ -4490,18 +5134,14 @@ function hhaWeekButtons(weekId) {
 
 function disableHhaWeekButtons(weekId) {
   for (const btn of hhaWeekButtons(weekId)) {
-    btn.disabled = true;
-    btn.setAttribute('aria-busy', 'true');
     if (!btn.dataset.hhaLabel) btn.dataset.hhaLabel = btn.textContent || '';
-    btn.textContent = 'Sending to HHA…';
+    setBusyButton(btn, true, 'Sending to HHA…');
   }
 }
 
 function enableHhaWeekButtons(weekId) {
   for (const btn of hhaWeekButtons(weekId)) {
-    btn.disabled = false;
-    btn.removeAttribute('aria-busy');
-    if (btn.dataset.hhaLabel) btn.textContent = btn.dataset.hhaLabel;
+    setBusyButton(btn, false, btn.dataset.hhaLabel || 'Send to HHA');
   }
 }
 
@@ -4660,7 +5300,12 @@ async function showTriageDetail(errorText, weekId) {
   document.body.appendChild(backdrop);
 }
 
-async function adminDash() {
+let adminWeeksCache = null;
+let adminDashGen = 0;
+
+async function adminDash(opts = {}) {
+  const gen = ++adminDashGen;
+  const fresh = opts.fresh !== false;
   let d = { timesheet: { draft: 0, submitted: 0, signed: 0, locked: 0 }, hha: { pending: 0, confirmed: 0, failed: 0 } };
   let weeks = [];
   let weeksLoadError = '';
@@ -4673,35 +5318,67 @@ async function adminDash() {
   const weeksHhaErrors = state.adminWeeksHhaErrors === true;
   const sameMonday = (weekStart) =>
     (mondayFromDos(weekStart) || String(weekStart || '').trim()) === weeksWeekStart;
-  try {
-    d = await api('GET', '/dashboard');
-  } catch (err) {
-    console.warn('dashboard load failed', err);
+  const q = new URLSearchParams();
+  if (!weeksAll && weeksWeekStart) q.set('weekStart', weeksWeekStart);
+  if (weeksName) q.set('name', weeksName);
+  const qs = q.toString();
+  const weeksPath = `/admin/weeks${qs ? `?${qs}` : ''}`;
+  const weeksCacheKey = `${weeksAll ? 'all' : weeksWeekStart}|${weeksName}`;
+  const cachedWeeks = !fresh && adminWeeksCache && adminWeeksCache.key === weeksCacheKey
+    ? adminWeeksCache
+    : null;
+  if (cachedWeeks) {
+    d = cachedWeeks.dashboard;
+    weeks = cachedWeeks.weeks.slice();
+    weeksLoadError = cachedWeeks.error || '';
+  } else {
+  if (!document.getElementById('adminWeeksWeek')) {
+    showWorking('Dashboard');
+  } else {
+    const updating = document.getElementById('adminDashUpdating');
+    if (updating) {
+      updating.hidden = false;
+      updating.innerHTML = loaderHtml('Updating…');
+    }
   }
+  // Totals and the week table are independent. Waiting for one before starting
+  // the other made the Dashboard sit through two full state loads in a row.
+  const [dashSettled, weeksSettled] = await Promise.all([
+    api('GET', '/dashboard').then(
+      (value) => ({ ok: true, value }),
+      (err) => ({ ok: false, err }),
+    ),
+    api('GET', weeksPath).then(
+      (value) => ({ ok: true, value }),
+      (err) => ({ ok: false, err }),
+    ),
+  ]);
+  if (dashSettled.ok) d = dashSettled.value;
+  else console.warn('dashboard load failed', dashSettled.err);
   try {
-    const q = new URLSearchParams();
-    if (!weeksAll && weeksWeekStart) q.set('weekStart', weeksWeekStart);
-    if (weeksName) q.set('name', weeksName);
-    const qs = q.toString();
     let listed = null;
-    try {
-      listed = await api('GET', `/admin/weeks${qs ? `?${qs}` : ''}`);
-    } catch (err) {
+    if (weeksSettled.ok) {
+      listed = weeksSettled.value;
+    } else {
+      const err = weeksSettled.err;
       // A weekStart query that the proxy drops into the path comes back 404.
       // The unfiltered list still has the rows; filter them here.
       if (weeksAll || !weeksWeekStart) throw err;
       listed = await api('GET', `/admin/weeks${weeksName ? `?${new URLSearchParams({ name: weeksName })}` : ''}`);
     }
     weeks = Array.isArray(listed?.weeks) ? listed.weeks : [];
-    if (!weeksAll && weeksWeekStart && weeks.length === 0) {
-      const all = await api('GET', `/admin/weeks${weeksName ? `?${new URLSearchParams({ name: weeksName })}` : ''}`);
-      weeks = Array.isArray(all?.weeks) ? all.weeks : [];
-    }
     if (!weeksAll && weeksWeekStart) weeks = weeks.filter((w) => sameMonday(w.weekStart));
   } catch (err) {
     console.warn('admin weeks load failed', err);
     weeks = [];
     weeksLoadError = err?.message || 'Could not load weeks.';
+  }
+  adminWeeksCache = {
+    key: weeksCacheKey,
+    weeks: weeks.slice(),
+    dashboard: d,
+    error: weeksLoadError,
+  };
   }
   // District options from the week/name result set (before district / HHA filters).
   const districtOptions = [
@@ -4711,6 +5388,7 @@ async function adminDash() {
     districtOptions.push(weeksDistrict);
     districtOptions.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   }
+  if (gen !== adminDashGen) return;
   if (weeksDistrict) {
     weeks = weeks.filter((w) => weekDistrictLabel(w) === weeksDistrict);
   }
@@ -4747,17 +5425,6 @@ async function adminDash() {
     }
     return parts.join(' ') || '<span class="muted">—</span>';
   };
-  const weeksFilterBlurb = weeksAll
-    ? 'Showing all weeks'
-    : `Showing week of ${weeksWeekStart} (Monday)`;
-  const weeksExtraBlurb = [
-    weeksName ? `name “${weeksName}”` : '',
-    weeksDistrict ? `district “${weeksDistrict}”` : '',
-    weeksHhaErrors ? 'HHA errors only' : '',
-  ]
-    .filter(Boolean)
-    .map((s) => ` · ${s}`)
-    .join('');
   const districtSelectOpts = [
     `<option value="">All districts</option>`,
     ...districtOptions.map(
@@ -4769,11 +5436,14 @@ async function adminDash() {
     <div class="hero-strip" aria-hidden="true"></div>
     <div class="card">
       <h2>Dashboard</h2>
+      <p class="muted" id="adminDashUpdating" hidden></p>
       <p>Timesheets — draft ${d?.timesheet?.draft ?? 0} · submitted ${d?.timesheet?.submitted ?? 0} · signed ${d?.timesheet?.signed ?? 0} · locked ${d?.timesheet?.locked ?? 0}</p>
       <p>HHA — confirmed ${d?.hha?.confirmed ?? 0} of ${d?.hha?.eligible ?? 0} eligible · pending ${d?.hha?.pending ?? 0} · failed ${d?.hha?.failed ?? 0}</p>
-      <p class="muted">HHA counts attended/makeup visits only. The Weeks “Sessions” column includes misses.</p>
+      <p class="muted">HHA counts attended/makeup visits only. The Provider status “Sessions” column includes misses.</p>
       <p class="muted">Auto-transfer runs Wed mornings (~7am ET); use Send to HHA for early payroll or exceptions.</p>
+      <button type="button" class="btn" id="adminControlToggle" aria-pressed="false">Administrative Control</button>
     </div>
+    <div id="adminControlPanel" hidden>
     <div class="card">
       <h2>14-day session import locker</h2>
       <p class="muted">When enabled, providers cannot import or add sessions older than the max age. Unlock a week or provider below to grant an exception.</p>
@@ -4808,9 +5478,40 @@ async function adminDash() {
       <p class="muted" id="yellowBlockStatus"></p>
     </div>
     <div class="card">
-      <h2>Weeks</h2>
-      <p class="muted">${esc(weeksFilterBlurb)}${esc(weeksExtraBlurb)}. Date snaps to Monday. Name matches provider or a child on that week. District and HHA filters apply to the loaded list.</p>
-      <p class="muted">Select weeks to download each timesheet as a zip (files ordered by week start, then provider) or merge them into one PDF. Merged rows use the timesheet order: date of service, then start time.</p>
+      <h2>Import lockers (default OFF)</h2>
+      <p class="muted"><strong>Risk:</strong> turning the short-session switch ON lets sessions through that are normally stopped, and short sessions can cause payroll / mandate mismatches. The partial-import switch never saves a row that has an error, but it does save the clean rows of a file that has errors, so a PDF can be imported only in part. Leave both OFF unless you need them, and turn them back OFF afterward.</p>
+      <div class="row">
+        <label>When a PDF has error rows, import only the clean rows
+          <select id="allowHardBlocksImport">
+            <option value="false">OFF (any error rejects the whole PDF, nothing is saved)</option>
+            <option value="true">ON (save the clean rows, skip and list the error rows)</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted">When ON, only sessions with no errors are saved. Every row with an error is skipped and listed in red, with its errors, at the top of the import result, so the provider can fix those rows and import again. Overlap and mandate limits are re-checked after the error rows are dropped. When OFF, one error rejects the whole PDF and nothing is saved. Rows are never saved, in either mode, when the child is not in the caseload, the child name cannot be read, the week is signed/locked or awaiting signature, the session is past the 14-day age lock, or the session discipline does not match the provider's. This switch applies to PDF imports only. Manual sessions and notes always require every check to pass.</p>
+      <div class="row">
+        <label>Allow a session shorter than the service type on the mandate
+          <select id="allowShortSession">
+            <option value="false">OFF (shorter sessions are blocked)</option>
+            <option value="true">ON (allow shorter sessions)</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted">When ON, a school session shorter than the mandate length (for example 15 min on a 30-min mandate) is accepted on import, week check, and Send to HHA. Billing and pay still use the mandate length.</p>
+      <p class="muted"><strong>Discipline match is always on.</strong> A regular session such as "PT School" for an OT provider is rejected on PDF import, manual entry and note upload. Additional services are exempt. A provider with no discipline set is not checked, so set every provider's discipline (OT / PT / SLP) on the Providers page. There is no switch for this and nothing can bypass it.</p>
+      <p class="muted">The short-session switch also applies to manually entered sessions and notes.</p>
+      <button type="button" class="btn-primary" id="saveImportLockers">Save import lockers</button>
+      <p class="muted" id="importLockersStatus"></p>
+    </div>
+    <div class="card">
+      <button type="button" class="btn-primary" id="aiOverrideToggle" aria-expanded="false" aria-controls="aiOverridePanel">AI errors override</button>
+      <div id="aiOverridePanel" hidden style="margin-top:0.75rem">
+        <div id="adminBlockReportsHost"></div>
+      </div>
+    </div>
+    </div>
+    <div class="card">
+      <h2>Provider status</h2>
       <div class="row">
         <label>Week start (Monday)
           <span class="week-start-controls">
@@ -4894,14 +5595,6 @@ async function adminDash() {
     persistAdminWeeksFilters();
     adminDash();
   });
-  document.getElementById('adminWeeksDistrict')?.addEventListener('change', () => {
-    readAdminWeeksFiltersFromForm();
-    adminDash();
-  });
-  document.getElementById('adminWeeksHhaErrors')?.addEventListener('change', () => {
-    readAdminWeeksFiltersFromForm();
-    adminDash();
-  });
   document.getElementById('adminWeeksApply')?.addEventListener('click', () => {
     readAdminWeeksFiltersFromForm();
     adminDash();
@@ -4913,8 +5606,15 @@ async function adminDash() {
       adminDash();
     }
   });
-  // Load 14-day locker + yellow import settings
-  (async () => {
+  document.getElementById('adminWeeksDistrict')?.addEventListener('change', () => {
+    readAdminWeeksFiltersFromForm();
+    adminDash({ fresh: false });
+  });
+  document.getElementById('adminWeeksHhaErrors')?.addEventListener('change', () => {
+    readAdminWeeksFiltersFromForm();
+    adminDash({ fresh: false });
+  });
+  const loadAdminControl = async () => {
     try {
       const out = await api('GET', '/admin/settings');
       const s = out.settings || {};
@@ -4928,6 +5628,10 @@ async function adminDash() {
       if (weeks) weeks.value = (s.unlockedWeekIds || []).join(', ');
       if (providers) providers.value = (s.unlockedProviderIds || []).join(', ');
       if (yellow) yellow.value = s.yellowWarningsBlockImport === false ? 'false' : 'true';
+      const hardLocker = document.getElementById('allowHardBlocksImport');
+      const shortLocker = document.getElementById('allowShortSession');
+      if (hardLocker) hardLocker.value = s.allowImportWithHardBlocks === true ? 'true' : 'false';
+      if (shortLocker) shortLocker.value = s.allowShortSessionVsMandate === true ? 'true' : 'false';
       state.meSettings = {
         ...(state.meSettings || {}),
         requireMfa: coerceRequireMfa(s.requireMfa, false),
@@ -4937,7 +5641,28 @@ async function adminDash() {
     } catch {
       /* ignore */
     }
-  })();
+  };
+  // AI errors override stays closed (and is not even fetched) until she clicks the button.
+  document.getElementById('aiOverrideToggle')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const panel = document.getElementById('aiOverridePanel');
+    const host = document.getElementById('adminBlockReportsHost');
+    if (!panel || !host) return;
+    const open = panel.hidden;
+    panel.hidden = !open;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open && !host.dataset.loaded) {
+      host.innerHTML = loaderHtml();
+      await fillBlockReportsHost(host);
+      host.dataset.loaded = '1';
+    }
+  });
+  document.getElementById('adminControlToggle')?.addEventListener('click', async () => {
+    const panel = document.getElementById('adminControlPanel');
+    if (!panel) return;
+    openSectionPage(panel);
+    await loadAdminControl();
+  });
   document.getElementById('saveAgeLock')?.addEventListener('click', async () => {
     const statusEl = document.getElementById('ageLockStatus');
     try {
@@ -4978,6 +5703,27 @@ async function adminDash() {
       setStatus(err.message || 'Unable to save import screening.', 'err');
     }
   });
+  document.getElementById('saveImportLockers')?.addEventListener('click', async () => {
+    const statusEl = document.getElementById('importLockersStatus');
+    try {
+      const out = await api('POST', '/admin/settings', {
+        allowImportWithHardBlocks: document.getElementById('allowHardBlocksImport').value === 'true',
+        allowShortSessionVsMandate: document.getElementById('allowShortSession').value === 'true',
+      });
+      const hard = out.settings?.allowImportWithHardBlocks === true;
+      const short = out.settings?.allowShortSessionVsMandate === true;
+      document.getElementById('allowHardBlocksImport').value = hard ? 'true' : 'false';
+      document.getElementById('allowShortSession').value = short ? 'true' : 'false';
+      if (statusEl) {
+        statusEl.textContent =
+          `Partial import (clean rows only): ${hard ? 'ON' : 'OFF'}. Short session vs mandate: ${short ? 'ON' : 'OFF'}. Discipline match: always on.`;
+      }
+      setStatus('Import lockers saved.', 'ok');
+    } catch (err) {
+      if (statusEl) statusEl.textContent = err.message || 'Save failed.';
+      setStatus(err.message || 'Unable to save import lockers.', 'err');
+    }
+  });
   bindBulkDelete('weeks', {
     noun: 'weeks',
     deleteOne: (id) => api('DELETE', `/admin/weeks/${id}`),
@@ -5002,12 +5748,12 @@ async function adminDash() {
     const downloadBtn = document.getElementById('adminWeeksDownload');
     const mergeBtn = document.getElementById('adminWeeksMerge');
     if (downloadBtn) {
-      downloadBtn.disabled = busy;
-      downloadBtn.textContent = busy && label === 'download' ? 'Downloading…' : 'Download timesheets';
+      if (busy && label === 'download') setBusyButton(downloadBtn, true, 'Downloading…');
+      else setBusyButton(downloadBtn, false, 'Download timesheets');
     }
     if (mergeBtn) {
-      mergeBtn.disabled = busy;
-      mergeBtn.textContent = busy && label === 'merge' ? 'Merging…' : 'Merge into one PDF';
+      if (busy && label === 'merge') setBusyButton(mergeBtn, true, 'Merging…');
+      else setBusyButton(mergeBtn, false, 'Merge into one PDF');
     }
   };
   document.getElementById('adminWeeksDownload')?.addEventListener('click', async () => {
@@ -5221,6 +5967,7 @@ async function adminDash() {
 }
 
 async function adminChildren() {
+  if (!peekGet('/admin/students')) showWorking('Children');
   const out = await api('GET', '/admin/students');
   const students = out.students || [];
   view(`
@@ -5232,21 +5979,27 @@ async function adminChildren() {
       </label>
       ${bulkBar('children')}
       <table>
-        <tr>${bulkTh('children')}<th>Name</th><th>School</th><th>Grade</th><th>Program</th><th>Mandates</th><th>Sessions</th><th></th></tr>
+        <tr>${bulkTh('children')}<th>Name</th><th>School</th><th>Grade</th><th>Program</th><th>Duration</th><th>Frequency</th><th>Mandates</th><th>Sessions</th><th></th></tr>
         <tbody id="childrenBody">
-        ${students.map((s) => `<tr data-child-row
-          data-search="${esc([s.firstName, s.middleName, s.lastName, s.name, s.schoolName, s.grade, s.programId, s.programType, s.id].filter(Boolean).join(' ').toLowerCase())}">
+        ${students.map((s) => {
+          const duration = (s.durations || []).filter(Boolean).map((line) => esc(line)).join('<br>') || '—';
+          const frequency = (s.frequencies || []).filter(Boolean).map((line) => esc(line)).join('<br>') || '—';
+          return `<tr data-child-row
+          data-search="${esc([s.firstName, s.middleName, s.lastName, s.name, s.schoolName, s.grade, s.programId, s.programType, s.id, ...(s.durations || []), ...(s.frequencies || [])].filter(Boolean).join(' ').toLowerCase())}">
           ${bulkTd('children', s.id)}
           <td>${childNameLink(s.id, s.name)}</td>
           <td>${esc(s.schoolName)}</td>
           <td>${esc(s.grade || '—')}</td>
           <td>${esc([s.programType, s.programId].filter(Boolean).join(' · ') || '—')}</td>
+          <td>${duration}</td>
+          <td>${frequency}</td>
           <td>${esc(s.mandateCount)}</td>
           <td>${esc(s.sessionCount)}</td>
           <td>
             <button type="button" class="btn" data-del-child="${esc(s.id)}">Remove</button>
           </td>
-        </tr>`).join('') || '<tr id="childrenEmpty"><td colspan="8">No children on file. Import a caseload under Mandates.</td></tr>'}
+        </tr>`;
+        }).join('') || '<tr id="childrenEmpty"><td colspan="10">No children on file. Import a caseload under Mandates.</td></tr>'}
         </tbody>
       </table>
       <p class="muted" id="childrenFilterEmpty" hidden>No children match this search.</p>
@@ -5286,6 +6039,7 @@ async function adminChildren() {
 
 async function adminChildDetail(studentId, opts = {}) {
   state.childDetailBack = opts.backTo === 'reports' ? 'reports' : 'children';
+  if (!peekGet(`/admin/students/${studentId}`)) showWorking('Child');
   const [detail, schoolsOut] = await Promise.all([
     api('GET', `/admin/students/${studentId}`),
     api('GET', '/admin/schools'),
@@ -5722,6 +6476,7 @@ async function adminChildDetail(studentId, opts = {}) {
 }
 
 async function adminProviderDetail(providerId) {
+  if (!peekGet(`/admin/providers/${providerId}`)) showWorking('Provider');
   const detail = await api('GET', `/admin/providers/${providerId}`);
   const p = detail.provider;
   const user = detail.user;
@@ -5866,7 +6621,6 @@ async function adminProviderDetail(providerId) {
 
       <div class="detail-pane"${provTab === 'sessions' ? '' : ' hidden'}>
         <h3>Sessions</h3>
-        <p class="muted">Search by date of service to show sessions (newest first). A start date alone includes that day forward; an end date alone includes that day and earlier. District is optional. Sessions from different program types (district/payer) land on separate timesheets for the same week; buildings inside one program share one sheet.</p>
         <div class="row">
           <label>Start date <input id="pSessFrom" type="date" value="${esc(sessFrom)}" /></label>
           <label>End date <input id="pSessTo" type="date" value="${esc(sessTo)}" /></label>
@@ -5926,8 +6680,21 @@ async function adminProviderDetail(providerId) {
           }).join('') || '<tr><td colspan="12">No sessions in this date range.</td></tr>'}
         </table>` : ''}
 
-        <h3 style="margin-top:1.25rem" id="pManHeading">Manual session + custom note</h3>
-        <p class="muted">Separate from Frontline / Therapist Activity import below. Do <strong>not</strong> use this for those PDFs — they are parsed there. Here the Word/PDF is an attachment only: it is <strong>not</strong> read or parsed. Enter every session field by hand, then Submit — that creates the session and archives any attached custom note (linked to this provider / week). Optional additional-service type (Eval, Documentation, etc.) shows in the Service column above.</p>
+        <h3 style="margin-top:1.25rem">Import Frontline / Therapist Activity sessions</h3>
+        <input id="pSessionPdf" type="file" accept="application/pdf,.pdf" />
+        <div class="row">
+          <button type="button" class="btn-primary" id="pUploadSessions">Import sessions</button>
+          <button type="button" class="btn" id="pReadWithClaude">${esc(t('upload.readOtherAi'))}</button>
+        </div>
+        <p class="muted">${esc(t('upload.readHintShort'))}</p>
+        <div id="pClaudeRead" class="upload-issues" hidden></div>
+        <div id="pUploadIssues" class="upload-issues" hidden></div>
+
+        <h3 style="margin-top:1.25rem">Manual session</h3>
+        <button type="button" class="btn-primary" id="pManAddNew">Add new session</button>
+        <div id="pManPage" hidden>
+        <h3 id="pManHeading">Add new session</h3>
+        <div id="pManForm">
         <input type="hidden" id="pManEditId" value="" />
         <input type="hidden" id="pManEditWeekId" value="" />
         <div class="row">
@@ -5938,7 +6705,7 @@ async function adminProviderDetail(providerId) {
         </div>
         <div class="row">
           <label>Service type
-            <input id="pManService" placeholder="PT School, ST Individual, OT School" />
+            <select id="pManService"><option value="">Select a child first</option></select>
           </label>
           <label>Additional service (optional)
             <select id="pManAddlType">
@@ -5990,20 +6757,17 @@ async function adminProviderDetail(providerId) {
         <label>Notes <textarea id="pManNotes" rows="3"></textarea></label>
         <p class="muted" id="pManMakeupNotesHint" hidden>${esc(MAKEUP_NOTES_HINT)}</p>
         <label>Custom note file (optional Word/PDF — not parsed) <input id="pManFile" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" /></label>
+        <label>Provider signature (required for attended / makeup) <input id="pManSign" autocomplete="off" placeholder="Type the provider full name to sign" /></label>
+        <p class="muted">Typing the provider name signs this session. A digital session note (like a Frontline report) is saved to Archived Documents for regular sessions. Additional services do not get a digital note.</p>
         <p class="muted">Missed sessions need a Frontline-style reason in the reason field or notes (e.g. Student Absence, Provider Absence, School Closed). Session attaches to the week of the date of service, split by the child’s program type / school signer when those differ.</p>
         <div class="row">
           <button type="button" class="btn-primary" id="pManSave">Submit session</button>
-          <button type="button" class="btn" id="pManCancelEdit" hidden>Cancel edit</button>
+          <button type="button" class="btn" id="pManCancelEdit">Cancel</button>
+        </div>
+        </div>
         </div>
 
-        <h3 style="margin-top:1.25rem">Import Frontline / Therapist Activity sessions</h3>
-        <p class="muted">Parsed import only (Frontline Related Service Session Notes or Therapist Activity Output PDF, text-based). Not for custom Word/PDF notes — use Manual session above for those. No week selection needed — each session attaches to the week of its date of service (within the 14-day locker), split by program type and school signer when those differ. Children and schools must already exist. Import is all-or-nothing for hard errors; yellow warnings follow the admin screening setting.</p>
-        <input id="pSessionPdf" type="file" accept="application/pdf,.pdf" />
-        <button type="button" class="btn-primary" id="pUploadSessions">Import sessions</button>
-        <div id="pUploadIssues" class="upload-issues" hidden></div>
-
         <h3 style="margin-top:1.25rem">Generate timesheet</h3>
-        <p class="muted">Open or create a week for this provider, choose the program type (school signer) when there is more than one, then view or send the timesheet. You can send another timesheet for the same calendar week when it is for a different program type. Buildings that share a signer stay on one sheet.</p>
         <div class="row">
           <label>Week start (Monday) <input id="pWeekStart" type="date" value="${esc(mondayIso())}" /></label>
           <label>Program type / school signer
@@ -6235,13 +6999,13 @@ async function adminProviderDetail(providerId) {
     const editWeekId = document.getElementById('pManEditWeekId');
     if (editWeekId) editWeekId.value = '';
     const heading = document.getElementById('pManHeading');
-    if (heading) heading.textContent = 'Manual session + custom note';
+    if (heading) heading.textContent = 'Add new session';
     const saveBtn = document.getElementById('pManSave');
     if (saveBtn) saveBtn.textContent = 'Submit session';
-    const cancelBtn = document.getElementById('pManCancelEdit');
-    if (cancelBtn) cancelBtn.hidden = true;
     const fileInput = document.getElementById('pManFile');
     if (fileInput) fileInput.value = '';
+    const signInput = document.getElementById('pManSign');
+    if (signInput) signInput.value = '';
   };
   const syncManualRatioVisibility = () => {
     const addl = document.getElementById('pManAddlType')?.value || '';
@@ -6260,11 +7024,32 @@ async function adminProviderDetail(providerId) {
     syncRatioOtherField(document.getElementById('pManRatio'));
   });
   syncManualRatioVisibility();
+  const manualService = bindManualServiceSelect(
+    document.getElementById('pManStudent'),
+    document.getElementById('pManService'),
+    () => mandates,
+    providerId,
+  );
+  const setManualFormOpen = (open) => {
+    const page = document.getElementById('pManPage');
+    if (!page) return;
+    if (open) {
+      openSectionPage(page);
+      document.getElementById('pManStudent')?.focus();
+    } else {
+      closeSectionPage();
+    }
+  };
+  document.getElementById('pManAddNew')?.addEventListener('click', () => {
+    clearManualSessionEdit();
+    setManualFormOpen(true);
+  });
   document.getElementById('pManCancelEdit')?.addEventListener('click', () => {
     clearManualSessionEdit();
+    setManualFormOpen(false);
     document.getElementById('pManStudent').value = '';
     document.getElementById('pManDos').value = '';
-    document.getElementById('pManService').value = '';
+    manualService.set('');
     document.getElementById('pManAddlType').value = '';
     setSessionRatio(document.getElementById('pManRatio'), '1:1');
     syncManualRatioVisibility();
@@ -6275,6 +7060,8 @@ async function adminProviderDetail(providerId) {
     document.getElementById('pManCpt').value = '';
     document.getElementById('pManCancel').value = '';
     document.getElementById('pManNotes').value = '';
+    const signReset = document.getElementById('pManSign');
+    if (signReset) signReset.value = '';
     void bindAdminMakeupNotes();
   });
   document.querySelectorAll('[data-edit-session]').forEach((btn) => {
@@ -6305,7 +7092,7 @@ async function adminProviderDetail(providerId) {
       document.getElementById('pManDos').value = raw.dateOfService || '';
       const rawSvc = String(raw.serviceType || '');
       const extractedRatio = extractSessionRatio(rawSvc);
-      document.getElementById('pManService').value = stripSessionRatio(rawSvc) || rawSvc;
+      manualService.set(stripSessionRatio(rawSvc) || rawSvc);
       const legacyPaid = raw.additionalServiceType === 'paid_absence' || raw.attendance === 'paid_absence';
       document.getElementById('pManAddlType').value = legacyPaid ? '' : (raw.additionalServiceType || '');
       setSessionRatio(document.getElementById('pManRatio'), extractedRatio);
@@ -6317,12 +7104,15 @@ async function adminProviderDetail(providerId) {
       document.getElementById('pManCpt').value = raw.cptLabel || '';
       document.getElementById('pManCancel').value = raw.cancelReason || '';
       document.getElementById('pManNotes').value = raw.notes || '';
+      const signEl = document.getElementById('pManSign');
+      if (signEl) signEl.value = raw.providerSignatureName || '';
       const heading = document.getElementById('pManHeading');
       if (heading) heading.textContent = 'Edit session';
       const saveBtn = document.getElementById('pManSave');
       if (saveBtn) saveBtn.textContent = 'Update session';
       const cancelBtn = document.getElementById('pManCancelEdit');
       if (cancelBtn) cancelBtn.hidden = false;
+      setManualFormOpen(true);
       await bindAdminMakeupNotes();
       if (raw.attendance === 'makeup') {
         const makeupOfEl = document.getElementById('pManMakeupOf');
@@ -6385,8 +7175,7 @@ async function adminProviderDetail(providerId) {
         }
       }
       if (btn) {
-        btn.disabled = true;
-        btn.textContent = editId ? 'Updating…' : 'Submitting…';
+        setBusyButton(btn, true, editId ? 'Updating…' : 'Submitting…');
       }
       setStatus(editId ? 'Updating session…' : 'Submitting session…', '');
       const weekStart = mondayFromDos(dateOfService) || mondayIso();
@@ -6425,6 +7214,7 @@ async function adminProviderDetail(providerId) {
         makeupOfSessionId: attendance === 'makeup' ? (makeupOfEl?.value || '') : '',
         cptLabel: document.getElementById('pManCpt')?.value?.trim() || '',
         notes,
+        signatureName: document.getElementById('pManSign')?.value?.trim() || '',
         programType,
       };
       if (serviceType) payload.serviceType = serviceType;
@@ -6436,13 +7226,14 @@ async function adminProviderDetail(providerId) {
       }
       const out = await api('POST', '/week/sessions', payload);
       const warns = Array.isArray(out.warnings) ? out.warnings : [];
-      const okMsg = editId
+      const noteTail = out.digitalNote ? ' Digital session note saved to Archived Documents.' : '';
+      const okMsg = (editId
         ? (out.archive || out.file
           ? 'Session updated; custom note archived (not parsed).'
           : 'Session updated.')
         : (out.archive || out.file
           ? 'Session saved; custom note archived (not parsed).'
-          : 'Session saved.');
+          : 'Session saved.')) + noteTail;
       setStatus({ success: [okMsg], warn: warns });
       await adminProviderDetail(providerId);
     } catch (e) {
@@ -6450,10 +7241,9 @@ async function adminProviderDetail(providerId) {
       const warns = Array.isArray(e.warnings) ? e.warnings : [];
       setStatus({ error: errs, warn: warns });
       if (btn) {
-        btn.disabled = false;
-        btn.textContent = document.getElementById('pManEditId')?.value?.trim()
+        setBusyButton(btn, false, document.getElementById('pManEditId')?.value?.trim()
           ? 'Update session'
-          : 'Submit session';
+          : 'Submit session');
       }
     }
   };
@@ -6463,8 +7253,7 @@ async function adminProviderDetail(providerId) {
     try {
       const file = document.getElementById('pSessionPdf').files[0];
       if (!file) throw new Error('Select a Frontline or Therapist Activity PDF first.');
-      btn.disabled = true;
-      btn.textContent = 'Importing…';
+      setBusyButton(btn, true, 'Importing…');
       if (issuesHost) {
         issuesHost.hidden = true;
         issuesHost.innerHTML = '';
@@ -6489,6 +7278,7 @@ async function adminProviderDetail(providerId) {
         : [];
       const skippedN = Array.isArray(out.skipped) ? out.skipped.length : out.skippedCount || 0;
       const blockedByYellow = Boolean(out.ok === false && warnList.length && !failedList.length);
+      const partialImport = out.partial === true;
       setUploadIssues(
         failedList,
         [
@@ -6497,9 +7287,33 @@ async function adminProviderDetail(providerId) {
             ? ['Import blocked by yellow warnings (locker is ON). Nothing was saved.']
             : []),
         ],
-        failedList.length || out.ok === false ? [] : savedList,
+        partialImport ? savedList : failedList.length || out.ok === false ? [] : savedList,
+        failedList.length || blockedByYellow
+          ? {
+              pdfBase64,
+              fileName: file.name || '',
+              providerId,
+              schoolId: state.selectedSchoolId || '',
+              programType: state.selectedProgramType || '',
+            }
+          : null,
+        { partial: partialImport },
       );
-      if (failedList.length || out.ok === false) {
+      if (partialImport) {
+        await adminProviderDetail(providerId);
+        setUploadIssues(
+          failedList,
+          warnList,
+          savedList,
+          { pdfBase64, fileName: file.name || '', providerId, schoolId: state.selectedSchoolId || '', programType: state.selectedProgramType || '' },
+          { partial: true },
+        );
+        setStatus({
+          success: [`Partial import: saved ${savedList.length || out.imported || 0} clean session(s).`],
+          error: failedList,
+          warn: warnList,
+        });
+      } else if (failedList.length || out.ok === false) {
         setStatus({
           error: failedList.length ? failedList : [],
           warn: warnList.length
@@ -6524,16 +7338,47 @@ async function adminProviderDetail(providerId) {
       }
     } catch (e) {
       const split = splitFailedBySeverity(e.failed || e.errors, e.warnings);
-      setUploadIssues(split.reds, split.yellows);
+      setUploadIssues(split.reds, split.yellows, [], await holdForSelectedPdf('pSessionPdf', providerId, split.reds));
       setStatus({
         error: split.reds.length ? split.reds : [e.message || 'Import failed.'],
         warn: split.yellows,
       });
     } finally {
       if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Import sessions';
+        setBusyButton(btn, false, 'Import sessions');
       }
+    }
+  };
+  const pReadClaudeBtn = document.getElementById('pReadWithClaude');
+  if (pReadClaudeBtn) pReadClaudeBtn.onclick = async () => {
+    const btn = pReadClaudeBtn;
+    const host = document.getElementById('pClaudeRead');
+    try {
+      const file = document.getElementById('pSessionPdf').files[0];
+      if (!file) throw new Error('Select a Frontline or Therapist Activity PDF first.');
+      setBusyButton(btn, true, 'Reading…');
+      if (host) {
+        host.hidden = true;
+        host.innerHTML = '';
+      }
+      setStatus(t('upload.reading'), '');
+      const out = await readNotesPdfWithClaude(file, providerId);
+      showClaudeReading(host, out);
+      const differs = (out.readings || []).filter((row) => !row.agrees).length;
+      setStatus(
+        differs
+          ? `${t('upload.otherAiDone')} ${out.shown || 0} session(s). ${differs} differ from the rules. No sessions were added.`
+          : `${t('upload.otherAiDone')} ${out.shown || 0} session(s) and agrees with the rules. No sessions were added.`,
+        differs ? 'warn' : 'ok',
+      );
+    } catch (e) {
+      if (host) {
+        host.hidden = false;
+        host.innerHTML = `<div class="err-box">${esc(e.message || t('upload.otherAiFail'))}</div>`;
+      }
+      setStatus(e.message || t('upload.otherAiFail'), 'error');
+    } finally {
+      setBusyButton(btn, false, t('upload.readOtherAi'));
     }
   };
   document.getElementById('pGenTimesheet').onclick = async () => {
@@ -6615,8 +7460,7 @@ async function adminProviderDetail(providerId) {
         setStatus({ error: lines, warn: warns });
         return;
       }
-      btn.disabled = true;
-      btn.textContent = 'Sending…';
+      setBusyButton(btn, true, 'Sending…');
       if (hint) {
         hint.hidden = false;
         hint.className = 'muted';
@@ -6647,8 +7491,7 @@ async function adminProviderDetail(providerId) {
         hint.textContent = errs[0] || 'Unable to send timesheet.';
       }
       if (btn) {
-        btn.disabled = false;
-        btn.textContent = 'Send timesheet';
+        setBusyButton(btn, false, 'Send timesheet');
       }
     }
   };
@@ -6720,18 +7563,49 @@ async function adminProviderDetail(providerId) {
 function leaveSchoolEditor() {
   const back = state.schoolBackDistrict;
   state.schoolBackDistrict = null;
+  state.schoolEditorStep = 1;
   if (back && (back.id || back.name)) return adminDistrictDetail(back.id, back.name);
   return adminDistricts();
 }
 
+function collapseSchoolDueRows(rows) {
+  const order = [];
+  const grouped = new Map();
+  for (const row of rows || []) {
+    if (!grouped.has(row.id)) {
+      order.push(row.id);
+      grouped.set(row.id, { ...row, _children: [], _providers: [] });
+    }
+    const group = grouped.get(row.id);
+    if (row.studentName) group._children.push(row.studentName);
+    if (row.providerName) group._providers.push(row.providerName);
+  }
+  return order.map((id) => {
+    const group = grouped.get(id);
+    const children = [...new Set(group._children)];
+    const providers = [...new Set(group._providers.filter(Boolean))];
+    const storedStudent = String(group.studentId || '').trim();
+    return {
+      ...group,
+      studentName: storedStudent ? children[0] || '' : children.join(', '),
+      providerName: providers.join(', '),
+    };
+  });
+}
+
 async function adminSchoolDetail(schoolId) {
+  if (!peekGet(`/admin/schools/${schoolId}`)) showWorking('School');
   const [detail, duesOut] = await Promise.all([
     api('GET', `/admin/schools/${schoolId}`),
-    api('GET', '/admin/reports/due-dates'),
+    api('GET', '/admin/reports/due-dates?raw=1'),
   ]);
   const school = detail.school;
   const cal = detail.calendar;
-  const dueDates = (duesOut.rows || []).filter((d) => d.schoolId === schoolId);
+  const dueDates = collapseSchoolDueRows(
+    (duesOut.rows || []).filter((d) => d.schoolId === schoolId),
+  );
+  // Children at this school come with the school detail payload (id + name).
+  const schoolStudents = Array.isArray(detail.students) ? detail.students : [];
   const calSummary = detail.schoolCalendarSummary || formatCalendarSummary(cal);
   const calendarEmpty =
     !cal?.yearStart && !cal?.yearEnd && !(cal?.offDays || []).length;
@@ -6758,11 +7632,20 @@ async function adminSchoolDetail(schoolId) {
     ? `<div class="err-box school-setup-banner"><strong>School setup incomplete</strong><p>${esc(setup.message || 'This school needs a calendar and/or address.')}</p>
         <ul>${setup.missingCalendar ? '<li>Add a school calendar (first day, last day, off days).</li>' : ''}${setup.missingAddress ? '<li>Add a full address (street, city, state, zip) for HHA CreatePatient.</li>' : ''}</ul></div>`
     : '';
+  const schoolStep = [1, 2, 3].includes(Number(state.schoolEditorStep)) ? Number(state.schoolEditorStep) : 1;
   view(`
-    <div class="card">
+    <div class="card" id="schoolStepNav">
       <button type="button" class="btn" id="backFromSchool">${esc(schoolBackLabel)}</button>
       <h2 class="${setup.incomplete ? 'school-name-incomplete' : ''}">${esc(school.name || 'School')}</h2>
+      <div class="pane-tabs" role="tablist">
+        <button type="button" class="pane-tab" data-school-step-btn="1" role="tab">Basic info</button>
+        <button type="button" class="pane-tab" data-school-step-btn="2" role="tab">School calendar</button>
+        <button type="button" class="pane-tab" data-school-step-btn="3" role="tab">Progress-report due dates</button>
+      </div>
+
+    <div class="detail-pane" data-school-step="1">
       ${setupBanner}
+      <h3>Basic information</h3>
       <p class="muted">${esc(detail.studentCount || 0)} children on caseload</p>
       <div class="row">
         <label>School name <input id="sname" value="${esc(school.name || '')}" /></label>
@@ -6784,7 +7667,7 @@ async function adminSchoolDetail(schoolId) {
       <button type="button" class="btn-primary" id="saveSchool">Save school</button>
       <button type="button" class="btn" id="deleteSchool">Remove school</button>
     </div>
-    <div class="card" id="schoolCalendarSection">
+    <div class="detail-pane" id="schoolCalendarSection" data-school-step="2">
       <h3>School calendar</h3>
       <p class="muted">School year dates and closed days (holidays and breaks). Used for school-day mandate tracking. Cycle length is the rotation at this school: 6-day (days 1–6) or 10-day (days 1–10).</p>
       ${
@@ -6822,10 +7705,11 @@ async function adminSchoolDetail(schoolId) {
       <button type="button" class="btn-primary" id="calSave">Save calendar</button>
       ${calSummary ? `<p class="muted" style="margin-top:0.5rem">Saved: ${esc(calSummary)}</p>` : ''}
     </div>
-    <div class="card">
+    <div class="detail-pane" data-school-step="3">
       <h3>Progress-report due dates</h3>
-      <p class="muted">Assign report due dates for this school. Use <strong>Notes</strong> for school-wide context or a specific child name (e.g. “only for child X”). Multiple assignments of the same type are allowed.</p>
+      <p class="muted">Assign report due dates for this school. Check one or more children below to create a separate due date for each; leave all unchecked for a school-wide due date. Multiple assignments of the same type are allowed.</p>
       <input type="hidden" id="dueEditId" value="" />
+      <input type="hidden" id="dueEditStudentId" value="" />
       <div class="row">
         <label>Type
           <select id="dueKind">
@@ -6836,16 +7720,32 @@ async function adminSchoolDetail(schoolId) {
         </label>
         <label>Due Date <input id="dueOn" type="date" /></label>
       </div>
-      <label>Notes <input id="dueNotes" placeholder="e.g. only for child X, or school-wide note" /></label>
+      <label>Notes <input id="dueNotes" placeholder="Optional note" /></label>
+      <fieldset class="due-students" id="dueStudents">
+        <legend>Children (optional)</legend>
+        ${
+          schoolStudents.length
+            ? `<div class="row"><button type="button" class="btn" id="dueStudentsAll">Select all</button> <button type="button" class="btn" id="dueStudentsNone">Clear</button></div>
+        <div class="due-students-list" style="max-height:14rem;overflow:auto">${schoolStudents
+          .map(
+            (s) =>
+              `<label style="display:block"><input type="checkbox" data-due-student="${esc(s.id)}" /> ${esc(s.name)}</label>`,
+          )
+          .join('')}</div>`
+            : '<p class="muted">No children on this school’s caseload.</p>'
+        }
+      </fieldset>
       <div class="row">
         <button type="button" class="btn-primary" id="duebtn">Add due date</button>
         <button type="button" class="btn" id="dueCancelEdit" hidden>Cancel edit</button>
       </div>
       ${bulkBar('school-dues')}
       <table>
-        <tr>${bulkTh('school-dues')}<th>Type</th><th>Due Date</th><th>Notes</th><th>Status</th><th></th></tr>
+        <tr>${bulkTh('school-dues')}<th>Child</th><th>Provider</th><th>Type</th><th>Due Date</th><th>Notes</th><th>Status</th><th></th></tr>
         ${dueDates.map((r) => `<tr>
           ${bulkTd('school-dues', r.id)}
+          <td>${esc(r.studentName || 'School-wide')}</td>
+          <td>${esc(r.providerName || '—')}</td>
           <td>${esc(r.kind === 'annual' ? 'Annual' : r.kind === 'reeval' ? 'Reevaluation' : 'Progress')}</td>
           <td>${esc(r.dueOn)}</td>
           <td>${esc(r.notes || '—')}</td>
@@ -6854,10 +7754,34 @@ async function adminSchoolDetail(schoolId) {
             <button type="button" class="btn" data-edit-due="${esc(r.id)}">Edit</button>
             <button type="button" class="btn" data-del-due="${esc(r.id)}">Remove</button>
           </td>
-        </tr>`).join('') || '<tr><td colspan="6">None yet</td></tr>'}
+        </tr>`).join('') || '<tr><td colspan="8">None yet</td></tr>'}
       </table>
     </div>
+    </div>
   `);
+
+  const showSchoolStep = (n) => {
+    state.schoolEditorStep = n;
+    document.querySelectorAll('[data-school-step]').forEach((el) => {
+      el.hidden = Number(el.getAttribute('data-school-step')) !== n;
+    });
+    document.querySelectorAll('[data-school-step-btn]').forEach((btn) => {
+      const on = Number(btn.getAttribute('data-school-step-btn')) === n;
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  };
+  document.querySelectorAll('[data-school-step-btn]').forEach((btn) => {
+    btn.addEventListener('click', () => showSchoolStep(Number(btn.getAttribute('data-school-step-btn'))));
+  });
+  showSchoolStep(schoolStep);
+
+  document.getElementById('dueStudentsAll')?.addEventListener('click', () => {
+    document.querySelectorAll('[data-due-student]:not(:disabled)').forEach((cb) => { cb.checked = true; });
+  });
+  document.getElementById('dueStudentsNone')?.addEventListener('click', () => {
+    document.querySelectorAll('[data-due-student]').forEach((cb) => { cb.checked = false; });
+  });
 
   let calOffDays = [...(cal?.offDays || [])].sort();
   const calOffDaysList = document.getElementById('calOffDaysList');
@@ -6931,6 +7855,9 @@ async function adminSchoolDetail(schoolId) {
     }
   };
   document.getElementById('calSave').onclick = async () => {
+    const calSaveBtn = document.getElementById('calSave');
+    if (calSaveBtn?.disabled) return;
+    setBusyButton(calSaveBtn, true, 'Saving…');
     try {
       const paste = document.getElementById('calOffDaysPaste').value || '';
       const pasted = paste.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
@@ -6944,7 +7871,10 @@ async function adminSchoolDetail(schoolId) {
       setStatus('School calendar saved.', 'ok');
       await adminSchoolDetail(schoolId);
       void refreshSchoolsSetupBadge();
-    } catch (e) { setStatus(e.message, 'err'); }
+    } catch (e) {
+      setBusyButton(calSaveBtn, false);
+      setStatus(e.message, 'err');
+    }
   };
   document.getElementById('backFromSchool').onclick = () => leaveSchoolEditor();
   document.getElementById('saveSchool').onclick = async () => {
@@ -6973,35 +7903,61 @@ async function adminSchoolDetail(schoolId) {
       await leaveSchoolEditor();
     } catch (e) { setStatus(e.message, 'err'); }
   };
+  const setDueStudentPickerDisabled = (disabled) => {
+    document.querySelectorAll('[data-due-student]').forEach((cb) => {
+      cb.disabled = disabled;
+      if (disabled) cb.checked = false;
+    });
+  };
   document.getElementById('duebtn').onclick = async () => {
+    const dueBtn = document.getElementById('duebtn');
+    if (dueBtn?.disabled) return;
+    const editId = (document.getElementById('dueEditId')?.value || '').trim();
+    setBusyButton(dueBtn, true, editId ? 'Saving…' : 'Adding…');
     try {
-      const editId = (document.getElementById('dueEditId')?.value || '').trim();
       const payload = {
         schoolId,
         kind: document.getElementById('dueKind').value,
         dueOn: document.getElementById('dueOn').value,
         notes: document.getElementById('dueNotes').value,
       };
-      if (editId) payload.id = editId;
-      await api('POST', '/admin/due-dates', payload);
-      setStatus(editId ? 'Due date updated.' : 'Progress-report due date saved. Alerts remain until marked complete.', 'ok');
-      document.getElementById('dueOn').value = '';
-      document.getElementById('dueNotes').value = '';
-      document.getElementById('dueEditId').value = '';
-      document.getElementById('duebtn').textContent = 'Add due date';
-      const cancelBtn = document.getElementById('dueCancelEdit');
-      if (cancelBtn) cancelBtn.hidden = true;
+      if (editId) {
+        payload.id = editId;
+        const editStudentId = (document.getElementById('dueEditStudentId')?.value || '').trim();
+        if (editStudentId) payload.studentId = editStudentId;
+      } else {
+        const studentIds = [...document.querySelectorAll('[data-due-student]:checked')]
+          .map((cb) => cb.getAttribute('data-due-student'))
+          .filter(Boolean);
+        if (studentIds.length) payload.studentIds = studentIds;
+      }
+      const out = await api('POST', '/admin/due-dates', payload);
+      const n = Array.isArray(out?.dueDates) ? out.dueDates.length : 0;
+      setStatus(
+        editId
+          ? 'Due date updated.'
+          : n > 1
+            ? `Saved ${n} progress-report due dates (one per child). Alerts remain until marked complete.`
+            : 'Progress-report due date saved. Alerts remain until marked complete.',
+        'ok',
+      );
       await adminSchoolDetail(schoolId);
-    } catch (e) { setStatus(e.message, 'err'); }
+    } catch (e) {
+      setBusyButton(dueBtn, false);
+      setStatus(e.message, 'err');
+    }
   };
   const dueCancelEdit = document.getElementById('dueCancelEdit');
   if (dueCancelEdit) {
     dueCancelEdit.onclick = () => {
       document.getElementById('dueEditId').value = '';
+      const editStudent = document.getElementById('dueEditStudentId');
+      if (editStudent) editStudent.value = '';
       document.getElementById('dueOn').value = '';
       document.getElementById('dueNotes').value = '';
       document.getElementById('dueKind').value = 'progress';
       document.getElementById('duebtn').textContent = 'Add due date';
+      setDueStudentPickerDisabled(false);
       dueCancelEdit.hidden = true;
     };
   }
@@ -7014,7 +7970,10 @@ async function adminSchoolDetail(schoolId) {
       document.getElementById('dueKind').value = row.kind === 'annual' || row.kind === 'reeval' ? row.kind : 'progress';
       document.getElementById('dueOn').value = row.dueOn || '';
       document.getElementById('dueNotes').value = row.notes || '';
+      const editStudent = document.getElementById('dueEditStudentId');
+      if (editStudent) editStudent.value = row.studentId || '';
       document.getElementById('duebtn').textContent = 'Save changes';
+      setDueStudentPickerDisabled(true);
       if (dueCancelEdit) dueCancelEdit.hidden = false;
       document.getElementById('dueNotes')?.focus();
     });
@@ -7037,6 +7996,7 @@ async function adminSchoolDetail(schoolId) {
 }
 
 async function adminProviders() {
+  if (!peekGet('/admin/providers')) showWorking('Providers');
   const [usersOut, providersOut] = await Promise.all([
     api('GET', '/admin/users'),
     api('GET', '/admin/providers'),
@@ -7102,10 +8062,13 @@ async function adminProviders() {
     </div>
     <div class="card">
       <h2>Providers</h2>
+      <label>Search
+        <input id="providerSearch" type="search" placeholder="Name, email, discipline, id…" autocomplete="off" />
+      </label>
       ${bulkBar('providers')}
       <table>
         <tr>${bulkTh('providers')}<th>Name</th><th>Email</th><th>Provider id</th><th>Discipline</th><th></th></tr>
-        ${providerRows.map(({ p, u, name, pid, orphan }) => `<tr data-provider-row data-provider-name="${esc(name || '')}">
+        ${providerRows.map(({ p, u, name, pid, orphan }) => `<tr data-provider-row data-provider-name="${esc(name || '')}" data-search="${esc([name, u?.email, p.discipline, pid].filter(Boolean).join(' ').toLowerCase())}">
             ${bulkTd('providers', pid, ' data-bulk-kind="provider"')}
             <td>${providerNameLink(pid, name || '—')}${orphan ? ' <span class="muted">(no account)</span>' : ''}</td>
             <td>${esc(u?.email || '—')}</td>
@@ -7115,7 +8078,7 @@ async function adminProviders() {
               <button type="button" class="btn" data-del-provider="${esc(pid)}">Remove</button>
             </td>
           </tr>`).join('') || ''}
-        ${loginOnly.map((u) => `<tr>
+        ${loginOnly.map((u) => `<tr data-provider-row data-search="${esc([u.displayName, u.email, u.id].filter(Boolean).join(' ').toLowerCase())}">
             ${bulkTd('providers', u.id, ' data-bulk-kind="user"')}
             <td>${esc(u.displayName || '—')} <span class="muted">(account only)</span></td>
             <td>${esc(u.email)}</td>
@@ -7125,8 +8088,23 @@ async function adminProviders() {
           </tr>`).join('')}
         ${!providerRows.length && !loginOnly.length ? '<tr><td colspan="6">None yet</td></tr>' : ''}
       </table>
+      <p class="muted" id="providersFilterEmpty" hidden>No providers match this search.</p>
     </div>
   `);
+  const providerSearchEl = document.getElementById('providerSearch');
+  const providerFilterEmpty = document.getElementById('providersFilterEmpty');
+  const applyProviderFilter = () => {
+    const q = String(providerSearchEl?.value || '').trim().toLowerCase();
+    let shown = 0;
+    document.querySelectorAll('[data-provider-row]').forEach((row) => {
+      const hay = row.getAttribute('data-search') || '';
+      const ok = !q || hay.includes(q) || q.split(/\s+/).every((t) => hay.includes(t));
+      row.hidden = !ok;
+      if (ok) shown += 1;
+    });
+    if (providerFilterEmpty) providerFilterEmpty.hidden = shown > 0 || !q;
+  };
+  if (providerSearchEl) providerSearchEl.addEventListener('input', applyProviderFilter);
 
   bindBulkDelete('providers', {
     noun: 'providers',
@@ -7204,8 +8182,16 @@ async function adminProviders() {
 
 async function adminDistricts(opts = {}) {
   if (opts.focusDistrictId) state.focusDistrictId = opts.focusDistrictId;
-  const out = await api('GET', '/admin/districts');
+  if (!peekGet('/admin/districts')) showWorking('Districts');
+  const [out, schoolsOut] = await Promise.all([
+    api('GET', '/admin/districts'),
+    // School list powers "Open school calendar"; the districts page still works without it.
+    api('GET', '/admin/schools').catch(() => ({ schools: [] })),
+  ]);
   const districts = out.districts || [];
+  const allSchools = [...(schoolsOut.schools || [])]
+    .filter((s) => s && s.id)
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
   view(`
     <div class="card entry-card">
       <div class="entry-collapsed" id="addDistrictCollapsed">
@@ -7223,20 +8209,84 @@ async function adminDistricts(opts = {}) {
         </div>
       </div>
     </div>
+    <div class="card" id="openSchoolCalendarCard">
+      <h2>Open school calendar</h2>
+      <p class="muted">Search for a school and open it directly (calendar, address, due dates) without scrolling through every district.</p>
+      <label>Find school <input id="schoolFindInput" type="search" placeholder="Type a school name…" autocomplete="off" /></label>
+      <ul id="schoolFindList" class="school-find-list" style="list-style:none;padding:0;margin:0.5rem 0 0;max-height:16rem;overflow:auto"></ul>
+    </div>
     <div class="card">
       <h2>Districts</h2>
       <p class="muted">Derived from school.district and caseload program types. Open a district to set the shared signer and see schools under it. Timesheets bin by program type and fall back to the district signer when a building has none.</p>
+      <label>Filter districts <input id="districtFilter" type="search" placeholder="Search districts by name…" autocomplete="off" /></label>
       <table>
         <tr><th>District</th><th>Signer</th><th>Schools</th><th></th></tr>
-        ${districts.map((d) => `<tr>
+        ${districts.map((d) => `<tr data-district-row="${esc(String(d.name || '').toLowerCase())}">
           <td><button type="button" class="linkish" data-open-district="${esc(d.id)}" data-district-name="${esc(d.name)}">${esc(d.name)}</button>${d.persisted ? '' : ' <span class="muted">(from caseload)</span>'}</td>
           <td>${esc(d.signerName || d.signerEmail || '—')}</td>
           <td>${esc(String(d.schoolCount || 0))}</td>
           <td><button type="button" class="btn" data-open-district="${esc(d.id)}" data-district-name="${esc(d.name)}">Open</button></td>
         </tr>`).join('') || '<tr><td colspan="4">No districts yet. Add one or set school.district / program type on caseload.</td></tr>'}
+        <tr id="districtFilterEmpty" hidden><td colspan="4" class="muted">No districts match that search.</td></tr>
       </table>
     </div>
   `);
+
+  const districtFilter = document.getElementById('districtFilter');
+  if (districtFilter) {
+    districtFilter.addEventListener('input', () => {
+      const q = districtFilter.value.trim().toLowerCase();
+      let shown = 0;
+      document.querySelectorAll('[data-district-row]').forEach((row) => {
+        const match = !q || (row.getAttribute('data-district-row') || '').includes(q);
+        row.hidden = !match;
+        if (match) shown += 1;
+      });
+      const empty = document.getElementById('districtFilterEmpty');
+      if (empty) empty.hidden = shown > 0 || !districts.length;
+    });
+  }
+
+  const schoolFindInput = document.getElementById('schoolFindInput');
+  const schoolFindList = document.getElementById('schoolFindList');
+  const renderSchoolFind = () => {
+    if (!schoolFindList) return;
+    const q = (schoolFindInput?.value || '').trim().toLowerCase();
+    if (!q) {
+      schoolFindList.innerHTML = allSchools.length
+        ? `<li class="muted">${esc(String(allSchools.length))} school(s). Start typing to search.</li>`
+        : '<li class="muted">No schools yet.</li>';
+      return;
+    }
+    const matches = allSchools
+      .filter((s) => `${s.name || ''} ${s.district || ''}`.toLowerCase().includes(q))
+      .slice(0, 40);
+    schoolFindList.innerHTML = matches.length
+      ? matches
+          .map(
+            (s) =>
+              `<li><button type="button" class="linkish" data-find-school="${esc(s.id)}">${esc(s.name || s.id)}</button>${s.district ? ` <span class="muted">${esc(s.district)}</span>` : ''}</li>`,
+          )
+          .join('')
+      : '<li class="muted">No schools match that search.</li>';
+    schoolFindList.querySelectorAll('[data-find-school]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const school = allSchools.find((s) => s.id === btn.getAttribute('data-find-school'));
+        if (!school) return;
+        const dist = school.district ? districtFromList(districts, school.district) : null;
+        // Back returns to the school's district when known, otherwise to Districts.
+        state.schoolBackDistrict = dist
+          ? { id: String(dist.id || ''), name: String(dist.name || '') }
+          : null;
+        state.schoolEditorStep = 1;
+        adminSchoolDetail(school.id).catch((e) =>
+          setStatus(e.message || 'Could not open this school.', 'err'),
+        );
+      });
+    });
+  };
+  if (schoolFindInput) schoolFindInput.addEventListener('input', renderSchoolFind);
+  renderSchoolFind();
 
   const setAddOpen = (open) => {
     const c = document.getElementById('addDistrictCollapsed');
@@ -7443,6 +8493,7 @@ function showDistrictDetail(d) {
   document.querySelectorAll('[data-open-school]').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.schoolBackDistrict = { id: String(d.id || ''), name: String(d.name || '') };
+      state.schoolEditorStep = 1;
       adminSchoolDetail(btn.getAttribute('data-open-school'));
     });
   });
@@ -7487,6 +8538,7 @@ async function adminSchools(opts = {}) {
 }
 
 async function adminAdmins() {
+  if (!peekGet('/admin/users')) showWorking('Admins');
   const usersOut = await api('GET', '/admin/users');
   const admins = (usersOut.users || []).filter((u) => u.role === 'admin');
   view(`
@@ -7570,6 +8622,7 @@ async function adminAdmins() {
 }
 
 async function adminMandates() {
+  if (!peekGet('/students') || !peekGet('/admin/providers')) showWorking('Mandates');
   const [studentsOut, providersOut] = await Promise.all([
     api('GET', '/students'),
     api('GET', '/admin/providers'),
@@ -7583,9 +8636,6 @@ async function adminMandates() {
   view(`
     <div class="card">
       <h2>Import caseload</h2>
-      <p class="muted">Use the KU export <strong>Related Service by serviceschool (WG)</strong> (Listing Results sheet) as CSV or Excel (.xls / .xlsx). Import saves immediately.</p>
-      <p class="muted" style="margin-top:0.35rem">Columns: CR Recommended School, Student Last/First Name, CR Expected Grade, CR Decision/Status, Related Service, RS Start/End, RS Ratio, RS Frequency, RS Period, <strong>RS Duration</strong>, RS Location, RS Provider. Optional when present: Group Size, Program ID, Program Type, Date of Birth. (Older short headers still work.)</p>
-      <p class="muted" style="margin-top:0.35rem">Frequency: <em>Weekly</em> = sessions per week; <em>Monthly</em> = sessions per calendar month; <em>6 day cycle</em> or <em>10 day cycle</em> = N sessions per that many school days. Providers must already exist in TMS and match “Last, First” or “First Last”. Agency labels such as “White Glove” or “White, Glove” are invalid — use the therapist name. Unmatched RS Provider rows are skipped (no empty-provider mandates).</p>
       <input id="caseloadFile" type="file" accept=".csv,.xls,.xlsx,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
       <div class="row" style="margin-top:0.6rem">
         <button class="btn-primary" id="caseloadImportBtn">Import caseload</button>
@@ -7866,9 +8916,8 @@ function weekProgressRowsHtml(progressRows) {
           ? Number(r.sessionsDeliveredPct)
           : Number(r.progressPct ?? 0);
       const notesPct = r.notesPostedPct != null ? Number(r.notesPostedPct) : 0;
-      const below =
-        r.belowMandate === true ||
-        (expected > 0 && delivered < expected);
+      // Trust API belowMandate (attended + missed + paid absence). Do not re-yellow on delivered %.
+      const below = r.belowMandate === true;
       const deliveredLabel = expected > 0
         ? `${delivered}/${expected} (${deliveredPct}%)`
         : `${delivered} (${deliveredPct}%)`;
@@ -7920,23 +8969,29 @@ function bindReportDetailChrome() {
     }
     const delDue = e.target.closest('[data-del-due]');
     if (delDue) {
+      if (delDue.disabled) return;
       try {
         if (!confirm('Remove this progress report due date? Alerts for it will stop. This cannot be undone.')) return;
+        setBusyButton(delDue, true, 'Removing…');
         await api('DELETE', `/admin/due-dates/${delDue.getAttribute('data-del-due')}`);
         setStatus('Due date removed.', 'ok');
         adminReports();
       } catch (err) {
+        setBusyButton(delDue, false);
         setStatus(err.message, 'err');
       }
       return;
     }
     const btn = e.target.closest('[data-complete]');
     if (!btn) return;
+    if (btn.disabled) return;
     try {
+      setBusyButton(btn, true, 'Saving…');
       await api('POST', `/admin/due-dates/${btn.getAttribute('data-complete')}/complete`, {});
       setStatus('Due date marked complete. Alerts stopped.', 'ok');
       adminReports();
     } catch (err) {
+      setBusyButton(btn, false);
       setStatus(err.message, 'err');
     }
   };
@@ -7978,11 +9033,11 @@ async function adminReportWeekProgress() {
     <div class="card">
       <button type="button" class="btn" id="backReports">← Reports</button>
       <h2>Weekly session progress</h2>
-      <p class="muted">Sessions delivered % and notes posted % versus each child's mandate. Missed sessions do not count as delivered; missed and attended both count toward notes posted. Yellow rows are below mandate.</p>
+      <p class="muted">Sessions delivered % is attended and makeup only (misses do not count as delivered). Notes posted % counts any session with a note. Yellow / below mandate means fewer submitted sessions than the mandate — attended, missed, and paid absence all fill a slot.</p>
       <div class="row">
         <label>Week from <input id="progFrom" type="date" value="${esc(from)}" /></label>
         <label>Week to <input id="progTo" type="date" value="${esc(to)}" /></label>
-        <button type="button" class="btn-primary" id="progLoad" disabled>Loading…</button>
+        <button type="button" class="btn-primary" id="progLoad" disabled>${loaderHtml()}</button>
         <button type="button" class="btn" id="progXlsx">Export Excel</button>
       </div>
       <table>
@@ -7995,7 +9050,7 @@ async function adminReportWeekProgress() {
           <th>Sessions delivered %</th>
           <th>Notes posted %</th>
         </tr>
-        <tbody id="progBody"><tr><td colspan="7">Loading…</td></tr></tbody>
+        <tbody id="progBody"><tr><td colspan="7">${loaderHtml()}</td></tr></tbody>
       </table>
     </div>
   `);
@@ -8011,9 +9066,9 @@ async function adminReportWeekProgress() {
     const tbody = document.getElementById('progBody');
     if (loadBtn) {
       loadBtn.disabled = true;
-      loadBtn.textContent = 'Loading…';
+      loadBtn.innerHTML = loaderHtml();
     }
-    if (tbody) tbody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+    if (tbody) tbody.innerHTML = `<tr><td colspan="7">${loaderHtml()}</td></tr>`;
     try {
       const progress = await api('GET', `/admin/reports/week-progress?${qq}`);
       if (tbody) tbody.innerHTML = weekProgressRowsHtml(progress.rows || []);
@@ -8025,8 +9080,7 @@ async function adminReportWeekProgress() {
       setStatus(e.message || 'Unable to load progress.', 'err');
     } finally {
       if (loadBtn) {
-        loadBtn.disabled = false;
-        loadBtn.textContent = 'Load';
+        setBusyButton(loadBtn, false, 'Load');
       }
     }
   };
@@ -8057,8 +9111,7 @@ async function adminReportWeekProgress() {
     setStatus(e.message || 'Unable to load progress.', 'err');
   } finally {
     if (loadBtn) {
-      loadBtn.disabled = false;
-      loadBtn.textContent = 'Load';
+      setBusyButton(loadBtn, false, 'Load');
     }
   }
 }
@@ -8071,7 +9124,7 @@ async function adminReportLastService() {
     <div class="card">
       <button type="button" class="btn" id="backReports">← Reports</button>
       <h2>Last date of service</h2>
-      <p class="muted">Every child in TMS. Most recent attended or makeup date of service by child and provider. If a child was never serviced, Last DOS is blank. Filter by provider as needed.</p>
+      <p class="muted">Children with an active mandate as of today, one row per child. Last DOS is the latest attended or makeup date across that child’s mandates. Provider is whoever delivered that date. If the child was never serviced, Last DOS is blank. Filter by provider as needed.</p>
       <div class="row">
         <label>Provider
           <select id="lastProvider">
@@ -8087,7 +9140,7 @@ async function adminReportLastService() {
         <button type="button" class="btn" id="lastXlsx">Export Excel</button>
       </div>
       <table><tr><th>Child</th><th>Provider</th><th>School</th><th>Last DOS</th></tr>
-      <tbody id="lastBody"><tr><td colspan="4">Loading…</td></tr></tbody>
+      <tbody id="lastBody"><tr><td colspan="4">${loaderHtml()}</td></tr></tbody>
       </table>
     </div>
   `);
@@ -8140,16 +9193,16 @@ async function adminReportDueDates() {
     <div class="card">
       <button type="button" class="btn" id="backReports">← Reports</button>
       <h2>Progress-report due dates</h2>
-      <p class="muted">School progress, annual, and reevaluation due dates in the selected range.</p>
+      <p class="muted">Open progress, annual, and reevaluation due dates in the selected range. Completed ones are hidden.</p>
       <div class="row">
         <label>From <input id="dueFrom" type="date" value="${esc(from)}" /></label>
         <label>To <input id="dueTo" type="date" value="${esc(to)}" /></label>
-        <button type="button" class="btn-primary" id="duesLoad">Load</button>
+        <button type="button" class="btn-primary" id="duesLoad" disabled>${loaderHtml()}</button>
         <button type="button" class="btn" id="duesXlsx">Export Excel</button>
       </div>
       ${bulkBar('report-dues')}
-      <table><tr>${bulkTh('report-dues')}<th>School</th><th>Type</th><th>Due Date</th><th>Notes</th><th>Status</th><th></th></tr>
-      <tbody id="duesBody"><tr><td colspan="7">Loading…</td></tr></tbody>
+      <table><tr>${bulkTh('report-dues')}<th>District</th><th>Child</th><th>Provider</th><th>Type</th><th>Due Date</th><th>Notes</th><th>Status</th><th></th></tr>
+      <tbody id="duesBody"><tr><td colspan="9">${loaderHtml()}</td></tr></tbody>
       </table>
     </div>
   `);
@@ -8161,31 +9214,35 @@ async function adminReportDueDates() {
       (rows || [])
         .map(
           (r) =>
-            `<tr>${bulkTd('report-dues', r.id)}<td>${esc(r.schoolName || r.schoolId)}</td><td>${esc(r.kind === 'annual' ? 'Annual' : r.kind === 'reeval' ? 'Reevaluation' : 'Progress')}</td><td>${esc(r.dueOn)}</td><td>${esc(r.notes || '—')}</td><td>${esc(r.status)}</td><td>${r.completedAt ? `<button class="btn" data-del-due="${esc(r.id)}">Remove</button>` : `<button class="btn" data-complete="${esc(r.id)}">Mark complete</button> <button class="btn" data-del-due="${esc(r.id)}">Remove</button>`}</td></tr>`,
+            `<tr>${bulkTd('report-dues', r.id)}<td>${esc(r.districtName || r.schoolName || r.schoolId)}</td><td>${esc(r.studentName || '—')}</td><td>${esc(r.providerName || '—')}</td><td>${esc(r.kind === 'annual' ? 'Annual' : r.kind === 'reeval' ? 'Reevaluation' : 'Progress')}</td><td>${esc(r.dueOn)}</td><td>${esc(r.notes || '—')}</td><td>${esc(r.status)}</td><td>${r.completedAt ? `<button class="btn" data-del-due="${esc(r.id)}">Remove</button>` : `<button class="btn" data-complete="${esc(r.id)}">Mark complete</button> <button class="btn" data-del-due="${esc(r.id)}">Remove</button>`}</td></tr>`,
         )
-        .join('') || '<tr><td colspan="7">None</td></tr>';
+        .join('') || '<tr><td colspan="9">None</td></tr>';
   };
+  const loadBtn = document.getElementById('duesLoad');
   const loadDues = async () => {
+    if (loadBtn?.disabled) return;
     const f = document.getElementById('dueFrom')?.value || from;
     const t = document.getElementById('dueTo')?.value || to;
     state.reportFrom = f;
     state.reportTo = t;
     const qq = `from=${encodeURIComponent(f)}&to=${encodeURIComponent(t)}`;
     const duesBody = document.getElementById('duesBody');
-    if (duesBody) duesBody.innerHTML = '<tr><td colspan="7">Loading…</td></tr>';
+    if (loadBtn) setBusyButton(loadBtn, true, 'Loading…');
+    if (duesBody) duesBody.innerHTML = `<tr><td colspan="9">${loaderHtml()}</td></tr>`;
     try {
       const dues = await api('GET', `/admin/reports/due-dates?${qq}`);
       fillDues(dues.rows || []);
       setStatus('', '');
     } catch (e) {
       if (duesBody) {
-        duesBody.innerHTML = `<tr><td colspan="7">${esc(e.message || 'Unable to load due dates.')}</td></tr>`;
+        duesBody.innerHTML = `<tr><td colspan="9">${esc(e.message || 'Unable to load due dates.')}</td></tr>`;
       }
       setStatus(e.message || 'Unable to load due dates.', 'err');
+    } finally {
+      if (loadBtn) setBusyButton(loadBtn, false, 'Load');
     }
   };
-  const duesLoad = document.getElementById('duesLoad');
-  if (duesLoad) duesLoad.onclick = () => loadDues();
+  if (loadBtn) loadBtn.onclick = () => loadDues();
   const duesXlsx = document.getElementById('duesXlsx');
   if (duesXlsx) {
     duesXlsx.onclick = async () => {
@@ -8211,9 +9268,11 @@ async function adminReportDueDates() {
   } catch (e) {
     const duesBody = document.getElementById('duesBody');
     if (duesBody) {
-      duesBody.innerHTML = `<tr><td colspan="6">${esc(e.message || 'Unable to load due dates.')}</td></tr>`;
+      duesBody.innerHTML = `<tr><td colspan="9">${esc(e.message || 'Unable to load due dates.')}</td></tr>`;
     }
     setStatus(e.message || 'Unable to load due dates.', 'err');
+  } finally {
+    if (loadBtn) setBusyButton(loadBtn, false, 'Load');
   }
 }
 
@@ -8253,10 +9312,10 @@ async function downloadSelectedArchives(group, mode) {
   const mergeBtn = document.querySelector(`[data-archive-merge="${group}"]`);
   const prevDownload = downloadBtn?.textContent;
   const prevMerge = mergeBtn?.textContent;
-  if (downloadBtn) downloadBtn.disabled = true;
-  if (mergeBtn) mergeBtn.disabled = true;
-  if (mode === 'pdf' && mergeBtn) mergeBtn.textContent = 'Merging…';
-  if (mode === 'zip' && downloadBtn) downloadBtn.textContent = 'Downloading…';
+  if (mode === 'pdf' && mergeBtn) setBusyButton(mergeBtn, true, 'Merging…');
+  else if (mergeBtn) mergeBtn.disabled = true;
+  if (mode === 'zip' && downloadBtn) setBusyButton(downloadBtn, true, 'Downloading…');
+  else if (downloadBtn) downloadBtn.disabled = true;
   setStatus(
     mode === 'pdf'
       ? 'Building one PDF, oldest week first…'
@@ -8278,12 +9337,10 @@ async function downloadSelectedArchives(group, mode) {
     setStatus(e.message || 'Unable to download the selected files.', 'err');
   } finally {
     if (downloadBtn) {
-      downloadBtn.disabled = false;
-      downloadBtn.textContent = prevDownload || 'Download selected';
+      setBusyButton(downloadBtn, false, prevDownload || 'Download selected');
     }
     if (mergeBtn) {
-      mergeBtn.disabled = false;
-      mergeBtn.textContent = prevMerge || 'Merge into one PDF';
+      setBusyButton(mergeBtn, false, prevMerge || 'Merge into one PDF');
     }
   }
 }
@@ -8318,6 +9375,7 @@ function archiveSourceLabel(sourceType) {
   if (v === 'therapist_activity') return 'Therapist Activity';
   if (v === 'frontline') return 'Frontline';
   if (v === 'upload_other') return 'Custom note';
+  if (v === 'manual_session_note') return 'Digital session note';
   if (v === 'timesheet' || v === 'timesheet_signed') return 'Timesheet';
   return v || 'Upload';
 }
@@ -8487,7 +9545,7 @@ async function adminReportArchive() {
           <th>File</th>
           <th></th>
         </tr>
-        <tbody id="archBody"><tr><td colspan="9">Loading…</td></tr></tbody>
+        <tbody id="archBody"><tr><td colspan="9">${loaderHtml()}</td></tr></tbody>
       </table></div>
     </div>
   `);
@@ -8505,7 +9563,7 @@ async function adminReportArchive() {
     if (providerId) q.set('providerId', providerId);
     if (nextFrom) q.set('from', nextFrom);
     if (nextTo) q.set('to', nextTo);
-    if (tbody) tbody.innerHTML = '<tr><td colspan="9">Loading…</td></tr>';
+    if (tbody) tbody.innerHTML = `<tr><td colspan="9">${loaderHtml()}</td></tr>`;
     try {
       const out = await api('GET', `/admin/archive?${q.toString()}`);
       const items = Array.isArray(out.items) ? out.items : [];
@@ -8606,7 +9664,7 @@ async function adminReportInternalNotes() {
           <th>Tags</th>
           <th>Note</th>
         </tr>
-        <tbody id="notesBody"><tr><td colspan="6">Loading…</td></tr></tbody>
+        <tbody id="notesBody"><tr><td colspan="6">${loaderHtml()}</td></tr></tbody>
       </table></div>
     </div>
   `);
@@ -8645,7 +9703,7 @@ async function adminReportInternalNotes() {
     if (nextTo) q.set('to', nextTo);
     if (pid) q.set('providerId', pid);
     const tbody = document.getElementById('notesBody');
-    if (tbody) tbody.innerHTML = '<tr><td colspan="6">Loading…</td></tr>';
+    if (tbody) tbody.innerHTML = `<tr><td colspan="6">${loaderHtml()}</td></tr>`;
     try {
       const out = await api('GET', `/admin/reports/internal-notes?${q.toString()}`);
       fillNotes(out.rows || []);
@@ -8755,7 +9813,7 @@ async function adminReportSessionNotes() {
           <th>Begin</th>
           <th>End</th>
         </tr>
-        <tbody id="snBody"><tr><td colspan="8">Loading…</td></tr></tbody>
+        <tbody id="snBody"><tr><td colspan="8">${loaderHtml()}</td></tr></tbody>
       </table></div>
     </div>
   `);
@@ -8820,7 +9878,7 @@ async function adminReportSessionNotes() {
     if (pid) q.set('providerId', pid);
     if (district) q.set('district', district);
     const tbody = document.getElementById('snBody');
-    if (tbody) tbody.innerHTML = '<tr><td colspan="8">Loading…</td></tr>';
+    if (tbody) tbody.innerHTML = `<tr><td colspan="8">${loaderHtml()}</td></tr>`;
     try {
       const out = await api('GET', `/admin/reports/session-notes?${q.toString()}`);
       if (Array.isArray(out.districtOptions) && out.districtOptions.length) {
@@ -8910,7 +9968,7 @@ async function adminReportHhaTransfers() {
           <th>Service</th>
           <th>HHA status</th>
         </tr>
-        <tbody id="hhaBody"><tr><td colspan="11">${from && to ? 'Loading…' : 'Enter From and To, then Load.'}</td></tr></tbody>
+        <tbody id="hhaBody"><tr><td colspan="11">${from && to ? loaderHtml() : 'Enter From and To, then Load.'}</td></tr></tbody>
       </table>
       </div>
     </div>
@@ -8933,7 +9991,7 @@ async function adminReportHhaTransfers() {
       return;
     }
     const q = `from=${encodeURIComponent(nextFrom)}&to=${encodeURIComponent(nextTo)}`;
-    if (tbody) tbody.innerHTML = '<tr><td colspan="11">Loading…</td></tr>';
+    if (tbody) tbody.innerHTML = `<tr><td colspan="11">${loaderHtml()}</td></tr>`;
     try {
       const out = await api('GET', `/admin/reports/hha-transfers?${q}`);
       if (tbody) tbody.innerHTML = hhaTransferRowsHtml(out.rows || []);
@@ -9684,8 +10742,7 @@ function showLogin(message) {
       loginError(t('login.needBoth'));
       return;
     }
-    btn.disabled = true;
-    btn.textContent = t('login.signingIn');
+    setBusyButton(btn, true, t('login.signingIn'));
     try {
       const out = await cognitoCall('InitiateAuth', {
         AuthFlow: 'USER_PASSWORD_AUTH',
@@ -9699,8 +10756,7 @@ function showLogin(message) {
       await handleAuthResponse(out, { email });
     } catch (e) {
       loginError(e.message);
-      btn.disabled = false;
-      btn.textContent = t('login.submit');
+      setBusyButton(btn, false, t('login.submit'));
     }
   };
   document.getElementById('loginBtn').onclick = submit;
@@ -9715,8 +10771,7 @@ function showLogin(message) {
       return;
     }
     const btn = document.getElementById('passkeyLoginBtn');
-    btn.disabled = true;
-    btn.textContent = t('mfa.passkeyWorking');
+    setBusyButton(btn, true, t('mfa.passkeyWorking'));
     try {
       const out = await cognitoCall('InitiateAuth', {
         AuthFlow: 'USER_AUTH',
@@ -9729,8 +10784,7 @@ function showLogin(message) {
       await handleAuthResponse(out, { email, preferPasskey: true });
     } catch (e) {
       loginError(e.message);
-      btn.disabled = false;
-      btn.textContent = t('mfa.passkeySignIn');
+      setBusyButton(btn, false, t('mfa.passkeySignIn'));
     }
   });
   document.getElementById('forgotPasswordBtn').onclick = () => {
@@ -9767,8 +10821,7 @@ function showMfaChallenge(email, session, challengeName, ctx = {}) {
       loginError(t('mfa.needCode'));
       return;
     }
-    btn.disabled = true;
-    btn.textContent = t('mfa.verifying');
+    setBusyButton(btn, true, t('mfa.verifying'));
     try {
       const responses = { USERNAME: email };
       if (sms) responses.SMS_MFA_CODE = code;
@@ -9785,8 +10838,7 @@ function showMfaChallenge(email, session, challengeName, ctx = {}) {
       await handleAuthResponse(out, { email, trustDevice: trustDeviceChecked(), ...ctx });
     } catch (e) {
       loginError(e.message);
-      btn.disabled = false;
-      btn.textContent = t('mfa.verify');
+      setBusyButton(btn, false, t('mfa.verify'));
     }
   };
   document.getElementById('mfaBtn').onclick = submit;
@@ -9882,8 +10934,7 @@ async function startEmailEnroll({ forced }) {
   `;
   document.getElementById('emailEnableBtn').onclick = async () => {
     const btn = document.getElementById('emailEnableBtn');
-    btn.disabled = true;
-    btn.textContent = t('mfa.confirming');
+    setBusyButton(btn, true, t('mfa.confirming'));
     loginError('');
     try {
       await cognitoCall('SetUserMFAPreference', {
@@ -9895,8 +10946,7 @@ async function startEmailEnroll({ forced }) {
       else await showSecurityMfa();
     } catch (e) {
       loginError(e.message);
-      btn.disabled = false;
-      btn.textContent = t('mfa.confirmEnable');
+      setBusyButton(btn, false, t('mfa.confirmEnable'));
     }
   };
 }
@@ -9920,8 +10970,7 @@ async function startPasskeyEnroll({ forced }) {
   `;
   document.getElementById('passkeyRegisterBtn').onclick = async () => {
     const btn = document.getElementById('passkeyRegisterBtn');
-    btn.disabled = true;
-    btn.textContent = t('mfa.passkeyWorking');
+    setBusyButton(btn, true, t('mfa.passkeyWorking'));
     loginError('');
     try {
       const start = await cognitoCall('StartWebAuthnRegistration', { AccessToken: state.accessToken });
@@ -9946,8 +10995,7 @@ async function startPasskeyEnroll({ forced }) {
       else await showSecurityMfa();
     } catch (e) {
       loginError(e.message || t('common.error'));
-      btn.disabled = false;
-      btn.textContent = t('mfa.passkeyRegister');
+      setBusyButton(btn, false, t('mfa.passkeyRegister'));
     }
   };
 }
@@ -9991,8 +11039,7 @@ async function startTotpEnroll({ forced }) {
         return;
       }
       const btn = document.getElementById('totpVerifyBtn');
-      btn.disabled = true;
-      btn.textContent = t('mfa.confirming');
+      setBusyButton(btn, true, t('mfa.confirming'));
       try {
         await cognitoCall('VerifySoftwareToken', {
           AccessToken: state.accessToken,
@@ -10008,8 +11055,7 @@ async function startTotpEnroll({ forced }) {
         else await showSecurityMfa();
       } catch (e) {
         loginError(e.message);
-        btn.disabled = false;
-        btn.textContent = t('mfa.confirmEnable');
+        setBusyButton(btn, false, t('mfa.confirmEnable'));
       }
     };
   } catch (e) {
@@ -10325,8 +11371,7 @@ function showForgotPassword(prefillEmail) {
       loginError(t('forgot.needEmail'));
       return;
     }
-    btn.disabled = true;
-    btn.textContent = t('forgot.sending');
+    setBusyButton(btn, true, t('forgot.sending'));
     try {
       await cognitoCall('ForgotPassword', {
         ClientId: CLIENT_ID,
@@ -10335,8 +11380,7 @@ function showForgotPassword(prefillEmail) {
       showConfirmForgotPassword(email);
     } catch (e) {
       loginError(e.message);
-      btn.disabled = false;
-      btn.textContent = t('forgot.send');
+      setBusyButton(btn, false, t('forgot.send'));
     }
   };
   document.getElementById('forgotEmail').focus();
@@ -10374,8 +11418,7 @@ function showConfirmForgotPassword(email) {
       loginError('The passwords do not match.');
       return;
     }
-    btn.disabled = true;
-    btn.textContent = 'Saving…';
+    setBusyButton(btn, true, 'Saving…');
     try {
       await cognitoCall('ConfirmForgotPassword', {
         ClientId: CLIENT_ID,
@@ -10387,8 +11430,7 @@ function showConfirmForgotPassword(email) {
       showLogin('');
     } catch (e) {
       loginError(e.message);
-      btn.disabled = false;
-      btn.textContent = 'Save new password';
+      setBusyButton(btn, false, 'Save new password');
     }
   };
   document.getElementById('forgotConfirmBtn').onclick = submit;
@@ -10423,8 +11465,7 @@ function showNewPassword(email, session) {
       loginError('The passwords do not match.');
       return;
     }
-    btn.disabled = true;
-    btn.textContent = 'Saving…';
+    setBusyButton(btn, true, 'Saving…');
     try {
       const out = await cognitoCall('RespondToAuthChallenge', {
         ChallengeName: 'NEW_PASSWORD_REQUIRED',
@@ -10435,8 +11476,7 @@ function showNewPassword(email, session) {
       await handleAuthResponse(out, { email });
     } catch (e) {
       loginError(e.message);
-      btn.disabled = false;
-      btn.textContent = 'Save password and sign in';
+      setBusyButton(btn, false, 'Save password and sign in');
     }
   };
   document.getElementById('newPassBtn').onclick = submit;
@@ -10499,8 +11539,7 @@ function showChangePassword() {
       changePasswordError('Sign out and sign in again to change your password.');
       return;
     }
-    btn.disabled = true;
-    btn.textContent = 'Saving…';
+    setBusyButton(btn, true, 'Saving…');
     try {
       await cognitoCall(
         'ChangePassword',
@@ -10515,8 +11554,7 @@ function showChangePassword() {
       showRole();
     } catch (e) {
       changePasswordError(e.message);
-      btn.disabled = false;
-      btn.textContent = 'Save';
+      setBusyButton(btn, false, 'Save');
     }
   };
   document.getElementById('changePwSave').onclick = submit;
@@ -10582,7 +11620,220 @@ document.getElementById('adminNav').onclick = (e) => {
     state.reportView = '';
     adminReports();
   }
+  if (screen === 'blockReports') adminBlockReports();
 };
+
+async function loadMyBlockReports() {
+  const host = document.getElementById('myBlockReports');
+  if (!host) return;
+  if (previewBlockActive() && !/localhost|127\.0\.0\.1/.test(String(API))) return;
+  try {
+    const out = await api('GET', '/block-reports');
+    const rows = (out.reports || []).filter((row) => row.status === 'pending' || row.status === 'declined');
+    if (!rows.length) {
+      host.innerHTML = '';
+      return;
+    }
+    host.innerHTML = rows
+      .map((row) => {
+        const pending = row.status === 'pending';
+        return `<div class="${pending ? 'warn-box' : 'err-box'}">${
+          pending
+            ? esc(t('upload.reportPending'))
+            : `${esc(t('block.decline'))}: ${esc(row.billuNote || '')}`
+        }${(row.errors || []).map((error) => `<div class="upload-issue-line">${esc(error)}</div>`).join('')}</div>`;
+      })
+      .join('');
+  } catch {
+    host.innerHTML = '';
+  }
+}
+
+async function openBlockReportPdf(reportId) {
+  const id = String(reportId || '').trim();
+  if (!id) return;
+  if (previewBlockActive()) {
+    const bytes = new TextEncoder().encode('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n');
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const existing = document.getElementById('blockReportPdfModal');
+    if (existing) existing.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'blockReportPdfModal';
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal-panel timesheet-print timesheet-pdf-panel">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h2>${esc(t('block.openPdf'))}</h2>
+          <button type="button" class="btn" data-close-block-pdf>Close</button>
+        </div>
+        <iframe class="timesheet-pdf-frame" title="${esc(t('block.openPdf'))}" src="${url}" style="display:block;width:100%;min-height:70vh;border:0"></iframe>
+      </div>`;
+    document.body.appendChild(backdrop);
+    const close = () => {
+      URL.revokeObjectURL(url);
+      backdrop.remove();
+    };
+    backdrop.querySelector('[data-close-block-pdf]').onclick = close;
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) close();
+    });
+    return;
+  }
+  try {
+    setStatus('Opening therapist report PDF…', '');
+    const raw = await api('GET', `/block-reports/${encodeURIComponent(id)}/file`);
+    if (!(raw instanceof Blob)) throw new Error('Unable to open the therapist report PDF.');
+    const blob = raw.type ? raw : new Blob([await raw.arrayBuffer()], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const existing = document.getElementById('blockReportPdfModal');
+    if (existing) existing.remove();
+    const backdrop = document.createElement('div');
+    backdrop.id = 'blockReportPdfModal';
+    backdrop.className = 'modal-backdrop';
+    backdrop.innerHTML = `
+      <div class="modal-panel timesheet-print timesheet-pdf-panel">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h2>${esc(t('block.openPdf'))}</h2>
+          <div class="row">
+            <a class="btn" href="${url}" download="therapist-report.pdf">Download</a>
+            <button type="button" class="btn" data-close-block-pdf>Close</button>
+          </div>
+        </div>
+        <iframe class="timesheet-pdf-frame" title="${esc(t('block.openPdf'))}" src="${url}" style="display:block;width:100%;min-height:70vh;border:0"></iframe>
+      </div>`;
+    document.body.appendChild(backdrop);
+    const close = () => {
+      URL.revokeObjectURL(url);
+      backdrop.remove();
+    };
+    backdrop.querySelector('[data-close-block-pdf]').onclick = close;
+    backdrop.addEventListener('click', (e) => {
+      if (e.target === backdrop) close();
+    });
+    setStatus('', '');
+  } catch (e) {
+    setStatus(e.message || 'Unable to open the therapist report PDF.', 'error');
+  }
+}
+
+function blockReportsMarkup(reports) {
+  return `${reports.length ? '' : '<p class="muted">No reports.</p>'}
+      ${reports.map((row) => `
+        <article class="card" data-block-report="${esc(row.id)}">
+          <p><strong>${esc(row.providerName || row.therapistName || '')}</strong> · ${esc(row.status)}</p>
+          <p>${esc(row.childSummary || '')} ${esc(row.dateSummary || '')}</p>
+          ${row.pdfKey
+            ? `<p><button type="button" class="btn" data-block-pdf="${esc(row.id)}">${esc(t('block.openPdf'))}</button></p>`
+            : `<p class="muted">${esc(t('block.noPdf'))}</p>`}
+          <p><strong>${esc(t('block.therapistMessage'))}</strong></p>
+          <p>${esc(row.therapistMessage || '')}</p>
+          ${(row.errors || []).map((error) => `<div class="upload-issue-line">${esc(error)}</div>`).join('')}
+          <p><strong>${esc(t('block.explanation'))}</strong></p>
+          <p>${esc(row.aiExplanation || '')}</p>
+          ${row.billuNote ? `<p><strong>${esc(t('block.noteLabel'))}</strong> ${esc(row.billuNote)}</p>` : ''}
+          ${row.status === 'pending' ? `
+            <label>${esc(t('block.noteLabel'))}
+              <textarea data-billu-note rows="3"></textarea>
+            </label>
+            <div class="row">
+              <button type="button" class="btn-primary" data-block-allow="${esc(row.id)}">${esc(t('block.allow'))}</button>
+              <button type="button" class="btn" data-block-decline="${esc(row.id)}">${esc(t('block.decline'))}</button>
+            </div>` : ''}
+        </article>`).join('')}`;
+}
+
+function bindBlockReportActions(root, reload) {
+  root.querySelectorAll('[data-block-pdf]').forEach((btn) => {
+    btn.onclick = () => openBlockReportPdf(btn.getAttribute('data-block-pdf'));
+  });
+  root.querySelectorAll('[data-block-allow], [data-block-decline]').forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.getAttribute('data-block-allow') || btn.getAttribute('data-block-decline');
+      const note = btn.closest('article')?.querySelector('[data-billu-note]')?.value || '';
+      if (!String(note).trim()) {
+        setStatus(t('block.needNote'), 'error');
+        return;
+      }
+      if (previewBlockActive()) {
+        setStatus(t('block.allow'), 'ok');
+        return;
+      }
+      btn.disabled = true;
+      try {
+        await api('POST', `/block-reports/${id}/decision`, {
+          action: btn.hasAttribute('data-block-allow') ? 'allow' : 'decline',
+          note: String(note).trim(),
+        });
+        await reload();
+      } catch (err) {
+        setStatus(err?.message || t('common.error'), 'error');
+        btn.disabled = false;
+      }
+    };
+  });
+}
+
+/** Administrative Control: clickable list of AI error reports; click a row to view it. */
+async function fillBlockReportsHost(host, selectedId) {
+  try {
+    const out = await api('GET', '/block-reports');
+    const reports = out.reports || [];
+    let selected = String(selectedId || '');
+    if (!reports.length) {
+      host.innerHTML = '<p class="muted">No reports.</p>';
+      return;
+    }
+    const draw = () => {
+      const rowHtml = reports.map((row) => {
+        const on = String(row.id) === selected;
+        const style = [
+          'display:block', 'width:100%', 'text-align:left', 'margin:0 0 0.4rem', 'padding:0.6rem 0.8rem',
+          'border-radius:8px', 'cursor:pointer', 'font:inherit', 'color:inherit',
+          on ? 'border:2px solid #1f6feb;background:#eef4ff' : 'border:1px solid #c9d1d9;background:#fff',
+        ].join(';');
+        return `<button type="button" class="ai-override-row${on ? ' on' : ''}" role="option" aria-selected="${on ? 'true' : 'false'}" data-ai-row="${esc(row.id)}" style="${style}">
+          <strong>${esc(row.providerName || row.therapistName || '')}</strong> · ${esc(row.status)}<br>
+          <span class="muted">${esc(row.childSummary || '')} ${esc(row.dateSummary || '')}</span>
+        </button>`;
+      }).join('');
+      const picked = reports.find((r) => String(r.id) === selected);
+      host.innerHTML = `<div class="ai-override-list" role="listbox" aria-label="AI errors override">${rowHtml}</div>
+        <div id="aiOverrideDetail">${picked ? blockReportsMarkup([picked]) : '<p class="muted">Select an item above to view it.</p>'}</div>`;
+      host.querySelectorAll('[data-ai-row]').forEach((btn) => {
+        btn.onclick = () => {
+          const id = btn.getAttribute('data-ai-row') || '';
+          selected = selected === id ? '' : id;
+          draw();
+        };
+      });
+      const detail = host.querySelector('#aiOverrideDetail');
+      if (picked && detail) bindBlockReportActions(detail, () => fillBlockReportsHost(host, selected));
+    };
+    draw();
+  } catch (err) {
+    host.innerHTML = `<div class="err-box">${esc(err.message || t('common.error'))}</div>`;
+  }
+}
+
+async function adminBlockReports() {
+  if (!peekGet('/block-reports')) showWorking(t('block.reviewTitle'));
+  let reports = [];
+  try {
+    const out = await api('GET', '/block-reports');
+    reports = out.reports || [];
+  } catch (err) {
+    view(`<div class="card"><h2>${esc(t('block.reviewTitle'))}</h2><div class="err-box">${esc(err.message || t('common.error'))}</div></div>`);
+    return;
+  }
+  view(`
+    <div class="card">
+      <h2>${esc(t('block.reviewTitle'))}</h2>
+      <div id="blockReportsPage">${blockReportsMarkup(reports)}</div>
+    </div>`);
+  const page = document.getElementById('blockReportsPage');
+  if (page) bindBlockReportActions(page, () => adminBlockReports());
+}
 
 // ---- Luna support chatbot ----
 const lunaState = {
@@ -10591,6 +11842,7 @@ const lunaState = {
   messages: [],
   pendingSummary: '',
   readyForHandoff: false,
+  dispute: null,
 };
 
 function setLunaVisible(on) {
@@ -10642,9 +11894,48 @@ function renderLunaMessages(extraTyping) {
   const typing = extraTyping
     ? '<div class="luna-bubble luna-bot luna-typing">Luna is typing…</div>'
     : '';
-  box.innerHTML = rows + typing;
+  const choices =
+    !extraTyping && lunaState.dispute?.buttons
+      ? `<div class="row luna-choice"><button type="button" class="btn-primary" data-luna-choice="yes">${esc(t('luna.yes'))}</button><button type="button" class="btn" data-luna-choice="no">${esc(t('luna.no'))}</button></div>`
+      : '';
+  box.innerHTML = rows + choices + typing;
+  box.querySelectorAll('[data-luna-choice]').forEach((btn) => {
+    btn.onclick = () => lunaDisputeChoice(btn.getAttribute('data-luna-choice'));
+  });
   box.scrollTop = box.scrollHeight;
   syncLunaHandoffBar();
+}
+
+async function lunaDisputeChoice(choice) {
+  if (lunaState.busy || !lunaState.dispute || lunaState.dispute.stage === 'closed') return;
+  const picked = choice === 'yes' ? 'yes' : 'no';
+  lunaState.dispute.buttons = false;
+  lunaState.messages.push({ role: 'user', content: picked === 'yes' ? t('luna.yes') : t('luna.no') });
+  renderLunaMessages(true);
+  lunaState.busy = true;
+  const sendBtn = document.getElementById('lunaSend');
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    const out = await api(
+      'POST',
+      '/support/luna/dispute',
+      { errors: lunaState.dispute.errors, stage: lunaState.dispute.stage, choice: picked, userText: '' },
+      lunaApiOpts(),
+    );
+    const reply = lunaVisibleReply(out);
+    if (reply) lunaState.messages.push({ role: 'assistant', content: reply });
+    const next = String(out?.stage || '');
+    if (next === 'explained' || next === 'awaiting-part' || next === 'closed') lunaState.dispute.stage = next;
+    lunaState.dispute.buttons = Boolean(out?.buttons);
+    if (next === 'closed') lunaState.dispute = null;
+    renderLunaMessages(false);
+  } catch (e) {
+    setLunaStatus(e?.message || 'Luna is unavailable.');
+    renderLunaMessages(false);
+  } finally {
+    lunaState.busy = false;
+    if (sendBtn) sendBtn.disabled = false;
+  }
 }
 
 function lunaContactDefaults() {
@@ -10716,6 +12007,30 @@ async function lunaChat(userText) {
   if (sendBtn) sendBtn.disabled = true;
   syncLunaHandoffBar();
   try {
+    if (lunaState.dispute && lunaState.dispute.stage !== 'closed') {
+      const notes = await selectedNotesPdfForLuna();
+      const body = {
+        errors: lunaState.dispute.errors,
+        stage: lunaState.dispute.stage,
+        userText: text,
+      };
+      if (notes?.pdfBase64) {
+        body.pdfBase64 = notes.pdfBase64;
+        body.fileName = notes.fileName || '';
+      }
+      const out = await api('POST', '/support/luna/dispute', body, lunaApiOpts());
+      const reply = lunaVisibleReply(out) || 'Thanks — could you share a bit more detail?';
+      lunaState.messages.push({ role: 'assistant', content: reply });
+      const next = String(out?.stage || '');
+      if (next === 'explained' || next === 'awaiting-part' || next === 'closed') {
+        lunaState.dispute.stage = next;
+      }
+      lunaState.dispute.buttons = Boolean(out?.buttons);
+      if (next === 'closed') lunaState.dispute = null;
+      if (out?.pending) await loadMyBlockReports();
+      renderLunaMessages(false);
+      return;
+    }
     const out = await api(
       'POST',
       '/support/luna/chat',
@@ -10862,6 +12177,11 @@ async function showRole() {
     signOut(t('session.ended'));
     return;
   }
+  document.body.classList.remove('is-auth');
+  document.body.classList.add('is-app');
+  applyStaticI18n();
+  // Spinner first — before /me and the home screen — so login never looks stuck.
+  openingAccountView();
   if (COGNITO_MODE && state.idToken) {
     try {
       const me = await api('GET', '/me');
@@ -10873,9 +12193,6 @@ async function showRole() {
     }
   }
   const admin = state.role === 'admin';
-  document.body.classList.remove('is-auth');
-  document.body.classList.add('is-app');
-  applyStaticI18n();
   // Always show whoBar after login for both therapist and admin
   const whoBar = document.getElementById('whoBar');
   whoBar.hidden = false;
@@ -10903,9 +12220,6 @@ async function showRole() {
   }
   initLuna();
   setLunaVisible(true);
-  // Replace Sign in (or any prior) content before API calls so chrome never
-  // shows "signed in" while the login form is still stuck on Signing in…
-  openingAccountView();
   try {
     if (COGNITO_MODE && state.accessToken) {
       const blocked = await enforceMfaIfRequired();
@@ -10918,7 +12232,88 @@ async function showRole() {
   }
 }
 
-if (COGNITO_MODE) {
+function previewBlockActive() {
+  const host = location.hostname;
+  if (host !== 'localhost' && host !== '127.0.0.1') return false;
+  try {
+    return new URLSearchParams(location.search).get('previewBlock') === '1';
+  } catch {
+    return false;
+  }
+}
+
+function renderPreviewBlock() {
+  document.body.classList.remove('is-auth');
+  document.body.classList.add('is-app');
+  const who = document.getElementById('whoBar');
+  if (who) who.hidden = false;
+  applyStaticI18n();
+  initLuna();
+  setLunaVisible(true);
+  view(`
+    <div class="card">
+      <h2>Import session notes</h2>
+      <button type="button" class="btn big" id="readWithClaude">${esc(t('upload.readOtherAi'))}</button>
+      <div id="myBlockReports"></div>
+      <div id="uploadIssues" class="upload-issues"></div>
+    </div>
+    <div class="card" id="billuPreview">
+      <h2>${esc(t('block.reviewTitle'))}</h2>
+      <article class="card" data-block-report="preview">
+        <p><strong>Pat Lee</strong> · pending</p>
+        <p>Maya Lopez 9/1/2026</p>
+        <p><button type="button" class="btn" id="previewOpenPdf" data-block-pdf="preview">${esc(t('block.openPdf'))}</button></p>
+        <p><strong>${esc(t('block.therapistMessage'))}</strong> The district header is the school on file.</p>
+        <div class="upload-issue-line">Maya Lopez — 9/1/2026: School 'PS 1' does not match child's school 'PS 2'.</div>
+        <p><strong>${esc(t('block.explanation'))}</strong> Maya’s 9/1 row was blocked because the PDF school did not match the caseload. It would be valid if PS 1 were her school.</p>
+        <label>${esc(t('block.noteLabel'))}
+          <textarea id="previewBilluNote" rows="3"></textarea>
+        </label>
+        <button type="button" class="btn-primary" id="previewAllow">${esc(t('block.allow'))}</button>
+        <p id="previewAllowResult"></p>
+      </article>
+      <article class="card" data-block-report="preview-allowed">
+        <p><strong>Pat Lee</strong> · allowed</p>
+        <p><button type="button" class="btn" id="previewOpenPdfAllowed" data-block-pdf="preview-allowed">${esc(t('block.openPdf'))}</button></p>
+        <p><strong>${esc(t('block.noteLabel'))}</strong> The PDF district header is the child’s school.</p>
+      </article>
+    </div>`);
+  setUploadIssues(
+    ["Maya Lopez — 9/1/2026: School 'PS 1' does not match child's school 'PS 2'."],
+    [],
+    [],
+    { pdfBase64: 'JVBERi0xLjQKJSVERkYK', fileName: 'notes.pdf', providerId: 'preview' },
+  );
+  document.querySelectorAll('#billuPreview [data-block-pdf]').forEach((btn) => {
+    btn.onclick = () => openBlockReportPdf(btn.getAttribute('data-block-pdf'));
+  });
+  const allow = document.getElementById('previewAllow');
+  if (allow) {
+    allow.onclick = () => {
+      const note = String(document.getElementById('previewBilluNote')?.value || '').trim();
+      const result = document.getElementById('previewAllowResult');
+      if (!note) {
+        if (result) result.textContent = t('block.needNote');
+        return;
+      }
+      if (result) result.textContent = `${t('block.allow')}: ${note}`;
+    };
+  }
+}
+
+document.addEventListener('click', (event) => {
+  const ask = event.target.closest?.('[data-ask-luna]');
+  if (!ask) return;
+  const box = ask.closest('.err-box, .warn-box, #weekErrorsBox');
+  const lines = [...(box ? box.querySelectorAll('[data-block-line]') : [])]
+    .map((node) => node.textContent.trim())
+    .filter(Boolean);
+  askLunaAboutErrors(lines);
+});
+
+if (previewBlockActive()) {
+  renderPreviewBlock();
+} else if (COGNITO_MODE) {
   hideAppChrome();
   applyStaticI18n();
   bindFooterAdvancedSecurity();

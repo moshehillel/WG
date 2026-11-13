@@ -811,3 +811,75 @@ describe('hhaOverlapGroupMate', () => {
     ).toBeNull();
   });
 });
+
+describe('additional services are never group / individual / over-mandate (tickets vBmVuBAb / ExK0gOoG)', () => {
+  const groupOnly = [mandate({ id: 'mg', studentId: 'st1', ratioGroup: true, groupSize: 2 })];
+  const addl = (over: Partial<SessionRow> = {}) =>
+    sess({
+      id: 'addl1',
+      serviceType: 'Eval',
+      additionalServiceType: 'eval',
+      notes: 'Evaluation of the child',
+      ...over,
+    });
+
+  it('soloGroupMandateNoteError: a regular 1:1 visit of a group-mandate child is blocked, an additional service is not', () => {
+    const base = {
+      notes: 'Service Provided: gait',
+      studentId: 'st1',
+      attendance: 'attended',
+      mandates: groupOnly,
+    };
+    expect(soloGroupMandateNoteWarning({ ...base, serviceType: 'PT School 1:1' })).toMatch(/seen individually/i);
+    // The row-level exemption works even when a caller forgets to filter first.
+    expect(
+      soloGroupMandateNoteWarning({ ...base, serviceType: 'Eval', additionalServiceType: 'eval' }),
+    ).toBeNull();
+    expect(
+      soloGroupMandateNoteWarning({ ...base, serviceType: 'PT School 1:1', additionalServiceType: '' }),
+    ).toMatch(/seen individually/i);
+  });
+
+  it('overlap: an additional service is a plain time clash, never a group / individual message', () => {
+    const regularGroup = sess({ id: 'g1', studentId: 'st2', serviceType: 'PT School 2:1' });
+    const err = sessionOverlapError({
+      candidate: addl({ studentId: '' }),
+      peers: [regularGroup],
+      studentNameById: names,
+      mandates: groupOnly,
+    });
+    expect(err).toMatch(/overlaps the Eval/i);
+    expect(err).not.toMatch(/group|individual rate|mix/i);
+
+    // Group candidate against an additional peer: not "already paid at the individual rate".
+    const err2 = sessionOverlapError({
+      candidate: sess({ id: 'g2', studentId: 'st1', serviceType: 'PT School 2:1' }),
+      peers: [addl({ studentId: '' })],
+      studentNameById: names,
+      mandates: groupOnly,
+    });
+    expect(err2).toMatch(/overlaps the Eval/i);
+    expect(err2).not.toMatch(/individual rate/i);
+
+    // Adjacent times are still fine.
+    expect(
+      sessionOverlapError({
+        candidate: addl({ studentId: '', beginTime: '2:30 pm', endTime: '3:00 pm' }),
+        peers: [regularGroup],
+        studentNameById: names,
+        mandates: groupOnly,
+      }),
+    ).toBeNull();
+  });
+
+  it('an additional service never counts as a present group peer or fills a group cap', () => {
+    const regular = sess({ id: 'r1', studentId: 'st1', serviceType: 'PT School 2:1' });
+    const addlGroupish = addl({ studentId: 'st2', serviceType: 'Group Eval' });
+    expect(presentGroupPeerCount({ candidate: regular, peers: [addlGroupish], mandates: groupOnly })).toBe(0);
+    expect(presentGroupPeerCount({ candidate: addlGroupish, peers: [regular], mandates: groupOnly })).toBe(0);
+  });
+
+  it('pay: an additional service never uses a group rate', () => {
+    expect(sessionUsesGroupPayRate(addl({ serviceType: 'Group Eval' }), { presentGroupPeerCount: 3 })).toBe(false);
+  });
+});

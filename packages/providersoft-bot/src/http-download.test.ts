@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   applyDateFilterToBody,
   assertHttpCsvHasDataRows,
+  clearNonDateNarrowingFiltersOnBody,
   clientStateNameForDateInput,
   formatTelerikDateValue,
+  pickChooseOptionValue,
   pickDateInputNamesByLabel,
 } from './http-download.js';
 
@@ -106,5 +108,63 @@ describe('pickDateInputNamesByLabel', () => {
     const begin = pickDateInputNamesByLabel(html, 'Service Begin Date');
     expect(begin.from).toContain('32_1');
     expect(begin.to).toContain('32_2');
+  });
+});
+
+describe('clearNonDateNarrowingFiltersOnBody', () => {
+  const step3Html = `
+    <select name="ctl00$Content$dlREportColumns$ctl01$DLColumControl_0">
+      <option selected="selected" value="0">&lt; Choose &gt;</option>
+      <option value="2">OT</option>
+    </select>
+    <input name="ctl00$Content$dlREportColumns$ctl15$DLColumControl_14_1" type="text" value="EVANS" />
+    <input name="ctl00$Content$dlREportColumns$ctl15$DLColumControl_14_2" type="text" value="MYRLANDE" />
+    <input name="ctl00$Content$dlREportColumns$ctl28$DLColumControl_27_1$datePicker$dateInput" type="text" value="10/26/2026" />
+    <input name="__VIEWSTATE" type="hidden" value="keep-me" />
+  `;
+
+  it('picks the Choose option value for filter selects', () => {
+    expect(
+      pickChooseOptionValue(
+        step3Html,
+        'ctl00$Content$dlREportColumns$ctl01$DLColumControl_0',
+      ),
+    ).toBe('0');
+  });
+
+  it('clears Provider Name text but leaves date + ASP.NET fields alone', () => {
+    const body = new URLSearchParams();
+    body.set('ctl00$Content$dlREportColumns$ctl01$DLColumControl_0', '2');
+    body.set('ctl00$Content$dlREportColumns$ctl15$DLColumControl_14_1', 'EVANS');
+    body.set('ctl00$Content$dlREportColumns$ctl15$DLColumControl_14_2', 'MYRLANDE');
+    body.set(
+      'ctl00$Content$dlREportColumns$ctl28$DLColumControl_27_1$datePicker$dateInput',
+      '10/26/2026',
+    );
+    body.set('__VIEWSTATE', 'keep-me');
+
+    const cleared = clearNonDateNarrowingFiltersOnBody(body, step3Html);
+    expect(cleared).toEqual(
+      expect.arrayContaining([
+        'ctl00$Content$dlREportColumns$ctl01$DLColumControl_0',
+        'ctl00$Content$dlREportColumns$ctl15$DLColumControl_14_1',
+        'ctl00$Content$dlREportColumns$ctl15$DLColumControl_14_2',
+      ]),
+    );
+    expect(body.get('ctl00$Content$dlREportColumns$ctl01$DLColumControl_0')).toBe(
+      '0',
+    );
+    expect(body.get('ctl00$Content$dlREportColumns$ctl15$DLColumControl_14_1')).toBe(
+      '',
+    );
+    expect(body.get('ctl00$Content$dlREportColumns$ctl15$DLColumControl_14_2')).toBe(
+      '',
+    );
+    expect(
+      body.get(
+        'ctl00$Content$dlREportColumns$ctl28$DLColumControl_27_1$datePicker$dateInput',
+      ),
+    ).toBe('10/26/2026');
+    expect(body.get('__VIEWSTATE')).toBe('keep-me');
   });
 });

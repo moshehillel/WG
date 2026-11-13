@@ -87,4 +87,22 @@ describe('session age lock', () => {
       appSettingsFromStore([{ id: 'global', requireMfa: false } as never]).requireMfa,
     ).toBe(false);
   });
+
+  it('import lockers default OFF and only a stored true turns them on', () => {
+    const d = appSettingsFromStore(undefined);
+    expect(d.allowImportWithHardBlocks).toBe(false);
+    expect(d.allowShortSessionVsMandate).toBe(false);
+    const legacy = appSettingsFromStore([{ id: 'global', requireMfa: true } as never]);
+    expect(legacy.allowImportWithHardBlocks).toBe(false);
+    expect(legacy.allowShortSessionVsMandate).toBe(false);
+    const on = appSettingsFromStore([
+      { id: 'global', allowImportWithHardBlocks: true, allowShortSessionVsMandate: true } as never,
+    ]);
+    expect(on.allowImportWithHardBlocks).toBe(true);
+    expect(on.allowShortSessionVsMandate).toBe(true);
+    expect(
+      appSettingsFromStore([{ id: 'global', allowShortSessionVsMandate: 'true' } as never])
+        .allowShortSessionVsMandate,
+    ).toBe(false);
+  });
 });

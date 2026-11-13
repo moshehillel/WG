@@ -304,8 +304,10 @@ export class HhaSoapClient {
     return this.call('GetCallDashBoardData', `<SearchFilters>\n  ${parts.join('\n  ')}\n</SearchFilters>`);
   }
 
-  getCaregiverPayCodes(): Promise<SoapCallResult> {
-    return this.call('GetCaregiverPayCodes', '');
+  getCaregiverPayCodes(caregiverId?: string): Promise<SoapCallResult> {
+    const id = caregiverId?.trim();
+    const inner = id ? `<CaregiverID>${escapeXml(id)}</CaregiverID>` : '';
+    return this.call('GetCaregiverPayCodes', inner);
   }
 
   getPayRateCodes(): Promise<SoapCallResult> {

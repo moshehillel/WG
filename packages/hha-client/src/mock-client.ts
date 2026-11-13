@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { HhaClockingDetails, HhaPatient, HhaVisit } from '@white-glove/shared';
-import { lookupContractId, lookupServiceCode, lookupServiceCodeAlias } from '@white-glove/shared';
+import {
+  applyCoordinatorWrite,
+  assertTherapyAssignment,
+  lookupContractId,
+  lookupServiceCode,
+  lookupServiceCodeAlias,
+  type TherapyAssignmentIds,
+} from '@white-glove/shared';
 import { stripLeadingZerosFromNumericId } from './create-patient-builder.js';
 import { isEvvPlaceholderSchedule } from './hha-time.js';
 import { findReusableContractPlacement } from './placements.js';
@@ -42,6 +49,7 @@ export class MockHhaClient implements HhaClient {
   /** PatientIDs that CreateSchedule rejects with ErrorID=-56 (stale / wrong agency). */
   readonly invalidPatientIds = new Set<string>();
   readonly calls: string[] = [];
+  readonly patientAssignments: Array<TherapyAssignmentIds & { patientId: string }> = [];
   /** 1:00–1:30 AM scaffolding visits. removeEvvPlaceholderVisits drops matches. */
   placeholderVisits: Array<{
     id: string;
@@ -149,8 +157,34 @@ export class MockHhaClient implements HhaClient {
   async ensureAcceptedServices(
     patientId: string,
     disciplines: string[],
+    assignment?: TherapyAssignmentIds,
   ): Promise<import('./types.js').EnsureAcceptedServicesResult> {
     this.calls.push('ensureAcceptedServices');
+    if (assignment) {
+      assertTherapyAssignment(assignment);
+      const patient = [...this.patients.values()].find((p) => p.id === patientId);
+      const applied = applyCoordinatorWrite(assignment, {
+        coordinatorId1: patient?.coordinatorId,
+        coordinatorId2: patient?.coordinatorId2,
+      });
+      this.patientAssignments.push({
+        patientId,
+        teamId: assignment.teamId,
+        coordinatorId: applied.coordinatorId,
+        ...(applied.coordinatorId2 ? { coordinatorId2: applied.coordinatorId2 } : {}),
+      });
+      if (patient) {
+        patient.coordinatorId = applied.coordinatorId;
+        if (applied.coordinatorId2) {
+          patient.coordinatorId2 = applied.coordinatorId2;
+        } else if (
+          applied.clearCoordinator2 ||
+          patient.coordinatorId2 === applied.coordinatorId
+        ) {
+          delete patient.coordinatorId2;
+        }
+      }
+    }
     const before = this.acceptedServicesByPatient.get(patientId) ?? [];
     const seen = new Set(before.map((d) => d.toUpperCase()));
     const added = disciplines
@@ -170,7 +204,15 @@ export class MockHhaClient implements HhaClient {
       `${patient.lastName}|${patient.firstName}|${patient.dateOfBirth ?? ''}`;
     const existing = this.patients.get(key);
     if (existing) {
-      this.patients.set(key, { ...existing, ...patient });
+      const rest = { ...patient };
+      delete rest.coordinatorId;
+      delete rest.coordinatorId2;
+      this.patients.set(key, {
+        ...existing,
+        ...rest,
+        coordinatorId: existing.coordinatorId,
+        coordinatorId2: existing.coordinatorId2,
+      });
       return { id: existing.id, created: false };
     }
     const id = randomUUID();
@@ -240,7 +282,25 @@ export class MockHhaClient implements HhaClient {
     auth: Parameters<HhaClient['upsertAuthorization']>[0],
   ): Promise<UpsertResult> {
     this.calls.push('upsertAuthorization');
-    const key = auth.authorizationNumber ?? `${auth.patientId}:${auth.serviceCode ?? ''}`;
+    const number = (auth.authorizationNumber ?? '').trim().toLowerCase();
+    const statusTokens = new Set([
+      'approved',
+      'pending',
+      'denied',
+      'rejected',
+      'active',
+      'inactive',
+      'expired',
+      'cancelled',
+      'canceled',
+      'suspended',
+      'draft',
+      '',
+    ]);
+    // Unique numbers reuse by number; status tokens require same patient+dates.
+    const key = statusTokens.has(number)
+      ? `${auth.patientId}:${auth.contractId ?? ''}:${auth.startDate ?? ''}:${auth.endDate ?? ''}:${auth.serviceCodeId ?? auth.serviceCode ?? ''}`
+      : auth.authorizationNumber ?? `${auth.patientId}:${auth.serviceCode ?? ''}`;
     const existing = this.authorizations.get(key);
     if (existing) return { id: existing.id, created: false };
     const result = { id: randomUUID(), created: true };
@@ -310,6 +370,26 @@ export class MockHhaClient implements HhaClient {
   async listPayRateCodes(): Promise<Array<{ id: string; name: string }>> {
     this.calls.push('listPayRateCodes');
     return [...this.payCodes.entries()].map(([name, id]) => ({ id, name }));
+  }
+
+  /** Optional per-caregiver pay codes for blank-rate EVV placeholder resolution. */
+  readonly caregiverPayCodes = new Map<string, Array<{ id: string; name: string }>>();
+
+  async listCaregiverPayCodes(caregiverId: string): Promise<Array<{ id: string; name: string }>> {
+    this.calls.push('listCaregiverPayCodes');
+    return this.caregiverPayCodes.get(String(caregiverId).trim()) ?? [];
+  }
+
+  /** Optional recent-visit pay codes for blank-rate EVV resolution tests. */
+  readonly recentCaregiverPayCodes = new Map<string, { id: string; name: string }>();
+
+  async findRecentCaregiverDisciplinePayCode(
+    caregiverId: string,
+    _discipline: string,
+    _options?: { preferEval?: boolean },
+  ): Promise<{ id: string; name: string } | undefined> {
+    this.calls.push('findRecentCaregiverDisciplinePayCode');
+    return this.recentCaregiverPayCodes.get(String(caregiverId).trim());
   }
 
   async resolveContractId(programType: string | undefined): Promise<number | undefined> {

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { pickFirstPayCodeForDiscipline } from '@white-glove/shared';
 import { resolvePayCodeIdFromCatalog, resolveHhaPayCodeName, payCodeLookupCandidates } from './pay-code-resolve.js';
 
 const SAMPLE_ROWS = [

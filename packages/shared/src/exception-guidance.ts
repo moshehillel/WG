@@ -561,6 +561,25 @@ export function explainException(ex: PipelineException): ExplainedException {
   const missingFields = missingFieldLabels(ex.details);
   const step = typeof ex.details?.step === 'string' ? ex.details.step : undefined;
 
+  if (/pay rate is blank/i.test(ex.message)) {
+    const evvVisitBlocked = /EVV visit not created/i.test(ex.message);
+    return {
+      title: 'Pay rate is blank',
+      problem: evvVisitBlocked
+        ? 'Pay rate is blank — EVV visit not created'
+        : 'Pay rate is blank',
+      impact: evvVisitBlocked
+        ? 'Patient/auth may have been written, but no EVV placeholder visit was scheduled — the aide cannot clock.'
+        : 'No HHA visit was written.',
+      action: evvVisitBlocked
+        ? 'Fill Pay Rate on the ProviderSoft new-services row (or assign the caregiver an HHA discipline pay code) and re-run so CreateSchedule can run.'
+        : 'Fill Pay Rate on the ProviderSoft row and re-run.',
+      rowRef,
+      reportLabel: report,
+      isPreview,
+    };
+  }
+
   switch (ex.code) {
     case 'unknown_service_code': {
       const sc = serviceCodeFieldsFromException(ex);

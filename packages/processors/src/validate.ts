@@ -12,7 +12,6 @@ import {
   buildPipelineResultCsvRows,
   failuresCsvKey,
   formatPipelineAlertBody,
-  formatPipelineAlertHtml,
   formatResultsHtml,
   getEnv,
   parseResultKey,
@@ -267,11 +266,6 @@ export async function validateAndNotify(options: {
       }
       const alertBody = formatPipelineAlertBody(alertOptions);
       const env = getEnv();
-      const htmlBody = formatPipelineAlertHtml({
-        ...alertOptions,
-        logoUrl: process.env.ALERT_LOGO_URL ?? env.ALERT_LOGO_URL,
-        hasCsvAttachments: csvAttachments.length > 0,
-      });
       const subject = buildAlertSubject({
         runId: options.runId,
         ok: result.ok,
@@ -309,7 +303,6 @@ export async function validateAndNotify(options: {
         alertEmails,
         subject,
         textBody: alertBody,
-        htmlBody,
         attachments: csvAttachments,
       });
 

@@ -9,6 +9,15 @@ import {
   resolveDischargeToId,
   extractDisciplineFromServiceType,
   DEFAULT_DISCHARGE_REASON_LABEL,
+  applyCoordinatorWrite,
+  assertTherapyAssignment,
+  formatHhaTeamRef,
+  MANAGER_WENDY_TEAM_ID,
+  THERAPY_TEAM_ID,
+  therapyCoordinator2VerifyMismatchMessage,
+  therapyCoordinatorVerifyMismatchMessage,
+  therapyTeamVerifyMismatchMessage,
+  type TherapyAssignmentIds,
 } from '@white-glove/shared';
 import {
   lookupContractId,
@@ -58,6 +67,7 @@ import {
   type PlaceholderRemovalCache,
 } from './evv-placeholder.js';
 import {
+  assertCreatePatientBranchAllowed,
   buildCreatePatientBody,
   canCreatePatient,
   createPatientDefaultsFromEnv,
@@ -78,6 +88,10 @@ import {
   resolvePayCodeIdFromCatalog,
   type PayCodeRow,
 } from './pay-code-resolve.js';
+import {
+  findMatchingAuthorizationId,
+  parsePatientAuthorizationBlocks,
+} from './authorization-match.js';
 import {
   activePlacements,
   backdatePlacementStart,
@@ -373,9 +387,11 @@ export class SoapHhaClientAdapter implements HhaClient {
   async ensureAcceptedServices(
     patientId: string,
     disciplines: string[],
+    assignment?: TherapyAssignmentIds,
   ): Promise<EnsureAcceptedServicesResult> {
     const wanted = disciplines.map((d) => d.trim()).filter(Boolean);
-    if (!wanted.length) {
+    if (assignment) assertTherapyAssignment(assignment);
+    if (!wanted.length && !assignment) {
       return { updated: false, before: [], after: [], added: [] };
     }
 
@@ -390,22 +406,58 @@ export class SoapHhaClientAdapter implements HhaClient {
     assertOk(addrRes, 'GetPatientAddress');
 
     const defaults = this.createPatientDefaults;
+    // Therapy assignment writes Therapy Team 10022046. Manager Wendy (2036) is
+    // never re-sent — even when the chart already shows Wendy.
     const echo = parseDemoEchoFromXml(pid, demoRes.bodyXml, addrRes.bodyXml, {
       mobilityStatusId: String(defaults.mobilityStatusId),
       evacuationZoneId: String(defaults.evacuationZoneId),
       sourceOfAdmission: String(defaults.sourceOfAdmission),
-      teamId: String(defaults.teamId),
-      branchId: String(defaults.branchId),
+      ...(defaults.branchId > 0 ? { branchId: String(defaults.branchId) } : {}),
       locationId: String(defaults.locationId),
     });
-    if (!echo.coordinatorId1) {
+    if (!echo.coordinatorId1 && !assignment) {
       throw new Error(
         `Refusing UpdatePatientDemographics for patient ${patientId}: the chart has no Coordinator ID. No coordinator is configured.`,
       );
     }
 
     const { merged, missing } = mergeAcceptedServices(echo.acceptedServices, wanted);
-    if (!missing.length) {
+    const write = assignment
+      ? applyCoordinatorWrite(assignment, {
+          coordinatorId1: echo.coordinatorId1,
+          coordinatorId2: echo.coordinatorId2,
+        })
+      : undefined;
+    const coordinatorId = write ? String(write.coordinatorId) : echo.coordinatorId1;
+    let coordinatorId2 = echo.coordinatorId2;
+    if (write?.coordinatorId2) {
+      coordinatorId2 = String(write.coordinatorId2);
+    } else if (write?.clearCoordinator2) {
+      coordinatorId2 = undefined;
+    }
+    if (coordinatorId2 && Number(coordinatorId2) === Number(coordinatorId)) {
+      coordinatorId2 = undefined;
+    }
+    let teamId = echo.teamId;
+    let requireTherapyTeamVerify = false;
+    if (assignment) {
+      teamId = String(assignment.teamId);
+      requireTherapyTeamVerify = true;
+    } else if (Number(teamId) === MANAGER_WENDY_TEAM_ID) {
+      teamId = String(THERAPY_TEAM_ID);
+      requireTherapyTeamVerify = true;
+    }
+    if (Number(teamId) === MANAGER_WENDY_TEAM_ID) {
+      throw new Error(
+        `Refusing UpdatePatientDemographics for patient ${patientId}: TeamID ${formatHhaTeamRef(MANAGER_WENDY_TEAM_ID)} is never allowed.`,
+      );
+    }
+    const coordinatorChanged =
+      Boolean(write) &&
+      ((echo.coordinatorId1 ?? '') !== (coordinatorId ?? '') ||
+        (echo.coordinatorId2 ?? '') !== (coordinatorId2 ?? ''));
+    const teamChanged = (echo.teamId ?? '') !== (teamId ?? '');
+    if (!missing.length && !coordinatorChanged && !teamChanged) {
       return {
         updated: false,
         before: echo.acceptedServices,
@@ -417,6 +469,9 @@ export class SoapHhaClientAdapter implements HhaClient {
     const body = buildUpdateAcceptedServicesBody({
       ...echo,
       acceptedServices: merged,
+      coordinatorId1: coordinatorId,
+      coordinatorId2,
+      teamId,
     });
     const upd = await this.soap.updatePatientDemographics(body);
     assertOk(upd, 'UpdatePatientDemographics(AcceptedServices)');
@@ -427,8 +482,7 @@ export class SoapHhaClientAdapter implements HhaClient {
       mobilityStatusId: String(defaults.mobilityStatusId),
       evacuationZoneId: String(defaults.evacuationZoneId),
       sourceOfAdmission: String(defaults.sourceOfAdmission),
-      teamId: String(defaults.teamId),
-      branchId: String(defaults.branchId),
+      ...(defaults.branchId > 0 ? { branchId: String(defaults.branchId) } : {}),
       locationId: String(defaults.locationId),
     });
 
@@ -438,6 +492,30 @@ export class SoapHhaClientAdapter implements HhaClient {
       throw new Error(
         `UpdatePatientDemographics reported success but AcceptedServices still missing [${stillMissing.join(', ')}] ` +
           `(have [${afterEcho.acceptedServices.join(', ')}])`,
+      );
+    }
+    if (requireTherapyTeamVerify) {
+      const expectedTeam = assignment?.teamId ?? THERAPY_TEAM_ID;
+      if ((afterEcho.teamId ?? '') !== String(expectedTeam)) {
+        throw new Error(therapyTeamVerifyMismatchMessage(afterEcho.teamId, expectedTeam));
+      }
+    }
+    if (Number(afterEcho.teamId) === MANAGER_WENDY_TEAM_ID) {
+      throw new Error(
+        `UpdatePatientDemographics reported success but TeamID is still ${formatHhaTeamRef(MANAGER_WENDY_TEAM_ID)}.`,
+      );
+    }
+    if (write && (afterEcho.coordinatorId1 ?? '') !== String(write.coordinatorId)) {
+      throw new Error(
+        therapyCoordinatorVerifyMismatchMessage(afterEcho.coordinatorId1, write.coordinatorId),
+      );
+    }
+    if (
+      write?.coordinatorId2 != null &&
+      (afterEcho.coordinatorId2 ?? '') !== String(write.coordinatorId2)
+    ) {
+      throw new Error(
+        therapyCoordinator2VerifyMismatchMessage(afterEcho.coordinatorId2, write.coordinatorId2),
       );
     }
 
@@ -508,6 +586,12 @@ export class SoapHhaClientAdapter implements HhaClient {
     }
 
     const refs = await this.resolveCreatePatientRefs();
+    assertCreatePatientBranchAllowed(refs.branchId);
+    if (Number(refs.teamId) === MANAGER_WENDY_TEAM_ID) {
+      throw new Error(
+        `CreatePatient refused: TeamID ${formatHhaTeamRef(MANAGER_WENDY_TEAM_ID)} is never allowed.`,
+      );
+    }
     const body = buildCreatePatientBody(patient, this.createPatientDefaults, refs);
     const result = await this.soap.createPatient(body);
     assertOk(result, 'CreatePatient');
@@ -748,15 +832,6 @@ export class SoapHhaClientAdapter implements HhaClient {
     if (!disciplineId) {
       throw new Error('CreatePatientAuthorization requires DisciplineID from service type');
     }
-    // Prefer an existing auth with the same Authorization Number (idempotent re-push).
-    const existingByNumber = await this.findAuthorizationByNumber(
-      auth.patientId,
-      auth.authorizationNumber!,
-      contractId,
-    );
-    if (existingByNumber) {
-      return { id: existingByNumber, created: false };
-    }
     let period = auth.period?.trim();
     let maximum = auth.maximum;
     if (!period || maximum === undefined) {
@@ -766,6 +841,19 @@ export class SoapHhaClientAdapter implements HhaClient {
     }
     const fromDate = psDateToIso(auth.startDate) ?? auth.startDate ?? '';
     const toDate = psDateToIso(auth.endDate) ?? auth.endDate ?? '';
+    // Prefer an existing auth only when the Authorization Number is a real unique id,
+    // or (for status tokens like "approved") when contract + From/To match this period.
+    const existingMatch = await this.findReusableAuthorization({
+      patientId: auth.patientId,
+      authorizationNumber: auth.authorizationNumber!,
+      contractId,
+      serviceCodeId,
+      fromDate,
+      toDate,
+    });
+    if (existingMatch) {
+      return { id: existingMatch, created: false };
+    }
     // WSDL: MaxHoursPeriod for Entire Period; HoursPerAuthPeriod only for Daily/Weekly/Monthly.
     // Sending Maximum is accepted but stores 0 units → prebilling "No Authorization".
     const maxNum = Number(maximum);
@@ -806,12 +894,15 @@ export class SoapHhaClientAdapter implements HhaClient {
     }
     if (!result.ok) {
       if (String(result.errorId) === '-78') {
-        // Only treat as already-exists when the SAME Authorization Number is present.
-        const existingId = await this.findAuthorizationByNumber(
-          auth.patientId,
-          auth.authorizationNumber!,
+        // Already-exists: reuse only a true match (unique number or same period).
+        const existingId = await this.findReusableAuthorization({
+          patientId: auth.patientId,
+          authorizationNumber: auth.authorizationNumber!,
           contractId,
-        );
+          serviceCodeId,
+          fromDate,
+          toDate,
+        });
         if (existingId) {
           return { id: existingId, created: false };
         }
@@ -1086,7 +1177,14 @@ export class SoapHhaClientAdapter implements HhaClient {
     const inRun = this.payCodeResolvedCache.get(key);
     if (inRun) return inRun;
 
-    const resolved = resolvePayCodeIdFromCatalog(key, await this.loadPayRateCodeRows());
+    const hadCatalog = Boolean(this.payRateCodeRows);
+    let resolved = resolvePayCodeIdFromCatalog(key, await this.loadPayRateCodeRows());
+    if (!resolved && hadCatalog) {
+      // Catalog was cached from earlier in this process; HHA may have added the
+      // code since (e.g. new OT $44). Reload once before giving up.
+      this.payRateCodeRows = undefined;
+      resolved = resolvePayCodeIdFromCatalog(key, await this.loadPayRateCodeRows());
+    }
     if (!resolved) return undefined;
 
     const hhaName = resolveHhaPayCodeName(key, this.payRateCodeRows ?? []);
@@ -1386,41 +1484,100 @@ export class SoapHhaClientAdapter implements HhaClient {
     return undefined;
   }
 
-  /** Match SearchPatientAuthorizations by AuthorizationNumber (optional contract filter). */
-  private async findAuthorizationByNumber(
-    patientId: string,
-    authorizationNumber: string,
-    contractId?: string,
-  ): Promise<string | undefined> {
-    const want = authorizationNumber.trim().toLowerCase();
-    if (!want) return undefined;
+  /**
+   * Reuse an existing auth only for a true match:
+   * unique AuthorizationNumber, or status-token number with same contract/service/From–To.
+   */
+  private async findReusableAuthorization(options: {
+    patientId: string;
+    authorizationNumber: string;
+    contractId?: string;
+    serviceCodeId?: string;
+    fromDate?: string;
+    toDate?: string;
+  }): Promise<string | undefined> {
     const result = await this.soap.call(
       'SearchPatientAuthorizations',
-      `<SearchFilters><PatientID>${escape(patientId)}</PatientID></SearchFilters>`,
+      `<SearchFilters><PatientID>${escape(options.patientId)}</PatientID></SearchFilters>`,
     );
     if (!result.ok || !result.bodyXml) return undefined;
-    const blocks = [
-      ...(result.bodyXml.match(/<Authorization>[\s\S]*?<\/Authorization>/gi) ?? []),
-      ...(result.bodyXml.match(/<AuthorizationInfo>[\s\S]*?<\/AuthorizationInfo>/gi) ?? []),
-    ];
-    for (const block of blocks) {
-      const number = (
-        xmlFirstTag(block, 'AuthorizationNumber') ??
-        xmlFirstTag(block, 'AuthNumber') ??
-        ''
-      )
-        .trim()
-        .toLowerCase();
-      if (number !== want) continue;
-      if (contractId) {
-        const blockContract =
-          xmlFirstTag(block, 'ContractID') ?? block.match(/<Contract>\s*<ID>(\d+)/i)?.[1];
-        if (blockContract && String(blockContract) !== String(contractId)) continue;
-      }
-      const authId = xmlFirstTag(block, 'AuthorizationID') ?? xmlFirstTag(block, 'ID');
-      if (authId) return authId;
+    return findMatchingAuthorizationId(parsePatientAuthorizationBlocks(result.bodyXml), {
+      authorizationNumber: options.authorizationNumber,
+      contractId: options.contractId,
+      serviceCodeId: options.serviceCodeId,
+      fromDate: options.fromDate,
+      toDate: options.toDate,
+    });
+  }
+
+  /** Caregiver-assigned pay codes (GetCaregiverPayCodes with CaregiverID). */
+  async listCaregiverPayCodes(caregiverId: string): Promise<PayCodeRow[]> {
+    const id = caregiverId.trim();
+    if (!id) return [];
+    let result = await this.soap.getCaregiverPayCodes(id);
+    if (!result.ok && this.reasonLookup) {
+      result = await this.reasonLookup.getCaregiverPayCodes(id);
     }
-    return undefined;
+    if (!result.ok || !result.bodyXml) return [];
+    return parsePayCodesFromXml(result.bodyXml);
+  }
+
+  /**
+   * Walk recent SearchVisits for this caregiver and return the newest PayCodeID
+   * whose name matches the discipline (and Eval when requested). Skips PL.
+   */
+  async findRecentCaregiverDisciplinePayCode(
+    caregiverId: string,
+    discipline: string,
+    options?: { preferEval?: boolean },
+  ): Promise<PayCodeRow | undefined> {
+    const id = caregiverId.trim();
+    const disc = discipline.trim().toUpperCase();
+    if (!id || !disc) return undefined;
+    const stDisc = disc === 'SLP' ? 'ST' : disc;
+    const discs = new Set([disc, stDisc]);
+    const preferEval = options?.preferEval === true;
+    // HHA SearchVisits is picky about long ranges — walk ~8 weeks in 14-day chunks.
+    const end = new Date();
+    const visitIds: string[] = [];
+    for (let week = 0; week < 4 && visitIds.length < 20; week++) {
+      const chunkEnd = new Date(end.getTime() - week * 14 * 24 * 60 * 60 * 1000);
+      const chunkStart = new Date(chunkEnd.getTime() - 14 * 24 * 60 * 60 * 1000);
+      const found = await this.soap.searchVisits({
+        caregiverId: Number(id),
+        startDate: chunkStart.toISOString().slice(0, 10),
+        endDate: chunkEnd.toISOString().slice(0, 10),
+      });
+      if (!found.ok || !found.bodyXml) continue;
+      for (const vid of xmlIds(found.bodyXml, 'VisitID').map(String)) {
+        if (!visitIds.includes(vid)) visitIds.push(vid);
+      }
+    }
+    // Newest first (later chunks are older; reverse within each would be ideal — reverse all).
+    visitIds.reverse();
+    let fallback: PayCodeRow | undefined;
+    for (const vid of visitIds.slice(0, 25)) {
+      const info = await this.soap.getVisitInfoV2(Number(vid));
+      if (!info.ok || !info.bodyXml) continue;
+      const payCodeId =
+        xmlFirstTag(info.bodyXml, 'PayCodeID') ??
+        xmlFirstTag(info.bodyXml, 'PayRateCodeID') ??
+        info.bodyXml.match(/<PayCode>\s*<ID>(\d+)/i)?.[1];
+      const payCodeName =
+        xmlFirstTag(info.bodyXml, 'PayCodeName') ??
+        xmlFirstTag(info.bodyXml, 'PayRateCodeName') ??
+        info.bodyXml.match(/<PayCode>\s*<ID>\d+<\/ID>\s*<Name>([^<]*)/i)?.[1] ??
+        '';
+      if (!payCodeId || !payCodeName.trim()) continue;
+      const name = payCodeName.trim();
+      if (/\bPL\b/i.test(name)) continue;
+      const m = name.toUpperCase().match(/^(?:AM\s+)?([A-Z]{2,4})\b/);
+      if (!m || !discs.has(m[1]!)) continue;
+      const row = { id: payCodeId, name };
+      if (preferEval && /\beval\b/i.test(name)) return row;
+      if (!fallback) fallback = row;
+    }
+    return fallback;
   }
 
   private async loadPayRateCodeRows(): Promise<PayCodeRow[]> {

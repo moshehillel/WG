@@ -169,7 +169,7 @@ export function dailyLookbackDays(env: NodeJS.ProcessEnv = process.env): number 
 }
 
 /**
- * API Report Verified Date lookback ending today (TO-anchored).
+ * API Report Verified Date lookback days (TO-anchored; Mon/Tue share Monday as TO).
  * Default 14 days so mid-week fixes still fall inside next Tuesday's download.
  */
 export function verifiedSessionLookbackDays(env: NodeJS.ProcessEnv = process.env): number {
@@ -190,7 +190,7 @@ export function newServiceLookbackDays(env: NodeJS.ProcessEnv = process.env): nu
 
 /**
  * Legacy API Report Verified Date window: Tuesday through Monday (7 calendar days).
- * Prefer TO-anchored lookback via defaultDateRange (catches mid-week re-verifies / fixes).
+ * Kept for tests / callers; production uses verifiedSessionsSharedLookbackRange.
  *
  * Week starts Tuesday in Eastern business-day terms:
  * - if businessDay is Sun or Mon → go back to the previous Tuesday
@@ -214,6 +214,22 @@ export function verifiedSessionsTueMonRange(businessDay: Date): { from: Date; to
 }
 
 /**
+ * API Report Verified Date window for Monday dry + Tuesday live (and mid-week runs).
+ * TO-anchored lookback (default 14 days), with the Mon/Tue pair sharing one window:
+ * on Tuesday, pin TO to Monday so live matches Monday dry-run preview
+ * (same intent as verifiedSessionsTueMonRange's Tuesday special case).
+ */
+export function verifiedSessionsSharedLookbackRange(
+  businessDay: Date,
+  lookbackDays: number,
+): { from: Date; to: Date } {
+  const dow = businessDay.getDay(); // Sun=0 … Sat=6
+  const to = dow === 2 ? addCalendarDays(businessDay, -1) : businessDay;
+  const from = addCalendarDays(to, -lookbackDays);
+  return { from, to };
+}
+
+/**
  * If a codegen selector points at the calendar popup button, map to the text input.
  * Prefer filling `..._datePicker_dateInput` over clicking popupButton + day cells.
  */
@@ -227,8 +243,8 @@ export function preferDateInputSelector(selector: string): string {
  * Computed date windows (never hardcode calendar days) — used for both live and sandbox downloads:
  * - Gluck open / closure / discharge: Eastern calendar day minus lookback (default same day)
  * - new_services: Service Begin Date from today−14 through today (default 14-day lookback)
- * - API Report (verified_sessions): Verified Date from (today − lookback) through today (TO-anchored;
- *   default 14 days so mid-week fixes / re-verifies still appear on next Tuesday)
+ * - API Report (verified_sessions): Verified Date TO-anchored lookback (default 14 days);
+ *   Monday dry and Tuesday live share the Monday-closed window so preview matches live
  */
 export function defaultDateRange(
   kind: BotReportKind,
@@ -241,10 +257,10 @@ export function defaultDateRange(
   const businessDay = addCalendarDays(calendarDate(year, month, day), -lookback);
 
   if (kind === 'verified_sessions') {
-    // Anchor on Verified Date TO (= business day). FROM is lookback — not Session Date.
+    // Verified Date lookback — not Session Date. Mon dry + Tue live share TO=Monday.
     const sessionLookback = verifiedSessionLookbackDays(env);
-    const from = addCalendarDays(businessDay, -sessionLookback);
-    return { from: formatPsDate(from), to: formatPsDate(businessDay) };
+    const { from, to } = verifiedSessionsSharedLookbackRange(businessDay, sessionLookback);
+    return { from: formatPsDate(from), to: formatPsDate(to) };
   }
 
   if (kind === 'new_services') {

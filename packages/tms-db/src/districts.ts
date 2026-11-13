@@ -235,3 +235,35 @@ export function findDistrictDirectoryRow(
   const wantName = (derivedKey || decoded).toLowerCase();
   return directory.find((d) => d.name.toLowerCase() === wantName);
 }
+
+/**
+ * Building names in the child's district for upload school matching.
+ * Uses persisted school.district plus the district directory (which also
+ * links buildings via student.programType when school.district is blank).
+ * Does not fuzzy-match on town substrings in the school name alone.
+ */
+export function sameDistrictSchoolNames(
+  store: MemoryStore,
+  known: { name?: string; district?: string } | null | undefined,
+  programType?: string | null,
+): string[] {
+  const labels = [
+    String(known?.district || '').trim(),
+    String(programType || '').trim(),
+  ].filter(Boolean);
+  const names = new Set<string>();
+  for (const label of labels) {
+    const row = findDistrictDirectoryRow(store, label);
+    if (row) {
+      for (const s of row.schools) {
+        const n = String(s.name || '').trim();
+        if (n) names.add(n);
+      }
+    }
+    for (const s of schoolsForDistrict(store, label)) {
+      const n = String(s.name || '').trim();
+      if (n) names.add(n);
+    }
+  }
+  return [...names];
+}

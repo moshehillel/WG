@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { sameDistrictSchoolNames } from './districts.js';
+import { MemoryStore } from './memory-store.js';
 import {
   extractDistrictAgencyHeader,
   isHomeschooledSchoolName,
@@ -8,6 +10,7 @@ import {
   pdfSchoolConflictsWithChild,
   schoolNamesConflict,
 } from './session-parse.js';
+import { newId, nowIso } from './ids.js';
 
 describe('school name match / Frontline Setting', () => {
   it('does not flag Carle Place Middle School vs Carle Place MS/HS', () => {
@@ -33,6 +36,7 @@ describe('school name match / Frontline Setting', () => {
         'Westbury UFSD',
       ),
     ).toBe(false);
+    // Without store district peers, a different building still conflicts (no town-name fuzzy).
     expect(
       pdfSchoolConflictsWithChild(
         'Westbury Middle School',
@@ -45,6 +49,43 @@ describe('school name match / Frontline Setting', () => {
         'Carle Place UFSD',
         { name: 'Powells Lane', district: '' },
         'Westbury UFSD',
+      ),
+    ).toBe(true);
+  });
+
+  it('allows same-district buildings via store membership (Westbury Middle vs Drexel)', () => {
+    const westburyPeers = ['Drexel Avenue', 'Westbury Middle School', 'Powells Lane'];
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Westbury Middle School',
+        { name: 'Drexel Avenue', district: 'Westbury UFSD' },
+        'Westbury UFSD',
+        { sameDistrictSchoolNames: westburyPeers },
+      ),
+    ).toBe(false);
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Westbury Middle School',
+        { name: 'Drexel Avenue', district: '' },
+        'Westbury UFSD',
+        { sameDistrictSchoolNames: westburyPeers },
+      ),
+    ).toBe(false);
+    // Elmont building vs Valley Stream report — peers are Elmont only → still blocked.
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Valley Stream Union Free School District No. 24',
+        { name: 'Clara H. Carlson School', district: 'Elmont Union Free School District' },
+        'Elmont UFSD',
+        { sameDistrictSchoolNames: ['Clara H. Carlson School', 'Covert Avenue School'] },
+      ),
+    ).toBe(true);
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Westbury Middle School',
+        { name: 'Clara H. Carlson School', district: 'Elmont UFSD' },
+        'Elmont UFSD',
+        { sameDistrictSchoolNames: ['Clara H. Carlson School', 'Covert Avenue School'] },
       ),
     ).toBe(true);
   });
@@ -189,10 +230,26 @@ Sep 23 2026 10:40AM
     expect(isHomeschooledSchoolName('Homeschooled')).toBe(true);
     expect(isHomeschooledSchoolName('home schooled')).toBe(true);
     expect(isHomeschooledSchoolName('Home School')).toBe(true);
+    expect(isHomeschooledSchoolName('Homebound')).toBe(true);
+    expect(isHomeschooledSchoolName('Home bound')).toBe(true);
+    expect(isHomeschooledSchoolName('Home-bound')).toBe(true);
     expect(isHomeschooledSchoolName('Elmont Union Free School District')).toBe(false);
-    for (const label of ['Homeschooled', 'Home schooled', 'Home School', 'Homeschool']) {
+    for (const label of [
+      'Homeschooled',
+      'Home schooled',
+      'Home School',
+      'Homeschool',
+      'Homebound',
+      'Home bound',
+      'Home-bound',
+    ]) {
       expect(
         pdfSchoolConflictsWithChild(valley, { name: label, district: '' }, ''),
+      ).toBe(false);
+    }
+    for (const pdf of ['NSSA', 'Locust Valley']) {
+      expect(
+        pdfSchoolConflictsWithChild(pdf, { name: 'Homebound', district: '' }, ''),
       ).toBe(false);
     }
     expect(
@@ -216,6 +273,78 @@ Sep 23 2026 10:40AM
         'Valley Stream Union Free School District No. 24',
       ),
     ).toBe(true);
+  });
+
+  it('resolves same-district peers from store membership (not town-name fuzzy)', () => {
+    const store = new MemoryStore();
+    const drexel = store.upsertSchool({
+      id: newId(),
+      name: 'Drexel Avenue',
+      district: 'Westbury UFSD',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    store.upsertSchool({
+      id: newId(),
+      name: 'Westbury Middle School',
+      district: 'Westbury UFSD',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    const clara = store.upsertSchool({
+      id: newId(),
+      name: 'Clara H. Carlson School',
+      district: 'Elmont Union Free School District',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    store.upsertSchool({
+      id: newId(),
+      name: 'Howell Road School',
+      district: 'Valley Stream Union Free School District No. 24',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+
+    const westburyPeers = sameDistrictSchoolNames(store, drexel, 'Westbury UFSD');
+    expect(westburyPeers).toEqual(
+      expect.arrayContaining(['Drexel Avenue', 'Westbury Middle School']),
+    );
+    expect(westburyPeers).not.toEqual(expect.arrayContaining(['Clara H. Carlson School']));
+
+    expect(
+      pdfSchoolConflictsWithChild('Westbury Middle School', drexel, 'Westbury UFSD', {
+        sameDistrictSchoolNames: westburyPeers,
+      }),
+    ).toBe(false);
+
+    const elmontPeers = sameDistrictSchoolNames(store, clara, 'Elmont UFSD');
+    expect(
+      pdfSchoolConflictsWithChild('Howell Road School', clara, 'Elmont UFSD', {
+        sameDistrictSchoolNames: elmontPeers,
+      }),
+    ).toBe(true);
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Valley Stream Union Free School District No. 24',
+        clara,
+        'Elmont UFSD',
+        { sameDistrictSchoolNames: elmontPeers },
+      ),
+    ).toBe(true);
+
+    expect(
+      pdfSchoolConflictsWithChild(
+        'Westbury Middle School',
+        { name: 'Homeschooled', district: '' },
+        'Westbury UFSD',
+        { sameDistrictSchoolNames: westburyPeers },
+      ),
+    ).toBe(false);
   });
 
   it('ignores note scraps / F82 and prefers Clara H. Carlson School', () => {

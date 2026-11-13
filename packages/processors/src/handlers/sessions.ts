@@ -1,12 +1,23 @@
 import type { Handler } from 'aws-lambda';
-import { applyHhaSecretFromArn, createHhaClient } from '@white-glove/hha-client';
+import {
+  applyHhaSecretFromArn,
+  createHhaClient,
+  type SoapHhaClientAdapter,
+} from '@white-glove/hha-client';
 import type { ParseResult, ProcessorResult, VerifiedSessionRow } from '@white-glove/shared';
-import { buildCaregiverCodeMap, getEnv } from '@white-glove/shared';
+import {
+  buildCaregiverCodeMap,
+  getEnv,
+  processorBranchResultKey,
+  unscheduledServicesKey,
+} from '@white-glove/shared';
+import { compactProcessorResultForSfn } from '../compact-processor-result.js';
 import { createIdempotencyStore } from '../idempotency.js';
+import { fetchUnscheduledForSessions } from '../fetch-unscheduled-for-sessions.js';
 import { createReferenceMappingStore } from '../reference-mapping.js';
 import { processVerifiedSessions } from '../process-sessions.js';
 import { runProcessorBranchSafely } from '../safe-handler.js';
-import { getObjectText } from '../s3.js';
+import { getObjectText, putJson } from '../s3.js';
 
 export interface SessionsEvent {
   parse: ParseResult;
@@ -56,15 +67,39 @@ export const handler: Handler<SessionsEvent, ProcessorResult> = async (event) =>
       }
     }
 
-    return processVerifiedSessions({
+    const hha = createHhaClient(env, {
+      referenceCache: createReferenceMappingStore(env.IDEMPOTENCY_TABLE),
+    });
+    const unscheduled = await fetchUnscheduledForSessions(rows);
+    console.log(
+      `[sessions] getUnscheduledServices run=${event.parse.runId} rows=${unscheduled.rows.length} from=${unscheduled.fromDate} to=${unscheduled.toDate} skipped=${unscheduled.skipped}`,
+    );
+    await putJson(bucket, unscheduledServicesKey(event.parse.runId), {
+      total: unscheduled.rows.length,
+      rows: unscheduled.rows,
+      fromDate: unscheduled.fromDate,
+      toDate: unscheduled.toDate,
+      skipped: unscheduled.skipped,
+      skipReason: unscheduled.skipReason,
+    });
+    const soap = hha as SoapHhaClientAdapter;
+    const entUnscheduled =
+      unscheduled.spaToken && typeof soap.getSoap === 'function'
+        ? { spaToken: unscheduled.spaToken, soap }
+        : undefined;
+
+    const result = await processVerifiedSessions({
       runId: event.parse.runId,
       rows,
-      hha: createHhaClient(env, {
-        referenceCache: createReferenceMappingStore(env.IDEMPOTENCY_TABLE),
-      }),
+      hha,
       store: createIdempotencyStore(env.IDEMPOTENCY_TABLE),
       dryRun: event.dryRun ?? env.DRY_RUN,
       caregiverMap,
+      unscheduledRows: unscheduled.rows,
+      unscheduledFetchActive: !unscheduled.skipped,
+      entUnscheduled,
     });
+    await putJson(bucket, processorBranchResultKey(event.parse.runId, 'sessions'), result);
+    return compactProcessorResultForSfn(result, 0);
   });
 };

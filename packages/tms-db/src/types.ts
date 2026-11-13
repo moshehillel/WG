@@ -271,6 +271,14 @@ export interface SessionRow {
   aiFlags: string[];
   /** True when AI/heuristic screening found hard blocks (blocks submit). */
   aiBlock?: boolean;
+  /** True when a person typed the session in (POST /week/sessions) instead of a PDF import. */
+  manualEntry?: boolean;
+  /** Typed provider e-signature on a manual session (required for attended / makeup). */
+  providerSignatureName?: string;
+  /** ISO time the manual session was signed. */
+  providerSignedAt?: string;
+  /** TMS user id who typed the signature. */
+  providerSignedByUserId?: string;
 }
 
 /** Global TMS app settings (single row id = "global"). */
@@ -285,6 +293,20 @@ export interface AppSettings {
    * When false, only red/hard blocks fail the import; yellow flags are returned as warnings.
    */
   yellowWarningsBlockImport: boolean;
+  /**
+   * Admin locker (default OFF) — partial PDF import. When false, one error rejects the whole
+   * PDF (all-or-nothing). When true, only rows with no error are saved; every error row is
+   * skipped and listed. An error row is never saved in either mode (unknown child, unreadable
+   * name, signed/locked week, 14-day age lock, discipline mismatch, overlap, mandate ...).
+   * The name is kept so the stored setting carries over.
+   */
+  allowImportWithHardBlocks: boolean;
+  /**
+   * Admin locker (default OFF). When true, a school session whose clock length is shorter
+   * than the service-type minutes on the mandate is accepted (import, week check, Send to HHA).
+   * Billing and pay still follow the mandate length.
+   */
+  allowShortSessionVsMandate: boolean;
   /**
    * When true (default), Cognito MFA is required for every login (therapist + admin):
    * users without TOTP/SMS must enroll before using the app.
@@ -308,6 +330,8 @@ export function defaultAppSettings(): AppSettings {
     sessionImportAgeLockEnabled: true,
     sessionImportMaxAgeDays: 14,
     yellowWarningsBlockImport: true,
+    allowImportWithHardBlocks: false,
+    allowShortSessionVsMandate: false,
     requireMfa: true,
     allowSmsMfa: false,
     unlockedWeekIds: [],
@@ -333,6 +357,8 @@ export type ArchiveSourceType =
   | 'frontline'
   | 'therapist_activity'
   | 'upload_other'
+  /** Digital session note generated when a regular session is typed in manually. */
+  | 'manual_session_note'
   | 'timesheet'
   | 'timesheet_signed';
 
@@ -358,6 +384,8 @@ export interface DueDate {
   id: string;
   /** Progress / annual / reeval deadlines apply to the whole school caseload. */
   schoolId: string;
+  /** Optional child this due date applies to; absent = school-wide. */
+  studentId?: string;
   /** Report type: progress | annual | reeval (UI label: Type). */
   kind: DueKind;
   dueOn: string;
@@ -400,6 +428,43 @@ export interface AuditEvent {
   at: string;
 }
 
+/** Held upload a therapist asked Billu to review. Not an accepted timesheet. */
+export interface BlockErrorReport {
+  id: string;
+  status: 'pending' | 'allowed' | 'declined' | 'luna';
+  providerId: string;
+  providerName: string;
+  therapistUserId: string;
+  therapistName: string;
+  therapistEmail: string;
+  therapistMessage: string;
+  errors: string[];
+  childSummary: string;
+  dateSummary: string;
+  fileName: string;
+  schoolId: string;
+  programType: string;
+  /**
+   * S3 key for the notes PDF that was blocked. Empty when the block had no file
+   * (for example "Select a notes PDF first"). Bytes stay in the file store, not here.
+   */
+  pdfKey: string;
+  /** Secret for the email download link. Omitted from API list and decision payloads. */
+  pdfToken: string;
+  /** Extracted note text held until Billu allows the import. Omitted from API lists. */
+  pendingText: string;
+  aiExplanation: string;
+  aiExplanationStatus: 'ok' | 'unavailable';
+  createdAt: string;
+  decidedAt: string;
+  decidedByUserId: string;
+  decidedByName: string;
+  decidedByEmail: string;
+  billuNote: string;
+  overrideNotifiedAt: string;
+  importedAt: string;
+}
+
 export interface TmsSnapshot {
   users: AppUser[];
   schools: School[];
@@ -418,6 +483,7 @@ export interface TmsSnapshot {
   hhaTransfers: HhaTransfer[];
   audit: AuditEvent[];
   settings: AppSettings[];
+  blockReports: BlockErrorReport[];
 }
 
 export function emptySnapshot(): TmsSnapshot {
@@ -439,5 +505,6 @@ export function emptySnapshot(): TmsSnapshot {
     hhaTransfers: [],
     audit: [],
     settings: [defaultAppSettings()],
+    blockReports: [],
   };
 }

@@ -20,3 +20,4 @@ export * from './xlsx-export.js';
 export * from './session-upload-validate.js';
 export * from './session-overlap.js';
 export * from './session-age-lock.js';
+export * from './manual-signature.js';

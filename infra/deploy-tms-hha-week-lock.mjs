@@ -82,7 +82,28 @@ if (!bundled.includes('CreateSchedule overlap linked VisitID')) {
 if (!bundled.includes('d{4}|d{2}') && !bundled.includes('d{4}|\\d{2}')) {
   throw new Error('Bundle missing two-digit year date pattern — abort so date formatting is not reverted');
 }
-console.log('bundle guard: week lock + overlap VisitID link + date window + HHA markers OK');
+const mustHave = [
+  ['97150 untimed CPT', '97150'],
+  ['92507 untimed CPT', '92507'],
+  ['#38 locker note', 'Group-mandate child seen individually'],
+  ['Elizabeth no-peer locker', 'no peer was available'],
+  ['solo individual bill', 'school group'],
+  ['Fred S Keller 72817', '72817'],
+  ['Fred S. Keller School', 'Fred S. Keller School'],
+  ['Frontline district header', 'District\\s*\\/\\s*Agency'],
+  ['compound hyphen names', "[-']"],
+  ['Makeup-Weekly', 'Makeup-Weekly'],
+  ['stale failed drop', 'drop superseded failed HHA transfer'],
+];
+for (const [label, needle] of mustHave) {
+  if (!bundled.includes(needle)) {
+    throw new Error(`Bundle missing ${label} (${needle}) — aborting so this deploy cannot roll it back`);
+  }
+}
+if (bundled.includes('stripSchoolBillingDurationBucket')) {
+  throw new Error('Bundle reintroduced stripSchoolBillingDurationBucket — aborting');
+}
+console.log('bundle guard: week lock + overlap VisitID link + date window + prior fixes OK');
 
 if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
 execSync(

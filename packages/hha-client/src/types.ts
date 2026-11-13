@@ -4,6 +4,7 @@ import type {
   HhaContract,
   HhaPatient,
   HhaVisit,
+  TherapyAssignmentIds,
 } from '@white-glove/shared';
 
 export interface UpsertResult {
@@ -124,6 +125,7 @@ export interface HhaClient {
   ensureAcceptedServices(
     patientId: string,
     disciplines: string[],
+    assignment?: TherapyAssignmentIds,
   ): Promise<EnsureAcceptedServicesResult>;
   upsertPatient(patient: HhaPatient): Promise<UpsertResult>;
   /**
@@ -152,6 +154,20 @@ export interface HhaClient {
   resolvePayCodeId(payCodeName: string): Promise<string | undefined>;
   /** Agency pay-rate catalog (GetPayRateCodes + caregiver pay codes). */
   listPayRateCodes(): Promise<Array<{ id: string; name: string }>>;
+  /**
+   * Pay codes assigned to one caregiver (GetCaregiverPayCodes + CaregiverID).
+   * Used when ProviderSoft Pay Rate is blank but the aide already has a discipline rate in HHA.
+   */
+  listCaregiverPayCodes?(caregiverId: string): Promise<Array<{ id: string; name: string }>>;
+  /**
+   * Most recent PayCodeID this caregiver used on a visit matching the discipline
+   * (and optionally Eval). Used when GetCaregiverPayCodes returns the office catalog.
+   */
+  findRecentCaregiverDisciplinePayCode?(
+    caregiverId: string,
+    discipline: string,
+    options?: { preferEval?: boolean },
+  ): Promise<{ id: string; name: string } | undefined>;
   /** Live HHA lookup by Program Type name (static config fallback). */
   resolveContractId(programType: string | undefined): Promise<number | undefined>;
   /** Live HHA lookup by Service Type name (API Mappings sheet when programType provided). */

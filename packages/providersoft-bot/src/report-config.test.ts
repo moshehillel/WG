@@ -7,6 +7,7 @@ import {
   formatPsDate,
   preferDateInputSelector,
   REPORT_DATE_INPUTS,
+  verifiedSessionsSharedLookbackRange,
   verifiedSessionsTueMonRange,
 } from './report-config.js';
 
@@ -30,7 +31,7 @@ describe('defaultDateRange', () => {
     expect(range).toEqual({ from: '7/27/2026', to: '7/27/2026' });
   });
 
-  it('verified_sessions is Verified Date TO-anchored (lookback → today)', () => {
+  it('verified_sessions Monday dry is Verified Date lookback → Monday', () => {
     // Mon Jul 27 Eastern 11 PM = 03:00 UTC Tue Jul 28 → to=7/27, from=7/13 (14d)
     const now = new Date('2026-07-28T03:00:00.000Z');
     const range = defaultDateRange('verified_sessions', now, {
@@ -38,6 +39,36 @@ describe('defaultDateRange', () => {
       PROVIDERSOFT_TIMEZONE: 'America/New_York',
     });
     expect(range).toEqual({ from: '7/13/2026', to: '7/27/2026' });
+  });
+
+  it('verified_sessions Tuesday live matches Monday dry window (TO=Monday)', () => {
+    // Tue Jul 28 Eastern 11 PM = 03:00 UTC Wed Jul 29 → same window as Mon Jul 27
+    const mon = new Date('2026-07-28T03:00:00.000Z');
+    const tue = new Date('2026-07-29T03:00:00.000Z');
+    const env = {
+      PROVIDERSOFT_DAILY_LOOKBACK_DAYS: '0',
+      PROVIDERSOFT_TIMEZONE: 'America/New_York',
+    };
+    expect(defaultDateRange('verified_sessions', tue, env)).toEqual(
+      defaultDateRange('verified_sessions', mon, env),
+    );
+    expect(defaultDateRange('verified_sessions', tue, env)).toEqual({
+      from: '7/13/2026',
+      to: '7/27/2026',
+    });
+  });
+
+  it('verified_sessions Mon 11/9 and Tue 11/10 share 10/26→11/9', () => {
+    // Mon Nov 9 2026 11 PM ET = 04:00 UTC Tue Nov 10; Tue Nov 10 11 PM ET = 04:00 UTC Wed Nov 11
+    const mon = new Date('2026-11-10T04:00:00.000Z');
+    const tue = new Date('2026-11-11T04:00:00.000Z');
+    const env = {
+      PROVIDERSOFT_DAILY_LOOKBACK_DAYS: '0',
+      PROVIDERSOFT_TIMEZONE: 'America/New_York',
+    };
+    const expected = { from: '10/26/2026', to: '11/9/2026' };
+    expect(defaultDateRange('verified_sessions', mon, env)).toEqual(expected);
+    expect(defaultDateRange('verified_sessions', tue, env)).toEqual(expected);
   });
 
   it('verified_sessions mid-week still ends TO=today (not next Monday)', () => {
@@ -66,7 +97,7 @@ describe('defaultDateRange', () => {
     expect(dailyLookbackDays({ PROVIDERSOFT_DAILY_LOOKBACK_DAYS: '1' })).toBe(1);
   });
 
-  it('sandbox and live share defaultDateRange (today for Gluck; 14d new service; 14d API TO today)', () => {
+  it('sandbox and live share defaultDateRange (today for Gluck; 14d new service; Mon/Tue API shared)', () => {
     const now = new Date('2026-07-28T03:00:00.000Z');
     const env = {
       PROVIDERSOFT_DAILY_LOOKBACK_DAYS: '0',
@@ -82,6 +113,19 @@ describe('defaultDateRange', () => {
     expect(defaultDateRange('verified_sessions', now, env)).toEqual({
       from: '7/13/2026',
       to: '7/27/2026',
+    });
+  });
+});
+
+describe('verifiedSessionsSharedLookbackRange', () => {
+  it('pins Tuesday TO to Monday with the same 14-day FROM', () => {
+    expect(verifiedSessionsSharedLookbackRange(calendarDate(2026, 11, 9), 14)).toEqual({
+      from: calendarDate(2026, 10, 26),
+      to: calendarDate(2026, 11, 9),
+    });
+    expect(verifiedSessionsSharedLookbackRange(calendarDate(2026, 11, 10), 14)).toEqual({
+      from: calendarDate(2026, 10, 26),
+      to: calendarDate(2026, 11, 9),
     });
   });
 });

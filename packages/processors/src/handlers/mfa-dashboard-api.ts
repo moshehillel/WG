@@ -615,7 +615,13 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const statusCode =
+      err && typeof err === 'object' && 'statusCode' in err
+        ? Number((err as { statusCode?: number }).statusCode)
+        : 0;
     console.error('[mfa-dashboard]', message);
+    if (statusCode >= 400 && statusCode < 500)
+      return json(statusCode, { error: message });
     return json(500, { error: message });
   }
 };

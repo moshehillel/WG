@@ -138,9 +138,13 @@ export class WhiteGloveStack extends cdk.Stack {
       versioned: true,
       serverAccessLogsBucket: auditBucket,
       serverAccessLogsPrefix: 'reports-access/',
+      // Only bot run artifacts expire. tms/ holds therapist uploads, signed
+      // timesheets, and locker files; a bucket-wide rule was deleting those
+      // after 7 days while the archive index still pointed at them.
       lifecycleRules: [
         {
           id: 'expire-old-runs',
+          prefix: 'runs/',
           expiration: cdk.Duration.days(
             Number(this.node.tryGetContext('reportsRetentionDays') ?? 7),
           ),
@@ -402,7 +406,10 @@ export class WhiteGloveStack extends cdk.Stack {
     const openedFn = makeProcessor(
       'OpenedFn',
       'packages/processors/src/handlers/opened.ts',
-      {},
+      {
+        /** Billu Markowitz. OpenedFn has no other coordinator; 81103 is Abigail and must not be the fallback. */
+        HHA_COORDINATOR_ID: '84898',
+      },
       cdk.Duration.minutes(15),
     );
     const closedFn = makeProcessor(
@@ -421,8 +428,9 @@ export class WhiteGloveStack extends cdk.Stack {
     const sessionsFnEnv: Record<string, string> = {
       HHA_ENT_GRAPHQL_ENABLED: 'true',
       HHA_ENT_AUTO_LOGIN: 'true',
+      /** Billu 84898, Grace 67321 and 67322. 68033 is Esty Neuman, not Billu. */
       HHA_ENT_COORDINATOR_ID: String(
-        this.node.tryGetContext('hhaEntCoordinatorId') ?? '68033,67321',
+        this.node.tryGetContext('hhaEntCoordinatorId') ?? '84898,67321,67322',
       ),
       HHA_ENT_COORDINATOR_NAMES: String(
         this.node.tryGetContext('hhaEntCoordinatorNames') ?? 'Billu Markowitz,Grace Greenfeld',
@@ -798,9 +806,12 @@ export class WhiteGloveStack extends cdk.Stack {
       },
     });
 
+    // 03:00 UTC Wednesday is Tuesday 11:00 PM EDT / 10:00 PM EST.
+    // weekDay TUE at 03:00 UTC is Monday night Eastern, which is the preview rule
+    // (out of band: WhiteGlove-MondayApiPreview, infra/deploy-monday-api-preview.mjs).
     const tuesdaySessionsRule = this.addEasternNightSchedule(this, 'TuesdaySessionsSchedule', {
-      weekDay: 'TUE',
-      description: 'Tuesday night live verified sessions / API Report (11:00 PM Eastern)',
+      weekDay: 'WED',
+      description: 'Tuesday night live verified sessions / API Report (11:00 PM EDT / 10:00 PM EST)',
       enabled: false,
       stateMachine,
       input: {

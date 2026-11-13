@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BLANK_PAY_RATE_EVV_VISIT_MESSAGE,
+  BLANK_PAY_RATE_MESSAGE,
   buildPayCodeName,
   extractDisciplineFromServiceType,
+  isBlankOrZeroPayRate,
   payRateSuffix,
-  pickFirstPayCodeForDiscipline,
   serviceTypeLooksGroup,
 } from './pay-codes.js';
 
@@ -65,34 +67,16 @@ describe('pay-codes', () => {
     expect(serviceTypeLooksGroup('2:00 pm')).toBe(false);
   });
 
-  it('picks first catalog pay code for a discipline (placeholder fallback)', () => {
-    const rows = [
-      { id: '200431', name: 'OT $70' },
-      { id: '200432', name: 'OT $70.50' },
-      { id: '176130', name: 'PT $70' },
-      { id: '260780', name: 'ST $70' },
-    ];
-    expect(pickFirstPayCodeForDiscipline('OT', rows)).toEqual({
-      id: '200431',
-      name: 'OT $70',
-      rateSuffix: '70',
-      isGroup: false,
-    });
-    expect(pickFirstPayCodeForDiscipline('SLP', rows)?.id).toBe('260780');
-  });
-
-  it('prefers group pay codes when wantGroup', () => {
-    const rows = [
-      { id: '200431', name: 'OT $70' },
-      { id: 'g34', name: 'OT Group $34' },
-      { id: 'g40', name: 'OT Group $40' },
-    ];
-    expect(pickFirstPayCodeForDiscipline('OT', rows, { group: true })).toEqual({
-      id: 'g34',
-      name: 'OT Group $34',
-      rateSuffix: '34',
-      isGroup: true,
-    });
+  it('treats a missing, blank, or zero pay rate as blank', () => {
+    expect(isBlankOrZeroPayRate(undefined)).toBe(true);
+    expect(isBlankOrZeroPayRate(null)).toBe(true);
+    expect(isBlankOrZeroPayRate('')).toBe(true);
+    expect(isBlankOrZeroPayRate('0')).toBe(true);
+    expect(isBlankOrZeroPayRate('0.0000')).toBe(true);
+    expect(isBlankOrZeroPayRate(0)).toBe(true);
+    expect(isBlankOrZeroPayRate('72')).toBe(false);
+    expect(BLANK_PAY_RATE_MESSAGE).toBe('Pay rate is blank');
+    expect(BLANK_PAY_RATE_EVV_VISIT_MESSAGE).toBe('Pay rate is blank — EVV visit not created');
   });
 });
 

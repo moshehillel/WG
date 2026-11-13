@@ -8,6 +8,18 @@ import {
 } from '@white-glove/tms-db';
 import type { Mailer } from './mail.js';
 
+/** Addresses that must never get due-date alert emails (they bounce). Also any `.local` address. */
+export const DUE_NAG_EXCLUDED_EMAILS: readonly string[] = ['testy@whiteglovecare.net'];
+
+/** True when a due-date alert may be emailed to this address. */
+export function isDueNagRecipient(email: string | undefined | null): boolean {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e || !e.includes('@')) return false;
+  if (e.endsWith('.local')) return false;
+  if (DUE_NAG_EXCLUDED_EMAILS.includes(e)) return false;
+  return true;
+}
+
 export async function runDueNags(
   store: MemoryStore,
   mail: Mailer,
@@ -42,7 +54,13 @@ export async function runDueNags(
       })
       .filter(Boolean) as string[];
     const admins = store.data.users.filter((u) => u.role === 'admin').map((u) => u.email);
-    const to = [...new Set([...providerEmails, ...admins].filter(Boolean))];
+    const to = [
+      ...new Map(
+        [...providerEmails, ...admins]
+          .filter(isDueNagRecipient)
+          .map((e) => [e.trim().toLowerCase(), e.trim()] as const),
+      ).values(),
+    ];
     if (to.length) {
       await mail.send({
         to,

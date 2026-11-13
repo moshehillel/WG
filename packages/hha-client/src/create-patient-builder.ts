@@ -1,4 +1,5 @@
 import type { HhaPatient } from '@white-glove/shared';
+import { coordinatorId2ForNewChild, coordinatorIdForNewChild } from '@white-glove/shared';
 import { psDateToIso } from './hha-time.js';
 
 export { normalizeHhaGender } from '@white-glove/shared';
@@ -82,6 +83,20 @@ export function formatAdmissionId(
   return id.startsWith(prefix) ? id : `${prefix}${id}`;
 }
 
+/**
+ * HHA MRNumber (Patient ID in the UI): the bare numeric program/case id.
+ * Drops the AdmissionID prefix when present; returns undefined if not all digits.
+ */
+export function formatMrNumber(
+  caseId: string | undefined,
+  prefix = 'PS',
+): string | undefined {
+  let id = caseId?.trim();
+  if (!id) return undefined;
+  if (prefix && id.startsWith(prefix)) id = id.slice(prefix.length);
+  return /^\d+$/.test(id) ? id : undefined;
+}
+
 /** Strip leading zeros from an all-digit id (MR / admission) for a second HHA lookup. */
 export function stripLeadingZerosFromNumericId(id: string | undefined): string | undefined {
   const value = id?.trim();
@@ -135,13 +150,19 @@ export function buildCreatePatientBody(
     throw new Error('CreatePatient requires caseId or externalId for AdmissionID');
   }
 
+  // SearchPatients MRNumber is the bare numeric program/case id (no PS prefix).
+  const mrNumber = formatMrNumber(patient.caseId ?? patient.externalId, defaults.admissionIdPrefix);
+  const mrNumberXml = mrNumber ? `\n  <MRNumber>${esc(mrNumber)}</MRNumber>` : '';
+
   const birthDate = psDateToIso(patient.dateOfBirth) ?? patient.dateOfBirth!;
   const serviceRequestStartDate =
     psDateToIso(patient.intakeDate) ?? psDateToIso(patient.dateOfBirth) ?? birthDate;
   const { zip5, zip4 } = parseZipCode(patient.zipCode);
   const phone = patient.homePhone ? formatPhone(patient.homePhone) : '';
   const discipline = mapServiceToDiscipline(patient.serviceCode);
-  const coordinatorId = resolveCreatePatientCoordinatorId(defaults.coordinatorId);
+  const coordinatorId = coordinatorIdForNewChild(patient.coordinatorId);
+  const coordinatorId2 = coordinatorId2ForNewChild(patient.coordinatorId2, coordinatorId);
+  const teamId = resolveCreatePatientTeamId(refs.teamId);
   const gender = patient.gender?.trim() || defaults.defaultGender;
   const zip4Xml = zip4 !== undefined ? `\n      <Zip4>${zip4}</Zip4>` : '';
   const acceptedServicesXml = discipline
@@ -157,14 +178,16 @@ export function buildCreatePatientBody(
   <LastName>${esc(patient.lastName)}</LastName>
   <BirthDate>${esc(birthDate)}</BirthDate>
   <Gender>${esc(gender)}</Gender>
-  <CoordinatorID1>${coordinatorId}</CoordinatorID1>
+  <CoordinatorID1>${coordinatorId}</CoordinatorID1>${
+    coordinatorId2 ? `\n  <CoordinatorID2>${coordinatorId2}</CoordinatorID2>` : ''
+  }
   <ServiceRequestStartDate>${esc(serviceRequestStartDate)}</ServiceRequestStartDate>
-  <AdmissionID>${esc(admissionId)}</AdmissionID>
+  <AdmissionID>${esc(admissionId)}</AdmissionID>${mrNumberXml}
   <MedicaidNumber>${esc(formatMedicaidNumber(patient.caseId ?? patient.externalId))}</MedicaidNumber>
   <AllowDuplicate>1</AllowDuplicate>
   <SourceOfAdmission>${defaults.sourceOfAdmission}</SourceOfAdmission>
   <BranchID>${refs.branchId}</BranchID>
-  <TeamID>${refs.teamId}</TeamID>
+  <TeamID>${teamId}</TeamID>
   <LocationID>${refs.locationId}</LocationID>${acceptedServicesXml}
   <Addresses>
     <Address>
@@ -207,6 +230,67 @@ export function resolveCreatePatientCoordinatorId(_raw?: number): number {
   return CREATE_PATIENT_COORDINATOR_ID;
 }
 
+/**
+ * Therapy Team on White Glove Community (office 1025). Named 2026-10-28.
+ * 2036 is Manager Wendy Ext. 3238 on that same office. Do not send it.
+ * A missing env value, Wendy's id, or any other id still resolves here.
+ */
+export const CREATE_PATIENT_TEAM_ID = 10022046;
+
+/**
+ * HHA Branch "CHHA Case" (id 10073742).
+ * ProviderSoft Gluck open / new services only. Never for TMS CreatePatient.
+ */
+export const PROVIDERSOFT_CHHA_CASE_BRANCH_ID = 10073742;
+
+/** CreatePatient team. Always Therapy Team (10022046). */
+export function resolveCreatePatientTeamId(_raw?: number): number {
+  return CREATE_PATIENT_TEAM_ID;
+}
+
+/** `providersoft` (default) or `tms`. Set HHA_CREATE_PATIENT_CHANNEL=tms on TmsApiFn. */
+export function createPatientChannel(
+  env: NodeJS.ProcessEnv = process.env,
+): 'providersoft' | 'tms' {
+  const raw = env.HHA_CREATE_PATIENT_CHANNEL?.trim().toLowerCase();
+  return raw === 'tms' ? 'tms' : 'providersoft';
+}
+
+/**
+ * ProviderSoft → CHHA Case 10073742 (or HHA_BRANCH_ID override).
+ * TMS → HHA_TMS_BRANCH_ID / HHA_BRANCH_ID only; never falls back to CHHA Case.
+ * Missing TMS branch returns 0 so CreatePatient can refuse visibly.
+ */
+export function resolveCreatePatientBranchId(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const channel = createPatientChannel(env);
+  if (channel === 'tms') {
+    const raw = env.HHA_TMS_BRANCH_ID?.trim() || env.HHA_BRANCH_ID?.trim();
+    const id = raw ? Number(raw) : 0;
+    if (!Number.isFinite(id) || id <= 0) return 0;
+    if (id === PROVIDERSOFT_CHHA_CASE_BRANCH_ID) return 0;
+    return id;
+  }
+  const id = Number(env.HHA_BRANCH_ID || PROVIDERSOFT_CHHA_CASE_BRANCH_ID);
+  return Number.isFinite(id) && id > 0 ? id : PROVIDERSOFT_CHHA_CASE_BRANCH_ID;
+}
+
+/** Refuse TMS CreatePatient when branch is missing or still CHHA Case. */
+export function assertCreatePatientBranchAllowed(
+  branchId: number,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const channel = createPatientChannel(env);
+  if (channel !== 'tms') return;
+  if (!branchId || branchId === PROVIDERSOFT_CHHA_CASE_BRANCH_ID) {
+    throw new Error(
+      `CreatePatient refused for TMS: branch is not configured (automation previously forced CHHA Case ${PROVIDERSOFT_CHHA_CASE_BRANCH_ID}). ` +
+        `Set HHA_TMS_BRANCH_ID on TmsApiFn to the TMS therapy branch (WGCC Therapy Services, 10090277). Do not use CHHA Case on TMS.`,
+    );
+  }
+}
+
 export function createPatientDefaultsFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): CreatePatientDefaults {
@@ -214,8 +298,8 @@ export function createPatientDefaultsFromEnv(
     officeId: Number(env.HHA_OFFICE_ID || 1025),
     coordinatorId: resolveCreatePatientCoordinatorId(),
     sourceOfAdmission: Number(env.HHA_SOURCE_OF_ADMISSION || 9300),
-    branchId: Number(env.HHA_BRANCH_ID || 10073742),
-    teamId: Number(env.HHA_TEAM_ID || 2036),
+    branchId: resolveCreatePatientBranchId(env),
+    teamId: resolveCreatePatientTeamId(),
     locationId: Number(env.HHA_LOCATION_ID || 12284),
     mobilityStatusId: Number(env.HHA_MOBILITY_STATUS_ID || 2495),
     evacuationZoneId: Number(env.HHA_EVACUATION_ZONE_ID || 10003239),

@@ -110,9 +110,10 @@ describe('resolveSessionVisit group remap', () => {
     expect(resolved.resolved.visit.serviceCodeId).toBe('alias:PT Group');
   });
 
-  it('resolves without pay-code lookup when Pay Rate is 0 (missed)', async () => {
+  it('does not pick a catalog pay code when Pay Rate is 0', async () => {
     const hha = new MockHhaClient();
-    hha.payCodes.set('PT45', 'pay-pt45');
+    hha.payCodes.set('PT $45', 'pay-pt45');
+    hha.payCodes.set('OT $100 PL', '263113');
     let payLookups = 0;
     const orig = hha.resolvePayCodeId.bind(hha);
     hha.resolvePayCodeId = async (name) => {
@@ -132,11 +133,11 @@ describe('resolveSessionVisit group remap', () => {
       needsEvv: false,
     });
 
-    expect(resolved.ok, !resolved.ok ? resolved.error.message : '').toBe(true);
-    if (!resolved.ok) {
-      throw new Error(resolved.error.message);
-    }
+    expect(resolved.ok).toBe(false);
+    if (resolved.ok) return;
+    expect(resolved.error.message).toContain('Pay rate is blank');
+    expect(resolved.error.message).not.toMatch(/pay code not found|OT \$100/i);
     expect(payLookups).toBe(0);
-    expect(resolved.resolved.visit.payCodeId).toBeUndefined();
+    expect(hha.calls).not.toContain('listPayRateCodes');
   });
 });

@@ -73,7 +73,7 @@ export {
   startHhaMfaRenewal,
 } from './mfa-renew.js';
 export type { MfaCookieStatus } from './mfa-renew.js';
-export { loginEntHttp, oidcEntBearer, bootstrapEntApis, startEntFreshLoginToMfa, sendEntMfaOtp, completeEntMfaLogin } from './ent-http-login.js';
+export { loginEntHttp, loginEntJson, oidcEntBearer, bootstrapEntApis, startEntFreshLoginToMfa, sendEntMfaOtp, completeEntMfaLogin } from './ent-http-login.js';
 export { captureEntSpaToken } from './ent-spa-capture.js';
 export { EntCookieJar } from './ent-cookie-jar.js';
 export type { EntCookie } from './ent-cookie-jar.js';
@@ -110,12 +110,22 @@ export {
 } from './pay-code-resolve.js';
 export type { PayCodeRow } from './pay-code-resolve.js';
 export {
+  findMatchingAuthorizationId,
+  isNonUniqueAuthorizationNumber,
+  isUniqueAuthorizationNumber,
+  normalizeAuthorizationDate,
+  parsePatientAuthorizationBlocks,
+} from './authorization-match.js';
+export type {
+  FindMatchingAuthorizationOptions,
+  ParsedPatientAuthorization,
+} from './authorization-match.js';
+export { pickCaregiverDisciplinePayCode } from './caregiver-pay-code.js';
+export {
   isAlreadyBilledConfirmFault,
   isVisitAlreadyBilledXml,
   isVisitAlreadyPayConfirmedXml,
 } from './visit-confirm.js';
-export { pickFirstPayCodeForDiscipline } from '@white-glove/shared';
-export type { FallbackPayCodePick } from '@white-glove/shared';
 export type {
   AcsEvvCallInfo,
   CreateVisitFromUnscheduledInput,
@@ -132,12 +142,20 @@ export type {
   UnscheduledVisitSource,
 } from './unscheduled-visit-flow.js';
 export {
+  assertCreatePatientBranchAllowed,
   buildCreatePatientBody,
   canCreatePatient,
+  createPatientChannel,
   createPatientDefaultsFromEnv,
+  CREATE_PATIENT_COORDINATOR_ID,
+  CREATE_PATIENT_TEAM_ID,
   formatAdmissionId,
   mapServiceToDiscipline,
   normalizeHhaGender,
+  PROVIDERSOFT_CHHA_CASE_BRANCH_ID,
+  resolveCreatePatientBranchId,
+  resolveCreatePatientCoordinatorId,
+  resolveCreatePatientTeamId,
   stripLeadingZerosFromNumericId,
 } from './create-patient-builder.js';
 export type { CreatePatientDefaults, CreatePatientReferenceIds } from './create-patient-builder.js';

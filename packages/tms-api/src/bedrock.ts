@@ -1,4 +1,48 @@
-import { screenServiceNote } from '@white-glove/tms-db';
+import { noteNeedsAbsenceFallback, screenServiceNote } from '@white-glove/tms-db';
+
+const HAIKU_45_MODEL_ID = 'us.anthropic.claude-haiku-4-5-20251001-v1:0';
+const RETIRED_HAIKU_MODEL_ID = 'us.anthropic.claude-3-5-haiku-20241022-v1:0';
+
+function bedrockModelId(): string {
+  const configured = process.env.TMS_BEDROCK_MODEL_ID?.trim() || '';
+  if (!configured) return '';
+  if (configured === RETIRED_HAIKU_MODEL_ID) return HAIKU_45_MODEL_ID;
+  return configured;
+}
+
+export function absenceFallbackWarning(
+  storedAttendance: string,
+  modelAttendance: string,
+): string {
+  const stored = String(storedAttendance || '').trim().toLowerCase();
+  const model = String(modelAttendance || '').trim().toLowerCase();
+  if (stored !== 'attended') return '';
+  if (model === 'missed') {
+    return 'This note reads as a missed visit, but attendance is marked attended.';
+  }
+  if (model === 'makeup') {
+    return 'This note reads as a makeup visit, but attendance is marked attended.';
+  }
+  if (model === 'paid_absence' || model === 'paid absence') {
+    return 'This note reads as a paid absence, but attendance is marked attended.';
+  }
+  return '';
+}
+
+export function absenceFallbackPrompt(input: {
+  notes: string;
+  beginTime: string;
+  endTime: string;
+}): string {
+  return (
+    'Classify this therapy session note. Reply with JSON only: {"attendance":"attended"|"missed"|"makeup"|"paid_absence"}. ' +
+    'missed means the child or provider was not there and no therapy was delivered. ' +
+    'paid_absence means the note says paid absence (for example "Student Not Available: Paid absence.") and the visit stays payable with its clock times. ' +
+    'makeup means this visit is making up an earlier missed visit. ' +
+    'attended means therapy was delivered, even if a partner was absent or the note mentions missing a turn or past missed work. ' +
+    `Times: ${input.beginTime || '(none)'} to ${input.endTime || '(none)'}. Note: ${input.notes}`
+  );
+}
 
 export async function screenNoteWithOptionalBedrock(input: {
   notes: string;
@@ -15,8 +59,11 @@ export async function screenNoteWithOptionalBedrock(input: {
   source: 'heuristic' | 'bedrock';
 }> {
   const local = screenServiceNote(input);
-  const model = process.env.TMS_BEDROCK_MODEL_ID?.trim();
-  if (!model) return { ...local, source: 'heuristic' };
+  const model = bedrockModelId();
+  // Rules already decided, or the note has no absence wording. Do not call the model.
+  if (local.block || !model || !noteNeedsAbsenceFallback(input)) {
+    return { ...local, source: 'heuristic' };
+  }
   try {
     const extra = await invokeBedrockFlags(model, input);
     const blockFlags = [...new Set([...local.blockFlags, ...extra.blockFlags])];
@@ -34,23 +81,20 @@ export async function screenNoteWithOptionalBedrock(input: {
   }
 }
 
-async function invokeBedrockFlags(
-  modelId: string,
-  input: Record<string, string>,
-): Promise<{ blockFlags: string[]; warnFlags: string[] }> {
+export async function invokeClaudeText(
+  prompt: string,
+  maxTokens: number,
+  timeoutMs = 8000,
+): Promise<string> {
+  const modelId = bedrockModelId();
+  if (!modelId) throw new Error('Claude reading is not configured.');
   const { BedrockRuntimeClient, InvokeModelCommand } = await import('@aws-sdk/client-bedrock-runtime');
   const client = new BedrockRuntimeClient({});
   const body = {
     anthropic_version: 'bedrock-2023-05-31',
-    max_tokens: 400,
-    messages: [
-      {
-        role: 'user',
-        content: `Screen this related-service note for compliance and inconsistencies. Return JSON only: {"flags":[{"message":"...","severity":"block"|"warn"}]}. Use severity "block" for empty/missing notes (when attendance is attended or makeup), missing times, placeholder text (lorem ipsum / asdf), or real compliance problems — NOT for brevity alone (very short notes of a few words are allowed). "warn" only for soft suggestions. If you omit severity, the flag is treated as a block. Input: ${JSON.stringify(input)}`,
-      },
-    ],
+    max_tokens: maxTokens,
+    messages: [{ role: 'user', content: prompt }],
   };
-  // Keep Send timesheet under Netlify proxy limits; on timeout, caller falls back to heuristic.
   const out = await Promise.race([
     client.send(
       new InvokeModelCommand({
@@ -61,27 +105,60 @@ async function invokeBedrockFlags(
       }),
     ),
     new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Bedrock note screen timed out')), 8000);
+      setTimeout(() => reject(new Error('Claude reading timed out')), timeoutMs);
     }),
   ]);
   const raw = JSON.parse(Buffer.from(out.body).toString('utf8')) as {
     content?: Array<{ text?: string }>;
   };
-  const text = raw.content?.[0]?.text || '{}';
+  return raw.content?.[0]?.text || '';
+}
+
+async function invokeBedrockAttendance(
+  modelId: string,
+  input: { notes: string; beginTime: string; endTime: string },
+): Promise<string> {
+  if (!modelId) return '';
+  const text = await invokeClaudeText(absenceFallbackPrompt(input), 400, 8000);
   const parsed = JSON.parse(text.match(/\{[\s\S]*\}/)?.[0] || '{}') as {
-    flags?: Array<string | { message?: string; severity?: string }>;
+    attendance?: string;
   };
-  const blockFlags: string[] = [];
-  const warnFlags: string[] = [];
-  for (const item of Array.isArray(parsed.flags) ? parsed.flags : []) {
-    if (typeof item === 'string') {
-      if (item.trim()) blockFlags.push(item);
-      continue;
+  return String(parsed.attendance || '').trim().toLowerCase();
+}
+
+async function invokeBedrockFlags(
+  modelId: string,
+  input: Record<string, string>,
+): Promise<{ blockFlags: string[]; warnFlags: string[] }> {
+  const attendance = await invokeBedrockAttendance(modelId, input);
+  const warning = absenceFallbackWarning(input.attendance, attendance);
+  return { blockFlags: [], warnFlags: warning ? [warning] : [] };
+}
+
+/** Reads one note. Empty string means the model was not called or did not answer. */
+export async function classifyNoteAttendance(input: {
+  notes: string;
+  beginTime: string;
+  endTime: string;
+}): Promise<'attended' | 'missed' | 'makeup' | 'paid_absence' | ''> {
+  const model = bedrockModelId();
+  if (!model) return '';
+  try {
+    const attendance = await invokeBedrockAttendance(model, input);
+    const normalized = String(attendance || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '_');
+    if (
+      normalized === 'attended' ||
+      normalized === 'missed' ||
+      normalized === 'makeup' ||
+      normalized === 'paid_absence'
+    ) {
+      return normalized;
     }
-    const message = String(item?.message || '').trim();
-    if (!message) continue;
-    if (String(item?.severity || '').toLowerCase() === 'warn') warnFlags.push(message);
-    else blockFlags.push(message);
+    return '';
+  } catch {
+    return '';
   }
-  return { blockFlags, warnFlags };
 }

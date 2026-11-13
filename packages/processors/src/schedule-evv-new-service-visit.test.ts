@@ -40,7 +40,7 @@ describe('schedule-evv-new-service-visit helpers', () => {
     ).toBe(false);
   });
 
-  it('preview requires Provider Name and Service Begin Date; blank Pay Rate is ok', () => {
+  it('preview requires Provider Name and Service Begin Date; blank Pay Rate is not a preview failure', () => {
     const missingProvider = previewEvvNewServiceVisit({
       caseId: 'c1',
       firstName: 'A',
@@ -66,7 +66,7 @@ describe('schedule-evv-new-service-visit helpers', () => {
     });
     expect(missingDate?.message).toContain('Service Begin Date');
 
-    const blankPayRateOk = previewEvvNewServiceVisit({
+    const blankPayRate = previewEvvNewServiceVisit({
       caseId: 'c1',
       firstName: 'A',
       lastName: 'B',
@@ -76,7 +76,8 @@ describe('schedule-evv-new-service-visit helpers', () => {
       startDate: '08/01/2026',
       serviceCode: 'OT CHHA',
     });
-    expect(blankPayRateOk).toBeUndefined();
+    expect(blankPayRate?.details?.blankPayRate).toBe(true);
+    expect(blankPayRate?.message).toMatch(/Pay rate is blank — EVV visit not created/i);
   });
 
   it('caregiver-not-found preview has no Fix or name-order hint', () => {
@@ -120,7 +121,7 @@ describe('schedule-evv-new-service-visit helpers', () => {
     expect(missing?.details?.payCodeName).toBe('OT $72');
   });
 
-  it('preview flags missing catalog when blank Pay Rate and no discipline rates', () => {
+  it('preview flags blank/zero Pay Rate without inventing a catalog pay code', () => {
     const missing = previewEvvNewServiceVisit(
       {
         caseId: 'c1',
@@ -130,17 +131,19 @@ describe('schedule-evv-new-service-visit helpers', () => {
         programType: 'Extended Home Care Therapy',
         providerName: 'X Y',
         startDate: '08/01/2026',
-        serviceCode: 'OT CHHA',
+        serviceCode: 'OT HC Eval',
+        payRate: '0',
       },
-      { payCodeId: null },
+      { payCodeId: '263113' },
     );
-    expect(missing?.details?.payRateFallback).toBe(true);
-    expect(missing?.message).toMatch(/any catalog rate/i);
+    expect(missing?.message).toMatch(/Pay rate is blank — EVV visit not created/i);
+    expect(missing?.details?.blankPayRate).toBe(true);
+    expect(missing?.message).not.toMatch(/OT \$100 PL/i);
   });
 
-  it('uses 9:00–9:30 placeholder times', () => {
-    expect(NEW_SERVICE_EVV_VISIT_START).toBe('9:00 AM');
-    expect(NEW_SERVICE_EVV_VISIT_END).toBe('9:30 AM');
+  it('uses a fixed 1:00–1:30 AM night window for placeholder times', () => {
+    expect(NEW_SERVICE_EVV_VISIT_START).toBe('1:00 AM');
+    expect(NEW_SERVICE_EVV_VISIT_END).toBe('1:30 AM');
   });
 
   it('sends PayCodeID from Service Type + Pay Rate to locateOrScheduleVisit', async () => {
@@ -175,6 +178,9 @@ describe('schedule-evv-new-service-visit helpers', () => {
     expect(locateOrScheduleVisit).toHaveBeenCalledWith(
       expect.objectContaining({
         visitDate: '2026-08-20',
+        startTime: '1:00 AM',
+        endTime: '1:30 AM',
+        durationMinutes: 30,
         payCodeId: 'pay-ot72',
         payRate: '72.0000',
         scheduleType: 'Skilled',
@@ -182,72 +188,77 @@ describe('schedule-evv-new-service-visit helpers', () => {
     );
   });
 
-  it('falls back to first catalog pay rate when Pay Rate is blank', async () => {
+  it('uses caregiver-assigned OT pay code when Pay Rate is blank (never OT $100 PL catalog)', async () => {
     const locateOrScheduleVisit = vi.fn(async () => ({ id: 'v1', created: true }));
     const hha = {
       resolveCaregiverId: vi.fn(async () => 'cg-1'),
-      resolvePayCodeId: vi.fn(async () => undefined),
-      listPayRateCodes: vi.fn(async () => [
-        { id: 'pay-pt70', name: 'PT $70' },
-        { id: 'pay-ot70', name: 'OT $70' },
+      resolvePayCodeId: vi.fn(async () => '263113'),
+      listPayRateCodes: vi.fn(async () => [{ id: '263113', name: 'OT $100 PL' }]),
+      listCaregiverPayCodes: vi.fn(async () => [
+        { id: '263113', name: 'OT $100 PL' },
         { id: 'pay-ot72', name: 'OT $72' },
       ]),
       locateOrScheduleVisit,
     };
-    await scheduleEvvNewServiceVisit({
+    const result = await scheduleEvvNewServiceVisit({
       row: {
-        caseId: '166448',
-        firstName: 'A',
-        lastName: 'B',
+        caseId: '02887709',
+        firstName: 'Austen',
+        lastName: 'Lee',
         sourceReport: 'new_services',
         programType: 'Americare Certified',
-        providerName: 'TEST AIDE',
+        providerName: 'Marilyn Rosario',
         startDate: '08/20/2026',
         serviceCode: 'OT HC Eval',
+        payRate: undefined,
       },
       hha: hha as never,
       patientId: 'p1',
       contractId: 'c1',
       serviceCodeId: 's1',
     });
+    expect(result).toEqual({ id: 'v1', created: true });
     expect(hha.resolvePayCodeId).not.toHaveBeenCalled();
-    expect(hha.listPayRateCodes).toHaveBeenCalled();
+    expect(hha.listCaregiverPayCodes).toHaveBeenCalledWith('cg-1');
     expect(locateOrScheduleVisit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payCodeId: 'pay-ot70',
-        payRate: '70',
-        scheduleType: 'Skilled',
-      }),
+      expect.objectContaining({ payCodeId: 'pay-ot72', payRate: '72' }),
     );
   });
 
-  it('fails when Pay Rate is blank and discipline has no catalog rates', async () => {
-    const locateOrScheduleVisit = vi.fn(async () => ({ id: 'v1', created: true }));
+  it('fails visibly when Pay Rate is blank and caregiver has no usable discipline pay code', async () => {
+    const locateOrScheduleVisit = vi.fn(async () => {
+      throw new Error('HHA CreateSchedule failed: Invalid "PayCodeID" (ErrorID=-74)');
+    });
     const hha = {
       resolveCaregiverId: vi.fn(async () => 'cg-1'),
-      resolvePayCodeId: vi.fn(async () => undefined),
-      listPayRateCodes: vi.fn(async () => [{ id: 'pay-pt70', name: 'PT $70' }]),
+      resolvePayCodeId: vi.fn(async () => '263113'),
+      listPayRateCodes: vi.fn(async () => [{ id: '263113', name: 'OT $100 PL' }]),
+      listCaregiverPayCodes: vi.fn(async () => [{ id: '263113', name: 'OT $100 PL' }]),
       locateOrScheduleVisit,
     };
     await expect(
       scheduleEvvNewServiceVisit({
         row: {
-          caseId: '166448',
-          firstName: 'A',
-          lastName: 'B',
+          caseId: '02887709',
+          firstName: 'Austen',
+          lastName: 'Lee',
           sourceReport: 'new_services',
           programType: 'Americare Certified',
-          providerName: 'TEST AIDE',
+          providerName: 'Marilyn Rosario',
           startDate: '08/20/2026',
           serviceCode: 'OT HC Eval',
+          payRate: '',
         },
         hha: hha as never,
         patientId: 'p1',
         contractId: 'c1',
         serviceCodeId: 's1',
       }),
-    ).rejects.toThrow(/no HHA pay rate codes for discipline "OT"/);
-    expect(locateOrScheduleVisit).not.toHaveBeenCalled();
+    ).rejects.toThrow(/Pay rate is blank — EVV visit not created/i);
+    expect(hha.resolvePayCodeId).not.toHaveBeenCalled();
+    // Tried CreateSchedule without PayCodeID after caregiver PL-only list.
+    expect(locateOrScheduleVisit).toHaveBeenCalledTimes(1);
+    expect(locateOrScheduleVisit.mock.calls[0]?.[0]).not.toHaveProperty('payCodeId');
   });
 
   it('does not schedule for no-EVV program even if called path is gated', () => {

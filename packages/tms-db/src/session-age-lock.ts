@@ -7,9 +7,13 @@ export { defaultAppSettings };
 export function appSettingsFromStore(settings: AppSettings[] | undefined): AppSettings {
   const row = (settings || []).find((s) => s.id === 'global');
   if (!row) return defaultAppSettings();
+  // Drop the retired enforceProviderDisciplineMatch switch: discipline match is always on.
+  const { enforceProviderDisciplineMatch: _retired, ...kept } = row as AppSettings & {
+    enforceProviderDisciplineMatch?: unknown;
+  };
   return {
     ...defaultAppSettings(),
-    ...row,
+    ...kept,
     id: 'global',
     unlockedWeekIds: Array.isArray(row.unlockedWeekIds) ? row.unlockedWeekIds.map(String) : [],
     unlockedProviderIds: Array.isArray(row.unlockedProviderIds)
@@ -19,6 +23,9 @@ export function appSettingsFromStore(settings: AppSettings[] | undefined): AppSe
       Number(row.sessionImportMaxAgeDays) > 0 ? Number(row.sessionImportMaxAgeDays) : 14,
     yellowWarningsBlockImport:
       typeof row.yellowWarningsBlockImport === 'boolean' ? row.yellowWarningsBlockImport : true,
+    // Lockers are opt-in: anything but a stored boolean true stays OFF.
+    allowImportWithHardBlocks: row.allowImportWithHardBlocks === true,
+    allowShortSessionVsMandate: row.allowShortSessionVsMandate === true,
     requireMfa: typeof row.requireMfa === 'boolean' ? row.requireMfa : true,
     allowSmsMfa: typeof row.allowSmsMfa === 'boolean' ? row.allowSmsMfa : false,
   };

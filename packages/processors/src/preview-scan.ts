@@ -1,12 +1,11 @@
 import type { HhaClient } from '@white-glove/hha-client';
 import type { OpenedCaseRow, PipelineException, VerifiedSessionRow } from '@white-glove/shared';
 import {
+  BLANK_PAY_RATE_MESSAGE,
   buildPayCodeName,
-  extractDisciplineFromServiceType,
+  isBlankOrZeroPayRate,
   lookupCaregiverCode,
   lookupServiceCodeAlias,
-  pickFirstPayCodeForDiscipline,
-  serviceTypeLooksGroup,
 } from '@white-glove/shared';
 import {
   previewEvvNewServiceVisit,
@@ -146,18 +145,11 @@ export async function previewOpenedCaseWithHha(
       const cg = await hha.resolveCaregiverId(row.providerName);
       caregiverFound = Boolean(cg);
     }
-    const built = buildPayCodeName(row.serviceCode, row.payRate);
-    if (built) {
-      const id = await hha.resolvePayCodeId(built.payCodeName);
-      payCodeId = id ?? null;
-    } else {
-      const discipline = extractDisciplineFromServiceType(row.serviceCode);
-      if (discipline) {
-        const catalog = await hha.listPayRateCodes();
-        const fallback = pickFirstPayCodeForDiscipline(discipline, catalog, {
-          group: serviceTypeLooksGroup(row.serviceCode),
-        });
-        payCodeId = fallback?.id ?? null;
+    if (!isBlankOrZeroPayRate(row.payRate)) {
+      const built = buildPayCodeName(row.serviceCode, row.payRate);
+      if (built) {
+        const id = await hha.resolvePayCodeId(built.payCodeName);
+        payCodeId = id ?? null;
       }
     }
     const visitIssue = previewEvvNewServiceVisit(row, { caregiverFound, payCodeId });
@@ -234,7 +226,19 @@ export async function previewVerifiedSessionWithHha(
   }
 
   const payCode = buildPayCodeName(row.serviceCode, row.payRate);
-  if (row.serviceCode && row.payRate && !payCode) {
+  if (isBlankOrZeroPayRate(row.payRate)) {
+    issues.push({
+      code: 'missing_field',
+      message: previewMessage({
+        report: 'verified_sessions',
+        rowId,
+        summary: BLANK_PAY_RATE_MESSAGE,
+      }),
+      reportKind: 'verified_sessions',
+      rowId,
+      details: { serviceCode: row.serviceCode, payRate: row.payRate, preview: true },
+    });
+  } else if (row.serviceCode && row.payRate && !payCode) {
     issues.push({
       code: 'other',
       message: previewMessage({

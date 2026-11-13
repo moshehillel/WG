@@ -20,7 +20,7 @@ const SECRET = required('HHA_APP_SECRET');
 const KEY = required('HHA_APP_KEY').replace(/\s+/g, '');
 
 const OFFICE_ID = Number(process.env.HHA_OFFICE_ID || 1025);
-const COORDINATOR_ID = Number(process.env.HHA_COORDINATOR_ID || 81103);
+const COORDINATOR_ID = Number(required('HHA_COORDINATOR_ID'));
 const SOURCE_OF_ADMISSION = Number(process.env.HHA_SOURCE_OF_ADMISSION || 9300);
 
 const gluckCsv =

@@ -7,6 +7,7 @@ import { createReferenceMappingStore } from '../reference-mapping.js';
 import { createServiceMappingStore } from '../service-mapping.js';
 import { processOpenedCases } from '../process-opened.js';
 import { runProcessorBranchSafely } from '../safe-handler.js';
+import { emptyCaseBranchResult } from '../dry-run-sessions-only.js';
 import { getObjectText, putJson } from '../s3.js';
 import { resultStoppedForTimeBudget, shouldYieldFromLambdaContext, withTimedOutFlag } from '../time-budget.js';
 
@@ -18,6 +19,10 @@ export interface OpenedEvent {
 }
 
 export const handler: Handler<OpenedEvent, ProcessorResult> = async (event, context) => {
+  if (event.dryRun) {
+    console.log(`[opened] dry run reads sessions only; skipping Gluck open run=${event.parse.runId}`);
+    return emptyCaseBranchResult(event.parse.runId, 'opened_cases');
+  }
   const env = await applyHhaSecretFromArn(getEnv());
   if (event.sandboxLiveFixtures && !event.dryRun) applySandboxHhaWrites();
   else if (event.dryRun) applySandboxHhaReads();

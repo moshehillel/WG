@@ -95,7 +95,7 @@ describe('hha-error-digest', () => {
     });
 
     const mail = new MemoryMailer();
-    process.env.TMS_SPA_ORIGIN = 'https://wgfront.netlify.app';
+    process.env.TMS_SPA_ORIGIN = 'https://tms.whiteglovecare.net';
     process.env.TMS_HHA_ERROR_EMAIL = 'mgluck@whiteglovecare.net';
     const out = await runHhaErrorDigest(store, mail, new Date('2026-09-04T22:00:00Z'));
     expect(out.emailed).toBe(true);
@@ -106,7 +106,7 @@ describe('hha-error-digest', () => {
     expect(mail.sent[0].text).toContain('Pat Lee');
     expect(mail.sent[0].text).toContain('Sam Kid');
     expect(mail.sent[0].text).toContain('OT72');
-    expect(mail.sent[0].text).toContain(`hhaWeek=${week.id}`);
+    expect(mail.sent[0].text).toContain(`https://tms.whiteglovecare.net/?hhaWeek=${week.id}`);
     expect(mail.sent[0].text).toContain('Send to HHA');
   });
 

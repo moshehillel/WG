@@ -10,6 +10,7 @@ import type {
   AppUser,
   ArchiveRecord,
   AuditEvent,
+  BlockErrorReport,
   District,
   DueDate,
   HhaTransfer,
@@ -214,6 +215,14 @@ export class MemoryStore {
 
   addAdminNote(row: AdminNote): AdminNote {
     this.data.adminNotes.push(row);
+    return row;
+  }
+
+  upsertBlockReport(row: BlockErrorReport): BlockErrorReport {
+    if (!this.data.blockReports) this.data.blockReports = [];
+    const i = this.data.blockReports.findIndex((r) => r.id === row.id);
+    if (i >= 0) this.data.blockReports[i] = row;
+    else this.data.blockReports.push(row);
     return row;
   }
 

@@ -205,13 +205,13 @@ export function formatPipelineAlertBody(options: {
     lines.push('--- Failed ---');
     lines.push('  (none)');
     lines.push('');
-    lines.push('Attachments: failures.csv / results.csv (when emailed via SES). Results table is in the HTML email body.');
+    lines.push('Attachments: failures.csv and results.csv (when emailed via SES).');
     return lines.join('\n').trimEnd();
   }
 
   lines.push('--- Failed ---');
   lines.push(
-    `  ${options.hardFailures} row(s) — see Results table in the HTML email (reasons + patients).`,
+    `  ${options.hardFailures} row(s) — patients and reasons are in failures.csv and results.csv.`,
   );
   lines.push('');
   lines.push('Attachments: failures.csv and results.csv (Excel import).');

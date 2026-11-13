@@ -79,7 +79,7 @@ if (!rules.length) {
       '-c',
       'hhaUseMock=false',
       '-c',
-      `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net,ggreenfeld@whiteglovecare.net,alowy@whiteglovecare.net,gfriedman@whiteglovecare.net,miris@whiteglovecare.net'}`,
+      `alertEmails=${process.env.ALERT_EMAILS ?? 'elefkowitz@whiteglovecare.net,moshe@advancedautomations.net,ggreenfeld@whiteglovecare.net,alowy@whiteglovecare.net,gfriedman@whiteglovecare.net,miris@whiteglovecare.net,rlebovits@whiteglovecare.net'}`,
     ],
     { cwd: infraDir, stdio: 'inherit', shell: true },
   );

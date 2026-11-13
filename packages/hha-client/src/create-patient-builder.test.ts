@@ -1,12 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { BILLU_COORDINATOR_ID, GRACE_COORDINATOR_ID, THERAPY_TEAM_ID } from '@white-glove/shared';
 import {
+  assertCreatePatientBranchAllowed,
   buildCreatePatientBody,
   canCreatePatient,
   CREATE_PATIENT_COORDINATOR_ID,
+  CREATE_PATIENT_TEAM_ID,
   createPatientDefaultsFromEnv,
+  PROVIDERSOFT_CHHA_CASE_BRANCH_ID,
+  resolveCreatePatientBranchId,
   resolveCreatePatientCoordinatorId,
+  resolveCreatePatientTeamId,
   formatAdmissionId,
   formatMedicaidNumber,
+  formatMrNumber,
   mapServiceToDiscipline,
   parseZipCode,
 } from './create-patient-builder.js';
@@ -143,6 +150,9 @@ describe('create-patient-builder', () => {
   it('formats medicaid and admission ids', () => {
     expect(formatMedicaidNumber('1012074')).toMatch(/^ZW\d{5}[A-Z]$/);
     expect(formatAdmissionId('1012074')).toBe('PS1012074');
+    expect(formatMrNumber('1012074')).toBe('1012074');
+    expect(formatMrNumber(' PS1012074 ')).toBe('1012074');
+    expect(formatMrNumber('ABC')).toBeUndefined();
   });
 
   it('parses zip codes', () => {
@@ -184,8 +194,128 @@ describe('create-patient-builder', () => {
       },
     );
     expect(xml).toContain('<CoordinatorID1>84898</CoordinatorID1>');
+    expect(xml).toContain(`<TeamID>${CREATE_PATIENT_TEAM_ID}</TeamID>`);
+    expect(xml).not.toContain('<TeamID>2036</TeamID>');
     expect(xml).not.toContain('81103');
     expect(xml).not.toContain('68033');
+  });
+
+  it('uses the existing Therapy Team id', () => {
+    expect(THERAPY_TEAM_ID).toBe(CREATE_PATIENT_TEAM_ID);
+    expect(THERAPY_TEAM_ID).toBe(10022046);
+    expect(BILLU_COORDINATOR_ID).toBe(CREATE_PATIENT_COORDINATOR_ID);
+  });
+
+  it('sets Grace on a new child when the provider last-name rule says so, and keeps TMS CreatePatient on Billu', () => {
+    const defaults = createPatientDefaultsFromEnv({} as NodeJS.ProcessEnv);
+    const refs = {
+      branchId: 10073742,
+      teamId: 2036,
+      locationId: 12284,
+      mobilityStatusId: 2495,
+      evacuationZoneId: 10003239,
+    };
+    const patient = {
+      firstName: 'Omar',
+      lastName: 'Abedin',
+      dateOfBirth: '2020-01-01',
+      caseId: '922522794',
+      address1: '1 Main St',
+      city: 'Bronx',
+      state: 'NY',
+      zipCode: '10459',
+    };
+    const graceXml = buildCreatePatientBody(
+      { ...patient, coordinatorId: GRACE_COORDINATOR_ID },
+      defaults,
+      refs,
+    );
+    expect(graceXml).toContain('<CoordinatorID1>67321</CoordinatorID1>');
+    expect(graceXml).toContain(`<TeamID>${CREATE_PATIENT_TEAM_ID}</TeamID>`);
+    expect(graceXml).not.toContain('<CoordinatorID1>67322</CoordinatorID1>');
+
+    const tmsXml = buildCreatePatientBody(patient, defaults, refs);
+    expect(tmsXml).toContain('<CoordinatorID1>84898</CoordinatorID1>');
+    expect(tmsXml).not.toContain('CoordinatorID2');
+
+    const bothXml = buildCreatePatientBody(
+      { ...patient, coordinatorId: GRACE_COORDINATOR_ID, coordinatorId2: BILLU_COORDINATOR_ID },
+      defaults,
+      refs,
+    );
+    expect(bothXml).toContain('<CoordinatorID1>67321</CoordinatorID1>');
+    expect(bothXml).toContain('<CoordinatorID2>84898</CoordinatorID2>');
+    expect(bothXml).toContain(`<TeamID>${CREATE_PATIENT_TEAM_ID}</TeamID>`);
+    expect(bothXml).not.toContain('67322');
+    expect(bothXml).not.toContain('68033');
+    expect(bothXml).not.toContain('81103');
+
+    const copiedXml = buildCreatePatientBody(
+      { ...patient, coordinatorId: GRACE_COORDINATOR_ID, coordinatorId2: GRACE_COORDINATOR_ID },
+      defaults,
+      refs,
+    );
+    expect(copiedXml).not.toContain('CoordinatorID2');
+
+    for (const blocked of [81103, 68033, 67322]) {
+      const blockedSecond = buildCreatePatientBody(
+        { ...patient, coordinatorId: GRACE_COORDINATOR_ID, coordinatorId2: blocked },
+        defaults,
+        refs,
+      );
+      expect(blockedSecond).toContain('<CoordinatorID1>67321</CoordinatorID1>');
+      expect(blockedSecond).not.toContain('CoordinatorID2');
+      expect(blockedSecond).not.toContain(String(blocked));
+    }
+
+    for (const blocked of [81103, 68033, 67322]) {
+      const xml = buildCreatePatientBody({ ...patient, coordinatorId: blocked }, defaults, refs);
+      expect(xml).toContain('<CoordinatorID1>84898</CoordinatorID1>');
+      expect(xml).not.toContain(`<CoordinatorID1>${blocked}</CoordinatorID1>`);
+    }
+  });
+
+  it('sends Therapy Team even when HHA_TEAM_ID is Wendy', () => {
+    const defaults = createPatientDefaultsFromEnv({
+      HHA_TEAM_ID: '2036',
+    } as NodeJS.ProcessEnv);
+    expect(defaults.teamId).toBe(CREATE_PATIENT_TEAM_ID);
+    expect(resolveCreatePatientTeamId(2036)).toBe(10022046);
+    expect(resolveCreatePatientTeamId(undefined)).toBe(10022046);
+  });
+
+  it('keeps CHHA Case branch for ProviderSoft and refuses it for TMS', () => {
+    expect(PROVIDERSOFT_CHHA_CASE_BRANCH_ID).toBe(10073742);
+    expect(resolveCreatePatientBranchId({} as NodeJS.ProcessEnv)).toBe(
+      PROVIDERSOFT_CHHA_CASE_BRANCH_ID,
+    );
+    expect(
+      resolveCreatePatientBranchId({
+        HHA_CREATE_PATIENT_CHANNEL: 'tms',
+      } as NodeJS.ProcessEnv),
+    ).toBe(0);
+    expect(
+      resolveCreatePatientBranchId({
+        HHA_CREATE_PATIENT_CHANNEL: 'tms',
+        HHA_BRANCH_ID: '10073742',
+      } as NodeJS.ProcessEnv),
+    ).toBe(0);
+    expect(
+      resolveCreatePatientBranchId({
+        HHA_CREATE_PATIENT_CHANNEL: 'tms',
+        HHA_TMS_BRANCH_ID: '99999999',
+      } as NodeJS.ProcessEnv),
+    ).toBe(99999999);
+    expect(() =>
+      assertCreatePatientBranchAllowed(0, {
+        HHA_CREATE_PATIENT_CHANNEL: 'tms',
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/CHHA Case 10073742/);
+    expect(() =>
+      assertCreatePatientBranchAllowed(PROVIDERSOFT_CHHA_CASE_BRANCH_ID, {
+        HHA_CREATE_PATIENT_CHANNEL: 'tms',
+      } as NodeJS.ProcessEnv),
+    ).toThrow(/CHHA Case/);
   });
 
   it('does not send Abigail Creech or Esty Neuman on CreatePatient', () => {
@@ -289,6 +419,7 @@ describe('create-patient-builder', () => {
       },
     );
     expect(xml).toContain('<AdmissionID>PS1012074</AdmissionID>');
+    expect(xml).toContain('<MRNumber>1012074</MRNumber>');
     expect(xml).toContain('<Discipline>SI</Discipline>');
     expect(xml).toContain('<Zip5>10801</Zip5>');
     expect(xml).toContain('<Zip4>4721</Zip4>');

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bids — White Glove Therapy</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="is-app">
+  <div class="app-backdrop" aria-hidden="true"></div>
+  <header class="app-header">
+    <div class="brand">
+      <img class="brand-logo" src="wg-logo.png" width="220" height="50" alt="White Glove Therapy &amp; Education" />
+      <div class="brand-copy">
+        <h1>Bids</h1>
+        <p class="brand-tag">Preschool and school-age cases</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="who">
+        <span id="whoami"></span>
+        <label id="providerPick" hidden>Signed in
+          <select id="provider">
+            <option value="rivka">Rivka Klein</option>
+            <option value="chana">Chana Weiss</option>
+          </select>
+        </label>
+        <label id="rolePick" hidden>Role
+          <select id="role">
+            <option value="provider">Provider</option>
+            <option value="coordinator">Coordinator</option>
+          </select>
+        </label>
+        <button type="button" class="btn" id="signOut" hidden>Sign out</button>
+      </div>
+    </div>
+    <nav id="nav" class="admin-nav" aria-label="Sections"></nav>
+  </header>
+  <main>
+    <p id="status" role="status"></p>
+    <section id="view"></section>
+  </main>
+  <footer class="site-footer">
+    <a href="https://www.advancedautomations.net" target="_blank" rel="noopener noreferrer">Powered by Advanced Automations</a>
+    <span> · Sample cases · no texts sent</span>
+  </footer>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

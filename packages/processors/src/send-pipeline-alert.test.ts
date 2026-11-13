@@ -171,8 +171,7 @@ describe('sendPipelineAlert', () => {
       fromEmail: 'alerts@advancedautomations.net',
       alertEmails: 'a@example.com',
       subject: 'Test',
-      textBody: 'plain',
-      htmlBody: '<p>html</p>',
+      textBody: 'See failures.csv and results.csv.',
       attachments: [
         {
           filename: 'failures.csv',
@@ -194,5 +193,7 @@ describe('sendPipelineAlert', () => {
     const mime = raw.RawMessage!.Data!.toString('utf8');
     expect(mime).toContain('filename="failures.csv"');
     expect(mime).toContain('Content-Disposition: attachment');
+    expect(mime).toContain('Content-Type: text/plain; charset=UTF-8');
+    expect(mime).not.toContain('text/html');
   });
 });

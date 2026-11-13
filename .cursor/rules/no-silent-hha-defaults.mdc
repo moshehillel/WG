@@ -1,0 +1,18 @@
+---
+description: Do not invent HHAeXchange assignment defaults
+alwaysApply: true
+---
+
+# No silent HHA assignment defaults
+
+Do not hardcode or fall back to an HHAeXchange coordinator, team, office, branch, location, or other assignment id.
+
+A missing assignment stops the write. Set one only after the user names that exact person in the conversation.
+
+TMS CreatePatient coordinator is Billu Markowitz only, id 84898, named on 2026-10-20.
+
+TMS CreatePatient team is Therapy Team only, id 10022046, on White Glove Community office 1025, named on 2026-10-28. Do not use 2036 (Manager Wendy Ext. 3238).
+
+The sessions / unscheduled-visit interface uses Billu Markowitz (84898) and Grace Greenfeld (67321 and 67322), confirmed 2026-10-21. Do not include 68033 (Esty Neuman).
+
+Do not change these people unless the user names someone else. Do not restore 81103 (Abigail Creech).

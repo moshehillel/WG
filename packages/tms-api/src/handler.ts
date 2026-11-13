@@ -24,11 +24,29 @@ async function mail(): Promise<Mailer> {
   return mailer;
 }
 
-function cors(): Record<string, string> {
+const TMS_SITE_ORIGINS = [
+  'https://tms.whiteglovecare.net',
+  'https://whiteglovetms.netlify.app',
+  'https://wgfront.netlify.app',
+];
+
+function allowedSiteOrigins(): string[] {
+  const fromEnv = (process.env.TMS_CORS_ORIGIN || '')
+    .split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter((s) => s && s !== '*');
+  return [...new Set([...TMS_SITE_ORIGINS, ...fromEnv])];
+}
+
+function cors(originHeader?: string): Record<string, string> {
+  const allowed = allowedSiteOrigins();
+  const requested = (originHeader || '').trim().replace(/\/$/, '');
+  const allow = allowed.includes(requested) ? requested : allowed[0];
   return {
-    'access-control-allow-origin': process.env.TMS_CORS_ORIGIN || '*',
+    'access-control-allow-origin': allow,
     'access-control-allow-headers': 'content-type,authorization,x-tms-role,x-tms-email',
     'access-control-allow-methods': 'GET,POST,OPTIONS,PUT,PATCH,DELETE',
+    vary: 'origin',
   };
 }
 
@@ -120,6 +138,7 @@ async function purgeSmokeUsers(
 }
 
 export const handler: APIGatewayProxyHandlerV2 = async (event) => {
+  const originHeader = event.headers?.origin || event.headers?.Origin;
   try {
     const rec = event as { source?: string; tmsJob?: string; emails?: string[] };
     // Prefer explicit tmsJob — multiple EventBridge rules share this Lambda.
@@ -220,6 +239,8 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
       query: event.queryStringParameters || {},
       body,
     };
+    const hhaReady = resolveHhaClient();
+    const mailReady = mail();
     await loadTmsState(store);
     // Scan used by loadTmsState is eventually consistent — a re-GET right after
     // requireMfa:false can still hydrate the stale true and make Advanced Save look failed.
@@ -251,8 +272,8 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     const beforeSheets = sheetSig();
     let midPersisted = false;
     const result = await handleTmsRequest(store, req, {
-      hha: await resolveHhaClient(),
-      mail: await mail(),
+      hha: await hhaReady,
+      mail: await mailReady,
       persistNow: async () => {
         await saveTmsState(before, store);
         // Rebase so the final save only writes mutations after this flush (e.g. audit of MFA clear).
@@ -279,7 +300,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     if (Buffer.isBuffer(result.body)) {
       const out: APIGatewayProxyStructuredResultV2 = {
         statusCode: result.status,
-        headers: { ...cors(), ...(result.headers || {}) },
+        headers: { ...cors(originHeader), ...(result.headers || {}) },
         body: result.body.toString('base64'),
         isBase64Encoded: true,
       };
@@ -287,7 +308,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
     }
     return {
       statusCode: result.status,
-      headers: { ...cors(), 'content-type': 'application/json; charset=utf-8', ...(result.headers || {}) },
+      headers: { ...cors(originHeader), 'content-type': 'application/json; charset=utf-8', ...(result.headers || {}) },
       body: typeof result.body === 'string' ? result.body : JSON.stringify(result.body),
     };
   } catch (err) {
@@ -298,7 +319,7 @@ export const handler: APIGatewayProxyHandlerV2 = async (event) => {
         : 'Something went wrong while processing the request.';
     return {
       statusCode: 500,
-      headers: { ...cors(), 'content-type': 'application/json; charset=utf-8' },
+      headers: { ...cors(originHeader), 'content-type': 'application/json; charset=utf-8' },
       body: JSON.stringify({ error: message }),
     };
   }

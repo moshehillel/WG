@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -8,13 +8,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=99" />
+  <link rel="stylesheet" href="styles.css?v=102" />
 </head>
 <body class="is-auth">
   <div class="app-backdrop" aria-hidden="true"></div>
   <header class="app-header">
     <div class="brand">
       <img class="brand-logo" src="wg-logo.png" width="220" height="50" alt="White Glove Therapy &amp; Education" />
+      <div class="brand-scene" aria-hidden="true" title="School"></div>
       <div class="brand-copy">
         <h1 id="brandH1">Provider portal</h1>
         <p class="brand-tag" id="brandTag">Clinical timesheets &amp; caseload operations</p>
@@ -45,6 +46,7 @@
       <button type="button" data-admin="districts" class="nav">Districts</button>
       <button type="button" data-admin="admins" class="nav">Admins</button>
       <button type="button" data-admin="reports" class="nav">Reports</button>
+      <button type="button" data-admin="blockReports" class="nav">Error reports</button>
     </nav>
   </header>
   <main>
@@ -74,7 +76,7 @@
       </header>
       <div id="lunaMessages" class="luna-messages" aria-live="polite"></div>
       <div id="lunaHandoffBar" class="luna-handoff" hidden>
-        <p>Ready to send this to Moshe? Name and email are required.</p>
+        <p id="lunaHandoffLead">Ready to submit this ticket? Name and email are required.</p>
         <div class="luna-handoff-fields">
           <label for="lunaContactName">Name
             <input id="lunaContactName" type="text" maxlength="200" autocomplete="name" required placeholder="Your name" />
@@ -83,7 +85,7 @@
             <input id="lunaContactEmail" type="email" maxlength="320" autocomplete="email" required placeholder="you@example.com" />
           </label>
         </div>
-        <button type="button" class="btn-primary" id="lunaSendHandoff" disabled>Send to Moshe</button>
+        <button type="button" class="btn-primary" id="lunaSendHandoff" disabled>Submit a ticket</button>
       </div>
       <form id="lunaForm" class="luna-form">
         <label class="sr-only" for="lunaInput">Message Luna</label>
@@ -100,7 +102,7 @@
     </button>
   </div>
 
-  <script src="config.js?v=38"></script>
-  <script src="app.js?v=171"></script>
+  <script src="config.js?v=40"></script>
+  <script src="app.js?v=201"></script>
 </body>
 </html>

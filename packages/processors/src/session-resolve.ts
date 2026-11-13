@@ -2,8 +2,11 @@ import type { HhaClient } from '@white-glove/hha-client';
 import { inferCreateScheduleType, psDateToIso, sessionDurationMinutes } from '@white-glove/hha-client';
 import type { ExceptionCode, HhaVisit, UnscheduledMatchKeys, VerifiedSessionRow } from '@white-glove/shared';
 import {
+  BLANK_PAY_RATE_MESSAGE,
   buildPayCodeName,
+  isBlankOrZeroPayRate,
   lookupCaregiverCode,
+  resolveTherapyAssignment,
 } from '@white-glove/shared';
 import { HHA_NAME_MATCH_HINT } from './preview-scan.js';
 import { applyGroupServiceRemap } from './remap-group-service.js';
@@ -97,6 +100,18 @@ export async function resolveSessionVisit(options: {
     };
   }
 
+  const assignment = resolveTherapyAssignment(row.providerName);
+  if (!assignment.ok) {
+    return {
+      ok: false,
+      error: resolveError(
+        'missing_field',
+        `[verified_sessions] session=${sessionId} FAILED — missing provider last name. Coordinator is not assigned. No HHA write attempted.`,
+        { missing: ['provider last name'], providerName: row.providerName },
+      ),
+    };
+  }
+
   const caregiverCode =
     lookupCaregiverCode(caregiverMap, row.providerName) ?? row.caregiverId;
   const caregiverId = await hha.resolveCaregiverId(row.providerName);
@@ -111,9 +126,19 @@ export async function resolveSessionVisit(options: {
     };
   }
 
+  if (isBlankOrZeroPayRate(row.payRate)) {
+    return {
+      ok: false,
+      error: resolveError(
+        'missing_field',
+        `[verified_sessions] session=${sessionId} ${BLANK_PAY_RATE_MESSAGE}`,
+        { payRate: row.payRate, serviceCode },
+      ),
+    };
+  }
+
   const payCode = buildPayCodeName(serviceCode, row.payRate);
   let payCodeId: string | undefined;
-  // Missed / Pay Rate 0 never produces OT0 — leave payCodeId unset and continue.
   if (payCode) {
     payCodeId = await hha.resolvePayCodeId(payCode.payCodeName);
     if (!payCodeId) {
@@ -147,6 +172,8 @@ export async function resolveSessionVisit(options: {
     // Therapy must be Skilled — Non-Skilled causes false ErrorID=-310.
     scheduleType: inferCreateScheduleType(serviceCode),
     durationMinutes,
+    teamId: String(assignment.teamId),
+    coordinatorId: String(assignment.coordinatorId),
   };
 
   return { ok: true, resolved: { visit, needsEvv } };

@@ -11,12 +11,59 @@ import { buildTimesheetPdf } from './timesheet.js';
 process.env.TMS_ALLOW_DEV_HEADERS = '1';
 
 describe('phase 2–3', () => {
+  it('never emails bouncing (.local, testy@) addresses for due dates, but still emails moshe@', async () => {
+    const store = new MemoryStore();
+    const emails = [
+      'testy@whiteglovecare.net',
+      'bmarkowitz@whiteglovecare.net',
+      'admin@whiteglove.local',
+      'moshe@advancedautomations.net',
+      'miris@whiteglovecare.net',
+    ];
+    emails.forEach((email, i) =>
+      store.upsertUser({
+        id: `admin${i}`,
+        cognitoSub: `a${i}`,
+        email,
+        role: 'admin',
+        displayName: email,
+        providerId: '',
+        active: true,
+        createdAt: nowIso(),
+      }),
+    );
+    const school = store.upsertSchool({
+      id: newId(),
+      name: 'MacArthur',
+      district: '',
+      signerName: '',
+      signerEmail: '',
+      createdAt: nowIso(),
+    });
+    store.upsertDueDate({
+      id: 'd2',
+      schoolId: school.id,
+      kind: 'progress',
+      dueOn: '2001-01-01',
+      completedAt: '',
+      lastNagOn: '',
+    });
+    const mail = new MemoryMailer();
+    await runDueNags(store, mail, new Date('2026-09-01T12:00:00Z'));
+    expect(mail.sent.length).toBe(1);
+    expect([...(mail.sent[0]?.to ?? [])].sort()).toEqual([
+      'bmarkowitz@whiteglovecare.net',
+      'miris@whiteglovecare.net',
+      'moshe@advancedautomations.net',
+    ]);
+  });
+
   it('nags due dates until complete', async () => {
     const store = new MemoryStore();
     store.upsertUser({
       id: 'admin',
       cognitoSub: 'a',
-      email: 'admin@whiteglove.local',
+      email: 'bmarkowitz@whiteglovecare.net',
       role: 'admin',
       displayName: 'Admin',
       providerId: '',

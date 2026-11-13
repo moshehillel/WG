@@ -196,7 +196,10 @@ const ln = demo.lastName || 'Patient';
 const gender = demo.gender || 'Female';
 const birth = demo.birthDate || '1950-01-01';
 const office = demo.officeId || process.env.HHA_OFFICE_ID || '1025';
-const coord = demo.coordinatorId1 || process.env.HHA_COORDINATOR_ID || '81103';
+const coord = demo.coordinatorId1 || process.env.HHA_COORDINATOR_ID;
+if (!coord) {
+  throw new Error('Chart has no CoordinatorID1 and HHA_COORDINATOR_ID is not set. Refusing to update.');
+}
 
 function acceptedXml(list) {
   return `<AcceptedServices>
